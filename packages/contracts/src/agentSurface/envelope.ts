@@ -139,8 +139,11 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   ssh_failed: c("unavailable"),
   // Classified by remoteCode when the remote sent a known one.
   remote_refused: c("failed_precondition"),
+  remote_outdated: before("failed_precondition"),
   caller_changed: before("conflict"),
   duplicate_task: before("conflict"),
+  // The discard kept ownership and skips an absent file, so repeating it is safe.
+  attachment_remove_failed: before("unavailable"),
   // Linked hosts (OrchestratorMcpFailure reason)
   link_refused: before("permission_denied"),
   // Cloud machines (CloudMachineErrorReason)
@@ -210,6 +213,11 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   launch_refused: before("failed_precondition"),
   // The thread may have started; the error's message names the read that settles it.
   launch_uncertain: c("unknown_outcome"),
+  // clientRequestId reservations (docs/internals/agent-surface.md#idempotency); nothing runs.
+  in_progress: before("conflict"),
+  idempotency_mismatch: before("conflict"),
+  // The first call started and never recorded an outcome; details.reconcile names the read.
+  outcome_unknown: c("unknown_outcome"),
   invalid_branch: before("invalid_request"),
   source_not_found: before("not_found"),
   source_ambiguous: before("invalid_request"),
@@ -307,6 +315,57 @@ const retryableFor = (failure: FailureClass, context: CallContext) =>
   failure.code !== "unknown_outcome" &&
   TRANSIENT.has(failure.code) &&
   (context.effect === "read" || context.deduplicated === true || failure.nothingRan === true);
+
+/**
+ * What a keyed write's result means for its reservation. A transient refusal that ran nothing
+ * frees the key, so the same request can run once the condition clears. A failure that may
+ * have left effects holds the key as unknown. Anything else is kept and replayed, errors
+ * included: a permission refusal can follow a partial effect, so it never frees the key.
+ * `declared` is the failure's own literal when the server still holds the error.
+ */
+export const settlementOf = (
+  result: AgentSurfaceResult,
+  declared?: { readonly _tag: string; readonly code?: string },
+): "completed" | "released" | "unknown" => {
+  if (result.status !== "error") return "completed";
+  const failure =
+    (declared?.code === undefined ? undefined : FAILURE_CLASSES[declared.code]) ??
+    (declared === undefined ? undefined : FAILURE_CLASSES[declared._tag]) ??
+    FAILURE_CLASSES[result.error.reason] ??
+    c(result.error.code);
+  if (result.error.code === "unknown_outcome" || failure.code === "unknown_outcome")
+    return "unknown";
+  if (!TRANSIENT.has(failure.code)) return "completed";
+  return failure.nothingRan === true ? "released" : "unknown";
+};
+
+const stringField = (value: unknown, key: string) => {
+  const field =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)[key]
+      : undefined;
+  return typeof field === "string" && field !== "" ? field : undefined;
+};
+
+/**
+ * The declared domain literal behind a failure, which the MCP layer may have flattened to text.
+ * Only literals the classification table names count: an undeclared failure is one the direct
+ * call deliberately scrubs, so it must not leak even its tag. Free text such as a reason string
+ * or a computed message never leaves through here.
+ */
+export const declaredFailureLiteral = (
+  error: unknown,
+): { readonly _tag: string; readonly code?: string } | undefined => {
+  const tag = stringField(error, "_tag");
+  if (tag === undefined) return undefined;
+  // A wrapper keeps a legacy code and names the wrapped literal in reason; the declared reason
+  // wins, as fromFailure documents.
+  const literal = (["reason", "code", "failureCode"] as const)
+    .map((key) => stringField(error, key))
+    .find((value) => value !== undefined && FAILURE_CLASSES[value] !== undefined);
+  if (literal !== undefined) return { _tag: tag, code: literal };
+  return FAILURE_CLASSES[tag] === undefined ? undefined : { _tag: tag };
+};
 
 type Fields = Readonly<Record<string, unknown>>;
 const asFields = (value: unknown): Fields | undefined =>

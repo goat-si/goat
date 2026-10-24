@@ -17,7 +17,11 @@ import { ServerProviderUsageLimits } from "./providerUsageLimits.ts";
 import { QuotaPool } from "./quotaPool.ts";
 import { HostResourcesSnapshot } from "./resourceTelemetry.ts";
 import { RepositoryInventorySnapshot } from "./repositoryInventory.ts";
-import { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "./opencodex.ts";
+import {
+  OpenCodexChildBootstrapStatus,
+  OpenCodexInventorySnapshot,
+  OpenCodexUpdateStatus,
+} from "./opencodex.ts";
 import { HubParityResult } from "./hubParity.ts";
 import { ServerActivityBlocker } from "./serverActivity.ts";
 import { GoatclawHostSync } from "./permissionProfiles.ts";
@@ -249,6 +253,8 @@ export const HostStatusEntry = Schema.Struct({
   parity: ForwardCompatibleOptional(HubParityResult),
   /** Managed OpenCodex updates this machine coordinates. Only the answering machine sets it. */
   opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
+  /** This Home's progress joining a cloud machine it created as its Child. Set by the Home. */
+  opencodexChild: ForwardCompatibleOptional(OpenCodexChildBootstrapStatus),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
   /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */

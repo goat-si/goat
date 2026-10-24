@@ -267,11 +267,14 @@ adding to it. The question opens in a **Side chat** tab in the right panel, and 
 answers never enter the thread's history. Send `/side` alone, use the side chat button
 in the thread header, or press `Mod+/` to open or close the tab.
 
-The side chat starts from the conversation up to the last finished turn, so you can
-ask while the agent is still working. It has the full composer, with the thread's
-model, workspace, and permission mode. It is meant for questions and leaves files alone
-unless you ask it to change something. Use **Start a new side chat** to discard it and
-pick up the latest conversation, or **Open as a full thread** to continue it on its own.
+The side chat starts from the conversation up to the last finished turn, and every
+question you send it also carries the thread's current state: whether it is working,
+interrupted, or waiting on you, its goal, its task list, and its latest messages. You can
+ask what the thread is doing while the agent is still working, and the side chat header
+shows the thread's status. It has the full composer, with the thread's model, workspace,
+and permission mode. It is meant for questions and leaves files alone unless you ask it
+to change something. Use **Start a new side chat** to discard it, or **Open as a full
+thread** to continue it on its own.
 
 ## Goals
 

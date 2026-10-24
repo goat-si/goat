@@ -1,7 +1,8 @@
-// @effect-diagnostics nodeBuiltinImport:off -- Executes the shipped Pi extension at its native JavaScript boundary.
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off -- Executes the shipped Pi extension at its native JavaScript boundary, including its own fetch.
 import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeVM from "node:vm";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 
 interface RegisteredTool {
@@ -52,6 +53,7 @@ export async function loadMcpBridge(
       readonly name: string;
       readonly description?: string;
       readonly annotations?: { readonly readOnlyHint?: boolean };
+      readonly _meta?: Record<string, unknown>;
     }>;
     /** A stdio MCP server the bridge starts as the managed Cua Driver. */
     readonly cua?: { readonly command: string; readonly args: ReadonlyArray<string> };
@@ -60,6 +62,11 @@ export async function loadMcpBridge(
     readonly inputSchema?: Record<string, unknown>;
     /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
     readonly goatMcp?: boolean;
+    /**
+     * A real GOAT /mcp: the environment the adapter launches Pi with. The bridge reads its
+     * credentials from it and reaches the server with the real fetch instead of the catalog.
+     */
+    readonly server?: { readonly env: NodeJS.ProcessEnv };
   } = {},
 ) {
   const handlers = new Map<string, AgentStartHook>();
@@ -83,18 +90,23 @@ export async function loadMcpBridge(
   const catalog = (
     options.catalog ?? [
       {
-        name: "orchestrator_capabilities",
-        description: "Discover available providers and models.",
+        name: "goat_describe",
+        description: "Find GOAT capabilities.",
         annotations: { readOnlyHint: true },
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
       },
-      { name: "delegate_task", description: "Delegate work to another agent." },
       {
-        name: "task_status",
-        description: "Check delegated work.",
+        name: "goat_call",
+        description: "Call any GOAT capability by path.",
+        _meta: { [ALWAYS_LOAD_META_KEY]: true },
+      },
+      {
+        name: "goat_task_create",
+        description: "Delegate work to another agent.",
         annotations: { readOnlyHint: false },
       },
       {
-        name: "preview_snapshot",
+        name: "goat_preview_snapshot",
         description: "Inspect the collaborative browser.",
       },
     ]
@@ -116,10 +128,15 @@ export async function loadMcpBridge(
         env: {
           ...(options.goatMcp === false
             ? {}
-            : {
-                GOAT_MCP_URL: "http://fixture.invalid/mcp",
-                GOAT_MCP_BEARER_TOKEN: "fixture-token",
-              }),
+            : options.server !== undefined
+              ? {
+                  GOAT_MCP_URL: options.server.env.GOAT_MCP_URL,
+                  GOAT_MCP_BEARER_TOKEN: options.server.env.GOAT_MCP_BEARER_TOKEN,
+                }
+              : {
+                  GOAT_MCP_URL: "http://fixture.invalid/mcp",
+                  GOAT_MCP_BEARER_TOKEN: "fixture-token",
+                }),
           GOAT_PI_MCP_EXTENSION_PATH: "/fixture/pi-t3-extension.ts",
           GOAT_PI_RUNTIME_MODE: options.runtimeMode,
           ...(options.cua === undefined
@@ -145,6 +162,7 @@ export async function loadMcpBridge(
           authorization: transport.headers.authorization!,
           signal: transport.signal,
         });
+        if (options.server !== undefined) return fetch(url, transport);
         const request = JSON.parse(transport.body) as {
           id: number;
           method: string;

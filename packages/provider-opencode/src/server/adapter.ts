@@ -83,6 +83,7 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import { openCodeToolTurnItem } from "./toolItems.ts";
+import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
 export const OPENCODE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(OPENCODE_PROVIDER);
@@ -965,12 +966,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           yield* OpenCodeRuntime.runOpenCodeSdk("mcp.add", () =>
             client.mcp.add({
               name: "goat",
-              config: {
-                type: "remote",
-                url: mcpSession.endpoint,
-                headers: { Authorization: mcpSession.authorizationHeader },
-                oauth: false,
-              },
+              config: goatRemoteMcpConfig(mcpSession.endpoint, mcpSession.authorizationHeader),
             }),
           );
         }
@@ -2985,12 +2981,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.mcp.add(
                   {
                     name: "goat",
-                    config: {
-                      type: "remote",
-                      url: currentMcp.endpoint,
-                      headers: { Authorization: currentMcp.authorizationHeader },
-                      oauth: false,
-                    },
+                    config: goatRemoteMcpConfig(
+                      currentMcp.endpoint,
+                      currentMcp.authorizationHeader,
+                    ),
                   },
                   { signal },
                 ),

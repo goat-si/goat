@@ -36,9 +36,14 @@ import type { ChatComposer, ChatComposerHandle } from "./chat/ChatComposer";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import ChatView from "./ChatView";
 import * as chatViewLogic from "./ChatView.logic";
+const { reportMockFactoryFailure } = await vi.hoisted(
+  () => import("../../test/reportMockFactoryFailure"),
+);
 // Browser module namespaces cannot be spied on, so expose the scheduler as a mock that keeps its real behavior.
 vi.mock("./ChatView.logic", async (original) => {
-  const actual = await original<typeof import("./ChatView.logic")>();
+  const actual = await reportMockFactoryFailure("./ChatView.logic", () =>
+    original<typeof import("./ChatView.logic")>(),
+  );
   return {
     ...actual,
     scheduleEnvironmentReconnectWarning: vi.fn(actual.scheduleEnvironmentReconnectWarning),
@@ -855,7 +860,7 @@ it("uses reconciled SSH presentation in the chat banner while keeping fresh fail
   await fixture.rerender(<div />);
   await mount();
   expect(banner()?.textContent).toContain(
-    "Installing GOAT runtime — first setup can take a few minutes",
+    "Installing GOAT runtime. First setup can take a few minutes",
   );
   expect(banner()?.textContent).not.toContain("OLD SETUP TIMEOUT");
 });

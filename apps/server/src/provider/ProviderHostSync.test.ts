@@ -5,11 +5,19 @@ import {
   ProviderDriverKind,
   ProviderHostMatrixResult,
   ProviderInstanceId,
+  type ProviderAuthState,
 } from "@goat/contracts";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import { resolveSpawnCommand } from "@goat/shared/shell";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
+import packageJson from "../../package.json" with { type: "json" };
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostSync from "./ProviderHostSync.ts";
@@ -60,8 +68,64 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     expect(byHost.local?.providers.map((provider) => provider.driver)).toContain("codex");
     expect(byHost.old?.status).toBe("update_runtime");
     expect(byHost.stopped?.status).toBe("not_ready");
+    expect(byHost.stopped?.message).toContain("no ready connection to GOAT on stopped");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("regression #1002: judges hosts by the protocols they serve, not by GOAT version", () => {
+  const served = servedRuntimeProtocolRanges();
+  const protocols: Record<string, unknown> = {
+    nightly: served,
+    behind: { ssh: { min: 1, max: served.ssh.min - 1 }, orchestration: served.orchestration },
+    ahead: {
+      ssh: served.ssh,
+      orchestration: { min: served.orchestration.max + 1, max: served.orchestration.max + 1 },
+    },
+    same: served,
+    malformed: { ssh: { min: 5, max: 1 }, orchestration: served.orchestration },
+  };
+  const { layer } = harness({
+    answer: (call) =>
+      Effect.succeed({
+        rows: [
+          {
+            host: null,
+            status: "ok",
+            goatVersion: call.host === "same" ? packageJson.version : "0.0.1-nightly.20261023.246",
+            ...(protocols[call.host] === undefined ? {} : { protocol: protocols[call.host] }),
+            // What a remote says about itself never decides the verdict this machine shows.
+            versionMismatch: true,
+            compatibility: "incompatible",
+            message: "Remote's own warning.",
+            providers: [],
+          },
+        ],
+      }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { hosts: ["nightly", "behind", "ahead", "legacy", "same", "malformed"] },
+      { kind: "client", sessionId: viewer },
+    );
+    const byHost = Object.fromEntries(result.rows.map((row) => [row.host ?? "local", row]));
+    // A different build serving the same protocols is informational only: no warning.
+    expect(byHost.nightly).not.toHaveProperty("message");
+    expect(byHost.nightly).toMatchObject({ compatibility: "compatible", versionMismatch: true });
+    expect(byHost.local?.protocol).toEqual(served);
+    expect(byHost.behind?.compatibility).toBe("incompatible");
+    expect(byHost.behind?.message).toMatch(/Update GOAT on behind\.$/);
+    expect(byHost.ahead?.compatibility).toBe("incompatible");
+    expect(byHost.ahead?.message).toMatch(/Update GOAT on this machine\.$/);
+    expect(byHost.legacy?.compatibility).toBe("degraded");
+    expect(byHost.legacy?.message).toContain("does not report the protocols it serves");
+    expect(byHost.same).toMatchObject({ compatibility: "compatible" });
+    expect(byHost.same).not.toHaveProperty("versionMismatch");
+    expect(byHost.same).not.toHaveProperty("message");
+    expect(byHost.malformed?.compatibility).toBe("degraded");
+    expect(byHost.malformed?.message).toContain("does not report the protocols it serves");
   }).pipe(Effect.provide(layer));
 });
 
@@ -311,7 +375,13 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(started.kind).toBe("started");
     if (started.kind !== "started") return;
     const done = yield* sync.awaitDone(started.sync.syncId);
-    expect(state.spawned.at(-1)?.args).toEqual(["install", "-g", "@xai-official/grok@1.2.3"]);
+    // Windows launches npm.cmd through cmd.exe, which folds the argv into one quoted command line.
+    const official = yield* resolveSpawnCommand("npm", [
+      "install",
+      "-g",
+      "@xai-official/grok@1.2.3",
+    ]).pipe(Effect.provide(NodeServices.layer));
+    expect(state.spawned.at(-1)).toEqual({ command: official.command, args: official.args });
     expect(done.done).toBe(true);
     expect(done.hosts[0]).toMatchObject({ host: null, phase: "failed" });
     const wire = JSON.stringify(done);
@@ -319,3 +389,114 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "regression #983: a cancel that lands while a host accepts the sync still reaches it",
+  () =>
+    Effect.gen(function* () {
+      const calling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const running = (done: boolean) => ({
+        syncId: "remote-sync",
+        driver: "opencode",
+        version: "1.2.3",
+        login: true,
+        startedAt: "2026-10-20T00:00:00.000Z",
+        done,
+        hosts: [{ host: null, phase: done ? "cancelled" : "installing", version: null }],
+      });
+      const { layer, state } = harness({
+        answer: (call) =>
+          call.tool === "goat_provider_sync"
+            ? Deferred.succeed(calling, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ kind: "started", sync: running(false) }),
+              )
+            : Effect.succeed(running(true)),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], version: "1.2.3" },
+          { kind: "client", sessionId: person },
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(calling);
+        // The cancel starts while the remote is still answering, before its sync id is known here.
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "client", sessionId: person })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        const cancelled = yield* Fiber.join(stopping);
+        expect(state.calls.at(-1)?.call).toMatchObject({
+          host: "box",
+          tool: "goat_provider_sync_cancel",
+          arguments: { syncId: "remote-sync" },
+        });
+        expect(cancelled).toMatchObject({
+          done: true,
+          hosts: [{ host: "box", phase: "cancelled" }],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("regression #983: cancelling a sync during a managed sign-in cancels the flow", () =>
+  Effect.gen(function* () {
+    const signingIn = yield* Deferred.make<void>();
+    const cancels: Array<{ readonly input: unknown; readonly owner: string }> = [];
+    const instanceId = ProviderInstanceId.make("opencode");
+    const flow = {
+      instanceId,
+      phase: "waiting" as const,
+      flowId: "flow-1",
+      authorizationUrl: null,
+      expiresAt: null,
+      message: null,
+      interaction: { type: "deviceCode", url: "https://example.test/device", userCode: "ABCD" },
+    } as unknown as ProviderAuthState;
+    const { layer } = harness({
+      providers: [
+        {
+          instanceId,
+          driver: ProviderDriverKind.make("opencode"),
+          displayName: "OpenCode",
+          installed: true,
+          version: "1.2.3",
+          auth: { status: "unauthenticated" },
+          setup: { canAuthenticate: true },
+        },
+      ],
+      instances: [{ instanceId: "opencode", driverKind: "opencode" }],
+      auth: {
+        start: () => Effect.succeed(flow),
+        subscribe: () =>
+          Stream.fromEffect(Deferred.succeed(signingIn, undefined)).pipe(
+            Stream.drain,
+            Stream.concat(Stream.never),
+          ),
+        cancel: (input, owner) =>
+          Effect.sync(() => {
+            cancels.push({ input, owner });
+            return { ...flow, phase: "cancelled" as const };
+          }),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", version: "1.2.3" },
+        { kind: "client", sessionId: person },
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      yield* Deferred.await(signingIn);
+      const cancelled = yield* sync.cancel(
+        { syncId: started.sync.syncId },
+        { kind: "client", sessionId: person },
+      );
+      expect(cancels).toEqual([{ input: { instanceId, flowId: "flow-1" }, owner: person }]);
+      expect(cancelled.hosts[0]).toMatchObject({ host: null, phase: "cancelled" });
+      expect(cancelled.hosts[0]).not.toHaveProperty("login");
+    }).pipe(Effect.provide(layer));
+  }),
+);

@@ -286,7 +286,9 @@ it.effect.each([
           tabId: alternateTabId,
           threadId,
         });
-        expect(event.request.input).toEqual({});
+        // Only a shown or saved image needs the browser to capture one.
+        // The seventh call is a default one after six in this mode.
+        expect(event.request.input).toEqual({ captureImage: requests <= 6 && images });
         return broker.respond({
           clientId: "mcp-image-option-client",
           connectionId: event.connectionId,
@@ -316,7 +318,9 @@ it.effect.each([
         const omitted =
           "accessibilityTree (use interactiveElements locators or goat_preview_evaluate)";
         expect(snapshot.isError).toBe(false);
-        expect(snapshot.structuredContent).toEqual({ ...boundedMetadata, omitted: [omitted] });
+        expect(snapshot.structuredContent).toEqual(
+          images ? undefined : { ...boundedMetadata, omitted: [omitted] },
+        );
         const [identity, text, ...rest] = snapshot.content;
         expect(identity?.type === "text" ? decodeJsonText(identity.text) : null).toEqual({
           url: page.url,
@@ -389,7 +393,7 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       const inputs = yield* serveSnapshots("mcp-fullpage-client", fullPage);
       const saved = yield* callSnapshot({ fullPage: true, save: true });
       expect(saved.isError).toBe(false);
-      expect(inputs).toEqual([{ fullPage: true }]);
+      expect(inputs).toEqual([{ fullPage: true, captureImage: true }]);
       expect(saved.content.map((content) => content.type)).toEqual(["text"]);
       expect(saved.structuredContent).toEqual({
         url: snapshotResult.url,
@@ -409,10 +413,8 @@ it.effect("saves full-page captures without replaying images and keeps clipping 
       );
       const image = yield* callSnapshot({ fullPage: true, includeImage: true });
       expect(image.content.map((content) => content.type)).toContain("image");
-      expect(image.structuredContent).toMatchObject({
-        screenshot: { fullPage: true, clipped: true, byteLength: 3 },
-      });
-      expect(image.structuredContent).not.toHaveProperty("screenshot.data");
+      expect(image.structuredContent).toBeUndefined();
+      expect(JSON.stringify(image.content)).toContain('\\"clipped\\":true,\\"byteLength\\":3');
     }),
   ).pipe(Effect.provide(layerTest)),
 );
@@ -904,9 +906,8 @@ it.effect("registers annotated tools and preserves authenticated request context
         );
       expect(snapshot.isError).toBe(false);
       expect(snapshot.content.some((content) => content.type === "image")).toBe(true);
-      expect(snapshot.structuredContent).toMatchObject({
-        screenshot: { mimeType: "image/png", width: 10, height: 5 },
-      });
+      expect(snapshot.structuredContent).toBeUndefined();
+      expect(JSON.stringify(snapshot.content)).toContain('\\"width\\":10,\\"height\\":5');
       expect(routedRequests.find(({ operation }) => operation === "snapshot")?.tabId).toBe(
         alternateTabId,
       );

@@ -73,7 +73,17 @@ export const layer = McpToolAccess.toLayer(
                 message: "Only the caller that prepared a pending upload can discard it.",
               });
             }
-            yield* Upload.deletePendingAttachment(input.attachmentId);
+            // Ownership stays until the file is gone, so a failed removal can be retried.
+            yield* Upload.discardPendingAttachment(input.attachmentId).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestratorMcpFailure({
+                    code: "orchestration_error",
+                    reason: "attachment_remove_failed",
+                    message: "The pending upload could not be removed. Discard it again.",
+                  }),
+              ),
+            );
             uploadOwners.delete(input.attachmentId);
             return {};
           }),
@@ -85,6 +95,7 @@ export const layer = McpToolAccess.toLayer(
           (input) =>
             Effect.gen(function* () {
               const { caller, projection } = yield* readThread(input.threadId, ["messages"]);
+              yield* McpToolAccess.admit(input);
               if (projection.thread.archivedAt !== null)
                 return yield* new OrchestratorMcpFailure({
                   code: "invalid_request",
@@ -124,6 +135,7 @@ export const layer = McpToolAccess.toLayer(
                 status: result.run.status,
               };
             }),
+          { admission: "handler" },
         ),
       ),
     };

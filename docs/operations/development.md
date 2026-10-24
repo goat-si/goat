@@ -2,8 +2,9 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24;
-Bun is optional. From the repository root:
+Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24.x,
+at least 24.16.0, because earlier `node:sqlite` builds cut TEXT values off at the first NUL character and
+the server's memory tests round-trip such text. Bun is optional. From the repository root:
 
 ```sh
 vp i
@@ -47,6 +48,8 @@ Add `--browser` to open a browser automatically.
 
 Linked worktrees default to their own `.goat/userdata` (one created earlier keeps `.t3`), even when `GOAT_HOME` is set.
 The main checkout defaults to `~/.goat/dev` (`~/.t3/dev` while only that exists). An explicit `--home-dir` wins in both cases.
+The first start in a worktree seeds its empty database from a read-only copy of
+`~/.goat/userdata` (`~/.t3/userdata` when that database is absent); `--no-seed` or `GOAT_DEV_SEED=0` skips that.
 Never run a development server against the live `~/.goat/userdata` or `~/.t3/userdata`.
 See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
 
@@ -135,8 +138,15 @@ for the security model.
 changed files, `knip:check` when code or a manifest changes, the generated GraphQL checks, typecheck
 of the affected packages and their dependents, and the test files beside the changed files. It maps
 files to packages with [ci-changes.cjs](../../.github/scripts/ci-changes.cjs), as CI does. It
-compares against the merge base with `origin/main`, or with a ref you pass. CI still runs the full
-test suites and the jobs the summary lists, so a local pass does not promise a green CI run.
+compares against the merge base with `origin/dev`, or with a ref you pass. A pull request's CI run
+is quick too: the whole-repository check and typecheck plus the same tests beside the changes. The
+full test suites and the jobs the summary lists run with the `ci:full` label, a manual `goat-ci`
+run, and the full runs on `dev`, so a local pass does not promise a green full run.
+
+The steps run side by side, so a run takes about as long as its slowest step, usually knip's
+exports pass at about 10 s. When the files are exactly those of the last passing run, it prints that
+run's summary instead of running again. Any change to a file, the install, or a generated file runs
+the checks again.
 
 While you iterate, run single checks:
 
@@ -155,7 +165,6 @@ Install that browser once before running the browser suite locally, as CI does:
 TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
 `@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
 refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
-Marketing keeps `astro check` for Astro files.
 
 Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
 [ci.yml](../../.github/workflows/ci.yml) for its current jobs.
@@ -242,6 +251,58 @@ For a cross-architecture or universal build, add the requested Rust targets:
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ```
+
+### macOS computer use helper
+
+On a Mac, computer use runs Cua Driver under `GOAT Computer Use.app` so its permissions belong
+to the helper, not to GOAT or your terminal. To try it from a dev checkout, build it and point the
+dev app at it:
+
+```sh
+node scripts/build-computer-use-helper.ts --channel dev
+GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
+```
+
+The script signs with the keychain's Developer ID Application identity when one is usable, and
+`--identity -` signs ad-hoc. An ad-hoc helper gets a new code hash on every build, so macOS asks
+for Accessibility and Screen Recording again after each rebuild. Only `--channel dev` may be
+ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team, launched them.
+Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
+session that cannot unlock it (`errSecInternalComponent`).
+
+### Windows computer use helper
+
+On Windows, computer use runs Cua Driver under `GOAT Computer Use.exe`, which checks that the
+session has a usable desktop, runs only the driver files whose SHA-256 it was built with, and
+ends the driver with itself. Build it on Windows (the C# compiler ships with Windows) and point
+the dev app at the folder:
+
+```powershell
+node scripts/build-computer-use-helper-windows.ts --channel dev
+$env:GOAT_CUA_HELPER_PATH = "$PWD\apps\desktop\.computer-use-helper\computer-use-helper"; vp run dev
+```
+
+Start the dev app from the signed-in desktop. A shell reached over SSH or a service runs in
+Session 0, where the helper reports that there is no desktop and the driver refuses to start.
+Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
+executable installed two folders above them and signed by the same publisher.
+
+### Linux computer use helper
+
+On Linux, computer use runs Cua Driver under `goat-computer-use`, a Node helper
+(`apps/server/src/cua/linuxHelper`) that speaks the computer use protocol on stdio and owns the
+driver as its child. Build it, then run the live check, which starts its own Xvfb display,
+D-Bus session, AT-SPI bus and fixture window and stops each by the pid it started:
+
+```sh
+node scripts/build-computer-use-helper-linux.ts
+node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
+```
+
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), `dbus-daemon`, at-spi2-core,
+python3 with GTK 3 introspection and `xdotool`. Without a writable `/dev/uinput` and an X server
+that accepts new input devices, which Xvfb is not, background keys and pixel clicks are refused
+with `backgroundUnavailable`; AT-SPI clicks and value writes still run in the background.
 
 ### Windows installer prerequisites
 

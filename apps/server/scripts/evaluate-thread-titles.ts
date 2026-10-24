@@ -27,6 +27,11 @@ import * as VcsProjectConfig from "../src/vcs/VcsProjectConfig.ts";
 import * as GitVcsDriver from "../src/vcs/GitVcsDriver.ts";
 import * as ProcessRunner from "../src/processRunner.ts";
 import * as ServerConfig from "../src/config.ts";
+import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// Started from a git hook, this run inherits GIT_DIR, which would point git in its fixture
+// workspace, and in every server or provider child it starts, at the developer's checkout (#1114).
+removeInheritedGitEnv(process.env);
 
 const { values } = NodeUtil.parseArgs({
   options: {

@@ -52,7 +52,7 @@ const TEST_ONLY_DEPS = {
 };
 // Declared dependencies that only feed a build step: the server bundles the
 // built web app (apps/server/vite.config.ts) but never imports it.
-const BUILD_ONLY_DEPS = { t3: ["@goat/web"] };
+const BUILD_ONLY_DEPS = { goat: ["@goat/web"] };
 
 // Sources scripts/mobile-native-static-check.ts lints, plus the tool and rule
 // configuration that decides how it lints them, plus the root package.json

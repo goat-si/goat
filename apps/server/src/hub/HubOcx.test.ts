@@ -1,21 +1,99 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import { EnvironmentId, OrchestratorMcpFailure, type HostThreadCounts } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
+import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   countLinkTunnels,
   deviceScript,
   healthScript,
+  HubOcx,
+  layer as hubOcxLayer,
   parseDeviceOutput,
   platformOf,
 } from "./HubOcx.ts";
 
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 const CODE = "ocx_pair_Q0xJRU5UX1RFU1RfQ09ERV9GSVhUVVJFXzAwMDAwMDAwMDA";
+const scope: McpInvocationScope = {
+  environmentId: EnvironmentId.make("hub-fixture"),
+  capabilities: new Set(["orchestration"]),
+  issuedAt: 0,
+  requestNamespace: "hub-test",
+  thread: undefined,
+  client: { sessionId: "test", label: "Test client", access: "full-access" },
+};
+
+/** The device answers `goat_host_status` live with these thread counts. */
+const deviceReporting = (threads: HostThreadCounts) =>
+  hubOcxLayer.pipe(
+    Layer.provide(
+      Layer.mock(HostThreads.HostThreadsMcpService)({
+        readOnHost: (_scope, input, decode) =>
+          decode({
+            hosts: [
+              {
+                host: null,
+                reachability: "ok",
+                metrics: {
+                  sampledAt: 0,
+                  cpuCount: 1,
+                  cpuUtilization: 0,
+                  totalMemoryBytes: 1,
+                  availableMemoryBytes: 1,
+                  loadAvg: null,
+                  disk: null,
+                  threads,
+                  quotas: [],
+                },
+              },
+            ],
+          }).pipe(
+            Effect.map((result) => ({ ...result, host: input.host })),
+            Effect.mapError(
+              () =>
+                new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  message: "Invalid fixture",
+                }),
+            ),
+          ),
+      }),
+    ),
+    Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+    Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
+    Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+    Layer.provide(NodeServices.layer),
+  );
+
+// ADR-0019's restart rung waits for these turns; a running subagent is work a restart interrupts.
+it.effect.each([
+  {
+    name: "one subagent and no top-level turn",
+    threads: { running: 0, subagentsRunning: 1 },
+    expected: 1,
+  },
+  {
+    name: "top-level and subagent turns",
+    threads: { running: 2, subagentsRunning: 1 },
+    expected: 3,
+  },
+  { name: "nothing running", threads: { running: 0, subagentsRunning: 0 }, expected: 0 },
+  { name: "a host too old to report subagents", threads: { running: 0 }, expected: undefined },
+])("counts running turns on a device with $name", ({ threads, expected }) =>
+  Effect.gen(function* () {
+    const ocx = yield* HubOcx;
+    expect(yield* ocx.runningTurns("macmini-ts", scope)).toBe(expected);
+  }).pipe(Effect.provide(deviceReporting({ waiting: 0, queued: 0, ...threads }))),
+);
 
 it.live("runs the Desktop ocx without letting it read the rest of the script", () =>
   Effect.gen(function* () {

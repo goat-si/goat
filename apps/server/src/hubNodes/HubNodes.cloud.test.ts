@@ -10,7 +10,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import { ALIAS, ID, makeWorld } from "../cloudMachines/CloudMachineService.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
-import migration from "../persistence/Migrations/094_HubNodes.ts";
+import migration from "../persistence/Migrations/095_HubNodes.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";

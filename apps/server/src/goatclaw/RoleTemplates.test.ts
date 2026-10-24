@@ -46,7 +46,7 @@ describe("goatclaw role templates", () => {
     for (const kind of ["progress", "needs_input", "completed or failed"])
       expect(brief).toContain("- " + kind + ":");
     expect(brief).toContain("NOT RUN:");
-    expect(brief).toContain("goat_decision_request");
+    expect(brief).toContain('goat_call {path:"decision.request"}');
     expect(brief.endsWith("Task:\n\nShip H4.")).toBe(true);
   });
 });

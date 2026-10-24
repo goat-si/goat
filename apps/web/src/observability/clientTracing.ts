@@ -18,8 +18,9 @@ const CLIENT_TRACING_RESOURCE = {
   serviceName: "goat-web",
   attributes: {
     "service.namespace": "goat",
+    "deployment.environment.name": import.meta.env.DEV ? "development" : "production",
     "service.runtime": "goat-web",
-    "service.mode": isElectron ? "electron" : "browser",
+    "goat.client.surface": isElectron ? "desktop" : "web",
     "service.version": APP_VERSION,
   },
 } as const;

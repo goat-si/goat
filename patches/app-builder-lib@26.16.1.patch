@@ -13,3 +13,25 @@ index 8a3462b185b078a260483635e6d774e2ece6e269..105778c145ab63a26444179215c643a7
              try {
                  await nsisUtil_1.UninstallerReader.exec(installerPath, uninstallerPath);
              }
+diff --git a/out/util/electronGet.js b/out/util/electronGet.js
+index 11a859b..5a9fac4 100644
+--- a/out/util/electronGet.js
++++ b/out/util/electronGet.js
+@@ -335,10 +335,14 @@ async function downloadArtifactToFile(config, label) {
+                     if (e instanceof builder_util_runtime_1.HttpError) {
+                         return e.isServerError();
+                     }
+-                    if (typeof ((_a = e === null || e === void 0 ? void 0 : e.response) === null || _a === void 0 ? void 0 : _a.statusCode) === "number") {
+-                        return e.response.statusCode >= 500;
++                    // got also attaches the response to a network error that arrives after the
++                    // headers (a connection reset mid-body), so only an HTTPError is judged by its
++                    // status; everything else by its network code. Upstream main does the same
++                    // (electron-userland/electron-builder#10105), but no v26 release has it.
++                    if ((e === null || e === void 0 ? void 0 : e.name) === "HTTPError" && typeof ((_a = e.response) === null || _a === void 0 ? void 0 : _a.statusCode) === "number") {
++                        return e.response.statusCode >= 500 || e.response.statusCode === 429;
+                     }
+-                    return typeof (e === null || e === void 0 ? void 0 : e.code) === "string" && ["ENOTFOUND", "ETIMEDOUT", "ECONNRESET", "EPIPE", "ENOENT"].includes(e.code);
++                    return typeof (e === null || e === void 0 ? void 0 : e.code) === "string" && ["ENOTFOUND", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "EPIPE", "ENOENT"].includes(e.code);
+                 },
+             });
+         }

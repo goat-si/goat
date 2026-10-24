@@ -14,7 +14,6 @@ import {
   type FallbackChainStep,
   type FallbackFailure,
   type FleetSettings,
-  FallbackChain,
   type GoatFallbackChainGetResult,
   type GoatFallbackChainSetInput,
   type GoatFallbackChainSetResult,
@@ -49,6 +48,7 @@ import {
   stepKey,
   toSelection,
 } from "./fallbackPolicy.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 export type FallbackStep =
   | { readonly _tag: "SwitchInThread"; readonly selection: ModelSelection; readonly hop: number }
@@ -553,7 +553,6 @@ export const layerChains = Layer.effect(
       get: Effect.map(read, view),
       set: (input, authorizeAtCommit) =>
         Effect.gen(function* () {
-          const fleet = yield* read;
           const warnings: Array<string> = [];
           if (input.chain !== null) {
             const providers = yield* registry.getProviders;
@@ -564,7 +563,7 @@ export const layerChains = Layer.effect(
                   message:
                     "Provider instance " +
                     step.instanceId +
-                    " is not configured here; goat_provider_list lists the instances.",
+                    ` is not configured here; ${goatCallText("provider.list")} lists the instances.`,
                 });
               if (
                 !provider.models.some(

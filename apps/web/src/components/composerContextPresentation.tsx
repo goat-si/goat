@@ -38,6 +38,8 @@ import {
 } from "./contextPresentationRegistry";
 import type { ContextChipKind } from "./ContextChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { CapabilityContextChip } from "./CapabilityContextChip";
+import { turnCapabilityForContextId } from "@goat/shared/turnCapabilities";
 import {
   ContextChipPopover,
   ContextChipShell,
@@ -457,6 +459,11 @@ export function ComposerContextReferenceChip(props: {
   label: string;
 }): ReactElement {
   const records = use(ComposerContextRecordsContext);
+  // A capability chip is whole in its id; there is no draft record to look up.
+  const capability =
+    props.kind === "capability" ? turnCapabilityForContextId(props.contextId) : undefined;
+  if (capability !== undefined)
+    return <CapabilityContextChip capability={capability} label={props.label} />;
   return composerContextPresentationRegistry.render(props.kind, records.get(props.contextId), {
     label: props.label,
   });

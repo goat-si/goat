@@ -4,7 +4,7 @@ import type {
   PullRequestListResult,
 } from "@goat/contracts";
 
-import type { PullRequestTabStatusSeed } from "~/components/RightPanelTabs";
+import type { PullRequestTabStatusSeed } from "~/components/RightPanelTab";
 import { pullRequestSurfaceId } from "~/rightPanelStore";
 import {
   filterPullRequestsByInvolvement,

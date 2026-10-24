@@ -67,7 +67,7 @@ export const toOperationError = (cause: unknown): ServerBrowserOperationError =>
   return new ServerBrowserOperationError("PreviewAutomationExecutionError", firstLine);
 };
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+export const DEFAULT_TIMEOUT_MS = 15_000;
 
 /** Real Chromium history, including same-document entries whose response is null. */
 export const navigateHistory = async (
@@ -139,7 +139,7 @@ const refsFor = (page: Page) => {
   return state;
 };
 
-const targetLocator = (
+export const targetLocator = (
   page: Page,
   input: { readonly locator?: string | undefined; readonly selector?: string | undefined },
 ): Locator | null => {
@@ -171,6 +171,51 @@ export type PointerReporter = (
   phase: "move" | "click",
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
+
+/**
+ * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
+ * action waited. Every wait for the target runs before it and sends no input (Playwright's trial
+ * runs move the mouse, and a drag trial even releases a button); after it, the action gets only
+ * DISPATCH_TIMEOUT_MS. If control is cut after the gate, the tab ignores input until that action
+ * ends (SessionControl.onDispatchCut). `linger` keeps covering input that outlives its action,
+ * such as a click answered early because it opened a dialog.
+ */
+export interface DispatchGate {
+  (): void;
+  readonly linger?: (work: Promise<unknown>) => void;
+}
+const open: DispatchGate = () => {};
+
+/** How long an action that passed its gate may still wait for Playwright's own checks. */
+const DISPATCH_TIMEOUT_MS = 1_000;
+
+const targetChanged = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationExecutionError",
+    "The target changed or was disabled before the input landed. Take a fresh snapshot and try again.",
+  );
+
+/** The target's element, after Playwright's wait for it; a detached target is a changed one. */
+export const elementOf = async (locator: Locator, timeout: number) => {
+  const handle = await locator.elementHandle({ timeout });
+  if (handle === null) throw targetChanged();
+  return handle;
+};
+
+/** Playwright's actionability waits, without the mouse move its trial runs make. */
+const settled = async (locator: Locator, timeout: number, enabled = true) => {
+  const handle = await elementOf(locator, timeout);
+  try {
+    await handle.waitForElementState("visible", { timeout });
+    if (enabled) await handle.waitForElementState("enabled", { timeout });
+    await handle.waitForElementState("stable", { timeout });
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
+};
+
+/** After the gate: Playwright's own last checks, briefly, and no wait for a navigation. */
+const dispatched = { timeout: DISPATCH_TIMEOUT_MS, noWaitAfter: true } as const;
 
 const targetPoint = async (
   page: Page,
@@ -244,8 +289,6 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-// The broker waits 15s for the host; a snapshot, retry included, answers well before.
-const SNAPSHOT_TIMEOUT_MS = 10_000;
 // How long a frame in another process gets to answer; one that crashed never does.
 const FRAME_ANSWER_MS = 1_000;
 
@@ -347,7 +390,7 @@ const openReaders = async (page: Page, cdp: CDPSession) => {
         ids(frameTree).map(async (frameId) => {
           const world = await session.send("Page.createIsolatedWorld", {
             frameId,
-            worldName: "t3-preview",
+            worldName: "goat-preview",
           });
           return world.executionContextId;
         }),
@@ -488,7 +531,7 @@ const readPageMetrics = async (cdp: CDPSession) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
     frameId: frameTree.frame.id,
-    worldName: "t3-preview-metrics",
+    worldName: "goat-preview-metrics",
   });
   let { cssVisualViewport } = await cdp.send("Page.getLayoutMetrics");
   // Desktop zoom applies asynchronously; bracket the CSS metrics to reject a torn read.
@@ -616,9 +659,13 @@ type SnapshotInput = {
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
   readonly renderScale: number | "display";
   readonly fullPage?: boolean | undefined;
+  /** False skips the capture when nothing would show or save the image (L4). */
+  readonly captureImage?: boolean;
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** What remains of the request's deadline, the one its timeout error names. */
+  readonly timeoutMs: number;
 };
 
 /** The scale a page renders at and its viewport in device-independent pixels, a clip's units. */
@@ -653,15 +700,18 @@ const capture = async (
   const generation = state.generation;
   const { readers, read } = await openReaders(input.page, input.cdp);
   const before = await read();
-  const capture = input.fullPage
-    ? captureFullPage(input.cdp)
-    : captureViewport(input.page, input.cdp, { format: "png", scale, viewport, offset }).then(
-        (data) => ({
-          mimeType: "image/png" as const,
-          data,
-          ...pngSize(data),
-        }),
-      );
+  const capture =
+    input.captureImage === false
+      ? Promise.resolve(undefined)
+      : input.fullPage
+        ? captureFullPage(input.cdp)
+        : captureViewport(input.page, input.cdp, { format: "png", scale, viewport, offset }).then(
+            (data) => ({
+              mimeType: "image/png" as const,
+              data,
+              ...pngSize(data),
+            }),
+          );
   // Taken between the reads, so a value that changes during either fails the comparison.
   // Awaited after the tree: a capture that fails has finished its tree before a retry starts.
   const pageAndScreenshot = Promise.all([
@@ -725,7 +775,7 @@ const capture = async (
     consoleEntries: [...input.consoleEntries],
     networkEntries: [...input.networkEntries],
     actionTimeline: [...input.actionTimeline],
-    screenshot,
+    ...(screenshot === undefined ? {} : { screenshot }),
   };
 };
 
@@ -733,10 +783,10 @@ const capture = async (
 const snapshotTurns = new WeakMap<Page, number>();
 
 export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
-  const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
+  const deadline = Date.now() + input.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), SNAPSHOT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(tooBusy()), input.timeoutMs);
   });
   const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
   snapshotTurns.set(input.page, turn);
@@ -767,42 +817,61 @@ export const click = async (
   page: Page,
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ): Promise<{ readonly x: number; readonly y: number }> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   const point = await targetPoint(page, locator, input, timeout);
   await pointer(point, "click");
-  const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
-  const clicked =
-    locator === null
-      ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, timeout });
+  const button = input.button ?? "left";
+  if (locator !== null) await settled(locator, timeout);
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
     page.once("dialog", onDialog);
   });
+  // Each press goes out on its own after the gate: Playwright sends a double click's presses
+  // together, and the browser still delivers the rest after the first opens a dialog.
+  const press = (count: number) => {
+    gate();
+    if (count === 1)
+      return locator === null
+        ? page.mouse.click(point.x, point.y, { button })
+        : locator.click({ button, ...dispatched });
+    return page.mouse
+      .down({ button, clickCount: count })
+      .then(() => page.mouse.up({ button, clickCount: count }));
+  };
   try {
-    if ((await Promise.race([clicked, dialogOpened])) === "dialog") void clicked.catch(constVoid);
+    for (let count = 1; count <= (input.clickCount ?? 1); count++) {
+      const pressed = press(count);
+      if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
+        // That press waits on the dialog, past this action; later presses are never sent.
+        gate.linger?.(pressed);
+        void pressed.catch(constVoid);
+        break;
+      }
+    }
   } finally {
     page.off("dialog", onDialog);
   }
   return point;
 };
 
-export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
+export const type = async (
+  page: Page,
+  input: PreviewAutomationTypeInput,
+  gate: DispatchGate = open,
+) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
-  if (locator !== null && input.clear) {
-    await locator.fill(input.text, { timeout });
-    return;
-  }
+  if (locator !== null) await locator.waitFor({ state: "visible", timeout });
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const focused =
     (locator !== null || (await target.count()) > 0) &&
     (await target.evaluate(
-      (element) => {
+      (element, clear) => {
         // Like the desktop host: an enabled text control or contenteditable
         // that actually takes focus. Anything else would swallow the text or
         // send it to whichever field had focus before.
@@ -834,9 +903,22 @@ export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
         control.focus?.();
         const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
         const active = root.activeElement;
-        return active != null && (active === element || element.contains(active));
+        const owned = active != null && (active === element || element.contains(active));
+        // Selected here, the old text is replaced by the one input sent after the gate.
+        if (owned && clear) {
+          if (textControl) (element as unknown as { select(): void }).select();
+          else
+            (
+              globalThis as unknown as {
+                getSelection(): { selectAllChildren(node: unknown): void } | null;
+              }
+            )
+              .getSelection()
+              ?.selectAllChildren(element);
+        }
+        return owned;
       },
-      undefined,
+      input.clear === true,
       { timeout },
     ));
   if (focused !== true) {
@@ -845,9 +927,12 @@ export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
       "The target is not an enabled text field, so no text was typed.",
     );
   }
-  if (input.clear) {
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.press("Delete");
+  gate();
+  // One input after the gate: a key press is held off by the input fence; inserted text is a
+  // single call with nothing to wait for.
+  if (input.text === "") {
+    if (input.clear) await page.keyboard.press("Delete");
+    return;
   }
   await page.keyboard.insertText(input.text);
 };
@@ -856,93 +941,138 @@ export const hover = async (
   page: Page,
   input: PreviewAutomationHoverInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   await pointer(await targetPoint(page, locator, input, timeout), "move");
   if (locator === null) {
+    gate();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await locator.hover({ timeout });
+  await settled(locator, timeout, false);
+  gate();
+  await locator.hover(dispatched);
 };
 
 export const select = async (
   page: Page,
   input: PreviewAutomationSelectInput,
+  gate: DispatchGate = open,
 ): Promise<PreviewAutomationSelectResult> => {
-  const locator = targetLocator(page, input)!;
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const options = await locator.evaluate(
-    (element) =>
-      element.tagName === "SELECT"
-        ? Array.from(
-            (element as unknown as { options: ArrayLike<{ value: string; label: string }> })
-              .options,
-            ({ value, label }) => ({ value, label: label.trim() }),
-          )
-        : null,
-    undefined,
-    { timeout },
-  );
-  const values =
-    options &&
-    input.values.map(
+  const handle = await elementOf(targetLocator(page, input)!, timeout);
+  try {
+    const found = await handle.evaluate((element) => {
+      if (element.tagName !== "SELECT") return null;
+      const select = element as unknown as {
+        readonly disabled: boolean;
+        readonly multiple: boolean;
+        readonly options: ArrayLike<{ value: string; label: string }>;
+      };
+      return {
+        disabled: select.disabled,
+        multiple: select.multiple,
+        options: Array.from(select.options, ({ value, label }) => ({ value, label: label.trim() })),
+      };
+    });
+    if (found === null)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTargetNotEditableError",
+        "This element is not a <select>. Click a custom dropdown, then click its option.",
+      );
+    if (found.disabled) throw targetChanged();
+    const values = input.values.map(
       (entry) =>
         (
-          options.find((option) => option.value === entry) ??
-          options.find((option) => option.label === entry.trim())
-        )?.value ?? entry,
+          found.options.find((option) => option.value === entry) ??
+          found.options.find((option) => option.label === entry.trim())
+        )?.value,
     );
-  if (values === null)
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationTargetNotEditableError",
-      "This element is not a <select>. Click a custom dropdown, then click its option.",
-    );
-  return { selected: await locator.selectOption(values, { timeout }) };
+    const missing = values.indexOf(undefined);
+    if (missing !== -1 || (!found.multiple && values.length > 1))
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        missing !== -1
+          ? `This <select> has no option "${input.values[missing]}".`
+          : "This <select> takes one option.",
+      );
+    gate();
+    // What Playwright's selectOption does once the options exist, without its wait for them.
+    const selected = await handle.evaluate((element, chosen) => {
+      const select = element as unknown as {
+        selectedIndex: number;
+        readonly options: ArrayLike<{ value: string; selected: boolean }>;
+        readonly selectedOptions: ArrayLike<{ value: string }>;
+        dispatchEvent(event: unknown): boolean;
+      };
+      // No values clears the selection, single select included (selectOption's contract).
+      select.selectedIndex = -1;
+      for (const value of chosen) {
+        const option = Array.from(select.options).find((entry) => entry.value === value);
+        if (option) option.selected = true;
+      }
+      const EventType = (
+        globalThis as unknown as { Event: new (type: string, init: object) => unknown }
+      ).Event;
+      select.dispatchEvent(new EventType("input", { bubbles: true, composed: true }));
+      select.dispatchEvent(new EventType("change", { bubbles: true }));
+      return Array.from(select.selectedOptions, (option) => option.value);
+    }, values as ReadonlyArray<string>);
+    return { selected };
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
 };
 
 export const drag = async (
   page: Page,
   input: PreviewAutomationDragInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, timeout), "move");
-  // Observe the drag's outcome as it starts: a rejection nobody handles while the cursor
-  // moves exits the server.
-  const dragFailure = source.dragTo(target, { timeout }).then(
-    () => null,
-    (error: unknown) => ({ error }),
-  );
+  await settled(source, timeout, false);
+  await settled(target, timeout, false);
   const end = await target.boundingBox({ timeout }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
-  const failure = await dragFailure;
-  if (failure) throw failure.error;
+  gate();
+  await source.dragTo(target, dispatched);
 };
 
-export const setInputFiles = async (page: Page, input: PreviewAutomationUploadInput) => {
-  const locator = targetLocator(page, input);
-  if (locator === null) return false;
-  await locator.setInputFiles([...input.paths], { timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
-  return true;
-};
-
-export const press = async (page: Page, input: PreviewAutomationPressInput) => {
+export const press = async (
+  page: Page,
+  input: PreviewAutomationPressInput,
+  gate: DispatchGate = open,
+) => {
+  gate();
   await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
-export const scroll = async (page: Page, input: PreviewAutomationScrollInput) => {
+export const scroll = async (
+  page: Page,
+  input: PreviewAutomationScrollInput,
+  gate: DispatchGate = open,
+) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
   const locator = targetLocator(page, input);
   if (locator === null) {
+    gate();
     // Page-side code is passed as source: the server compiles without DOM types.
     await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
     return;
   }
-  await locator.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
+  try {
+    gate();
+    await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
 };
 
 /**
@@ -1124,156 +1254,3 @@ export const parseNetError = (errorText: string) => {
   const description = /ERR_[A-Z_]+/.exec(errorText)?.[0] ?? errorText;
   return { description, code: NET_ERROR_CODES[description] ?? -2 };
 };
-
-export const RECORDING_ENCODER_SCRIPT = `(() => {
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  const chunks = [];
-  let recorder = null;
-  let started = null;
-  let stopped = null;
-  let sizeBytes = 0;
-  let tooLarge = false;
-  let frame = null;
-  let cursor = null;
-  let ring = null;
-  const AGENT_CURSOR_PATH = new Path2D("M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z");
-  let ringTimer = null;
-  let scale = 1;
-  let offsetX = 0;
-  let offsetY = 0;
-  const paint = () => {
-    if (!frame) return;
-    const fit = Math.min(canvas.width / frame.width, canvas.height / frame.height);
-    const width = frame.width * fit;
-    const height = frame.height * fit;
-    offsetX = (canvas.width - width) / 2;
-    offsetY = (canvas.height - height) / 2;
-    if (width < canvas.width || height < canvas.height) {
-      context.fillStyle = "#000";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-    }
-    context.drawImage(frame, offsetX, offsetY, width, height);
-    scale = (width / frame.width) * frame.cssScale;
-    if (ring) {
-      const age = (performance.now() - ring.at) / 400;
-      if (age < 1) {
-        context.beginPath();
-        context.arc(offsetX + ring.x * scale, offsetY + ring.y * scale, (8 + 18 * age) * scale, 0, Math.PI * 2);
-        context.strokeStyle = "rgba(59,130,246," + (0.9 * (1 - age)) + ")";
-        context.lineWidth = 3 * scale;
-        context.stroke();
-      }
-    }
-    if (cursor) {
-      // The agent cursor (lucide MousePointer2, as in the live panel), never the human arrow.
-      const s = 20 / 24 * scale;
-      context.save();
-      context.translate(offsetX + cursor.x * scale - 2 * scale, offsetY + cursor.y * scale - 2 * scale);
-      context.scale(s, s);
-      context.lineWidth = 2;
-      context.lineJoin = "round";
-      context.lineCap = "round";
-      context.fillStyle = "#fff";
-      context.strokeStyle = "#2563eb";
-      context.shadowColor = "rgba(0,0,0,0.25)";
-      context.shadowBlur = 2;
-      context.fill(AGENT_CURSOR_PATH);
-      context.shadowColor = "transparent";
-      context.stroke(AGENT_CURSOR_PATH);
-      context.restore();
-    }
-  };
-  window.__goatRecorder = {
-    async frame(base64, cssWidth) {
-      if (tooLarge) return false;
-      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
-      if (tooLarge) { bitmap.close(); return false; }
-      if (!recorder) {
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        const mimeType = ["video/mp4;codecs=avc1.640033", "video/webm;codecs=vp9", "video/webm"].find((type) => MediaRecorder.isTypeSupported(type));
-        const bitsPerSecond = Math.min(50e6, Math.max(2.5e6, bitmap.width * bitmap.height * 30 * 0.05));
-        recorder = new MediaRecorder(canvas.captureStream(30), { mimeType, videoBitsPerSecond: bitsPerSecond });
-        started = new Promise((resolve, reject) => {
-          recorder.onstart = resolve;
-          recorder.onerror = (event) => reject(event.error);
-        });
-        stopped = new Promise((resolve) => { recorder.onstop = resolve; });
-        recorder.ondataavailable = (event) => {
-          if (tooLarge || event.data.size === 0) return;
-          sizeBytes += event.data.size;
-          if (sizeBytes > ${PROVIDER_SEND_TURN_MAX_FILE_BYTES}) {
-            tooLarge = true;
-            chunks.length = 0;
-            clearInterval(ringTimer);
-            frame?.close();
-            frame = null;
-            if (recorder.state !== "inactive") recorder.stop();
-            for (const track of recorder.stream.getTracks()) track.stop();
-            return;
-          }
-          chunks.push(event.data);
-        };
-        recorder.start(1000);
-      }
-      // Frame px per page CSS px, before fitting into the canvas.
-      bitmap.cssScale = bitmap.width / cssWidth;
-      frame?.close();
-      frame = bitmap;
-      paint();
-      await started;
-      return true;
-    },
-    cursor(x, y, click) {
-      if (tooLarge) return;
-      cursor = { x, y };
-      if (click) {
-        ring = { x, y, at: performance.now() };
-        clearInterval(ringTimer);
-        ringTimer = setInterval(() => {
-          paint();
-          if (performance.now() - ring.at > 400) { ring = null; clearInterval(ringTimer); paint(); }
-        }, 33);
-      }
-      paint();
-    },
-    async stop() {
-      if (!recorder) return { mimeType: null, count: 0, bytes: 0 };
-      if (recorder.state !== "inactive") {
-        // Consume the cached frame, then wait for the final paint to reach the
-        // capture stream. Animation ticks alone can stop before it is delivered.
-        const video = document.createElement("video");
-        video.muted = true;
-        video.srcObject = recorder.stream;
-        const nextFrame = () => Promise.race([
-          new Promise(resolve => video.requestVideoFrameCallback(resolve)),
-          stopped,
-        ]);
-        const initial = nextFrame();
-        void video.play().catch(() => {});
-        await initial;
-        if (recorder.state !== "inactive") {
-          const delivered = nextFrame();
-          recorder.stream.getVideoTracks()[0].requestFrame();
-          paint();
-          await delivered;
-        }
-        video.pause();
-        video.srcObject = null;
-        if (recorder.state !== "inactive") recorder.stop();
-      }
-      await stopped;
-      return { mimeType: recorder.mimeType, count: chunks.length, bytes: sizeBytes };
-    },
-    async chunk(index) {
-      const bytes = new Uint8Array(await chunks[index].arrayBuffer());
-      let binary = "";
-      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-      }
-      return btoa(binary);
-    },
-  };
-})()`;

@@ -56,6 +56,7 @@ import {
 } from "@goat/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { codexToolOutput } from "./CodexToolOutput.ts";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -472,30 +473,24 @@ function codexBackgroundCommandDetail(item: {
   return outputTail.length === 0 ? header : `${header}\n\nOutput tail:\n${outputTail}`;
 }
 
+// Codex spawns can omit the prompt, which registers as an empty string.
+function codexNativeSubagentLabel(task: OrchestrationV2Subagent): string | undefined {
+  return task.title?.trim() || task.prompt.trim() || undefined;
+}
+
+function codexNativeSubagentDetail(task: OrchestrationV2Subagent): string {
+  const header = `Subagent ${task.status}: ${codexNativeSubagentLabel(task) ?? task.id}`;
+  return task.result == null || task.result.length === 0
+    ? header
+    : `${header}\n\nResult:\n${task.result}`;
+}
+
 export interface CodexDynamicToolProjection extends McpToolPresentation {
   readonly toolName: string;
   readonly title?: string;
   readonly input: unknown;
   readonly output?: unknown;
   readonly status: OrchestrationV2TurnItem["status"];
-}
-
-function codexMcpToolOutput(
-  item: Extract<CodexDynamicToolItem, { readonly type: "mcpToolCall" }>,
-): unknown | undefined {
-  const resultOutput =
-    item.result === null || item.result === undefined
-      ? undefined
-      : item.result.structuredContent !== null && item.result.structuredContent !== undefined
-        ? item.result.structuredContent
-        : item.result.content;
-
-  if (item.error === null || item.error === undefined) {
-    return resultOutput;
-  }
-  return resultOutput === undefined
-    ? { error: item.error.message }
-    : { error: item.error.message, result: resultOutput };
 }
 
 // Reading an app's resource is one MCP round trip; a server that hangs must not
@@ -506,15 +501,6 @@ function codexMcpAppResourceUri(item: CodexDynamicToolItem): string | undefined 
   if (item.type !== "mcpToolCall") return undefined;
   const uri = item.mcpAppUi?.resourceUri ?? item.mcpAppResourceUri ?? item.appContext?.resourceUri;
   return typeof uri === "string" && uri.startsWith(MCP_APP_RESOURCE_SCHEME) ? uri : undefined;
-}
-
-function codexDynamicToolOutput(
-  item: Extract<CodexDynamicToolItem, { readonly type: "dynamicToolCall" }>,
-): unknown | undefined {
-  if (item.contentItems !== null && item.contentItems !== undefined) {
-    return item.contentItems;
-  }
-  return item.success === false ? { success: false } : undefined;
 }
 
 type CodexImageGenerationItem = Extract<
@@ -546,8 +532,7 @@ function codexImageGenerationProjection(
 const projectCodexDynamicToolItem = Effect.fn("CodexAdapterV2.projectDynamicToolItem")(function* (
   item: CodexDynamicToolItem,
 ): Effect.fn.Return<CodexDynamicToolProjection, never, Crypto.Crypto> {
-  const output =
-    item.type === "mcpToolCall" ? codexMcpToolOutput(item) : codexDynamicToolOutput(item);
+  const output = codexToolOutput(item);
   const toolName =
     item.type === "mcpToolCall"
       ? `${item.server}.${item.tool}`
@@ -861,7 +846,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
       cwd: input.runtimePolicy.cwd,
       model: input.modelSelection.model,
       // Model catalogues can default summaries to "none". Request them on every
-      // turn, including resumed threads, for T3's reasoning timeline.
+      // turn, including resumed threads, for GOAT's reasoning timeline.
       summary: "detailed",
       // Always explicit: omitting this on resume leaves Codex's previous
       // reviewer sticky after switching away from Auto mode.
@@ -1429,17 +1414,28 @@ export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactoryShape
 >()("goat/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
+// One app-server hosts many threads, so its process must never carry a thread credential.
+const codexThreadMcpEnvironment = (
+  session: McpProviderSession.McpProviderSessionConfig | undefined,
+) =>
+  Object.fromEntries(
+    Object.entries(McpProviderSession.withThreadMcpEnvironment({}, session)).map(
+      ([name, value]) => [`shell_environment_policy.set.${name}`, value ?? ""],
+    ),
+  );
+
 /**
  * Codex waits this long for MCP servers before the first model request and
  *   leaves out any server still starting (default 1 s, too short for cold
  *   `npx`/`uvx` servers).
  */
 export const CODEX_THREAD_CONFIG = {
+  ...codexThreadMcpEnvironment(undefined),
   "tools.update_plan.enabled": true,
   mcp_optional_startup_grace_ms: 10_000,
 } as const;
 
-// T3 wait tools can block for up to an hour. Keep Codex's MCP timeout above
+// GOAT wait tools can block for up to an hour. Keep Codex's MCP timeout above
 // that limit so the server's own wait timeout ends a long call.
 const CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
 
@@ -1523,11 +1519,12 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...codexThreadMcpEnvironment(mcpSession),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
         ? {}
         : {
-            // Override only T3's server so launch-argument MCP servers survive.
+            // Override only GOAT's server so launch-argument MCP servers survive.
             "mcp_servers.goat": {
               url: mcpSession.endpoint,
               disabled_tools: disabledMemoryTools,
@@ -1991,7 +1988,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: routeInput.execution.environment,
+          environment: McpProviderSession.withThreadMcpEnvironment(
+            routeInput.execution.environment,
+            undefined,
+          ),
           routeArgs,
         });
         const memoryByThread = new Map<
@@ -6819,6 +6819,41 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   status: input.status,
                   completedAt: input.completedAt,
                 });
+                // Codex does not wake a parent whose turn already completed, so
+                // the child's result would sit unread until the next message.
+                // Only direct children of a root turn wake it: a grandchild
+                // reports to its own parent, and a root turn already running on
+                // the thread receives the result natively.
+                const parent = input.context.subagent.parentContext;
+                if (
+                  continuationRequests !== undefined &&
+                  parent.subagent === null &&
+                  (input.status === "completed" || input.status === "failed") &&
+                  !(yield* Ref.get(terminalizedNonCompletedNativeTurns)).has(parent.nativeTurnId) &&
+                  ![...(yield* Ref.get(activeTurns)).values()].some(
+                    (active) =>
+                      active.subagent === null &&
+                      active.providerThread.id === parent.providerThread.id,
+                  )
+                ) {
+                  const task = input.context.subagent.task;
+                  yield* continuationRequests.offer({
+                    threadId: parent.projectionThreadId,
+                    providerThreadId: parent.providerThread.id,
+                    driver: CODEX_PROVIDER,
+                    detail: codexNativeSubagentDetail(task),
+                    // The detail is the whole wake; Codex buffers no output for it.
+                    delivery: "message_text",
+                    notification: backgroundWorkNotification([
+                      {
+                        kind: "subagent",
+                        label: codexNativeSubagentLabel(task),
+                        outcome: input.status,
+                        childThreadId: input.context.subagent.childThreadId,
+                      },
+                    ]),
+                  });
+                }
               }
               if (input.status === "interrupted" || input.status === "failed") {
                 yield* terminalizeRunningCommandItems(

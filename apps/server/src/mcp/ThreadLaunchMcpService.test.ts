@@ -321,7 +321,9 @@ it.effect(
       expect(model.message).toContain(
         "does not offer model nonexistent, even after refreshing its model list",
       );
-      expect(model.message).toContain('goat_provider_diagnose {instanceId:"fakeCloud"}');
+      expect(model.message).toContain(
+        'goat_call {path:"provider.diagnose", args:{instanceId:"fakeCloud"}}',
+      );
       const provider = yield* launch({
         instanceId: ProviderInstanceId.make("gone"),
         model: "fake",
@@ -382,9 +384,11 @@ it.effect.each(["worker", "owner"])(
         .pipe(Effect.result);
       if (profile === "owner") {
         const unrequested = yield* launch;
-        expect(unrequested._tag === "Failure" && unrequested.failure.message).toContain(
-          "bills a paid account",
-        );
+        const refusal = unrequested._tag === "Failure" ? unrequested.failure.message : "";
+        expect(refusal).toContain("bills a paid account");
+        // The advice must name a route this tool's caller can take; this tool takes no decisionId.
+        expect(refusal).toContain('goat_call {path:"cloud_agent.launch"}');
+        expect(refusal).not.toContain("decisionId");
         yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
         VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
         yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)

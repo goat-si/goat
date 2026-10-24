@@ -1,4 +1,4 @@
-import { GoatHostStatusResult } from "@goat/contracts";
+import { GoatHostStatusResult, hasCloudMachineAliasPrefix } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -10,10 +10,12 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
+import { interruptibleTurns } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { prepareScript, resolveOcx } from "../opencodex/childPrepare.ts";
 
 const MAX_BYTES = 256 * 1024;
 const EXIT = /\n?__goat_ocx_exit=(\d+)\s*$/u;
@@ -85,9 +87,19 @@ export class HubOcx extends Context.Service<
     ) => Effect.Effect<HubClientHandoff, HubOcxError>;
     /** SHA256 fingerprint of GOAT's pinned host key for the alias, if GOAT pins one. */
     readonly pinnedFingerprint: (alias: string) => Effect.Effect<string | undefined>;
+    /**
+     * Makes the device ready to be a Child: installs `version` for this user when OpenCodex is
+     * missing or older than Remote Link supports, then starts it unless it already answers.
+     * Stdout carries the version that answers; the code is one of `PREPARE_EXIT`.
+     */
+    readonly prepareDevice: (
+      alias: string,
+      version: string,
+      timeoutMs: number,
+    ) => Effect.Effect<OcxOutput, HubOcxError>;
     /** False when `ssh -G` shows a jump chain or proxy command, or cannot resolve the alias. */
     readonly directAlias: (alias: string) => Effect.Effect<boolean>;
-    /** Running turns on the device; undefined when it cannot be read. */
+    /** Running turns on the device, subagents included; undefined when it cannot be read. */
     readonly runningTurns: (
       alias: string,
       scope: McpInvocationScope,
@@ -111,7 +123,6 @@ export const platformOf = (uname: string): DevicePlatform | undefined => {
 };
 
 /**
- * Resolves ocx in OpenCodex's remoteOcxArgv order: Desktop and system installs before PATH shims.
  * A pairing code goes to ocx's stdin through the shell's printf builtin, so it is never in argv.
  */
 export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) => {
@@ -125,14 +136,7 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
       ? `"$goat_ocx" ${quoted} </dev/null 2>/dev/null`
       : `printf '%s\\n' '${pairingCode}' | "$goat_ocx" ${quoted} 2>/dev/null`;
   return [
-    "goat_ocx=",
-    'for goat_candidate in "$HOME/.opencodex-desktop/bin/ocx" /Applications/OpenCodex.app/Contents/MacOS/ocx /usr/bin/ocx "/c/Program Files/OpenCodex/ocx"; do',
-    '  if [ -x "$goat_candidate" ]; then goat_ocx=$goat_candidate; break; fi',
-    "done",
-    'if [ -z "$goat_ocx" ]; then',
-    '  PATH="$PATH:$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"',
-    "  goat_ocx=$(command -v ocx 2>/dev/null) || goat_ocx=",
-    "fi",
+    ...resolveOcx(),
     "if [ -z \"$goat_ocx\" ]; then printf '\\n__goat_ocx_exit=127\\n'; exit 0; fi",
     invoke,
     "printf '\\n__goat_ocx_exit=%s\\n' \"$?\"",
@@ -140,7 +144,7 @@ export const deviceScript = (args: ReadonlyArray<string>, pairingCode?: string) 
   ].join("\n");
 };
 
-export const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
+const platformScript = "uname -s 2>/dev/null\nprintf '\\n__goat_ocx_exit=%s\\n' \"$?\"\n";
 
 export const parseDeviceOutput = (stdout: string): OcxOutput | undefined => {
   const match = EXIT.exec(stdout);
@@ -254,6 +258,8 @@ const make = Effect.gen(function* () {
   return HubOcx.of({
     home,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
+    prepareDevice: (alias, version, timeoutMs) =>
+      runDevice(alias, prepareScript(version), timeoutMs),
     devicePlatform: Effect.fn("HubOcx.devicePlatform")(
       function* (alias) {
         const result = yield* dispatch.runHostScript({
@@ -306,7 +312,11 @@ const make = Effect.gen(function* () {
     pinnedFingerprint: Effect.fn("HubOcx.pinnedFingerprint")(
       function* (alias) {
         if (!SAFE_ALIAS.test(alias)) return undefined;
-        for (const directory of ["goat-hosts", "goat-cloud"]) {
+        // A cloud alias is only ever pinned by the cloud machine service, never by a person.
+        const directories = hasCloudMachineAliasPrefix(alias)
+          ? ["goat-cloud"]
+          : ["goat-hosts", "goat-cloud"];
+        for (const directory of directories) {
           const file = path.join(homeDirectory, ".ssh", directory, `${alias}.known_hosts`);
           if (!(yield* fs.exists(file))) continue;
           const output = yield* run("ssh-keygen", ["-E", "sha256", "-lf", file], 10_000);
@@ -350,9 +360,9 @@ const make = Effect.gen(function* () {
           decodeStatus,
         );
         const entry = status.hosts.find(({ host }) => host === null);
-        return entry?.reachability === "ok" && !entry.lastKnown
-          ? entry.metrics?.threads.running
-          : undefined;
+        const threads =
+          entry?.reachability === "ok" && !entry.lastKnown ? entry.metrics?.threads : undefined;
+        return threads === undefined ? undefined : interruptibleTurns(threads);
       },
       Effect.orElseSucceed(() => undefined),
     ),

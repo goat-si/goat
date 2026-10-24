@@ -1,6 +1,6 @@
 /**
- * The lease stream a computer use proxy holds open: the current state of the admission it was
- * started for, then a new line whenever that may have changed, ending with the line that ends
+ * The control stream a computer use proxy holds open: the current state of the control it was
+ * started with, then a new line whenever that may have changed, ending with the line that ends
  * it. It authenticates with the thread's own GOAT MCP credential, so a proxy only ever learns
  * about its own thread.
  *
@@ -22,10 +22,10 @@ import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 
-/** Lease updates for one thread's handoff until one of them ends it. */
+/** Updates for one thread's control until one of them ends it. */
 export const leaseUpdates = (input: {
   readonly threadId: import("@goat/contracts").ThreadId;
-  readonly handoffId: string;
+  readonly controlId: string;
 }) =>
   Stream.callback<
     ComputerUseLeaseUpdate,
@@ -52,8 +52,8 @@ export const leaseUpdates = (input: {
           Effect.orElseSucceed(() => false),
         );
         const state = enabled
-          ? yield* leases.state(input.threadId, input.handoffId).pipe(
-              Effect.orElseSucceed((): ComputerUseLeases.ComputerUseLeaseState => ({
+          ? yield* leases.controlState(input.threadId, input.controlId).pipe(
+              Effect.orElseSucceed((): ComputerUseLeases.ComputerUseControlState => ({
                 _tag: "ended",
                 reason: "revoked",
               })),
@@ -66,13 +66,23 @@ export const leaseUpdates = (input: {
           });
           return yield* Queue.end(queue);
         }
+        if (state._tag === "paused") {
+          yield* Queue.offer(queue, {
+            state: "paused",
+            controlId: input.controlId,
+            reason: state.reason,
+          });
+          yield* Queue.take(wake);
+          continue;
+        }
         yield* Queue.offer(queue, {
           state: "active",
-          handoffId: state.lease.handoffId,
-          expiresAt: DateTime.formatIso(state.lease.expiresAt),
+          controlId: input.controlId,
+          expiresAt: DateTime.formatIso(state.expiresAt),
+          ...(state.apps === undefined ? {} : { apps: state.apps }),
+          ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
         });
-        const remaining =
-          DateTime.toEpochMillis(state.lease.expiresAt) - (yield* Clock.currentTimeMillis);
+        const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);
         yield* Effect.raceFirst(Queue.take(wake), Effect.sleep(Math.max(0, remaining)));
       }
     }),
@@ -90,8 +100,8 @@ export const layer = HttpRouter.add(
         ? authorization.slice("Bearer ".length).trim()
         : "";
     const invocation = token.length === 0 ? undefined : yield* registry.resolve(token);
-    const handoffId = new URL(request.url, "http://local").searchParams.get("handoff");
-    if (invocation?.thread === undefined || !handoffId)
+    const controlId = new URL(request.url, "http://local").searchParams.get("control");
+    if (invocation?.thread === undefined || !controlId)
       return HttpServerResponse.text(
         encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",
         { status: 401, contentType: "application/x-ndjson" },
@@ -100,7 +110,7 @@ export const layer = HttpRouter.add(
       ComputerUseLeases.ComputerUseLeases | ServerSettings.ServerSettingsService
     >();
     return HttpServerResponse.stream(
-      leaseUpdates({ threadId: invocation.thread.threadId, handoffId }).pipe(
+      leaseUpdates({ threadId: invocation.thread.threadId, controlId }).pipe(
         Stream.map((update) => encodeUpdate(update) + "\n"),
         Stream.encodeText,
         Stream.provideContext(context),

@@ -180,6 +180,7 @@ export interface ThreadManagementSendInput {
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   readonly senderThreadId?: ThreadId;
   readonly text: string;
+  readonly context?: import("@goat/contracts").OrchestrationMessageContext | undefined;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly modelSelection?: ModelSelection;
   readonly mode: ThreadManagementSendMode;
@@ -447,6 +448,7 @@ export interface ThreadManagementServiceShape {
   readonly getShellSnapshot: (options?: {
     readonly location?: "active" | "archive";
   }) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>;
+  readonly listActiveSubagentThreadIds: Orchestrator.OrchestratorV2["Service"]["listActiveSubagentThreadIds"];
   readonly readShellSnapshot: (options?: {
     readonly location?: "active" | "archive";
   }) => Effect.Effect<
@@ -639,6 +641,7 @@ export function makeStopDelegatedTasks(deps: {
           type: "thread.stop",
           commandId: CommandId.make(`${input.commandId}:stop:${threadId}`),
           threadId,
+          stopDelegatedTasks: false,
           ...(input.reason === undefined ? {} : { reason: input.reason }),
           stopCascadeFrom,
         })
@@ -1176,6 +1179,7 @@ const make = Effect.gen(function* () {
         ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
         ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
         text: input.text,
+        ...(input.context === undefined ? {} : { context: input.context }),
         attachments: input.attachments,
         ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
         dispatchMode,
@@ -1515,9 +1519,7 @@ const make = Effect.gen(function* () {
       messageIds: [input.messageId],
     });
     if (target.thread.archivedAt !== null) {
-      return yield* new ThreadManagementThreadArchivedError({
-        threadId: input.threadId,
-      });
+      return yield* new ThreadManagementThreadArchivedError({ threadId: input.threadId });
     }
 
     if (target.messages.some((message) => message.id === input.messageId)) {
@@ -1930,6 +1932,7 @@ const make = Effect.gen(function* () {
     getProjectThreadRecords,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
+    listActiveSubagentThreadIds: orchestrator.listActiveSubagentThreadIds,
     readShellSnapshot: orchestrator.readShellSnapshot,
     getThreadShell: orchestrator.getThreadShell,
     getReviewLedgerEntries: orchestrator.getReviewLedgerEntries,

@@ -25,6 +25,9 @@ export type CloudAgentProvider = typeof CloudAgentProvider.Type;
 /**
  * Claude Cloud starts from a project folder, and Claude Code asks once per folder whether to
  * trust it. GOAT answers that prompt itself for its own projects; this is what a person sees.
+ *
+ * Deprecated since GOAT 0.1.2, which trusts folders on its own and no longer shows them. Kept for
+ * Fleet in older clients; remove with the folder trust RPCs in GOAT 0.2.0.
  */
 export const CloudFolderTrust = Schema.Struct({
   instanceId: ProviderInstanceId,
@@ -237,10 +240,20 @@ export type CloudRunSummary = typeof CloudRunSummary.Type;
 export const CloudRunListInput = Schema.Struct({
   provider: Schema.optional(CloudAgentProvider),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  cursor: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(512)).annotate({
+      description: "nextCursor from the previous page, with the same provider.",
+    }),
+  ),
 });
 export type CloudRunListInput = typeof CloudRunListInput.Type;
 
-export const CloudRunListResult = Schema.Struct({ runs: Schema.Array(CloudRunSummary) });
+export const CloudRunListResult = Schema.Struct({
+  runs: Schema.Array(CloudRunSummary),
+  /** More runs match than this page holds. Older servers omit it. */
+  truncated: Schema.optionalKey(Schema.Boolean),
+  nextCursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+});
 export type CloudRunListResult = typeof CloudRunListResult.Type;
 
 export const CloudRunForgetInput = Schema.Struct({

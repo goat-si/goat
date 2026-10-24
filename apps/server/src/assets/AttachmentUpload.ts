@@ -15,10 +15,10 @@ import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 
 import {
   attachmentFileExtension,
+  attachmentPathCandidatesById,
   createPendingAttachmentId,
   parseThreadSegmentFromAttachmentId,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
-  resolveAttachmentPathById,
   sweepStalePendingAttachments,
 } from "../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
@@ -221,7 +221,8 @@ export const storeAttachmentUpload = Effect.fn("AttachmentUpload.store")(functio
   );
 });
 
-export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending")(function* (
+/** Removes a pending upload's file, failing when the file could not be removed. */
+export const discardPendingAttachment = Effect.fn("AttachmentUpload.discardPending")(function* (
   attachmentId: string,
 ) {
   if (parseThreadSegmentFromAttachmentId(attachmentId) !== PENDING_ATTACHMENT_THREAD_SEGMENT) {
@@ -229,14 +230,24 @@ export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending
   }
 
   const config = yield* ServerConfig.ServerConfig;
-  const attachmentPath = resolveAttachmentPathById({
-    attachmentsDir: config.attachmentsDir,
-    attachmentId,
-  });
-  if (!attachmentPath) {
-    return;
-  }
-
   const fileSystem = yield* FileSystem.FileSystem;
-  yield* fileSystem.remove(attachmentPath, { force: true }).pipe(Effect.orElseSucceed(() => {}));
+  // No existence check first: it reads a lookup error as a missing file.
+  // force ignores only a missing path, so every other failure is reported.
+  yield* Effect.forEach(
+    attachmentPathCandidatesById({ attachmentsDir: config.attachmentsDir, attachmentId }),
+    (candidate) => fileSystem.remove(candidate, { force: true }),
+    { discard: true },
+  );
+});
+
+export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending")(function* (
+  attachmentId: string,
+) {
+  // The client's delete has no failure to report, and the pending upload
+  // sweep removes a leftover file within a day.
+  yield* discardPendingAttachment(attachmentId).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Failed to delete pending attachment.", { attachmentId, cause }),
+    ),
+  );
 });

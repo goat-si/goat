@@ -1,16 +1,12 @@
 import {
   GoatHostStatusResult,
-  ORCHESTRATION_PROTOCOL_VERSION,
   OrchestratorMcpFailure,
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import {
-  ownRuntimeProtocolRanges,
-  servedRuntimeProtocolRanges,
-} from "@goat/shared/sshRuntimeProtocol";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -29,6 +25,7 @@ import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as OpenCodexInventory from "../opencodex/OpenCodexInventory.ts";
+import * as OpenCodexChildBootstrap from "../opencodex/OpenCodexChildBootstrap.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
 import * as DatabaseStorage from "../persistence/DatabaseStorage.ts";
@@ -46,6 +43,7 @@ import {
   hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
+  LOCAL_HOST_COMPATIBILITY,
   markHostCompatibility,
   quotaRefreshDue,
   tagRemoteHostStatus,
@@ -61,12 +59,6 @@ import {
 export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
-
-/** This machine reads every host as a client, so it compares the protocols it speaks. */
-const LOCAL_COMPATIBILITY = {
-  version: packageJson.version,
-  speaks: ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
-};
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -126,13 +118,22 @@ const make = Effect.gen(function* () {
   const strays = yield* Effect.serviceOption(StrayProcesses.StrayProcesses);
   const pressureMonitor = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
   const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-  /** This machine's view of whether its goatclaw policy reached the host. */
-  const withGoatclaw = (entry: HostStatusEntry) =>
-    Option.isNone(fleet) || entry.host === null
-      ? Effect.succeed(entry)
-      : fleet.value
-          .hostState(entry.host)
-          .pipe(Effect.map((goatclaw): HostStatusEntry => ({ ...entry, goatclaw })));
+  const childBootstrap = yield* Effect.serviceOption(
+    OpenCodexChildBootstrap.OpenCodexChildBootstrap,
+  );
+  /** This machine's view of the host: whether its goatclaw policy reached it, and its Child setup. */
+  const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
+    if (entry.host === null) return entry;
+    const goatclaw = Option.isSome(fleet) ? yield* fleet.value.hostState(entry.host) : undefined;
+    const child = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.status(entry.host)
+      : undefined;
+    return {
+      ...entry,
+      ...(goatclaw === undefined ? {} : { goatclaw }),
+      ...(child === undefined ? {} : { opencodexChild: child }),
+    } satisfies HostStatusEntry;
+  });
   const clock = yield* Clock.Clock;
   // Optional so tests and builds without the driver keep reporting the rest.
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
@@ -345,7 +346,7 @@ const make = Effect.gen(function* () {
                   input.repositories === true,
                   options?.requireReady === true,
                 ),
-                LOCAL_COMPATIBILITY,
+                LOCAL_HOST_COMPATIBILITY,
               ),
             ),
           ],
@@ -373,7 +374,7 @@ const make = Effect.gen(function* () {
         hosts: [
           local,
           ...(yield* Effect.forEach(remote, (entry) =>
-            withGoatclaw(markHostCompatibility(entry, LOCAL_COMPATIBILITY)),
+            withGoatclaw(markHostCompatibility(entry, LOCAL_HOST_COMPATIBILITY)),
           )),
         ],
       };

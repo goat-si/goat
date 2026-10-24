@@ -729,7 +729,7 @@ effectIt.effect(
       const report = input.onPreparationProgress!;
       yield* actEffect(report(phase));
       expect(dialog.textContent).toContain(
-        "Installing GOAT runtime — first setup can take a few minutes",
+        "Installing GOAT runtime. First setup can take a few minutes",
       );
       expect(dialog.textContent?.match(/Installing GOAT runtime/g)).toHaveLength(1);
       yield* actEffect(report({ ...phase, phase: null, outcome: "superseded" }));

@@ -2,14 +2,14 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import migration from "../persistence/Migrations/076_Memory.ts";
+import migration from "../persistence/Migrations/077_Memory.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 describe("Memory migration", () => {
   it.effect("upgrades a schema through ProjectionTurnItemRequestIndex without importing data", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toMigrationInclusive: 76 });
       yield* migration;
       yield* migration;
       const sql = yield* SqlClient.SqlClient;

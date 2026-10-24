@@ -10,6 +10,9 @@ import {
   type TerminalOpenInput,
   type TerminalRestartInput,
 } from "@goat/contracts";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { FakePtyAdapter, FakePtyProcess } from "./Manager.testkit.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as PtyAdapter from "@goat/shared/PtyAdapter";
 import * as Deferred from "effect/Deferred";
@@ -43,119 +46,6 @@ vi.mock("effect/SynchronizedRef", async (importOriginal) => {
 // The server omits DOM types, which include TypeScript's WebAssembly declarations.
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-
-class FakePtyProcess implements PtyAdapter.PtyProcess {
-  readonly writes: string[] = [];
-  readonly resizeCalls: Array<{ cols: number; rows: number }> = [];
-  readonly killSignals: Array<string | undefined> = [];
-  readonly pid: number;
-  writeFailure: unknown | undefined;
-  resizeFailure: unknown | undefined;
-  private readonly dataListeners = new Set<(data: string) => void>();
-  private readonly exitListeners = new Set<(event: PtyAdapter.PtyExitEvent) => void>();
-  killed = false;
-  exitOnSubscribe: PtyAdapter.PtyExitEvent | undefined;
-  onKill: ((signal?: string) => void) | undefined;
-
-  constructor(pid: number) {
-    this.pid = pid;
-  }
-
-  write(data: string): void {
-    if (this.writeFailure !== undefined) {
-      throw this.writeFailure;
-    }
-    this.writes.push(data);
-  }
-
-  resize(cols: number, rows: number): void {
-    if (this.resizeFailure !== undefined) {
-      throw this.resizeFailure;
-    }
-    this.resizeCalls.push({ cols, rows });
-  }
-
-  kill(signal?: string): void {
-    this.killed = true;
-    this.killSignals.push(signal);
-    this.onKill?.(signal);
-  }
-
-  onData(callback: (data: string) => void): () => void {
-    this.dataListeners.add(callback);
-    return () => {
-      this.dataListeners.delete(callback);
-    };
-  }
-
-  onExit(callback: (event: PtyAdapter.PtyExitEvent) => void): () => void {
-    if (this.exitOnSubscribe) callback(this.exitOnSubscribe);
-    this.exitListeners.add(callback);
-    return () => {
-      this.exitListeners.delete(callback);
-    };
-  }
-
-  emitData(data: string): void {
-    for (const listener of this.dataListeners) {
-      listener(data);
-    }
-  }
-
-  get exitListenerCount(): number {
-    return this.exitListeners.size;
-  }
-
-  emitExit(event: PtyAdapter.PtyExitEvent): void {
-    for (const listener of this.exitListeners) {
-      listener(event);
-    }
-  }
-}
-
-class FakePtyAdapter {
-  readonly spawnInputs: PtyAdapter.PtySpawnInput[] = [];
-  readonly processes: FakePtyProcess[] = [];
-  readonly spawnFailures: Error[] = [];
-  private readonly mode: "sync" | "async";
-  private nextPid = 9000;
-  exitOnSubscribe: PtyAdapter.PtyExitEvent | undefined;
-
-  constructor(mode: "sync" | "async" = "sync") {
-    this.mode = mode;
-  }
-
-  spawn(
-    input: PtyAdapter.PtySpawnInput,
-  ): Effect.Effect<PtyAdapter.PtyProcess, PtyAdapter.PtySpawnError> {
-    this.spawnInputs.push(input);
-    const failure = this.spawnFailures.shift();
-    if (failure) {
-      return Effect.fail(
-        new PtyAdapter.PtySpawnError({
-          adapter: "fake",
-          shell: input.shell,
-          cause: failure,
-        }),
-      );
-    }
-    const process = new FakePtyProcess(this.nextPid++);
-    process.exitOnSubscribe = this.exitOnSubscribe;
-    this.processes.push(process);
-    if (this.mode === "async") {
-      return Effect.tryPromise({
-        try: async () => process,
-        catch: (cause) =>
-          new PtyAdapter.PtySpawnError({
-            adapter: "fake",
-            shell: input.shell,
-            cause,
-          }),
-      });
-    }
-    return Effect.succeed(process);
-  }
-}
 
 // Publishes 9 MiB of output, past a stream's 8 MiB budget, while nothing pulls.
 const publishPastOutputBudget = (
@@ -263,7 +153,11 @@ const createManager = (
 ): Effect.Effect<
   ManagerFixture,
   PlatformError.PlatformError,
-  FileSystem.FileSystem | Path.Path | Scope.Scope | ProcessRunner.ProcessRunner
+  | FileSystem.FileSystem
+  | Path.Path
+  | Scope.Scope
+  | ProcessRunner.ProcessRunner
+  | McpProviderSessions.McpProviderSessions
 > =>
   Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
     Effect.gen(function* () {
@@ -411,7 +305,11 @@ it("bounds long partial lines and joins surrogate pairs across chunk boundaries"
 });
 
 it.layer(
-  Layer.merge(NodeServices.layer, ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer))),
+  Layer.mergeAll(
+    NodeServices.layer,
+    McpProviderSessions.layer,
+    ProcessRunner.layer.pipe(Layer.provide(NodeServices.layer)),
+  ),
   { excludeTestServices: true },
 )("TerminalManager", (it) => {
   it.effect("spawns lazily and reuses running terminal per thread", () =>
@@ -802,6 +700,62 @@ it.layer(
     }),
   );
 
+  it.effect("preserves large chunked OSC 52 and DCS strings across reopen", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir } = yield* createManager();
+      yield* manager.open(openInput());
+      const process = ptyAdapter.processes[0]!;
+      const outputSeen = yield* Deferred.make<void>();
+      const unsubscribe = yield* manager.subscribe((event) =>
+        event.type === "output" && event.data === "done\n"
+          ? Deferred.succeed(outputSeen, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      const sequences = [
+        { prefix: `\u001b]52;c;${"YWJj".repeat(16_384)}\u001b`, terminator: "\\" },
+        { prefix: `\u0090q${"?".repeat(65_536)}`, terminator: "\u009c" },
+      ];
+      const stripped = "\u001b]11;?\u0007\u0090$q m\u009c";
+      const preserved = "\u001b[31m\u009d52;c;YWJj\u009c";
+      const expected =
+        sequences.map(({ prefix, terminator }) => prefix + terminator + preserved).join("") +
+        "done\n";
+
+      // Counts reads of strings larger than one emitted chunk, so rescanning the
+      // pending prefix on every chunk (#23817) shows up as quadratic work.
+      const charCodeAt = String.prototype.charCodeAt;
+      let largeStringReads = 0;
+      yield* Effect.gen(function* () {
+        // eslint-disable-next-line no-extend-native -- Count reads without retaining millions of spy call records.
+        String.prototype.charCodeAt = function (this: string, index: number) {
+          if (this.length > 4_096) largeStringReads += 1;
+          return charCodeAt.call(this, index);
+        };
+        for (const { prefix, terminator } of sequences) {
+          for (let offset = 0; offset < prefix.length; offset += 4_096) {
+            process.emitData(prefix.slice(offset, offset + 4_096));
+          }
+          process.emitData(terminator + stripped + preserved);
+        }
+        process.emitData("done\n");
+        yield* Deferred.await(outputSeen);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            // eslint-disable-next-line no-extend-native -- Restore the counting hook even when the test fails.
+            String.prototype.charCodeAt = charCodeAt;
+          }),
+        ),
+      );
+      yield* manager.close({ threadId: "thread-1" });
+
+      expect(largeStringReads).toBeLessThan(2 * expected.length);
+      expect(yield* readFileString(yield* historyLogPath(logsDir))).toBe(expected);
+      expect((yield* manager.open(openInput())).history.startsWith(expected)).toBe(true);
+    }),
+  );
+
   it.effect(
     "preserves chunk-split ESC sequences with intermediate bytes without leaking final bytes",
     () =>
@@ -1087,6 +1041,49 @@ it.layer(
         );
         expect.soft(fishFeatures, JSON.stringify({ platform, env, runtimeEnv })).toEqual(expected);
       }
+    }),
+  );
+
+  it.effect("uses only its thread MCP credential in terminal spawns (#934)", () =>
+    Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const config = {
+        threadId: ThreadId.make("thread-1"),
+        environmentId: EnvironmentId.make("fixture"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        providerSessionId: "fixture-session",
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture-thread",
+        browserToolsAvailable: false,
+      };
+      yield* sessions.set(config);
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: {
+          GOAT_ACP_MCP_ENDPOINT: "http://wrong/mcp",
+          GOAT_ACP_MCP_AUTHORIZATION: "Bearer parent",
+        },
+      });
+      yield* manager.open(openInput({ env: { GOAT_ACP_MCP_AUTHORIZATION: "Bearer override" } }));
+      expect(ptyAdapter.spawnInputs[0]?.env).toMatchObject({
+        GOAT_ACP_MCP_ENDPOINT: config.endpoint,
+        GOAT_ACP_MCP_AUTHORIZATION: config.authorizationHeader,
+      });
+      yield* manager.open(openInput({ threadId: "other-thread" }));
+      expect(ptyAdapter.spawnInputs[1]?.env).toMatchObject({
+        GOAT_ACP_MCP_ENDPOINT: "",
+        GOAT_ACP_MCP_AUTHORIZATION: "",
+      });
+      yield* sessions.set({ ...config, authorizationHeader: "Bearer rotated-thread" });
+      yield* manager.restart(restartInput());
+      expect(ptyAdapter.spawnInputs[2]?.env.GOAT_ACP_MCP_AUTHORIZATION).toBe(
+        "Bearer rotated-thread",
+      );
+      yield* sessions.clear(config.threadId);
+      yield* manager.restart(restartInput());
+      expect(ptyAdapter.spawnInputs[3]?.env).toMatchObject({
+        GOAT_ACP_MCP_ENDPOINT: "",
+        GOAT_ACP_MCP_AUTHORIZATION: "",
+      });
     }),
   );
 

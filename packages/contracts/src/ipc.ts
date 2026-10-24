@@ -12,6 +12,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import type { DesktopWindowMaterialBridge } from "./desktopWindowMaterial.ts";
 import {
   type SshHostResult,
   SshHostStatus,
@@ -23,6 +24,7 @@ import type { DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
+import type { DesktopPreviewCaptureEvent, DesktopPreviewPointerEvent } from "./desktopBrowser.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -770,15 +772,6 @@ export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed())
   Schema.isNonEmpty(),
 );
 
-export interface DesktopPreviewPointerEvent {
-  tabId: string;
-  phase: "move" | "click";
-  x: number;
-  y: number;
-  sequence: number;
-  createdAt: string;
-}
-
 export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
   url: string;
@@ -1200,7 +1193,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge {
+export interface DesktopBridge extends DesktopWindowMaterialBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;
@@ -1423,6 +1416,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }
 

@@ -87,6 +87,7 @@ import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
@@ -125,6 +126,7 @@ import * as SecretRequests from "./secrets/SecretRequests.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
@@ -418,6 +420,8 @@ it.live.each(["thread", "shell"] as const)(
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
+          getShellSnapshot: () => Effect.die("shell resume must not load a full snapshot"),
+          listActiveSubagentThreadIds: () => Effect.succeed([]),
           streamStoredEventsFrom: (
             input: Parameters<
               ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]
@@ -568,6 +572,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   }),
   Layer.mock(TerminalManager.TerminalManager)({}),
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+  Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageService.UsageService)({}),
@@ -666,6 +671,7 @@ it.effect(
           streamChanges: Stream.unwrap(settingsChanges),
           subscribeChanges: settingsChanges,
         }),
+        Layer.mock(PreviewSessions.PreviewSessions)({}),
       );
       const server = yield* RpcServer.makeNoSerialization(
         RpcGroup.make(WsSubscribeServerConfigRpc),

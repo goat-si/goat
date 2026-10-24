@@ -1,4 +1,7 @@
+import { makeTempDir, removePath, makeDirectory } from "./testkit/fileFixtures.ts";
+import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -192,6 +195,7 @@ function normalizeFakePullRequestSummary(raw: unknown): FakePullRequestSummary |
 function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
   const result = NodeChildProcess.spawnSync("git", args, {
     cwd,
+    env: isolatedGitEnv(),
     encoding: "utf8",
   });
   if (result.status === 0) {
@@ -200,33 +204,6 @@ function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
   throw new Error(
     `Failed to simulate gh checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
   );
-}
-
-function makeTempDir(
-  prefix: string,
-): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> {
-  return Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem.makeTempDirectoryScoped({ prefix });
-  });
-}
-
-function removePath(
-  targetPath: string,
-): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    yield* fileSystem.remove(targetPath, { recursive: true, force: true });
-  });
-}
-
-function makeDirectory(
-  dirPath: string,
-): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    yield* fileSystem.makeDirectory(dirPath, { recursive: true });
-  });
 }
 
 function runGit(
@@ -5229,7 +5206,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("does not fail PR worktree prep when setup terminal startup fails", () =>
+  it.effect("#997 runs PR setup once even when setup terminal startup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
@@ -5244,6 +5221,9 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["push", "origin", "HEAD:refs/pull/184/head"]);
       yield* runGit(repoDir, ["checkout", "main"]);
 
+      const setup = yield* makeSetupHookFixture(repoDir);
+      yield* runGit(repoDir, ["config", "core.hooksPath", setup.hooksDirectory]);
+
       const { manager } = yield* makeManager({
         ghScenario: {
           pullRequest: {
@@ -5257,13 +5237,17 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         },
         setupScriptRunner: {
           runForThread: (input) =>
-            Effect.fail(
-              new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
-                threadId: input.threadId,
-                worktreePath: input.worktreePath,
-                operation: "openTerminal",
-                cause: new Error("terminal start failed"),
-              }),
+            setup.recordServerSetup.pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                    threadId: input.threadId,
+                    worktreePath: input.worktreePath,
+                    operation: "openTerminal",
+                    cause: new Error("terminal start failed"),
+                  }),
+                ),
+              ),
             ),
         },
       });
@@ -5275,6 +5259,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         threadId: asThreadId("thread-pr-setup-failure"),
       });
 
+      expect(yield* setup.starts).toEqual(["server"]);
       expect(result.branch).toBe("feature/pr-setup-failure");
       expect(result.worktreePath).not.toBeNull();
       expect(NodeFS.existsSync(result.worktreePath as string)).toBe(true);

@@ -12,13 +12,14 @@ import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isElectron } from "~/env";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useEnvironments } from "~/state/environments";
-import { useNpmReleasePublished } from "~/state/npmRelease";
+import { useCliReleasePublished } from "~/state/npmRelease";
 import { environmentIdsKey } from "~/state/environmentAtomList";
 import { environmentUpdateStatesAtom, serverEnvironment } from "~/state/server";
 import { environmentSessionStatesAtom } from "~/state/session";
 import { sshRuntime } from "~/state/sshRuntime";
 import { savedConnectionSshRoute } from "../settings/ConnectionsSettings.logic";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
+import { useCheckForUpdateWhenHostIsNewer } from "./newerHostUpdateCheck";
 import { useProviderUpdates } from "../ProviderUpdatesAction";
 import {
   canUpdateServer,
@@ -161,15 +162,22 @@ export function useUpdateEverything(
   }));
   const localEnvironmentId =
     machines.find((machine) => machine.hostedByThisApp && machine.connected)?.environmentId ?? null;
+  useCheckForUpdateWhenHostIsNewer(
+    machines.map((machine) =>
+      machine.connected && !machine.hostedByThisApp
+        ? machine.serverConfig?.environment.serverVersion
+        : null,
+    ),
+  );
   const {
     targets: behindServers,
     sshRuntimes,
     skipped: unreachable,
   } = collectServerUpdateTargets(machines, targetVersion, localUpdateVersion !== null);
   // A desktop-managed server installs from its own app's update feed, so only
-  // servers that download t3 from npm wait for npm to publish the version.
-  const needsNpm = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
-  const published = useNpmReleasePublished(needsNpm ? targetVersion : null);
+  // other servers need the verified CLI archives in GOAT's release repository.
+  const needsCli = behindServers.some((server) => server.selfUpdate !== "desktop-managed");
+  const published = useCliReleasePublished(needsCli ? targetVersion : null);
   const servers = published
     ? behindServers
     : behindServers.filter((server) => server.selfUpdate === "desktop-managed");
@@ -180,7 +188,7 @@ export function useUpdateEverything(
       .map((server) => ({
         environmentId: server.environmentId,
         label: server.serverLabel,
-        reason: `goat@${targetVersion} is not on npm yet`,
+        reason: `GOAT ${targetVersion} CLI release assets are not available yet`,
       })),
   ];
   const providers = useProviderUpdates();

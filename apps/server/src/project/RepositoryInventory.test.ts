@@ -75,7 +75,7 @@ const fixture = Effect.gen(function* () {
 
 const layer = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
 
-it.live("never runs a configured clean filter while inventorying tracked changes", () =>
+it.effect("never runs a configured clean filter while inventorying tracked changes", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* f.fs.writeFileString(f.repo + "/tracked.txt", "before");
@@ -92,7 +92,7 @@ it.live("never runs a configured clean filter while inventorying tracked changes
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("leaves dirt unknown when a global clean filter is configured", () =>
+it.effect("leaves dirt unknown when a global clean filter is configured", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* f.commit();
@@ -108,7 +108,7 @@ it.live("leaves dirt unknown when a global clean filter is configured", () =>
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("does not parse rename source filenames as branch headers", () =>
+it.effect("does not parse rename source filenames as branch headers", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     const name = "# branch.ab +100 -0";
@@ -122,7 +122,7 @@ it.live("does not parse rename source filenames as branch headers", () =>
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("reports an unborn checkout without an origin or invented dependency evidence", () =>
+it.effect("reports an unborn checkout without an origin or invented dependency evidence", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* f.fs.makeDirectory(f.repo + "/node_modules");
@@ -145,7 +145,7 @@ it.live("reports an unborn checkout without an origin or invented dependency evi
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("normalizes origin rather than upstream and never exposes remote credentials", () =>
+it.effect("normalizes origin rather than upstream and never exposes remote credentials", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     const head = yield* f.commit();
@@ -166,7 +166,7 @@ it.live("normalizes origin rather than upstream and never exposes remote credent
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("reports tracked and untracked dirt without running a repository fsmonitor", () =>
+it.effect("reports tracked and untracked dirt without running a repository fsmonitor", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* f.fs.writeFileString(f.repo + "/tracked.txt", "before");
@@ -188,7 +188,7 @@ it.live("reports tracked and untracked dirt without running a repository fsmonit
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("reads ahead and behind from existing refs without fetching", () =>
+it.effect("reads ahead and behind from existing refs without fetching", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     const base = yield* f.commit();
@@ -207,7 +207,7 @@ it.live("reads ahead and behind from existing refs without fetching", () =>
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live(
+it.effect(
   "enumerates registered Git worktrees, deduplicates them, and leaves unrelated repos alone",
   () =>
     Effect.gen(function* () {
@@ -224,7 +224,7 @@ it.live(
     }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("keeps missing and non-repository registrations explicit", () =>
+it.effect("keeps missing and non-repository registrations explicit", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     const plain = f.root + "/plain";
@@ -234,7 +234,7 @@ it.live("keeps missing and non-repository registrations explicit", () =>
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("bounds registered roots and caches one bounded snapshot", () =>
+it.effect("bounds registered roots and caches one bounded snapshot", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     const snapshot = yield* f.read(
@@ -251,15 +251,17 @@ it.live("bounds registered roots and caches one bounded snapshot", () =>
   }).pipe(Effect.scoped, Effect.provide(layer)),
 );
 
-it.live("marks a failed worktree enumeration incomplete even when the root can be inspected", () =>
-  Effect.gen(function* () {
-    const f = yield* fixture;
-    yield* f.commit();
-    const snapshot = yield* RepositoryInventory.RepositoryInventory.pipe(
-      Effect.flatMap((service) => service.read),
-      Effect.provide(f.inventoryLayer([f.repo], true)),
-    );
-    expect(snapshot.entries[0]?.state).toBe("available");
-    expect(snapshot.truncated).toBe(true);
-  }).pipe(Effect.scoped, Effect.provide(layer)),
+it.effect(
+  "marks a failed worktree enumeration incomplete even when the root can be inspected",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.commit();
+      const snapshot = yield* RepositoryInventory.RepositoryInventory.pipe(
+        Effect.flatMap((service) => service.read),
+        Effect.provide(f.inventoryLayer([f.repo], true)),
+      );
+      expect(snapshot.entries[0]?.state).toBe("available");
+      expect(snapshot.truncated).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
 );

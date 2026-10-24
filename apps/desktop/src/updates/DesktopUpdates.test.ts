@@ -13,16 +13,35 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
+import { addIdleDeadline } from "../electron/electronRequestTimeout.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
+import { describeUpdateErrorCause, UPDATE_CHECK_SETTLE_WAIT } from "./updateFailures.ts";
 import { flushCallbacks, makeHarness } from "./updatesTestHarness.ts";
 import {
   getDesktopUpdateInstallationMessage,
   type DesktopUpdateInstallationReason,
 } from "./updateInstallation.ts";
+
+/** The error electron-updater receives when a request's idle deadline fires. */
+function stalledRequestError(): unknown {
+  let failure: unknown;
+  addIdleDeadline(
+    { on: () => undefined, abort: () => undefined },
+    (error) => {
+      failure = error;
+    },
+    60_000,
+    (run) => {
+      run();
+      return () => undefined;
+    },
+  );
+  return failure;
+}
 
 describe("DesktopUpdates", () => {
   const installationScenarios: ReadonlyArray<{
@@ -281,6 +300,80 @@ describe("DesktopUpdates", () => {
     }),
   );
 
+  it.effect(
+    "regression: a check that fails after its deadline does not abort a running install",
+    () =>
+      Effect.gen(function* () {
+        const installStarted = yield* Deferred.make<void>();
+        const releaseInstall = yield* Deferred.make<void>();
+        const harness = makeHarness({
+          stopBackend: Deferred.succeed(installStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseInstall)),
+          ),
+        });
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+
+            const installFiber = yield* updates.install.pipe(Effect.forkScoped);
+            yield* Deferred.await(installStarted);
+            harness.emit(
+              "error",
+              new Error("feed request stalled"),
+              "Cannot check for updates: Error: feed request stalled",
+            );
+            yield* flushCallbacks;
+
+            yield* Deferred.succeed(releaseInstall, undefined);
+            const result = yield* Fiber.join(installFiber);
+            assert.isTrue(result.accepted);
+            assert.equal(harness.quitAndInstalls(), 1);
+            assert.notEqual((yield* updates.getState).errorContext, "install");
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
+  it.effect(
+    "regression: a prepared install waits out a refresh check through its deadline, then installs",
+    () =>
+      Effect.gen(function* () {
+        const checkStarted = yield* Deferred.make<void>();
+        const harness = makeHarness({
+          checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
+            Effect.andThen(Effect.never),
+          ),
+        });
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+
+            const check = yield* updates.check("poll").pipe(Effect.forkScoped);
+            yield* Deferred.await(checkStarted);
+            const install = yield* updates
+              .installPrepared("1.2.4", { waitForCheck: true, checkWait: UPDATE_CHECK_SETTLE_WAIT })
+              .pipe(Effect.forkScoped);
+            yield* flushCallbacks;
+            yield* TestClock.adjust("2 minutes");
+
+            const result = yield* Fiber.join(install);
+            assert.isTrue(result.accepted);
+            assert.isFalse(result.failed);
+            assert.equal(harness.quitAndInstalls(), 1);
+            assert.isTrue((yield* Fiber.join(check)).checked);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }),
+  );
+
   it.effect("preserves a queued installer after a background updater error", () => {
     const harness = makeHarness();
 
@@ -305,7 +398,7 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("logs the redacted cause of a rejected update check", () => {
+  it.effect("logs and shows the redacted cause of a rejected update check", () => {
     const cause = Object.assign(
       new Error("request failed for https://user:secret@example.com/update?token=secret"),
       { code: "ERR_UPDATER_LATEST_VERSION_NOT_FOUND" },
@@ -343,8 +436,9 @@ describe("DesktopUpdates", () => {
         assert.notInclude(Object.values(loggedAnnotation).map(String).join(" "), "secret");
         assert.equal(
           state.message,
-          "Electron updater failed to check for updates on channel default.",
+          "Could not check for updates: Error [ERR_UPDATER_LATEST_VERSION_NOT_FOUND]: request failed for [redacted URL]",
         );
+        assert.equal(state.errorContext, "check");
         assert.notInclude(state.message ?? "", "secret");
       }),
     ).pipe(
@@ -387,6 +481,34 @@ describe("DesktopUpdates", () => {
 
         const changedState = yield* updates.setChannel("nightly");
         assert.equal(changedState.channel, "nightly");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("regression: a download whose server stops sending data reports the stall", () => {
+    const harness = makeHarness({
+      downloadUpdate: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+          channel: "latest",
+          cause: stalledRequestError(),
+        }),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+        assert.isFalse(result.completed);
+        assert.equal(result.state.errorContext, "download");
+        assert.equal(
+          result.state.message,
+          "Download stopped: the update server sent no data for 60 seconds.",
+        );
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -832,36 +954,33 @@ describe("describeUpdateErrorCause", () => {
     ];
 
     for (const message of messages) {
-      const summary = DesktopUpdates.describeUpdateErrorCause(new Error(message));
+      const summary = describeUpdateErrorCause(new Error(message));
       assert.include(summary, "Error:");
       assert.notInclude(summary, "secret");
       assert.notInclude(summary, "https://");
       assert.notInclude(summary, "Headers:");
     }
-    assert.equal(
-      DesktopUpdates.describeUpdateErrorCause("404 Not Found\nbody-secret"),
-      "404 Not Found",
-    );
+    assert.equal(describeUpdateErrorCause("404 Not Found\nbody-secret"), "404 Not Found");
   });
 
   it("bounds long messages, parallel failures, and cyclic causes", () => {
     const longError = new Error("x".repeat(10_000));
     const parallel = Cause.combine(Cause.fail(longError), Cause.die(longError));
-    assert.isAtMost(DesktopUpdates.describeUpdateErrorCause(parallel).length, 1024);
+    assert.isAtMost(describeUpdateErrorCause(parallel).length, 1024);
 
     const cyclic = new Error("retry failed");
     cyclic.cause = cyclic;
-    assert.include(DesktopUpdates.describeUpdateErrorCause(cyclic), "[truncated cause]");
-    assert.isAtMost(DesktopUpdates.describeUpdateErrorCause(cyclic).length, 1024);
+    assert.include(describeUpdateErrorCause(cyclic), "[truncated cause]");
+    assert.isAtMost(describeUpdateErrorCause(cyclic).length, 1024);
   });
 
   it("does not serialize arbitrary payloads or let unreadable errors break logging", () => {
-    assert.equal(DesktopUpdates.describeUpdateErrorCause({ payload: "secret" }), "object");
+    assert.equal(describeUpdateErrorCause({ payload: "secret" }), "object");
     const unreadable = Object.defineProperty({}, "message", {
       get() {
         throw new Error("unreadable error");
       },
     });
-    assert.equal(DesktopUpdates.describeUpdateErrorCause(unreadable), "UnknownError");
+    assert.equal(describeUpdateErrorCause(unreadable), "UnknownError");
   });
 });

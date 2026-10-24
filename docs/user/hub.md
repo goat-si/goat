@@ -1,11 +1,18 @@
 # Hub
 
-A hub is one GOAT environment that runs your fleet. Its machine is also the
-[OpenCodex Home](./providers-codex.md#use-opencodex-home) that holds every
-provider sign-in, and your other machines reach their models through it. GOAT
-shows whether each linked device really uses the hub, and holds cloud runs there.
+A hub is one GOAT environment that runs your fleet. It is the GOAT server your
+phone [pairs with](./remote-access.md#connect-your-phone-to-a-hub), and its
+machine is also the [OpenCodex Home](./providers-codex.md#use-opencodex-home)
+that holds every provider sign-in, so your other machines reach their models
+through it. GOAT shows whether each linked device really uses the hub, and holds
+cloud runs there.
 
 The hub is off until you turn it on. Make only one environment the hub.
+
+Hub settings live in three places. **Settings → Hub** turns the hub on and lists
+its **OpenCodex devices**. **Settings → Connections** pairs your phone and lists
+**Devices on this hub**, the machines the hub reaches for phones and agents.
+**Settings → Providers → Codex** chooses whether Codex uses OpenCodex Home.
 
 When the desktop app first finds OpenCodex on its machine, it asks once whether
 Codex there should use your OpenCodex Home or keep its own sign-in, and, on a
@@ -26,7 +33,8 @@ Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys
 
 ## Add, repair, or remove a device
 
-**Add device to hub** joins a machine by its SSH alias; a standalone device in
+In **Settings → Hub → OpenCodex devices**, **Add device to hub** joins a machine
+by its SSH alias; a standalone device in
 the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
 the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
 for that alias, links the device, and checks its parity.
@@ -37,6 +45,14 @@ device can reach, such as behind Tailscale Serve. GOAT creates a single-use
 invite on the hub and redeems it on the device; you never see or copy the code.
 Agents can request the same for a device GOAT reaches only by password.
 
+A cloud machine this hub creates joins by itself. The first time it is used,
+GOAT installs this hub's OpenCodex release there with npm, starts it, and
+links it as a Remote Link Child, using the host key it pinned when it created
+the machine. It does this once per machine; use **Repair** if the link breaks
+later. Machines you add over SSH are never joined automatically. The machine's
+`goat_host_status` entry shows the progress, or why it stopped, for example
+when the machine has no npm.
+
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
 **Leave** disconnects the device and returns it to its own sign-ins, then revokes
@@ -44,7 +60,7 @@ its link or Hub key on the hub; GOAT asks before it does that.
 
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
-one that could not be cleaned up. They appear in **Settings → Decision inbox**;
+one that could not be cleaned up. They appear in **Settings → Decision Inbox**;
 answer there, then select **Continue** on the device. Approving needs permission
 to change this hub's settings.
 
@@ -65,7 +81,8 @@ made it. The row lists each host as **applied**, **waiting** (not reached yet) o
 **needs a GOAT update**; a host on an older GOAT cannot take the setting, and
 agents cannot launch new threads on it while profiles are on. Follow-up messages
 to threads already running there are still delivered, as they are to a host that
-is still **waiting**, so your agents can keep steering their work.
+is still **waiting**, so your agents can keep steering their work. The agent is told
+each time its limits may not apply on that host yet.
 
 ## Read a device
 

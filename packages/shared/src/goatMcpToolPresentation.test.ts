@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   GOAT_MCP_TOOL_NAMES,
+  resolveGoatMcpItemCall,
   resolveGoatMcpShippedToolId,
   resolveGoatMcpToolDefinition,
   resolveGoatMcpToolId,
@@ -172,3 +173,45 @@ it.each(["goat_review_findings_record", "goat_review_findings_export", "channel_
     }
   },
 );
+
+describe("resolveGoatMcpItemCall", () => {
+  it.each(["thread.read", "goat_thread_read"])(
+    "labels a goat_call to %s as the thread read it ran, with its args",
+    (path) => {
+      const call = resolveGoatMcpItemCall({
+        toolName: "mcp__goat__goat_call",
+        input: { path, args: { threadId: "t1" } },
+      });
+      expect(call.toolName).toBe("goat_thread_read");
+      expect(call.input).toEqual({ threadId: "t1" });
+      expect(call.presentation).toEqual(resolveGoatMcpToolPresentation("goat_thread_read"));
+      expect(call.definition?.summaryAction).toBe("thread-read");
+    },
+  );
+
+  it.each([
+    ["an unknown path", { path: "nope.missing", args: {} }],
+    ["a surface path", { path: "surface.describe", args: {} }],
+    ["no path", { args: {} }],
+  ])("keeps the goat_call label for %s", (_case, input) => {
+    const call = resolveGoatMcpItemCall({ toolName: "mcp__goat__goat_call", input });
+    expect(call.toolName).toBe("mcp__goat__goat_call");
+    expect(call.input).toEqual(input);
+    expect(call.presentation).toEqual(resolveGoatMcpToolPresentation("goat_call"));
+  });
+
+  it("leaves a direct tool call as itself", () => {
+    const input = { path: "thread.read" };
+    const call = resolveGoatMcpItemCall({ toolName: "goat_thread_send", input });
+    expect(call).toMatchObject({ toolName: "goat_thread_send", input });
+  });
+
+  it.each([
+    { name: "thread.read", arguments: { threadId: "t1" } },
+    { tool: "goat_thread_read", input: { threadId: "t1" } },
+    { resource: "thread", verb: "read", args: { threadId: "t1" } },
+  ])("reads a goat_call spelled %j as the server runs it", (input) => {
+    const call = resolveGoatMcpItemCall({ toolName: "mcp__goat__goat_call", input });
+    expect(call).toMatchObject({ toolName: "goat_thread_read", input: { threadId: "t1" } });
+  });
+});

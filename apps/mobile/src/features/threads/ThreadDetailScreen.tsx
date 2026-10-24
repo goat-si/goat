@@ -2,6 +2,7 @@ import type { CloudRunCard, CloudTaskState } from "@goat/client-runtime/state/cl
 import { CloudTaskStatus } from "./CloudTaskStatus";
 import { AppText as Text } from "../../components/ui/AppText";
 import { useSidebarWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
+import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -60,6 +61,7 @@ import {
 } from "@goat/shared/codexArtifactTemplates";
 import {
   declinePendingApprovals,
+  sendApprovalFeedback,
   type ApprovalResponder,
   type ThreadUserInputQuestion,
 } from "@goat/client-runtime/state/thread-requests";
@@ -110,6 +112,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
 import {
+  useDeviceType,
   useDuoBottomBarInset,
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
@@ -267,7 +270,10 @@ export interface ThreadDetailScreenProps {
   readonly onResumeQueue: (() => Promise<void>) | null;
   readonly onSendMessage: (
     followUp?: ActiveTurnComposerAction,
-    beforeDispatch?: () => Promise<boolean>,
+    beforeDispatch?: (
+      text: string,
+      hasAttachmentsOrContext: boolean,
+    ) => Promise<boolean | "responded">,
   ) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly canSwitchThreadProvider: boolean;
@@ -464,6 +470,15 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     props.environmentId,
     props.connectionStateLabel === "connected",
   );
+  const deviceType = useDeviceType();
+  const workspace = useWorkspaceTabs();
+  const sidebarSearchActive =
+    deviceType === "duo-unfolded" &&
+    workspace?.state.tabs[workspace.state.selectedTab].searchMode === "active";
+  // Keep the last input owner through keyboard dismissal, so closing sidebar
+  // search cannot briefly lift the composer into the keyboard's closing frame.
+  const [composerOwnsKeyboard, setComposerOwnsKeyboard] = useState(false);
+  if (sidebarSearchActive && composerOwnsKeyboard) setComposerOwnsKeyboard(false);
   const navigation = useNavigation();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
@@ -523,6 +538,8 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   const handleOwnedInputFocusChange = (focused: boolean) => {
     ownedInputFocusedRef.current = focused;
     if (focused) {
+      if (deviceType === "duo-folded" || deviceType === "duo-unfolded")
+        setComposerOwnsKeyboard(true);
       setKeyboardStateSuspect(false);
     }
   };
@@ -575,10 +592,13 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     (Platform.OS === "ios" && Platform.isPad
       ? Math.max(bottomSafeArea, 12) - (hasSidebarTabBar ? 5 : 0)
       : undefined);
-  const composerBottomInset =
-    alignedBottomInset !== undefined
-      ? Math.max(0, alignedBottomInset - THREAD_COMPOSER_BOTTOM_GUTTER)
-      : Math.max(bottomSafeArea, 12);
+  // The Duo's floating sidebar pill ends three points below the composer's usual gutter.
+  const composerBottomInset = Math.max(
+    0,
+    (alignedBottomInset !== undefined
+      ? alignedBottomInset - THREAD_COMPOSER_BOTTOM_GUTTER
+      : Math.max(bottomSafeArea, 12)) - (hasSidebarTabBar ? 3 : 0),
+  );
   const composerKeyboardOffset = composerBottomInset;
   const contentPresentationKind = props.contentPresentation.kind;
   const realThreadSyncLabel = (() => {
@@ -1213,18 +1233,40 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     const approvalsToDecline = props.activePendingApprovals;
     const declineBeforeDispatch =
       approvalsToDecline.length > 0 && props.activePendingUserInput === null
-        ? async () =>
-            props.respondingApprovalId === null &&
-            (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
-            selectedThreadKeyRef.current === targetThreadKey &&
-            // A draft edited or pasted into during the decline isn't what the user sent.
-            stillSendable?.() !== false &&
-            // An approval that arrived during the decline would block the redirect; the draft
-            // stays so the next send declines it too.
-            !activePendingApprovalsRef.current.some(
-              (approval) =>
-                !approvalsToDecline.some((declined) => declined.requestId === approval.requestId),
+        ? async (text: string, hasAttachmentsOrContext: boolean) => {
+            if (
+              selectedThreadKeyRef.current !== targetThreadKey ||
+              stillSendable?.() === false ||
+              props.respondingApprovalId !== null
             )
+              return false;
+            const feedbackTarget = approvalsToDecline[0];
+            if (feedbackTarget?.supportsFeedback) {
+              if (hasAttachmentsOrContext) {
+                Dialog.alert(
+                  "Approval feedback",
+                  "Send approval feedback without attachments or added context.",
+                );
+                return false;
+              }
+              return (await sendApprovalFeedback(feedbackTarget, text, props.onRespondToApproval))
+                ? ("responded" as const)
+                : false;
+            }
+            return (
+              props.respondingApprovalId === null &&
+              (await declinePendingApprovals(approvalsToDecline, props.onRespondToApproval)) &&
+              selectedThreadKeyRef.current === targetThreadKey &&
+              // A draft edited or pasted into during the decline isn't what the user sent.
+              stillSendable?.() !== false &&
+              // An approval that arrived during the decline would block the redirect; the draft
+              // stays so the next send declines it too.
+              !activePendingApprovalsRef.current.some(
+                (approval) =>
+                  !approvalsToDecline.some((declined) => declined.requestId === approval.requestId),
+              )
+            );
+          }
         : undefined;
     const messageId = await props.onSendMessage(followUp, declineBeforeDispatch);
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
@@ -1429,7 +1471,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
       {showContent ? (
         <KeyboardStickyView
           // Waiting for a visibility render misses the first keyboard frames.
-          enabled={Platform.OS === "ios" || !keyboardStateSuspect}
+          enabled={
+            Platform.OS === "ios"
+              ? deviceType !== "duo-unfolded" || (composerOwnsKeyboard && !sidebarSearchActive)
+              : !keyboardStateSuspect
+          }
           pointerEvents="box-none"
           style={{ position: "absolute", bottom: 0, left: 0, right: 0, top: 0 }}
           offset={{ closed: 0, opened: composerKeyboardOffset }}
@@ -1671,7 +1717,6 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                           </Text>
                         </View>
                       ) : null}
-                      {props.draftMode?.controls}
                       <ThreadComposer
                         isDraft={Boolean(props.draftMode)}
                         canOperateThread={props.canOperateThread}
@@ -1679,10 +1724,13 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
                         editorRef={composerEditorRef}
                         placeholder={
                           props.activePendingApproval
-                            ? "Send a message to decline and redirect the agent"
+                            ? props.activePendingApproval.supportsFeedback
+                              ? "Send feedback to decline this request"
+                              : "Send a message to decline and redirect the agent"
                             : "Ask the repo agent, or run a command…"
                         }
                         contentMaxWidth={contentMaxWidth}
+                        draftControls={props.draftMode?.controls}
                         connectionState={props.connectionStateLabel}
                         environmentLabel={props.environmentLabel}
                         selectedThread={props.selectedThread}

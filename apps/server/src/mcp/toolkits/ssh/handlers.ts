@@ -79,7 +79,7 @@ const toMcpFailure = (error: SshRemoteDispatch.SshRemoteDispatchError) =>
   });
 
 /** Names what a busy host is running, so a waiting update says what it waits for. */
-export const withUpdateBlockers = (
+const withUpdateBlockers = (
   result: SshHostSettledResult,
   blockers: ReadonlyArray<ServerActivityBlocker>,
 ): SshHostSettledResult => {
@@ -258,14 +258,17 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       }),
     ),
   ),
-  goat_ssh_runtime_update: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      const caller = yield* check;
-      const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup
-        .update(input, { kind: "mcp", scope: caller.scope })
-        .pipe(Effect.mapError(toSetupFailure("capability_denied")));
-    }),
+  goat_ssh_runtime_update: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        const caller = yield* check;
+        yield* McpToolAccess.admit(input);
+        const setup = yield* SshHostSetup.SshHostSetup;
+        return yield* setup
+          .update(input, { kind: "mcp", scope: caller.scope })
+          .pipe(Effect.mapError(toSetupFailure("capability_denied")));
+      }),
+    { admission: "handler" },
   ),
   // Reading ~/.ssh/config changes nothing; probing logs in but runs only `true`.
   goat_ssh_host_list: McpToolAccess.reads((input) =>
@@ -279,38 +282,42 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     }),
   ),
   // Linking stores a session that reaches another machine, like saving a connection.
-  goat_host_link_create: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      yield* requireOrchestration;
-      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-      const sshHosts = yield* dispatch
-        .listHosts({ probe: false })
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
-      if (sshHosts.some((host) => host.alias === input.name.trim())) {
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
-        });
-      }
-      const environment = yield* ServerEnvironment.ServerEnvironment;
-      const descriptor = yield* environment.getDescriptor;
-      const linkedHosts = yield* linkedHostsService;
-      const linked = yield* linkedHosts
-        .link({
-          name: input.name,
-          url: input.url,
-          code: input.code,
-          access: input.access ?? "approval-required",
-          beforeSave: check.pipe(Effect.asVoid),
-          clientName: `GOAT on ${descriptor.label}`,
-        })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
-          ),
-        );
-      return { host: linked.host, replaced: linked.replaced };
-    }),
+  goat_host_link_create: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        yield* requireOrchestration;
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const sshHosts = yield* dispatch
+          .listHosts({ probe: false })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
+        if (sshHosts.some((host) => host.alias === input.name.trim())) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
+          });
+        }
+        const environment = yield* ServerEnvironment.ServerEnvironment;
+        const descriptor = yield* environment.getDescriptor;
+        const linkedHosts = yield* linkedHostsService;
+        yield* check;
+        yield* McpToolAccess.admit(input);
+        const linked = yield* linkedHosts
+          .link({
+            name: input.name,
+            url: input.url,
+            code: input.code,
+            access: input.access ?? "approval-required",
+            beforeSave: check.pipe(Effect.asVoid),
+            clientName: `GOAT on ${descriptor.label}`,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
+            ),
+          );
+        return { host: linked.host, replaced: linked.replaced };
+      }),
+    { admission: "handler" },
   ),
   goat_host_link_list: McpToolAccess.reads(() =>
     Effect.gen(function* () {
@@ -346,412 +353,426 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     }),
   ),
   goat_ssh_thread_launch: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment((input, check) =>
-      Effect.gen(function* () {
-        const caller = yield* check;
-        const scope = yield* McpInvocationContext.McpInvocationContext;
-        const permissions = yield* Profiles.PermissionProfiles;
-        // A channel-owned caller (a GOAT Bot worker thread) admits this launch against its
-        // task's descendant budget; the record's identity drives the lane and correlation ids,
-        // so a retry collides with the first attempt instead of launching twice.
-        const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
-        const admission =
-          scope.thread === undefined
-            ? undefined
-            : yield* admitChildWork(channelChildWork, {
-                callerThreadId: scope.thread.threadId,
-                surface: "ssh_thread_launch",
-                prompt: input.message ?? "",
-                destinationKey: [
-                  input.host,
-                  input.cwd ?? "",
-                  input.workspace === undefined
-                    ? ""
-                    : input.workspace.type === "worktree"
-                      ? "worktree:" + input.workspace.branch
-                      : "cwd",
-                  input.modelSelection?.instanceId ?? "",
-                  input.modelSelection?.model ?? "",
-                  input.goatclawRole ?? "",
-                ].join("\u0000"),
-                destinationHint: input.host + ":" + (input.cwd ?? ""),
-              });
-        const laneId =
-          admission === undefined
-            ? yield* newCommandId()
-            : CommandId.make(admission.record.childWorkId);
-        const effective = yield* permissions.require(scope, "threads.remote", {
-          host: input.host,
-          runtimeMode: caller.limits.runtimeMode,
-        });
-        const runtimeMode = yield* resolveRuntimeMode(effective.runtimeMode, input.runtimeMode);
-        const role = input.goatclawRole;
-        if (role !== undefined && !effective.enabled)
-          return yield* new OrchestratorMcpFailure({
-            code: "capability_denied",
-            message: "goatclaw is off, so role launches are unavailable.",
+    McpToolAccess.writesEnvironment(
+      (input, check) =>
+        Effect.gen(function* () {
+          const caller = yield* check;
+          const scope = yield* McpInvocationContext.McpInvocationContext;
+          const permissions = yield* Profiles.PermissionProfiles;
+          const effective = yield* permissions.require(scope, "threads.remote", {
+            host: input.host,
+            runtimeMode: caller.limits.runtimeMode,
           });
-        const missing = role === undefined ? [] : missingRoleCapabilities(role, effective.profile);
-        if (role !== undefined && missing.length > 0) return yield* roleRefusal(role, missing);
-        if (role !== undefined && input.message === undefined)
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: "A goatclaw role launch needs message: the task the role works on.",
-          });
-        const pressure = yield* admitLaunch(input.host);
-        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        // goatclaw applies fleet-wide: bring the destination's policy up to date before it must
-        // enforce this ceiling. A destination that does not accept a ceiling at all still refuses
-        // the launch in SshRemoteDispatch.
-        if (effective.enabled) {
-          const fleet = yield* Effect.serviceOption(FleetSync.GoatclawFleetSync);
-          if (fleet._tag === "Some") yield* FleetSync.syncBeforeForwarding(fleet.value, input.host);
-        }
-        // The thread on this machine that launches; an outside client has none to record.
-        const launcher = caller.caller;
-        const launchedBy =
-          launcher === undefined
-            ? undefined
-            : yield* ServerEnvironment.ServerEnvironment.pipe(
-                Effect.flatMap((environment) => environment.getDescriptor),
-                Effect.map((descriptor) => ({
-                  kind: "launch" as const,
-                  threadId: launcher.id,
-                  environmentId: descriptor.environmentId,
-                  environmentLabel: descriptor.label,
-                  threadTitle: launcher.title,
-                  via: "ssh_thread_launch" as const,
-                })),
-              );
-        const attachments = yield* dispatch
-          .validateLaunchAttachments(input.attachments ?? [])
-          .pipe(Effect.mapError(toMcpFailure));
-        const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
-        if (
-          admission !== undefined &&
-          admission._tag === "existing" &&
-          admission.record.state !== "reserved"
-        ) {
-          // A retry of a launch this machine already recorded never launches again; it answers
-          // with where the first attempt stands.
-          const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
-          const row = yield* coordinator
-            .get(correlationId)
-            .pipe(Effect.mapError(toCoordinationFailure));
-          return yield* new OrchestratorMcpFailure({
-            code: "conflict",
-            message:
-              "This exact launch was already admitted (correlation id " +
-              correlationId +
-              (row?.remoteThreadId === null || row === null
-                ? ""
-                : ", remote thread " + row.remoteThreadId) +
-              ", state " +
-              (row === null ? "never persisted" : row.state) +
-              '). Use goat_thread_status with host "' +
-              input.host +
-              '" to follow it, or a changed request to launch anew.',
-          });
-        }
-        const referenceMessage =
-          input.references === undefined || input.references.length === 0
-            ? input.message
-            : yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService.pipe(
-                Effect.flatMap((references) =>
-                  references.prepareBrief(caller.scope, {
-                    message: input.message,
-                    references: input.references!,
-                    defaultHost: input.host,
-                  }),
-                ),
-              );
-        const launch: SshRemoteDispatch.SshLaunchInput = {
-          host: input.host,
-          cwd: input.cwd,
-          workspace: sshLaunchWorkspace(input.workspace),
-          title: input.title,
-          message:
-            role === undefined || referenceMessage === undefined
-              ? referenceMessage
-              : goatclawRoleBrief(role, referenceMessage),
-          projectTitle: input.projectTitle,
-          // The remote project usually has no default model, so a thread caller's own
-          // model is the sensible default; an outside client must pass one.
-          modelSelection: input.modelSelection ?? caller.caller?.modelSelection,
-          runtimeMode,
-          callerRuntimeMode: caller.limits.runtimeMode,
-          ...(effective.enabled ? { permissionProfileCeiling: effective.profile } : {}),
-          interactionMode: input.interactionMode,
-          attachments,
-          allowBroadWorkspaceRoot: input.allowBroadWorkspaceRoot,
-          launchedBy,
-          standingInstructions: input.standingInstructions,
-        };
-        // A webhook choice is checked, and an inline secret kept, before anything runs remotely.
-        const launchWatches = yield* LaunchWatchService.LaunchWatchService;
-        const repository = input.repository;
-        const repositoryNotes =
-          repository === undefined
-            ? []
-            : yield* RepositoryLaunchMcpService.RepositoryLaunchMcpService.pipe(
-                Effect.flatMap((service) =>
-                  service.check(scope, {
-                    host: input.host,
-                    path:
-                      input.workspace?.type === "existing_worktree"
-                        ? input.workspace.worktreePath
-                        : input.cwd,
-                    repository,
-                  }),
-                ),
-              );
-        // Set in the same uninterruptible step that saves the watch, which then holds the route.
-        // Until then any exit, interruption included, frees the secret the route kept.
-        let routeKept = false;
-        return yield* Effect.acquireUseRelease(
-          input.notifyTarget === undefined
-            ? Effect.succeed({ notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null })
-            : launchWatches
-                .resolveRoute({
-                  notifyWebhook: input.notifyWebhook,
-                  notifyOnCompletion: input.notifyOnCompletion,
-                  notifyTarget: input.notifyTarget,
-                  projectId: launcher?.projectId ?? null,
-                })
-                .pipe(
-                  Effect.mapError(
-                    (error) =>
-                      new OrchestratorMcpFailure({
-                        code: "invalid_request",
-                        message: error.message,
-                      }),
+          const runtimeMode = yield* resolveRuntimeMode(effective.runtimeMode, input.runtimeMode);
+          const role = input.goatclawRole;
+          if (role !== undefined && !effective.enabled)
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message: "goatclaw is off, so role launches are unavailable.",
+            });
+          const missing =
+            role === undefined ? [] : missingRoleCapabilities(role, effective.profile);
+          if (role !== undefined && missing.length > 0) return yield* roleRefusal(role, missing);
+          if (role !== undefined && input.message === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "A goatclaw role launch needs message: the task the role works on.",
+            });
+          // Admitted after the profile and role checks, so a replay passes them again.
+          yield* McpToolAccess.admit(input);
+
+          // A keyed retry ends in ToolAdmission above, so a channel task's descendant budget is
+          // reserved once; a keyless retry collides with the record this admission persists.
+          const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
+          const admission =
+            scope.thread === undefined
+              ? undefined
+              : yield* admitChildWork(channelChildWork, {
+                  callerThreadId: scope.thread.threadId,
+                  surface: "ssh_thread_launch",
+                  prompt: input.message ?? "",
+                  destinationKey: [
+                    input.host,
+                    input.cwd ?? "",
+                    input.workspace === undefined
+                      ? ""
+                      : input.workspace.type === "worktree"
+                        ? "worktree:" + input.workspace.branch
+                        : "cwd",
+                    input.modelSelection?.instanceId ?? "",
+                    input.modelSelection?.model ?? "",
+                    input.goatclawRole ?? "",
+                  ].join("\u0000"),
+                  destinationHint: input.host + ":" + (input.cwd ?? ""),
+                });
+          const laneId =
+            admission === undefined
+              ? yield* newCommandId()
+              : CommandId.make(admission.record.childWorkId);
+          const pressure = yield* admitLaunch(input.host);
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          // goatclaw applies fleet-wide: bring the destination's policy up to date before it must
+          // enforce this ceiling. A destination that does not accept a ceiling at all still refuses
+          // the launch in SshRemoteDispatch.
+          const fleet = effective.enabled
+            ? yield* Effect.serviceOption(FleetSync.GoatclawFleetSync)
+            : undefined;
+          const ceilingAdvice =
+            fleet?._tag === "Some"
+              ? yield* FleetSync.syncBeforeForwarding(fleet.value, input.host)
+              : undefined;
+          // The thread on this machine that launches; an outside client has none to record.
+          const launcher = caller.caller;
+          const launchedBy =
+            launcher === undefined
+              ? undefined
+              : yield* ServerEnvironment.ServerEnvironment.pipe(
+                  Effect.flatMap((environment) => environment.getDescriptor),
+                  Effect.map((descriptor) => ({
+                    kind: "launch" as const,
+                    threadId: launcher.id,
+                    environmentId: descriptor.environmentId,
+                    environmentLabel: descriptor.label,
+                    threadTitle: launcher.title,
+                    via: "ssh_thread_launch" as const,
+                  })),
+                );
+          const attachments = yield* dispatch
+            .validateLaunchAttachments(input.attachments ?? [])
+            .pipe(Effect.mapError(toMcpFailure));
+          const coordinator = yield* RemoteDispatchCoordinator.RemoteDispatchCoordinator;
+          if (
+            admission !== undefined &&
+            admission._tag === "existing" &&
+            admission.record.state !== "reserved"
+          ) {
+            // A retry of a launch this machine already recorded never launches again; it answers
+            // with where the first attempt stands.
+            const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
+            const row = yield* coordinator
+              .get(correlationId)
+              .pipe(Effect.mapError(toCoordinationFailure));
+            return yield* new OrchestratorMcpFailure({
+              code: "conflict",
+              message:
+                "This exact launch was already admitted (correlation id " +
+                correlationId +
+                (row?.remoteThreadId === null || row === null
+                  ? ""
+                  : ", remote thread " + row.remoteThreadId) +
+                ", state " +
+                (row === null ? "never persisted" : row.state) +
+                '). Use goat_thread_status with host "' +
+                input.host +
+                '" to follow it, or a changed request to launch anew.',
+            });
+          }
+          const referenceMessage =
+            input.references === undefined || input.references.length === 0
+              ? input.message
+              : yield* RepositoryReferenceMcpService.RepositoryReferenceMcpService.pipe(
+                  Effect.flatMap((references) =>
+                    references.prepareBrief(caller.scope, {
+                      message: input.message,
+                      references: input.references!,
+                      defaultHost: input.host,
+                    }),
                   ),
-                ),
-          (route) =>
-            Effect.gen(function* () {
-              const admitted = yield* permissions.claim(scope, {
-                id: laneId,
-                host: input.host,
-                runtimeMode,
-                worktree: input.workspace?.type === "worktree",
-                ...(role === undefined ? {} : { role }),
-              });
-              const guardedLaunch = {
-                ...launch,
-                runtimeMode: admitted.runtimeMode,
-                ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
-              };
-              const authorize = check.pipe(
-                Effect.andThen(permissions.recheck(scope, admitted, { host: input.host })),
-              );
-              const result = yield* Effect.gen(function* () {
-                if (scope.thread === undefined) {
-                  const value = yield* dispatch.launchThread(
-                    guardedLaunch,
+                );
+          const launch: SshRemoteDispatch.SshLaunchInput = {
+            host: input.host,
+            cwd: input.cwd,
+            workspace: sshLaunchWorkspace(input.workspace),
+            title: input.title,
+            message:
+              role === undefined || referenceMessage === undefined
+                ? referenceMessage
+                : goatclawRoleBrief(role, referenceMessage),
+            projectTitle: input.projectTitle,
+            // The remote project usually has no default model, so a thread caller's own
+            // model is the sensible default; an outside client must pass one.
+            modelSelection: input.modelSelection ?? caller.caller?.modelSelection,
+            runtimeMode,
+            callerRuntimeMode: caller.limits.runtimeMode,
+            ...(effective.enabled ? { permissionProfileCeiling: effective.profile } : {}),
+            interactionMode: input.interactionMode,
+            attachments,
+            allowBroadWorkspaceRoot: input.allowBroadWorkspaceRoot,
+            launchedBy,
+            standingInstructions: input.standingInstructions,
+          };
+          // A webhook choice is checked, and an inline secret kept, before anything runs remotely.
+          const launchWatches = yield* LaunchWatchService.LaunchWatchService;
+          const repository = input.repository;
+          const repositoryNotes =
+            repository === undefined
+              ? []
+              : yield* RepositoryLaunchMcpService.RepositoryLaunchMcpService.pipe(
+                  Effect.flatMap((service) =>
+                    service.check(scope, {
+                      host: input.host,
+                      path:
+                        input.workspace?.type === "existing_worktree"
+                          ? input.workspace.worktreePath
+                          : input.cwd,
+                      repository,
+                    }),
+                  ),
+                );
+          // Set in the same uninterruptible step that saves the watch, which then holds the route.
+          // Until then any exit, interruption included, frees the secret the route kept.
+          let routeKept = false;
+          return yield* Effect.acquireUseRelease(
+            input.notifyTarget === undefined
+              ? Effect.succeed({ notifyWebhook: input.notifyWebhook ?? false, webhookTarget: null })
+              : launchWatches
+                  .resolveRoute({
+                    notifyWebhook: input.notifyWebhook,
+                    notifyOnCompletion: input.notifyOnCompletion,
+                    notifyTarget: input.notifyTarget,
+                    projectId: launcher?.projectId ?? null,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        new OrchestratorMcpFailure({
+                          code: "invalid_request",
+                          message: error.message,
+                        }),
+                    ),
+                  ),
+            (route) =>
+              Effect.gen(function* () {
+                const admitted = yield* permissions.claim(scope, {
+                  id: laneId,
+                  host: input.host,
+                  runtimeMode,
+                  worktree: input.workspace?.type === "worktree",
+                  ...(role === undefined ? {} : { role }),
+                });
+                const guardedLaunch = {
+                  ...launch,
+                  runtimeMode: admitted.runtimeMode,
+                  ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
+                };
+                const authorize = check.pipe(
+                  Effect.andThen(permissions.recheck(scope, admitted, { host: input.host })),
+                );
+                const result = yield* Effect.gen(function* () {
+                  if (scope.thread === undefined) {
+                    const value = yield* dispatch.launchThread(
+                      guardedLaunch,
+                      authorize.pipe(Effect.asVoid),
+                    );
+                    return { ...value, correlationId: null };
+                  }
+                  yield* launchRemoteChildWork(channelChildWork, admission, input.host);
+                  const value = yield* coordinator.launch(
+                    {
+                      kind: "thread",
+                      originThreadId: scope.thread.threadId,
+                      delivery: input.reportDelivery ?? "wake",
+                      // A channel-owned launch carries its record's correlation id, so a retry's
+                      // INSERT collides on the row instead of starting a second remote thread.
+                      correlationId: admissionCorrelationId(admission),
+                      launch: guardedLaunch,
+                    },
                     authorize.pipe(Effect.asVoid),
                   );
-                  return { ...value, correlationId: null };
-                }
-                yield* launchRemoteChildWork(channelChildWork, admission, input.host);
-                const value = yield* coordinator.launch(
-                  {
-                    kind: "thread",
-                    originThreadId: scope.thread.threadId,
-                    delivery: input.reportDelivery ?? "wake",
-                    // A channel-owned launch carries its record's correlation id, so a retry's
-                    // INSERT collides on the row instead of starting a second remote thread.
-                    correlationId: admissionCorrelationId(admission),
-                    launch: guardedLaunch,
-                  },
-                  authorize.pipe(Effect.asVoid),
+                  yield* bindChildWork(channelChildWork, admission, {
+                    correlationId: value.correlationId,
+                    host: input.host,
+                  });
+                  return { ...value.launch, correlationId: value.correlationId };
+                }).pipe(
+                  Effect.tapError((error) => {
+                    const underlying = isRemoteDispatchError(error) ? error.cause : error;
+                    return admitted.enabled &&
+                      underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+                      (underlying.reason === "remote_refused" ||
+                        underlying.reason === "invalid_request" ||
+                        underlying.reason === "host_unknown") &&
+                      underlying.launchMayHaveStarted !== true
+                      ? permissions.release(laneId)
+                      : Effect.void;
+                  }),
+                  Effect.mapError((error) =>
+                    error instanceof SshRemoteDispatch.SshRemoteDispatchError
+                      ? toMcpFailure(error)
+                      : isRemoteDispatchError(error)
+                        ? toCoordinationFailure(error)
+                        : error,
+                  ),
                 );
-                yield* bindChildWork(channelChildWork, admission, {
-                  correlationId: value.correlationId,
-                  host: input.host,
-                });
-                return { ...value.launch, correlationId: value.correlationId };
-              }).pipe(
-                Effect.tapError((error) => {
-                  const underlying = isRemoteDispatchError(error) ? error.cause : error;
-                  return admitted.enabled &&
-                    underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                    (underlying.reason === "remote_refused" ||
-                      underlying.reason === "invalid_request" ||
-                      underlying.reason === "host_unknown") &&
-                    underlying.launchMayHaveStarted !== true
-                    ? permissions.release(laneId)
-                    : Effect.void;
-                }),
-                Effect.mapError((error) =>
-                  error instanceof SshRemoteDispatch.SshRemoteDispatchError
-                    ? toMcpFailure(error)
-                    : isRemoteDispatchError(error)
-                      ? toCoordinationFailure(error)
-                      : error,
-                ),
-              );
-              if (admitted.enabled)
-                yield* permissions.complete(
-                  laneId,
-                  result.threadId,
-                  result.correlationId ?? undefined,
-                );
-              const runId = result.runId === null ? null : RunId.make(result.runId);
-              const watching =
-                input.notifyOnCompletion !== false && (launcher !== undefined || runId !== null)
-                  ? yield* (
-                      launcher !== undefined
-                        ? launchWatches
-                            .register({
-                              launcherThreadId: launcher.id,
-                              host: result.host,
-                              threadId: ThreadId.make(result.threadId),
-                              projectId: null,
-                              title: input.title,
-                              runId,
-                              notifyWebhook: route.notifyWebhook,
-                              webhookTarget: route.webhookTarget,
-                            })
-                            .pipe(
-                              Effect.tap(() =>
-                                Effect.sync(() => {
-                                  routeKept = true;
-                                }),
-                              ),
-                              Effect.as(true),
-                              Effect.uninterruptible,
-                            )
-                        : runId === null
-                          ? Effect.succeed(false)
-                          : // An outside client's launch is watched only for the completion webhook.
-                            launchWatches
-                              .watchExternal({
-                                owner: scope.requestNamespace,
+                if (admitted.enabled)
+                  yield* permissions.complete(
+                    laneId,
+                    result.threadId,
+                    result.correlationId ?? undefined,
+                  );
+                const runId = result.runId === null ? null : RunId.make(result.runId);
+                const watching =
+                  input.notifyOnCompletion !== false && (launcher !== undefined || runId !== null)
+                    ? yield* (
+                        launcher !== undefined
+                          ? launchWatches
+                              .register({
+                                launcherThreadId: launcher.id,
                                 host: result.host,
                                 threadId: ThreadId.make(result.threadId),
                                 projectId: null,
                                 title: input.title,
                                 runId,
-                                ceiling: caller.limits.runtimeMode,
-                                route,
+                                notifyWebhook: route.notifyWebhook,
+                                webhookTarget: route.webhookTarget,
                               })
                               .pipe(
-                                Effect.map((watch) => {
-                                  routeKept = watch !== null;
-                                  return routeKept;
-                                }),
+                                Effect.tap(() =>
+                                  Effect.sync(() => {
+                                    routeKept = true;
+                                  }),
+                                ),
+                                Effect.as(true),
                                 Effect.uninterruptible,
                               )
-                    ).pipe(
-                      // The remote thread exists either way; a watch that failed to save is reported, not fatal.
-                      Effect.catch((error) =>
-                        Effect.logWarning("launch watch not recorded", {
-                          host: result.host,
-                          threadId: result.threadId,
-                          cause: error,
-                        }).pipe(Effect.as(false)),
-                      ),
-                    )
-                  : false;
-              return {
-                ...result,
-                watching,
-                ...(pressure === undefined ? {} : { pressure }),
-                notes: [
-                  ...result.notes,
-                  ...repositoryNotes,
-                  ...(watching && launcher === undefined
-                    ? [
-                        `This machine follows the thread on ${result.host} and posts to its completion webhook when the run ends, waits on a question, or if ${result.host} stays unreachable.`,
-                      ]
-                    : watching
+                          : runId === null
+                            ? Effect.succeed(false)
+                            : // An outside client's launch is watched only for the completion webhook.
+                              launchWatches
+                                .watchExternal({
+                                  owner: scope.requestNamespace,
+                                  host: result.host,
+                                  threadId: ThreadId.make(result.threadId),
+                                  projectId: null,
+                                  title: input.title,
+                                  runId,
+                                  ceiling: caller.limits.runtimeMode,
+                                  route,
+                                })
+                                .pipe(
+                                  Effect.map((watch) => {
+                                    routeKept = watch !== null;
+                                    return routeKept;
+                                  }),
+                                  Effect.uninterruptible,
+                                )
+                      ).pipe(
+                        // The remote thread exists either way; a watch that failed to save is reported, not fatal.
+                        Effect.catch((error) =>
+                          Effect.logWarning("launch watch not recorded", {
+                            host: result.host,
+                            threadId: result.threadId,
+                            cause: error,
+                          }).pipe(Effect.as(false)),
+                        ),
+                      )
+                    : false;
+                return {
+                  ...result,
+                  watching,
+                  ...(pressure === undefined ? {} : { pressure }),
+                  ...(ceilingAdvice === undefined ? {} : { ceiling: ceilingAdvice }),
+                  notes: [
+                    ...result.notes,
+                    ...repositoryNotes,
+                    ...(watching && launcher === undefined
                       ? [
-                          `This machine follows the thread on ${result.host} and wakes this thread when its run ends, when it waits on a question, or if ${result.host} stays unreachable; do not poll it. goat_thread_unwatch stops that.`,
+                          `This machine follows the thread on ${result.host} and posts to its completion webhook when the run ends, waits on a question, or if ${result.host} stays unreachable.`,
                         ]
-                      : scope.thread !== undefined
+                      : watching
                         ? [
-                            `${
-                              input.notifyOnCompletion === false
-                                ? "Run ends are not followed because completion notifications are disabled."
-                                : "Run ends are not followed because no launch watch was recorded."
-                            }${result.reportsSupported ? " Agent reports still arrive per reportDelivery." : ""}`,
+                            `This machine follows the thread on ${result.host} and wakes this thread when its run ends, when it waits on a question, or if ${result.host} stays unreachable; do not poll it. goat_thread_unwatch stops that.`,
                           ]
-                        : []),
-                ],
-              };
-            }),
-          (route) =>
-            routeKept || route.webhookTarget === null
-              ? Effect.void
-              : launchWatches.releaseRoute(route),
-        );
-      }),
+                        : scope.thread !== undefined
+                          ? [
+                              `${
+                                input.notifyOnCompletion === false
+                                  ? "Run ends are not followed because completion notifications are disabled."
+                                  : "Run ends are not followed because no launch watch was recorded."
+                              }${result.reportsSupported ? " Agent reports still arrive per reportDelivery." : ""}`,
+                            ]
+                          : []),
+                  ],
+                };
+              }),
+            (route) =>
+              routeKept || route.webhookTarget === null
+                ? Effect.void
+                : launchWatches.releaseRoute(route),
+          );
+        }),
+      { admission: "handler" },
     ),
   ),
   goat_ssh_thread_handoff: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment((input, check) =>
-      Effect.gen(function* () {
-        const caller = yield* check;
-        const sourceThreadId = input.threadId ?? caller.caller?.id;
-        if (sourceThreadId === undefined)
-          return yield* new OrchestratorMcpFailure({
-            code: "target_required",
-            message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
-          });
-        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        const hosts = yield* dispatch
-          .listHosts({ probe: false })
-          .pipe(Effect.mapError(toMcpFailure));
-        const host = input.host.trim();
-        if (!hosts.some((entry) => entry.alias === host))
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
-          });
-        // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
-        const target = { alias: host, hostname: host, username: null, port: null };
-        const current = yield* check;
-        const callerContext = yield* Effect.context<
-          | McpInvocationContext.McpInvocationContext
-          | ThreadManagementService.ThreadManagementService
-        >();
-        const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
-        const result = yield* sync
-          .handoffThread({
-            sourceThreadId,
-            target,
-            expectedEnvironmentId: null,
-            beforeRemoteChange: check.pipe(
-              Effect.asVoid,
-              Effect.provide(callerContext),
-              Effect.mapError(
-                () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+    McpToolAccess.writesEnvironment(
+      (input, check) =>
+        Effect.gen(function* () {
+          const caller = yield* check;
+          const sourceThreadId = input.threadId ?? caller.caller?.id;
+          if (sourceThreadId === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "target_required",
+              message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
+            });
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const hosts = yield* dispatch
+            .listHosts({ probe: false })
+            .pipe(Effect.mapError(toMcpFailure));
+          const host = input.host.trim();
+          if (!hosts.some((entry) => entry.alias === host))
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
+            });
+          // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
+          const target = { alias: host, hostname: host, username: null, port: null };
+          const current = yield* check;
+          yield* McpToolAccess.admit(input);
+          const callerContext = yield* Effect.context<
+            | McpInvocationContext.McpInvocationContext
+            | ThreadManagementService.ThreadManagementService
+          >();
+          const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
+          const result = yield* sync
+            .handoffThread({
+              sourceThreadId,
+              target,
+              expectedEnvironmentId: null,
+              beforeRemoteChange: check.pipe(
+                Effect.asVoid,
+                Effect.provide(callerContext),
+                Effect.mapError(
+                  () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+                ),
               ),
-            ),
-            ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
-              ? { allowRunId: current.caller.activeRunId }
-              : {}),
-            ...(input.message === undefined ? {} : { message: input.message }),
-            ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-            ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
-            ...(input.interactionMode === undefined
-              ? {}
-              : { interactionMode: input.interactionMode }),
-          })
-          .pipe(Effect.mapError(toHandoffFailure));
-        return {
-          host,
-          operationId: result.operationId,
-          remoteThreadId: result.remoteThreadId,
-          remoteProjectId: result.remoteProjectId,
-          remoteRepoPath: result.remoteRepoPath,
-          branch: result.branch,
-          notes: [
-            `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
-            `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
-          ],
-        };
-      }),
+              ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
+                ? { allowRunId: current.caller.activeRunId }
+                : {}),
+              ...(input.message === undefined ? {} : { message: input.message }),
+              ...(input.modelSelection === undefined
+                ? {}
+                : { modelSelection: input.modelSelection }),
+              ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+              ...(input.interactionMode === undefined
+                ? {}
+                : { interactionMode: input.interactionMode }),
+            })
+            .pipe(Effect.mapError(toHandoffFailure));
+          return {
+            host,
+            operationId: result.operationId,
+            remoteThreadId: result.remoteThreadId,
+            remoteProjectId: result.remoteProjectId,
+            remoteRepoPath: result.remoteRepoPath,
+            branch: result.branch,
+            notes: [
+              `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
+              `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
+            ],
+          };
+        }),
+      { admission: "handler" },
     ),
   ),
   goat_ssh_reports: McpToolAccess.readsAsCaller((input) =>

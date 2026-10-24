@@ -662,7 +662,7 @@ describe("HostThreadsMcpService", () => {
         expect(result._tag).toBe("Failure");
         if (result._tag !== "Failure") return;
         expect(result.failure.message).toContain("started from orchestrator-laptop");
-        expect(result.failure.message).toContain("goat_origin_report");
+        expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         expect(relays).toEqual([]);
       }),
   );
@@ -700,9 +700,9 @@ describe("HostThreadsMcpService", () => {
         expect(result.failure.message).toContain("is not in this machine's SSH config");
         if (mentionsOrigin) {
           expect(result.failure.message).toContain("started from orchestrator-laptop");
-          expect(result.failure.message).toContain("goat_origin_report");
+          expect(result.failure.message).toContain('goat_call {path:"origin.report"}');
         } else {
-          expect(result.failure.message).not.toContain("goat_origin_report");
+          expect(result.failure.message).not.toContain('path:"origin.report"');
         }
       }),
   );
@@ -751,11 +751,11 @@ describe("HostThreadsMcpService", () => {
             host: "box",
             threadId: ThreadId.make("remote-1"),
             message: "status?",
+            capabilities: [],
           }),
       );
       expect(result._tag === "Success" && result.success.host).toBe("box");
-      expect(calls[0]?.tool).toBe("goat_thread_send");
-      expect(calls[0]?.writes).toBe(true);
+      expect([calls[0]?.tool, calls[0]?.writes]).toEqual(["goat_thread_send", true]);
       expect(calls[0]?.arguments).toEqual({ threadId: "remote-1", message: "status?" });
       // The caller's watch on that thread, if any, follows the run the send joined.
       expect(rearms).toEqual([
@@ -904,7 +904,7 @@ it.effect("refuses a launch watch for a remote delegated task", () =>
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
           expect(result.failure.code).toBe("invalid_request");
-          expect(result.failure.message).toContain("goat_task_read");
+          expect(result.failure.message).toContain('goat_call {path:"task.read"}');
         }
       }),
   ),
@@ -1107,7 +1107,7 @@ it.effect("forwards ready-only reads without changing ordinary host bootstrap po
 );
 
 it.effect(
-  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state",
+  "forwards the goatclaw ceiling with a remote send whatever the destination's sync state, and says when it is unconfirmed",
   () =>
     Effect.gen(function* () {
       // Hub steering must not stall while sync is pending or the destination is too old to answer it.
@@ -1151,6 +1151,20 @@ it.effect(
             goatclawEnabled ? BUILTIN_PERMISSION_PROFILES.worker : undefined,
           );
           expect(settled).toEqual([true]);
+          // Delivery is never blocked; the result tells the caller the ceiling may not bind yet.
+          const sent = result._tag === "Success" ? result.success : undefined;
+          const confirmed = fleetReach?.enforcesCeilings === true;
+          expect(sent?.delivery).toBe("steered");
+          expect(sent !== undefined && "ceiling" in sent ? sent.ceiling : undefined).toEqual(
+            goatclawEnabled && !confirmed
+              ? {
+                  enforcement: "unconfirmed",
+                  host: "box",
+                  sync: fleetReach?.sync ?? { state: "pending" },
+                  message: expect.stringContaining("box has not confirmed"),
+                }
+              : undefined,
+          );
         }
       }
     }),

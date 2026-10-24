@@ -150,7 +150,7 @@ export interface LegacyRemovalOptions {
   readonly busyRetry: Schedule.Schedule<unknown, PlatformError.PlatformError>;
 }
 
-export const defaultLegacyRemovalOptions: LegacyRemovalOptions = {
+const defaultLegacyRemovalOptions: LegacyRemovalOptions = {
   // Antivirus and indexers hold freshly closed files for moments on Windows.
   busyRetry: Schedule.exponential("20 millis").pipe(Schedule.upTo({ times: 6 })),
 };

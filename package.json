@@ -25,6 +25,9 @@
     "agent-surface:smoke": "node scripts/agent-surface/smoke.ts",
     "agent-surface:eval": "node scripts/agent-surface/eval/run.ts",
     "agent-surface:eval-report": "node scripts/agent-surface/eval/report.ts",
+    "agent-surface:context-budget": "node scripts/agent-surface/context-budget.ts",
+    "agent-surface:context-budget-check": "node scripts/agent-surface/context-budget.ts --check",
+    "agent-surface:search-contract": "node scripts/agent-surface/search-contract.ts",
     "licenses:sync": "node scripts/sync-third-party-license-notices.ts",
     "icons:export:android": "node scripts/export-android-icons.ts",
     "build": "vp run --filter './apps/*' build",
@@ -67,7 +70,7 @@
     "vite-plus": "catalog:"
   },
   "engines": {
-    "node": "^24.13.1"
+    "node": "^24.16.0"
   },
   "packageManager": "pnpm@12.14.0"
 }

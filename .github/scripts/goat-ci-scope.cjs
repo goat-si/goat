@@ -3,26 +3,38 @@
 // Chooses the goat-ci tasks a run needs. Runs as the goat-scope job of goat-ci.yml and hands the ci
 // job its matrix.
 //
-// A pull request runs the tasks its changes reach: a change reaches a task when it touches a
-// workspace package the task tests or builds, directly or through workspace dependencies read from
-// the package.json files. The server suite and the memory growth suite go further and follow the
-// static import graph (goat-ci-imports.cjs): a pull request runs only the server test files that
-// import a changed file, and the full four-shard suite when that is most of the suite anyway or the
-// change is one the graph cannot place. A file this script cannot place runs everything, so a new
-// kind of file costs CI time instead of skipping a check.
+// A pull request, draft or ready, gets a quick run: check, typecheck (unless only documents
+// changed), and test-changed, the test files beside its changes that check:changed runs before a
+// push (scripts/lib/changed-tests.ts). The full suite runs on request: the ci:full label, or a
+// manual run of the branch, whose lane is all by default. The integrated lane=all runs on dev that
+// gate the nightly are manual runs, so they stay full.
 //
-// A draft runs check and typecheck. Labels widen a run: ci:full runs everything, ci:server the full
-// server suite, ci:memory the memory growth suite. A manual run takes a lane (all by default).
+// The ci:affected label runs the tasks the changes reach instead: a change reaches a task when it
+// touches a workspace package the task tests or builds, directly or through workspace dependencies
+// read from the package.json files. The server suite and the memory growth suite go further and
+// follow the static import graph (goat-ci-imports.cjs): only the server test files that import a
+// changed file run, and the full four-shard suite when that is most of the suite anyway or the
+// change is one the graph cannot place. A file it cannot place runs everything.
+//
+// ci:server adds the full server suite and ci:memory the memory growth suite to either kind of run.
 
 const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { buildImportGraph, dependents, isSource, mentionsOf } = require("./goat-ci-imports.cjs");
+// Node strips the types, so CI picks the same files check:changed runs before every push.
+const { testsForChanges } = require("../../scripts/lib/changed-tests.ts");
 
 const FULL_LABEL = "ci:full";
+const AFFECTED_LABEL = "ci:affected";
 const SERVER_LABEL = "ci:server";
 const MEMORY_LABEL = "ci:memory";
 const LANES = ["all", "server", "memory-growth", "quick"];
+/** The quick run's test task: the test files beside the changed files. */
+const CHANGED_TESTS_TASK = "test-changed";
+/** CI script tests use node:test, not Vitest. */
+const NODE_TEST_RE = /^\.github\/scripts\/[^/]+\.test\.cjs$/;
+const CODE_RE = /\.[cm]?[jt]sx?$/;
 const SERVER_SHARDS = 4;
 const SERVER_DIR = "apps/server";
 const SERVER_TEST_RE = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
@@ -77,6 +89,8 @@ const TASKS = [
   "build",
   "test-server",
 ];
+/** Matrix order: the quick run's test job follows the checks. */
+const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
 const TASK_ROOTS = {
@@ -367,7 +381,7 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
 /** The ci job matrix; test-server expands into its shards. Each entry carries the job title. */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
-  for (const task of TASKS) {
+  for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
     if (task === "test-server") {
       const related = server.mode === "related";
@@ -479,10 +493,64 @@ function laneRun(lane) {
 }
 
 /**
- * The whole decision for one run: a manual run follows its lane; a pull request follows its
- * changes, narrowed for a draft and widened by labels.
+ * The quick run for a pull request: check always, typecheck unless only documents changed, and
+ * test-changed when tests sit beside the changes. changedTests splits them by runner.
+ */
+function quickRun(changed, root) {
+  const reasons = new Map([["check", "quick run"]]);
+  const placed = changed.find((file) => !isDocument(file));
+  if (placed !== undefined) reasons.set("typecheck", placed);
+  const code = changed.filter((file) => CODE_RE.test(file) && fs.existsSync(path.join(root, file)));
+  const tests = [...testsForChanges(root, code)].sort();
+  const changedTests = {
+    vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
+    node: tests.filter((file) => NODE_TEST_RE.test(file)),
+  };
+  if (tests.length > 0) {
+    reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) beside the changes");
+  }
+  return {
+    full: false,
+    quick: true,
+    tasks: MATRIX_ORDER.filter((task) => reasons.has(task)),
+    reasons,
+    server: { mode: "none", files: [], shards: 0, reason: "quick run", reached: new Map() },
+    changedTests,
+  };
+}
+
+const noChangedTests = () => ({ vitest: [], node: [] });
+
+/** One line for goat-ci-result: what kind of run this was and how to widen it. */
+function noteFor(result, branch = "<branch>") {
+  // GITHUB_OUTPUT takes one note=value line; a file name in a reason may hold a newline.
+  return oneLine(describeRun(result, branch));
+}
+
+const oneLine = (text) => text.replace(/[\r\n]+/g, " ");
+
+function describeRun(result, branch) {
+  if (result.full) return "Full run: " + result.reasons.get("full") + ".";
+  const ran = result.tasks.join(", ") || "nothing";
+  const fullRun =
+    " label, or run gh workflow run goat-ci.yml --ref " + branch + " (lane all by default).";
+  if (result.quick) {
+    return "Quick run (" + ran + "). The full suite did not run: add the " + FULL_LABEL + fullRun;
+  }
+  return "Partial run (" + ran + "). For the full suite add the " + FULL_LABEL + fullRun;
+}
+
+/**
+ * The whole decision for one run: a manual run follows its lane; a pull request gets the quick
+ * run unless a label asks for more.
  */
 async function planRun({ env, payload, root, fetchImpl, files }) {
+  const result = await planTasks({ env, payload, root, fetchImpl, files });
+  const planned = { quick: false, changedTests: noChangedTests(), ...result };
+  return { ...planned, note: noteFor(planned, env.GITHUB_HEAD_REF || env.GITHUB_REF_NAME) };
+}
+
+async function planTasks({ env, payload, root, fetchImpl, files }) {
   if (env.GITHUB_EVENT_NAME !== "pull_request") {
     const lane = LANES.includes(env.INPUT_LANE) ? env.INPUT_LANE : "all";
     return laneRun(lane);
@@ -494,19 +562,17 @@ async function planRun({ env, payload, root, fetchImpl, files }) {
   if (changed === undefined) {
     return { ...laneRun("all"), reasons: new Map([["full", "HEAD is not the PR merge commit"]]) };
   }
-  let result = selectTasks(changed, readWorkspace(root), {
-    graph: buildImportGraph(root),
-    weights: readServerWeights(root),
-  });
-  if (payload.pull_request?.draft) {
-    const tasks = result.tasks.filter((task) => task === "check" || task === "typecheck");
-    result = {
-      full: false,
-      tasks,
-      reasons: new Map(tasks.map((task) => [task, "draft pull request"])),
-      server: { mode: "none", files: [], shards: 0, reason: "draft", reached: new Map() },
-    };
-  }
+  const result = labels.has(AFFECTED_LABEL)
+    ? {
+        ...selectTasks(changed, readWorkspace(root), {
+          graph: buildImportGraph(root),
+          weights: readServerWeights(root),
+        }),
+        quick: false,
+        affected: true,
+      }
+    : quickRun(changed, root);
+  if (result.full) return result;
   const tasks = new Set(result.tasks);
   const reasons = new Map(result.reasons);
   let server = result.server;
@@ -519,22 +585,41 @@ async function planRun({ env, payload, root, fetchImpl, files }) {
     tasks.add("test-memory-growth");
     reasons.set("test-memory-growth", MEMORY_LABEL + " label");
   }
-  return { full: result.full, tasks: TASKS.filter((task) => tasks.has(task)), reasons, server };
+  return {
+    ...result,
+    tasks: MATRIX_ORDER.filter((task) => tasks.has(task)),
+    reasons,
+    server,
+  };
 }
 
 function summaryLines(result) {
+  const kind = result.full
+    ? "Full run: " + result.reasons.get("full")
+    : result.quick
+      ? "Quick run: check, typecheck and the tests beside the changes."
+      : result.affected
+        ? "Run of what the changes reach (" + AFFECTED_LABEL + " label)."
+        : "Partial run: " + [...new Set(result.reasons.values())].join(", ") + ".";
   const lines = [
     "### goat-ci scope",
     "",
-    result.full
-      ? "Full run: " + result.reasons.get("full")
-      : "Path-based run. Labels widen it: " +
-        FULL_LABEL +
-        " (everything), " +
-        SERVER_LABEL +
-        " (full server suite), " +
-        MEMORY_LABEL +
-        " (memory growth).",
+    kind,
+    ...(result.full
+      ? []
+      : [
+          "",
+          "Labels widen it: " +
+            FULL_LABEL +
+            " (everything), " +
+            AFFECTED_LABEL +
+            " (what the changes reach), " +
+            SERVER_LABEL +
+            " (full server suite), " +
+            MEMORY_LABEL +
+            " (memory growth). A manual run of the branch runs everything: " +
+            "gh workflow run goat-ci.yml --ref <branch>.",
+        ]),
     "",
     "| Task | Chosen by |",
     "| --- | --- |",
@@ -542,6 +627,10 @@ function summaryLines(result) {
       (task) => "| " + task + " | " + (result.full ? "full run" : result.reasons.get(task)) + " |",
     ),
   ];
+  const changedTests = [...result.changedTests.vitest, ...result.changedTests.node];
+  if (changedTests.length > 0) {
+    lines.push("", "#### Changed tests", "", ...changedTests.map((file) => "- " + file));
+  }
   if (result.tasks.includes("test-server")) {
     lines.push(
       "",
@@ -580,6 +669,12 @@ async function main(env = process.env, fetchImpl = fetch) {
         JSON.stringify(matrix) +
         "\nserver_files=" +
         JSON.stringify(result.server.files) +
+        "\nchanged_tests=" +
+        JSON.stringify(result.changedTests.vitest) +
+        "\nchanged_node_tests=" +
+        JSON.stringify(result.changedTests.node) +
+        "\nnote=" +
+        result.note +
         "\n",
     );
   }
@@ -588,10 +683,12 @@ async function main(env = process.env, fetchImpl = fetch) {
 
 module.exports = {
   FULL_LABEL,
+  AFFECTED_LABEL,
   SERVER_LABEL,
   MEMORY_LABEL,
   LANES,
   TASKS,
+  CHANGED_TESTS_TASK,
   MEMORY_GROWTH_TESTS,
   SERVER_RUN_CONFIG,
   SOURCE_SCANNING_TESTS,

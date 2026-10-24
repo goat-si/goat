@@ -47,6 +47,7 @@ import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
 import { type LaunchWatch, replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
+import { rearmAfterRetry, rearmAfterSend, watchKeyOf } from "./launchWatchRearm.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
@@ -57,6 +58,7 @@ import {
   reauthorizationFailure,
 } from "./threadAccess.ts";
 import { boundedStatus, statusFromRead } from "./threadStatus.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Routes the thread tools by host. A thread id belongs to the environment that
@@ -108,6 +110,15 @@ const withoutHost = <T extends { readonly host?: unknown; readonly allHosts?: un
 ): Omit<T, "host" | "allHosts"> => {
   const { host: _host, allHosts: _allHosts, ...rest } = input;
   return rest;
+};
+
+/**
+ * A host older than turn capabilities refuses an argument it does not declare, so an empty
+ * request is left out; a real one reaches it and fails there with nothing sent.
+ */
+const remoteSendArguments = (input: OrchestratorMcpThreadSendInput) => {
+  const { capabilities, ...rest } = withoutHost(input);
+  return capabilities === undefined || capabilities.length === 0 ? rest : { ...rest, capabilities };
 };
 
 /** Another machine's answer is untrusted: it must decode as the tool's own result. */
@@ -314,45 +325,6 @@ const make = Effect.gen(function* () {
       : Effect.succeed(scope.thread.threadId);
 
   /**
-   * The caller's own watch of a thread: its thread's, or for an outside caller
-   * the launcherless watch its own launch made, never another caller's.
-   */
-  const watchKeyOf = (
-    scope: McpInvocationScope,
-    target: { readonly host: string | undefined; readonly threadId: ThreadId },
-  ): LaunchWatchService.LaunchWatchKey =>
-    scope.thread === undefined
-      ? { launcherThreadId: null, owner: scope.requestNamespace, ...target }
-      : { launcherThreadId: scope.thread.threadId, ...target };
-
-  /**
-   * A send from a watching thread is followed like its launch: the run it
-   * started or joined is reported when it ends. A send from outside any thread
-   * re-arms the launcherless watch its launch made, so the completion webhook
-   * hears about follow-up runs too. Bookkeeping must never fail the send itself.
-   */
-  const rearmAfterSend = (
-    scope: McpInvocationScope,
-    input: OrchestratorMcpThreadSendInput,
-    result: OrchestratorMcpThreadSendResult,
-  ) =>
-    result.delivery === "relayed"
-      ? Effect.void
-      : launchWatches
-          .rearm({
-            ...watchKeyOf(scope, { host: input.host, threadId: input.threadId }),
-            runId: result.runId,
-          })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("launch watch: send not followed", {
-                threadId: input.threadId,
-                cause: error,
-              }),
-            ),
-          );
-
-  /**
    * A thread started from another machine names hosts as that machine knows them.
    * One this machine cannot reach may still be reachable from there, so say where
    * this thread came from and how to hand the call back. A send is handed back by
@@ -376,7 +348,7 @@ const make = Effect.gen(function* () {
                 ? hostFailure(error)
                 : failure(
                     "invalid_request",
-                    `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call goat_origin_report with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
+                    `${error.message} This thread was started from ${origin.originLabel}, which may reach ${host}. To have it delivered from there, call ${goatCallText("origin.report")} with status progress, naming host ${host}, the thread, and the message; the origin can forward it.`,
                   ),
             ),
       ),
@@ -405,18 +377,24 @@ const make = Effect.gen(function* () {
             threadId: input.threadId,
             message: input.message,
             ...(input.mode === undefined ? {} : { mode: input.mode }),
+            ...(input.capabilities?.length ? { capabilities: input.capabilities } : {}),
             ...(input.clientRequestId === undefined
               ? {}
               : { clientRequestId: input.clientRequestId }),
           })
           .pipe(
             Effect.mapError((error) =>
-              error.reason === "relay_queue_full"
+              error.reason === "relay_unsupported" && (input.capabilities?.length ?? 0) > 0
                 ? failure(
                     "invalid_request",
-                    `${originLabel} has not collected this thread's earlier relayed sends yet; nothing was sent. Try again once it has.`,
+                    `${originLabel} runs a GOAT that cannot relay turn capabilities; nothing was sent. Send without capabilities, or update ${originLabel}.`,
                   )
-                : failure("orchestration_error", `Could not hand the send to ${originLabel}.`),
+                : error.reason === "relay_queue_full"
+                  ? failure(
+                      "invalid_request",
+                      `${originLabel} has not collected this thread's earlier relayed sends yet; nothing was sent. Try again once it has.`,
+                    )
+                  : failure("orchestration_error", `Could not hand the send to ${originLabel}.`),
             ),
           );
         return {
@@ -509,7 +487,7 @@ const make = Effect.gen(function* () {
           ? Effect.fail(
               failure(
                 "invalid_request",
-                `GOAT on ${host} is too old to list every project; update GOAT there or pass one of its projectIds, which goat_project_list with this host lists.`,
+                `GOAT on ${host} is too old to list every project; update GOAT there or pass one of its projectIds, which ${goatCallText("project.list")} with this host lists.`,
               ),
             )
           : Effect.fail(error),
@@ -631,7 +609,7 @@ const make = Effect.gen(function* () {
     ) {
       return yield* failure(
         "invalid_request",
-        "This remote thread backs a delegated task. Use goat_task_read and goat_task_cancel; its completion is already delivered to its parent.",
+        `This remote thread backs a delegated task. Use ${goatCallText("task.read")} and ${goatCallText("task.cancel")}; its completion is already delivered to its parent.`,
       );
     }
     // Reading the thread checks the caller may see it, here or on the host.
@@ -834,10 +812,12 @@ const make = Effect.gen(function* () {
                   : { clientRequestId: input.clientRequestId }),
               });
         const ceiling = admission?.ceiling;
-        if (host !== undefined && ceiling !== undefined)
-          yield* FleetSync.syncBeforeForwarding(fleet, host);
+        const ceilingAdvice =
+          host !== undefined && ceiling !== undefined
+            ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+            : undefined;
         const forwarded = ceiling === undefined ? {} : { permissionProfileCeiling: ceiling };
-        const result = yield* (
+        const sent = yield* (
           host === undefined
             ? local
                 .sendToThread(scope, input)
@@ -874,8 +854,8 @@ const make = Effect.gen(function* () {
                       arguments:
                         scope.thread !== undefined &&
                         (input.mode === "queue" || input.mode === "steer")
-                          ? { ...withoutHost(input), ...forwarded, mode: "auto" }
-                          : { ...withoutHost(input), ...forwarded },
+                          ? { ...remoteSendArguments(input), ...forwarded, mode: "auto" }
+                          : { ...remoteSendArguments(input), ...forwarded },
                       writes: true,
                       // A relayed send arrives as the origin's launcher thread, without this ceiling.
                       ...(ceiling === undefined
@@ -892,7 +872,7 @@ const make = Effect.gen(function* () {
               ? Effect.void
               : admission.settle(exit._tag === "Success").pipe(Effect.ignore),
           ),
-          Effect.tap((result) => rearmAfterSend(scope, input, result)),
+          Effect.tap((result) => rearmAfterSend(launchWatches, scope, input, result)),
           // A send to a remote thread this one launched follows its reports again.
           Effect.tap((result) =>
             host === undefined || result.delivery === "relayed"
@@ -906,6 +886,10 @@ const make = Effect.gen(function* () {
                   ),
           ),
         );
+        const result =
+          ceilingAdvice === undefined || sent.delivery === "relayed"
+            ? sent
+            : { ...sent, ceiling: ceilingAdvice };
         if (requestKey !== undefined) rememberSentRequest(requestKey, result);
         return result;
       }),
@@ -923,7 +907,7 @@ const make = Effect.gen(function* () {
             decodeInterrupt,
           ),
     retryThread: (scope, input) =>
-      input.host === undefined
+      (input.host === undefined
         ? local.retryThread(scope, input)
         : onHost(
             scope,
@@ -934,7 +918,8 @@ const make = Effect.gen(function* () {
               writes: true,
             },
             decodeRetry,
-          ),
+          )
+      ).pipe(Effect.tap((result) => rearmAfterRetry(launchWatches, input, result))),
     readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
     reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),
     configureReplication: (scope, input) =>

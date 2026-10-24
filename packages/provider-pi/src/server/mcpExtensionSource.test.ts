@@ -5,7 +5,14 @@ import * as NodeOS from "node:os";
 import * as NodeModule from "node:module";
 import * as NodeVM from "node:vm";
 import { assert, describe, it } from "@effect/vitest";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import {
+  legacyAgentSurfacePaths,
+  listedToolName,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { PI_GOAT_MCP_EXTENSION_SOURCE } from "./mcpExtensionSource.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
 
@@ -58,7 +65,7 @@ describe("Pi orchestration prompt section", () => {
     assert.isUndefined(result);
     assert.equal(sections.existing, "keep");
     assert.equal(sections.goat_code_development, GOAT_DEVELOPMENT_INSTRUCTIONS);
-    assert.include(sections.goat_code_orchestration!, "goat_provider_list");
+    assert.include(sections.goat_code_orchestration!, "## GOAT orchestration");
     assert.isFalse(Object.hasOwn(sections, "t3_code_orchestration"));
   });
 
@@ -107,7 +114,7 @@ describe("Pi orchestration prompt section", () => {
       assert.isDefined(result);
       assert.isTrue(result!.systemPrompt.startsWith(`${event.systemPrompt}\n\n`));
       assert.include(result!.systemPrompt, GOAT_DEVELOPMENT_INSTRUCTIONS);
-      assert.include(result!.systemPrompt, "goat_provider_list");
+      assert.include(result!.systemPrompt, "## GOAT orchestration");
     }
   });
 });
@@ -121,7 +128,7 @@ describe("Pi MCP tool results", () => {
     ] as const;
     const result = { content, structuredContent: { count: 2 }, _meta: { private: true } };
     const bridge = await loadMcpBridge({ modern: true, result });
-    const tool = bridge.tools.find((tool) => tool.name === "mcp__goat__preview_snapshot")!;
+    const tool = bridge.tools.find((tool) => tool.name === "mcp__goat__goat_preview_snapshot")!;
     const output = await tool.execute("snapshot", {});
     assert.deepEqual(output.content, [
       content[0],
@@ -171,27 +178,32 @@ describe("Pi MCP tool exposure", () => {
     ui: { notify: () => undefined },
   };
 
-  it("keeps orchestration direct and optional bridge tools discoverable on modern Pi", async () => {
+  it("keeps tools the server marks always-load direct and defers the rest on modern Pi", async () => {
     const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true });
     await bridge.handlers.get("session_start")!({ systemPrompt: "" }, discoveryContext);
     const start = bridge.handlers.get("before_agent_start");
     assert.isDefined(start);
     const prompt = await start!({ systemPrompt: "Pi system prompt" }, discoveryContext);
-    assert.include(prompt?.systemPrompt ?? "", "goat_provider_list");
+    assert.include(prompt?.systemPrompt ?? "", "## GOAT orchestration");
     assert.equal(bridge.servers.length, 0);
     assert.equal(bridge.tools.length, 4);
     assert.equal(bridge.registrations.length, 4);
     assert.equal(new Set(bridge.registrations).size, 4);
-    assert.deepEqual(bridge.getActiveTools(), ["read", "tool_search"]);
+    assert.deepEqual(bridge.getActiveTools(), [
+      "read",
+      "tool_search",
+      "mcp__goat__goat_describe",
+      "mcp__goat__goat_call",
+    ]);
     assert.deepEqual(
       bridge.tools
         .filter((tool) => tool.exposure !== "hidden")
         .map((tool) => [tool.name, tool.exposure]),
       [
-        ["mcp__goat__orchestrator_capabilities", "direct"],
-        ["mcp__goat__delegate_task", "direct"],
-        ["mcp__goat__task_status", "direct"],
-        ["mcp__goat__preview_snapshot", "deferred"],
+        ["mcp__goat__goat_describe", "direct"],
+        ["mcp__goat__goat_call", "direct"],
+        ["mcp__goat__goat_task_create", "deferred"],
+        ["mcp__goat__goat_preview_snapshot", "deferred"],
       ],
     );
     assert.deepEqual(
@@ -199,45 +211,79 @@ describe("Pi MCP tool exposure", () => {
       [],
     );
     const result = await bridge.tools
-      .find((tool) => tool.name === "mcp__goat__preview_snapshot")!
+      .find((tool) => tool.name === "mcp__goat__goat_preview_snapshot")!
       .execute("call-1", { depth: 2 });
     assert.equal(result.content[0]?.text, "browser snapshot");
     assert.deepEqual(JSON.parse(JSON.stringify(result.details)), {
       server: "goat",
-      tool: "preview_snapshot",
+      tool: "goat_preview_snapshot",
     });
     assert.deepEqual(JSON.parse(JSON.stringify(bridge.requests.at(-1)?.params)), {
-      name: "preview_snapshot",
+      name: "goat_preview_snapshot",
       arguments: { depth: 2 },
     });
     assert.equal(bridge.requests.at(-1)?.method, "tools/call");
+  });
+
+  it("declares the whole core listing directly, since the server marks every tool it lists", async () => {
+    const marked = { [ALWAYS_LOAD_META_KEY]: true };
+    const bridge = await loadMcpBridge({
+      modern: true,
+      toolSearchAvailable: true,
+      catalog: [
+        { name: "goat_describe", _meta: marked },
+        { name: "goat_call", _meta: marked },
+      ],
+    });
+    await bridge.handlers.get("session_start")!({ systemPrompt: "" }, discoveryContext);
+    assert.deepEqual(
+      bridge.tools.map((tool) => [tool.name, tool.exposure]),
+      [
+        ["mcp__goat__goat_describe", "direct"],
+        ["mcp__goat__goat_call", "direct"],
+      ],
+    );
   });
 
   it("restores gateway declarations after model switches and older tree loadouts without excluded tools", async () => {
     const bridge = await loadMcpBridge({
       modern: true,
       toolSearchAvailable: true,
-      allowsTool: (name) => name !== "mcp__goat__delegate_task",
+      allowsTool: (name) => name !== "mcp__goat__goat_call",
     });
     const event = { systemPrompt: "" };
     await bridge.handlers.get("session_start")!(event, discoveryContext);
     const gatewayContext = { model: { api: "openai-completions" }, ui: { notify: assert.fail } };
     await bridge.handlers.get("model_select")!(event, gatewayContext);
-    bridge.restoreActiveTools(["read", "mcp__goat__task_status"]);
+    bridge.restoreActiveTools(["read", "mcp__goat__goat_task_create"]);
     await bridge.handlers.get("session_tree")!(event, gatewayContext);
     assert.deepEqual(bridge.getActiveTools(), [
       "read",
-      "mcp__goat__task_status",
+      "mcp__goat__goat_task_create",
       "tool_search",
-      "mcp__goat__orchestrator_capabilities",
-      "mcp__goat__preview_snapshot",
+      "mcp__goat__goat_describe",
+      "mcp__goat__goat_preview_snapshot",
     ]);
     await bridge.handlers.get("model_select")!(event, discoveryContext);
     assert.equal(
-      bridge.tools.find((tool) => tool.name === "mcp__goat__preview_snapshot")?.exposure,
+      bridge.tools.find((tool) => tool.name === "mcp__goat__goat_preview_snapshot")?.exposure,
       "deferred",
     );
-    assert.include(bridge.getActiveTools(), "mcp__goat__preview_snapshot");
+    assert.include(bridge.getActiveTools(), "mcp__goat__goat_preview_snapshot");
+  });
+
+  it("brings the always-load tools back after a tree restore drops them on any model", async () => {
+    const bridge = await loadMcpBridge({ modern: true, toolSearchAvailable: true });
+    const event = { systemPrompt: "" };
+    await bridge.handlers.get("session_start")!(event, discoveryContext);
+    bridge.restoreActiveTools(["read"]);
+    await bridge.handlers.get("session_tree")!(event, discoveryContext);
+    assert.deepEqual(bridge.getActiveTools(), [
+      "read",
+      "tool_search",
+      "mcp__goat__goat_describe",
+      "mcp__goat__goat_call",
+    ]);
   });
 
   it.each(["legacy Pi", "disabled tool search"])(
@@ -258,7 +304,7 @@ describe("Pi MCP tool exposure", () => {
           .filter((tool) => tool.exposure !== "hidden")
           .every((tool) => tool.exposure === undefined || tool.exposure === "direct"),
       );
-      const tool = bridge.tools.find((tool) => tool.name === "mcp__goat__preview_snapshot");
+      const tool = bridge.tools.find((tool) => tool.name === "mcp__goat__goat_preview_snapshot");
       assert.isDefined(tool);
       const controller = new AbortController();
       const result = await tool!.execute("call-1", { depth: 2 }, controller.signal);
@@ -270,7 +316,7 @@ describe("Pi MCP tool exposure", () => {
         jsonrpc: "2.0",
         id: 3,
         method: "tools/call",
-        params: { name: "preview_snapshot", arguments: { depth: 2 } },
+        params: { name: "goat_preview_snapshot", arguments: { depth: 2 } },
       });
       assert.isUndefined(tool?.promptSnippet);
       assert.isUndefined(tool?.promptGuidelines);
@@ -344,29 +390,79 @@ describe("Pi tool discovery permissions", () => {
         },
       };
       for (const prefix of ["mcp__goat__"]) {
-        assert.isUndefined(
-          await hook({ toolName: prefix + "orchestrator_capabilities", input: {} }, ctx),
-        );
+        assert.isUndefined(await hook({ toolName: prefix + "goat_describe", input: {} }, ctx));
+        assert.equal((await hook({ toolName: prefix + "goat_call", input: {} }, ctx))?.block, true);
         assert.equal(
-          (await hook({ toolName: prefix + "delegate_task", input: {} }, ctx))?.block,
-          true,
-        );
-        assert.equal(
-          (await hook({ toolName: prefix + "task_status", input: {} }, ctx))?.block,
+          (await hook({ toolName: prefix + "goat_task_create", input: {} }, ctx))?.block,
           true,
         );
       }
       assert.equal(confirmations.length, 2);
       bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
       assert.equal(
-        (await hook({ toolName: "mcp__goat__orchestrator_capabilities", input: {} }, ctx))?.block,
+        (await hook({ toolName: "mcp__goat__goat_describe", input: {} }, ctx))?.block,
         true,
       );
       assert.equal(
-        (await hook({ toolName: "mcp__other__orchestrator_capabilities", input: {} }, ctx))?.block,
+        (await hook({ toolName: "mcp__other__goat_describe", input: {} }, ctx))?.block,
         true,
       );
       assert.equal(confirmations.length, 4);
+    },
+  );
+
+  it.each(["approval-required", "auto-accept-edits", "auto"])(
+    "runs goat_call without asking in %s only when its path resolves to a read",
+    async (runtimeMode) => {
+      const bridge = await loadMcpBridge({ modern: true, runtimeMode });
+      const hook = bridge.handlers.get("tool_call") as unknown as (
+        event: { toolName: string; input: unknown },
+        ctx: { ui: { confirm: (title: string) => Promise<boolean> } },
+      ) => Promise<{ block: true; reason: string } | undefined>;
+      const confirmations: string[] = [];
+      const ctx = {
+        ui: {
+          confirm: async (title: string) => {
+            confirmations.push(title);
+            return false;
+          },
+        },
+      };
+      const call = (path: unknown) =>
+        hook({ toolName: "mcp__goat__goat_call", input: { path, args: {} } }, ctx);
+      const entries = Object.values(agentSurfaceRegistry);
+      const withEffect = (effect: string) =>
+        entries.find((entry) => entry.resource !== "surface" && entry.effect === effect)!;
+      const read = withEffect("read");
+      const legacyRead = entries.find(
+        (entry) => entry.effect === "read" && entry.legacyNames.length > 0,
+      )!;
+      const renamedRead = [...legacyAgentSurfacePaths.keys()].find(
+        (path) => resolveAgentSurfaceEntry(path)?.effect === "read",
+      )!;
+      for (const path of [
+        read.path,
+        listedToolName(read),
+        legacyRead.legacyNames[0],
+        renamedRead,
+      ]) {
+        assert.isUndefined(await call(path), String(path));
+      }
+      assert.lengthOf(confirmations, 0);
+      const asked = [
+        withEffect("write").path,
+        withEffect("destructive").path,
+        "goat_call",
+        "no.such_path",
+        undefined,
+      ];
+      for (const path of asked) {
+        assert.equal((await call(path))?.block, true, String(path));
+      }
+      assert.lengthOf(confirmations, asked.length);
+      // A user extension that takes over the name gets no read exemption.
+      bridge.setBridgeSourcePath("/user/extensions/replacement.ts");
+      assert.equal((await call(read.path))?.block, true);
     },
   );
 
@@ -415,12 +511,15 @@ describe("Pi tool discovery permissions", () => {
       },
     };
     assert.isUndefined(
-      await toolCall!({ toolName: "tool_search", input: { query: "preview_snapshot" } }, ctx),
+      await toolCall!({ toolName: "tool_search", input: { query: "goat_preview_snapshot" } }, ctx),
     );
     assert.equal(confirmations.length, 0);
-    const result = await toolCall!({ toolName: "mcp__goat__preview_snapshot", input: {} }, ctx);
+    const result = await toolCall!(
+      { toolName: "mcp__goat__goat_preview_snapshot", input: {} },
+      ctx,
+    );
     assert.equal(result?.block, true);
-    assert.deepEqual(confirmations, ["Allow mcp__goat__preview_snapshot?"]);
+    assert.deepEqual(confirmations, ["Allow mcp__goat__goat_preview_snapshot?"]);
 
     searchPath = "/extensions/custom-search.ts";
     const replaced = await toolCall!({ toolName: "tool_search", input: {} }, ctx);

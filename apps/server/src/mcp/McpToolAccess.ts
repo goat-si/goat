@@ -29,6 +29,7 @@ import {
   assertLiveCaller,
   assertTargetWithinLimits,
   type Caller,
+  type CallerLimits,
   loadCaller,
   readCaller,
   unavailable,
@@ -124,6 +125,48 @@ const orchestratingCaller = refuseReadOnlyClient.pipe(
 export const hostReachingCaller = refuseReadOnlyClientWith(
   "This call reaches other machines with this machine's SSH keys, and this MCP client was approved for read-only access.",
 ).pipe(Effect.andThen(readCaller()), Effect.tap(assertLiveCaller));
+
+/**
+ * Where a write is admitted: after its caller checks and before its handler runs. ToolAdmission
+ * provides one per call and reserves a clientRequestId here, so a replay passes every check
+ * again and a caller that lost its grant is refused instead of answered from the record.
+ */
+export class KeyedAdmission extends Context.Service<
+  KeyedAdmission,
+  {
+    /**
+     * Reserves the call's key, or ends the call with its recorded answer or a refusal and never
+     * returns. `params` are the decoded arguments; their digest binds the key to this request.
+     */
+    readonly admit: (params: unknown, limits: CallerLimits | undefined) => Effect.Effect<void>;
+  }
+>()("goat/mcp/McpToolAccess/KeyedAdmission") {}
+
+/**
+ * Admits a write here. Declarations admit after their checks; a handler whose own checks must
+ * pass first declares `admission: "handler"` and yields this itself.
+ */
+export const admit = (params: unknown) =>
+  Effect.flatMap(Effect.serviceOption(KeyedAdmission), (admission) =>
+    admission._tag === "Some"
+      ? Effect.flatMap(Effect.serviceOption(AdmittedLimits), (limits) =>
+          admission.value.admit(params, Option.getOrUndefined(limits)),
+        )
+      : Effect.void,
+  );
+
+/** The modes the declaration resolved for this caller; a replay must still hold them. */
+class AdmittedLimits extends Context.Service<AdmittedLimits, CallerLimits>()(
+  "goat/mcp/McpToolAccess/AdmittedLimits",
+) {}
+
+const withLimits = <A, E, R>(limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  Effect.provideService(run, AdmittedLimits, limits);
+
+const admitted = <A, E, R>(params: unknown, limits: CallerLimits, run: Effect.Effect<A, E, R>) =>
+  withLimits(limits, Effect.andThen(admit(params), run));
+
+type AdmissionOption = { readonly admission?: "handler" };
 
 const requireThreadCaller = McpInvocationContext.McpInvocationContext.pipe(
   Effect.flatMap((scope) => McpInvocationContext.requireThreadScope(scope, "This tool")),
@@ -267,16 +310,27 @@ export const readsOrReachesHost = <P, A, E, R>(
 export const readsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => requireThreadCaller.pipe(Effect.flatMap(() => handle(params))));
 
-export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const actsAsCaller = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap(() => handle(params)),
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
     ),
   );
 
 export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => orchestratingCaller.pipe(Effect.flatMap(() => handle(params))));
+  declare("write", (params: P) =>
+    orchestratingCaller.pipe(
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+    ),
+  );
 
 /**
  * `writes` for a tool whose service acts for the calling thread, so an outside
@@ -286,7 +340,7 @@ export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.andThen(orchestratingCaller),
-      Effect.flatMap(() => handle(params)),
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
     ),
   );
 
@@ -294,13 +348,24 @@ export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<
  * Unlike `writes` it does not need thread control; the handler checks its
  * capability, as the capability toolkits do.
  */
-export const writesWithCapability = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
-  declare("write", (params: P) => writingCaller.pipe(Effect.flatMap(() => handle(params))));
+export const writesWithCapability = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
+  declare("write", (params: P) =>
+    writingCaller.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
+    ),
+  );
 
 export const writesThreads = <P, A, E, R>(
   threads: (params: P) => ReadonlyArray<ThreadId | undefined>,
   handle: (params: P) => Effect.Effect<A, E, R>,
-  options: { readonly refusalSuffix?: string } = {},
+  options: AdmissionOption & { readonly refusalSuffix?: string } = {},
 ) =>
   declare("write", (params: P) =>
     Effect.gen(function* () {
@@ -327,7 +392,11 @@ export const writesThreads = <P, A, E, R>(
       // orchestrator checks again under the thread's lock and records its
       // refusal here, since handlers wrap dispatch errors their own way.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      return yield* handle(params).pipe(
+      return yield* (
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params))
+      ).pipe(
         Effect.provideService(DispatchModeLimit, { ...caller.limits, refused }),
         Effect.catch((error) =>
           Effect.flatMap(Ref.get(refused), (refusal) =>
@@ -372,7 +441,7 @@ export const startsThreads = <P, A, E, R>(
           requested.interactionMode,
         ),
       };
-      return yield* handle(params, started);
+      return yield* admitted(params, limits, handle(params, started));
     }),
   );
 
@@ -388,11 +457,20 @@ export const writesEnvironment = <P, A, E, R>(
     params: P,
     check: Effect.Effect<Caller, OrchestratorMcpFailure, CheckServices>,
   ) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) => {
   const check = orchestratingCaller.pipe(
     Effect.tap((caller) => assertFullAccess(caller, fullAccessRequired)),
   );
-  return declare("write", (params: P) => check.pipe(Effect.flatMap(() => handle(params, check))));
+  return declare("write", (params: P) =>
+    check.pipe(
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params, check))
+          : admitted(params, caller.limits, handle(params, check)),
+      ),
+    ),
+  );
 };
 
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
@@ -410,12 +488,17 @@ export const removesCheckouts = <P, A, E, R>(
   removes: (params: P) => boolean,
   reachesHost: (params: P) => boolean,
   handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
 ) =>
   declare("destructive", (params: P) =>
     removes(params)
       ? orchestratingCaller.pipe(
           Effect.tap((caller) => assertFullAccess(caller, removesCheckoutsRequired)),
-          Effect.flatMap(() => handle(params)),
+          Effect.flatMap((caller) =>
+            options.admission === "handler"
+              ? withLimits(caller.limits, handle(params))
+              : admitted(params, caller.limits, handle(params)),
+          ),
         )
       : reachesHost(params)
         ? hostReachingCaller.pipe(Effect.flatMap(() => handle(params)))

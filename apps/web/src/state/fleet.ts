@@ -14,7 +14,7 @@ import {
   groupCloudAgentRuns,
 } from "@goat/client-runtime/state/fleet-cloud-agents";
 import { resolveProviderInstanceDisplayName } from "@goat/client-runtime/state/provider-instance-display";
-import type { CloudFolderTrust, CloudMachine, EnvironmentId, RemoteLaunch } from "@goat/contracts";
+import type { CloudMachine, EnvironmentId, RemoteLaunch } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 
@@ -47,6 +47,8 @@ function sameEnvironments(
         environment.sshAliases.join("\n") === other.sshAliases.join("\n") &&
         environment.os === other.os &&
         environment.machineKind === other.machineKind &&
+        environment.machineId === other.machineId &&
+        environment.machineUserId === other.machineUserId &&
         environment.connected === other.connected
       );
     })
@@ -86,6 +88,8 @@ function fleetEnvironments(
       sshAliases,
       os: serverConfig?.environment.platform.os ?? null,
       machineKind: serverConfig ? (machineKinds.get(environmentId) ?? null) : null,
+      machineId: serverConfig?.environment.machineId ?? null,
+      machineUserId: serverConfig?.environment.machineUserId ?? null,
       connected: connected.has(environmentId),
     });
   }
@@ -106,6 +110,7 @@ export const fleetPageEnvironmentsAtom = Atom.make((get) => fleetEnvironments(ge
 const fleetSummaryAtom = createFleetSummaryAtom({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   environmentsAtom: fleetEnvironmentsAtom,
+  primaryEnvironmentIdAtom,
 });
 
 export function useFleetSummary(): FleetSummary {
@@ -199,30 +204,6 @@ export function useFleetCloudAgents(): ReadonlyArray<FleetCloudAgentGroup> {
   return useAtomValue(fleetCloudAgentsAtom);
 }
 
-export interface FleetFolderTrustSource {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly folders: ReadonlyArray<CloudFolderTrust>;
-}
-
-/** Claude Code folder trust each connected environment reports; read only by the Fleet page. */
-const fleetFolderTrustAtom = Atom.make((get): ReadonlyArray<FleetFolderTrustSource> => {
-  const sources: FleetFolderTrustSource[] = [];
-  for (const { environmentId, label } of get(fleetEnvironmentsAtom)) {
-    const result = get(serverEnvironment.cloudFolderTrust({ environmentId, input: {} }));
-    const folders = Option.getOrNull(AsyncResult.value(result))?.folders ?? EMPTY;
-    if (folders.length > 0) sources.push({ environmentId, label, folders });
-  }
-  const previous = Option.getOrNull(get.self<ReadonlyArray<FleetFolderTrustSource>>());
-  return previous !== null && JSON.stringify(previous) === JSON.stringify(sources)
-    ? previous
-    : sources;
-}).pipe(Atom.withLabel("fleet-folder-trust"));
-
-export function useFleetFolderTrust(): ReadonlyArray<FleetFolderTrustSource> {
-  return useAtomValue(fleetFolderTrustAtom);
-}
-
 /** What the page draws, so streamed thread updates that change none of it keep one snapshot. */
 function snapshotKey(
   snapshot: FleetSnapshot,
@@ -236,6 +217,7 @@ function snapshotKey(
       machine.label,
       machine.subtitle,
       machine.boat,
+      machine.reportedAliases,
       machine.answering,
       machine.os,
       machine.machineKind,

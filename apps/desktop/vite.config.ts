@@ -177,12 +177,20 @@ export default defineConfig({
   ],
   test: {
     include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
+    alias: [
+      {
+        find: /^electron$/,
+        replacement: `${import.meta.dirname}/src/testing/electronStub.ts`,
+      },
+    ],
     // The Windows lane runs workspace suites concurrently; filesystem-heavy
     // desktop integration tests can exceed Vitest's 5 second default there.
     testTimeout: 15_000,
     setupFiles: [
       "../../packages/shared/src/testing/longTempDir.ts",
       "../../packages/shared/src/testing/providerEnv.ts",
+      "../../packages/shared/src/testing/gitEnv.setup.ts",
     ],
+    globalSetup: ["../../packages/shared/src/testing/gitConfigGuard.ts"],
   },
 });

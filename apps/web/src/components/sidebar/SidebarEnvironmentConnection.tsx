@@ -1,5 +1,8 @@
 import type { EnvironmentId } from "@goat/contracts";
-import { offlineSnapshotAgeLabel } from "@goat/client-runtime/connection";
+import {
+  connectionRowShowsSnapshotAge,
+  offlineSnapshotAgeLabel,
+} from "@goat/client-runtime/connection";
 import { shellSyncMessage } from "@goat/client-runtime/state/presentation";
 
 import { cn } from "~/lib/utils";
@@ -54,10 +57,9 @@ export function SidebarEnvironmentConnectionStatus({
     (environment.connection.phase === "connected" && syncMessage === null)
   )
     return null;
-  const age =
-    environment.connection.phase === "connected"
-      ? null
-      : offlineSnapshotAgeLabel(capturedAt, Date.parse(`${nowMinute}:59.999Z`));
+  const age = connectionRowShowsSnapshotAge(environment.connection)
+    ? offlineSnapshotAgeLabel(capturedAt, Date.parse(`${nowMinute}:59.999Z`))
+    : null;
   return (
     <span className="shrink-0">
       ·{" "}

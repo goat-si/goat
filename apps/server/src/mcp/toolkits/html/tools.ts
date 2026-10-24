@@ -13,6 +13,7 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import * as HtmlRender from "../../../htmlRender/HtmlRender.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const Html = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512_000)).annotate({
   description: "A complete, self-contained HTML document.",
@@ -63,16 +64,18 @@ export const HtmlPreviewTool = Tool.make(agentSurfaceRegistry["html.preview"].na
 // touches no workspace, so plan mode and read-only sandboxes can use it.
 const HtmlRenderTool = Tool.make(agentSurfaceRegistry["html.render"].name, {
   description: agentSurfaceRegistry["html.render"].description,
-  parameters: Schema.Struct({
-    html: Html,
-    title: Schema.String.check(
-      Schema.isMinLength(1),
-      Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),
-    ).annotate({ description: "Short name for the page." }),
-    height: Schema.Int.annotate({
-      description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use goat_html_preview's contentHeight. A lower height makes long content scroll inside the frame on mobile only.`,
+  parameters: withClientRequestId(
+    Schema.Struct({
+      html: Html,
+      title: Schema.String.check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(HTML_RENDER_MAX_TITLE_LENGTH),
+      ).annotate({ description: "Short name for the page." }),
+      height: Schema.Int.annotate({
+        description: `The frame height in CSS pixels, ${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}. Use goat_html_preview's contentHeight. A lower height makes long content scroll inside the frame on mobile only.`,
+      }),
     }),
-  }),
+  ),
   success: Schema.Struct({
     htmlRender: Schema.Struct({
       attachmentId: Schema.String,
@@ -93,6 +96,21 @@ const HtmlRenderTool = Tool.make(agentSurfaceRegistry["html.render"].name, {
 
 export const HtmlPreviewToolkit = Toolkit.make(HtmlPreviewTool);
 
-export const HtmlRenderToolkit = Toolkit.make(HtmlRenderTool);
+const HtmlListTool = Tool.make(agentSurfaceRegistry["html.list"].name, {
+  description: agentSurfaceRegistry["html.list"].description,
+  parameters: Schema.Struct({
+    cursor: Schema.optional(Schema.String),
+    limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
+  }),
+  success: HtmlRender.HtmlSavedPages,
+  failure: OrchestratorMcpFailure,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    HtmlRender.HtmlRender,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["html.list"]));
 
-export const HtmlToolkit = Toolkit.make(HtmlPreviewTool, HtmlRenderTool);
+export const HtmlRenderToolkit = Toolkit.make(HtmlRenderTool, HtmlListTool);
+
+export const HtmlToolkit = Toolkit.make(HtmlPreviewTool, HtmlRenderTool, HtmlListTool);

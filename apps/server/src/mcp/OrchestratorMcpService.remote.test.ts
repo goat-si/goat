@@ -1,3 +1,4 @@
+import * as FleetSync from "../goatclaw/FleetSync.ts";
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import * as Stream from "effect/Stream";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
@@ -43,11 +44,12 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
-import Migration0062 from "../persistence/Migrations/069_RemoteReports.ts";
-import Migration0063 from "../persistence/Migrations/070_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/072_RemoteDispatchQuestions.ts";
-import Migration0068 from "../persistence/Migrations/074_RemoteReportRelay.ts";
-import Migration0073 from "../persistence/Migrations/079_MemoryTaskGrantCeiling.ts";
+import Migration0062 from "../persistence/Migrations/070_RemoteReports.ts";
+import Migration0063 from "../persistence/Migrations/071_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/073_RemoteDispatchQuestions.ts";
+import Migration0068 from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import Migration0073 from "../persistence/Migrations/080_MemoryTaskGrantCeiling.ts";
+import * as Sqlite from "../persistence/Sqlite.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
@@ -105,14 +107,24 @@ const catalog: OrchestratorMcpCapabilitiesResult = {
   },
 };
 
-const fixture = Effect.gen(function* () {
+/** goatclaw on forwards the owner ceiling; fleetReach is what the destination's sync reports. */
+const fixtureWith = Effect.fnUntraced(function* (
+  options: { readonly fleetReach?: FleetSync.HostReach } = {},
+) {
   const sql = yield* SqlClient.SqlClient;
-  yield* Migration0062;
-  yield* Migration0063;
-  yield* Migration0065;
-  yield* Migration0068;
-  yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
-  yield* Migration0073;
+  const fleetReach = options.fleetReach;
+  if (fleetReach === undefined) {
+    yield* Migration0062;
+    yield* Migration0063;
+    yield* Migration0065;
+    yield* Migration0068;
+    yield* sql`CREATE TABLE scheduled_tasks (task_id TEXT PRIMARY KEY)`;
+    yield* Migration0073;
+  } else {
+    // goatclaw reads lanes and the caller's runtime mode from the real schema.
+    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${threadId}, 'project', 'Parent', 'codex', 'full-access', 'default', '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', '{}')`;
+  }
   const now = yield* DateTime.now;
   let shell: OrchestrationV2ThreadShell | null = liveThreadShell(threadId, {
     activeRunId: parentRunId,
@@ -162,7 +174,9 @@ const fixture = Effect.gen(function* () {
   let afterRegistration: (() => void) | undefined;
   const dependencies = Layer.mergeAll(
     NodeServices.layer,
-    ServerSettings.layerTest(),
+    ServerSettings.layerTest(
+      fleetReach === undefined ? {} : { goatclaw: { enabled: true, defaultProfile: "owner" } },
+    ),
     Layer.succeed(SqlClient.SqlClient, sql),
     Layer.mock(ThreadManagementService.ThreadManagementService)({
       getThreadRecords: (id) =>
@@ -345,7 +359,13 @@ const fixture = Effect.gen(function* () {
     Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   );
   const layer = OrchestratorMcpService.layer.pipe(
-    Layer.provide(layerNoFleetSync),
+    Layer.provide(
+      fleetReach === undefined
+        ? layerNoFleetSync
+        : Layer.mock(FleetSync.GoatclawFleetSync)({
+            ensure: () => Effect.succeed(fleetReach),
+          }),
+    ),
     Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
     Layer.provideMerge(RemoteDispatchCoordinator.layer),
@@ -396,6 +416,7 @@ const fixture = Effect.gen(function* () {
     },
   };
 });
+const fixture = fixtureWith();
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const encodeFailure = Schema.encodeEffect(OrchestratorMcpFailure);
 const isRemoteDispatchError = Schema.is(RemoteDispatchCoordinator.RemoteDispatchError);
@@ -456,6 +477,39 @@ it.effect(
         assert.equal(f.metadataCalls.length, 0);
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),
+);
+
+it.effect.each([
+  { sync: { state: "applied" as const }, enforcesCeilings: true },
+  { sync: { state: "pending" as const, message: "box is offline." }, enforcesCeilings: false },
+])(
+  "remote delegation with goatclaw on says when box has not confirmed the ceiling ($sync.state)",
+  (fleetReach) =>
+    Effect.gen(function* () {
+      const f = yield* fixtureWith({ fleetReach });
+      yield* Effect.gen(function* () {
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        const first = yield* service.delegateTask(scope, input);
+        const replay = yield* service.delegateTask(scope, input);
+        assert.equal(f.launches.length, 1);
+        assert.equal(f.launches[0]?.permissionProfileCeiling?.id, "owner");
+        assert.deepEqual(
+          first.ceiling,
+          fleetReach.enforcesCeilings
+            ? undefined
+            : {
+                enforcement: "unconfirmed",
+                host: "box",
+                sync: fleetReach.sync,
+                message: first.ceiling?.message ?? "",
+              },
+        );
+        assert.match(first.ceiling?.message ?? "box has not confirmed", /box has not confirmed/);
+        // The replay forwarded nothing, so it claims nothing about a ceiling.
+        assert.equal(replay.taskId, first.taskId);
+        assert.isUndefined(replay.ceiling);
+      }).pipe(Effect.provide(f.layer));
+    }).pipe(Effect.provide(Sqlite.layerMemory)),
 );
 
 it.effect("remote blocking delegation observes the result without optional task metadata", () =>

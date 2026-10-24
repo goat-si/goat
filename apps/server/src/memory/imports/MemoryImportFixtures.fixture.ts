@@ -27,6 +27,8 @@ import type {
   ImportSourceFile,
   ImportSlot,
 } from "./MemoryImportTypes.ts";
+import { it } from "@effect/vitest";
+import { isSupportedGitVersion } from "./gitSupport.ts";
 
 const MEMORY_IMPORT_FIXTURE_SEED = "wp5-fixture-v1";
 const MEMORY_IMPORT_FIXTURE_CLOCK = "2026-10-13T00:00:00.000Z";
@@ -195,6 +197,33 @@ const commitFixture = (
 };
 
 /** Scope finalizer is registered before any provider tree, Git object or state file is written. */
+const hostGitSupported = (() => {
+  try {
+    return isSupportedGitVersion(
+      NodeChildProcess.execFileSync("/usr/bin/git", ["--version"], { encoding: "utf8" }),
+    );
+  } catch {
+    return false;
+  }
+})();
+// Faults the reader refuses only once Git reads the repository.
+const GIT_READ_FAULTS = new Set(["git-symlink", "gitlink", "missing-object"]);
+/**
+ * The omo reader runs the host's Git and refuses versions outside its support policy, such as
+ * stock Ubuntu 24.04's 2.43; a fake Git in MemoryImportReader.test.ts covers that refusal. These
+ * gate the cases that need a supported real Git, so they run where one exists.
+ */
+export const hostGit = {
+  supported: hostGitSupported,
+  it: it.effect.skipIf(!hostGitSupported),
+  cases: <T>(cases: ReadonlyArray<T>) => (hostGitSupported ? cases : []),
+  profiles: MEMORY_IMPORT_FIXTURE_PROFILES.filter(
+    (profile) => hostGitSupported || profile !== "omo-memory-core-beta63",
+  ),
+  faults: <T extends readonly [string, ...unknown[]]>(faults: ReadonlyArray<T>) =>
+    faults.filter(([fault]) => hostGitSupported || !GIT_READ_FAULTS.has(fault)),
+};
+
 export const buildMemoryImportFixture = (
   profile: MemoryImportFixtureProfile,
   options: { readonly seed?: string; readonly files?: Readonly<Record<string, string>> } = {},

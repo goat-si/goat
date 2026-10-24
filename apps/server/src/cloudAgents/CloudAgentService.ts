@@ -63,6 +63,7 @@ import {
   holderFromCloudCell,
   holderFromDiagnoses,
 } from "./cloudHolders.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Routes cloud agent launches to an environment that holds the provider's login, and tracks
@@ -168,66 +169,154 @@ function projectMatchesRepository(
   );
 }
 
-const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (limit: number) {
+interface RunQuery {
+  readonly limit: number;
+  readonly provider?: CloudAgentProvider | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly after?: RunPosition | undefined;
+}
+
+/** A row's place in the newest-first order; the cursor encodes it so pages never overlap. */
+interface RunPosition {
+  readonly updatedAt: string;
+  readonly providerThreadId: string;
+}
+
+const encodeCursor = (position: RunPosition) =>
+  Buffer.from(JSON.stringify([position.updatedAt, position.providerThreadId]), "utf8").toString(
+    "base64url",
+  );
+
+const decodeCursor = (cursor: string): RunPosition | undefined => {
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === 2 &&
+      typeof parsed[0] === "string" &&
+      typeof parsed[1] === "string"
+    )
+      return { updatedAt: parsed[0], providerThreadId: parsed[1] };
+  } catch {
+    // A malformed cursor is reported to the caller below.
+  }
+  return undefined;
+};
+
+/**
+ * Filters run inside the query, so a match behind newer runs is still found. A row that does
+ * not decode is skipped, so the page keeps reading until it holds limit runs and has seen one
+ * more it could return; only then is it truncated.
+ */
+const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (query: RunQuery) {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{ readonly provider_json: string; readonly thread_json: string }>`
-    SELECT p.payload_json AS provider_json, t.payload_json AS thread_json
+  const batch = (after: RunPosition | undefined) => sql<RunRow>`
+    SELECT p.provider_thread_id, p.updated_at,
+      p.payload_json AS provider_json, t.payload_json AS thread_json
     FROM orchestration_v2_projection_provider_threads AS p
     JOIN orchestration_v2_projection_threads AS t ON t.thread_id = p.thread_id
     WHERE p.driver IN ('claudeCloud', 'cursorCloud', 'devinCloud')
       AND p.owner_node_id IS NULL
       AND t.deleted_at IS NULL
       AND json_type(p.payload_json, '$.cloudTask') = 'object'
+      ${query.provider === undefined ? sql`` : sql`AND p.driver = ${query.provider}`}
+      ${query.threadId === undefined ? sql`` : sql`AND p.thread_id = ${query.threadId}`}
+      ${
+        after === undefined
+          ? sql``
+          : sql`AND (p.updated_at < ${after.updatedAt}
+              OR (p.updated_at = ${after.updatedAt}
+                AND p.provider_thread_id > ${after.providerThreadId}))`
+      }
     ORDER BY p.updated_at DESC, p.provider_thread_id ASC
-    LIMIT ${limit}
+    LIMIT ${query.limit + 1}
   `;
   const runs: Array<StoredRun> = [];
-  for (const row of rows) {
-    const providerThread = yield* decodeProviderThreadPayload(row.provider_json).pipe(
-      Effect.option,
-    );
-    const thread = yield* decodeThreadPayload(row.thread_json).pipe(Effect.option);
-    if (Option.isNone(providerThread) || Option.isNone(thread)) continue;
-    const task = providerThread.value.cloudTask;
-    const driver = providerThread.value.driver;
-    if (task === undefined || !isCloudAgentProvider(driver)) continue;
-    runs.push({
-      externalId: providerThread.value.nativeThreadRef?.nativeId ?? undefined,
-      summary: {
-        threadId: thread.value.id,
-        provider: driver,
-        instanceId: providerThread.value.providerInstanceId,
-        title: thread.value.title,
-        status: task.status,
-        tracking: task.tracking,
-        ...(task.url === undefined ? {} : { url: task.url }),
-        ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
-        repository: task.source.repository,
-        ...(task.branch !== undefined
-          ? { branch: task.branch }
-          : task.source.branch !== "HEAD"
-            ? { branch: task.source.branch }
-            : {}),
-        ...(thread.value.externalLauncher === undefined
-          ? {}
-          : { launchedBy: thread.value.externalLauncher }),
-        registered: task.attach === "registered",
-        updatedAt: task.updatedAt,
-      },
-    });
+  let after = query.after;
+  let last: RunPosition | undefined;
+  let more = false;
+  while (!more) {
+    const rows = yield* batch(after);
+    for (const row of rows) {
+      const run = yield* decodeRunRow(row);
+      if (run === undefined) continue;
+      if (runs.length === query.limit) {
+        more = true;
+        break;
+      }
+      runs.push(run);
+      last = positionOf(row);
+    }
+    const end = rows.at(-1);
+    if (rows.length <= query.limit || end === undefined) break;
+    after = positionOf(end);
   }
-  return runs;
+  return { runs, next: more && last !== undefined ? encodeCursor(last) : undefined };
+});
+
+interface RunRow {
+  readonly provider_thread_id: string;
+  readonly updated_at: string;
+  readonly provider_json: string;
+  readonly thread_json: string;
+}
+
+const positionOf = (row: RunRow): RunPosition => ({
+  updatedAt: row.updated_at,
+  providerThreadId: row.provider_thread_id,
+});
+
+// Untraced: it runs once per row inside readRuns, which already has the span.
+const decodeRunRow = Effect.fnUntraced(function* (row: RunRow) {
+  const providerThread = yield* decodeProviderThreadPayload(row.provider_json).pipe(Effect.option);
+  const thread = yield* decodeThreadPayload(row.thread_json).pipe(Effect.option);
+  if (Option.isNone(providerThread) || Option.isNone(thread)) return undefined;
+  const task = providerThread.value.cloudTask;
+  const driver = providerThread.value.driver;
+  if (task === undefined || !isCloudAgentProvider(driver)) return undefined;
+  return {
+    externalId: providerThread.value.nativeThreadRef?.nativeId ?? undefined,
+    summary: {
+      threadId: thread.value.id,
+      provider: driver,
+      instanceId: providerThread.value.providerInstanceId,
+      title: thread.value.title,
+      status: task.status,
+      tracking: task.tracking,
+      ...(task.url === undefined ? {} : { url: task.url }),
+      ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+      repository: task.source.repository,
+      ...(task.branch !== undefined
+        ? { branch: task.branch }
+        : task.source.branch !== "HEAD"
+          ? { branch: task.source.branch }
+          : {}),
+      ...(thread.value.externalLauncher === undefined
+        ? {}
+        : { launchedBy: thread.value.externalLauncher }),
+      registered: task.attach === "registered",
+      updatedAt: task.updatedAt,
+    },
+  } satisfies StoredRun;
 });
 /** Cloud runs this environment follows or links, newest first. Needs only the database. */
-export const listCloudRuns = (input: CloudRunListInput) =>
-  readCloudRuns(input.limit ?? 50).pipe(
-    Effect.map((stored): CloudRunListResult => ({
-      runs: stored
-        .map((run) => run.summary)
-        .filter((run) => input.provider === undefined || run.provider === input.provider),
-    })),
-    Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")),
-  );
+export const listCloudRuns = Effect.fn("CloudAgentService.listRuns")(function* (
+  input: CloudRunListInput,
+) {
+  const after = input.cursor === undefined ? undefined : decodeCursor(input.cursor);
+  if (input.cursor !== undefined && after === undefined)
+    return yield* failure("invalid_request", "cursor is not a nextCursor from this list.");
+  const page = yield* readCloudRuns({
+    limit: input.limit ?? 50,
+    provider: input.provider,
+    after,
+  }).pipe(Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")));
+  return {
+    runs: page.runs.map((run) => run.summary),
+    truncated: page.next !== undefined,
+    ...(page.next === undefined ? {} : { nextCursor: page.next }),
+  } satisfies CloudRunListResult;
+});
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
@@ -250,8 +339,10 @@ const make = Effect.gen(function* () {
   const providersOf = (provider: CloudAgentProvider | undefined) =>
     provider === undefined ? CLOUD_AGENT_PROVIDERS : [provider];
 
-  const runs = (limit: number) =>
-    readCloudRuns(limit).pipe(
+  /** The run for one thread, however many newer runs there are. */
+  const runOf = (threadId: ThreadId) =>
+    readCloudRuns({ limit: 1, threadId }).pipe(
+      Effect.map((page) => page.runs[0]),
       Effect.provideService(SqlClient.SqlClient, sql),
       Effect.mapError(() => failure("orchestration_error", "Could not read cloud runs here.")),
     );
@@ -525,7 +616,7 @@ const make = Effect.gen(function* () {
     if (project === undefined)
       return yield* failure(
         "invalid_request",
-        `No project here has origin ${repo}. Add it with goat_project_clone or goat_project_create on this holder first.`,
+        `No project here has origin ${repo}. Add it with ${goatCallText("project.clone")} or ${goatCallText("project.create")} on this holder first.`,
       );
     return project;
   });
@@ -559,7 +650,7 @@ const make = Effect.gen(function* () {
         if (effective.enabled)
           return yield* failure(
             "capability_denied",
-            "Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with goat_ssh_thread_launch.",
+            `Remote cloud holders cannot yet preserve goatclaw lane accounting. Select a local holder, or launch a profiled thread on the holder with ${goatCallText("ssh.thread_launch")}.`,
           );
         const result = yield* hosts.writeOnHost(
           scope,
@@ -611,7 +702,7 @@ const make = Effect.gen(function* () {
           next: { after: "approval", call: "goat_cloud_launch" },
           holder,
           dryRun: false,
-          note: `A person must allow this launch in a GOAT app. Once approved, call goat_cloud_agent_launch again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
+          note: `A person must allow this launch in a GOAT app. Once approved, call ${goatCallText("cloud_agent.launch")} again with the same arguments and handoffId "${consent.handoff.handoffId}". A different launch needs a new approval.`,
         };
       const launched = yield* launches
         .launch(
@@ -637,7 +728,7 @@ const make = Effect.gen(function* () {
         holder,
         dryRun: false,
         threadId: launched.threadId,
-        note: `The cloud run starts in this thread from ${from}; goat_cloud_agent_run_list and goat_thread_status follow it.`,
+        note: `The cloud run starts in this thread from ${from}; ${goatCallText("cloud_agent.run_list")} and ${goatCallText("thread.status")} follow it.`,
       };
     },
   );
@@ -647,8 +738,7 @@ const make = Effect.gen(function* () {
   ) {
     const deadline = (yield* Clock.currentTimeMillis) + REGISTER_ATTACH_WAIT_MS;
     while ((yield* Clock.currentTimeMillis) < deadline) {
-      const run = (yield* runs(200)).find((candidate) => candidate.summary.threadId === threadId);
-      const task = run?.summary;
+      const task = (yield* runOf(threadId))?.summary;
       if (task?.tracking === "link-only") return "link-only" as const;
       if (task !== undefined && task.status !== "running" && task.status !== "submitting")
         return task.tracking;
@@ -803,7 +893,9 @@ const make = Effect.gen(function* () {
                 : linkOnlyNote,
             }
           : tracking === "pending"
-            ? { note: "Still attaching; goat_cloud_agent_run_list shows the outcome." }
+            ? {
+                note: `Still attaching; ${goatCallText("cloud_agent.run_list")} shows the outcome.`,
+              }
             : { note: "GOAT follows this run and reports when it finishes." }),
       };
     },
@@ -814,9 +906,7 @@ const make = Effect.gen(function* () {
 
   const forget: CloudAgentServiceShape["forget"] = Effect.fn("CloudAgentService.forget")(
     function* (input) {
-      const run = (yield* runs(200)).find(
-        (candidate) => candidate.summary.threadId === input.threadId,
-      );
+      const run = yield* runOf(input.threadId);
       if (run === undefined) return { threadId: input.threadId, forgotten: false };
       if (!run.summary.registered)
         return yield* failure(

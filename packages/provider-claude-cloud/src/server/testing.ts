@@ -1,6 +1,8 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as PlatformError from "effect/PlatformError";
 import * as Stream from "effect/Stream";
@@ -91,6 +93,68 @@ export const NATIVE_TRUST_DIALOG =
 export const NATIVE_TRUST_MOVED =
   "\u001b[1D\u001b[4B\r\u001b[1C\u001b[4A \r\u001b[1C\u001b[1B❯\r\r\n\r\n\r\n\u001b[1C\u001b[3A";
 export const DOWN = "\u001b[B";
+// Transcript lines in the shape claude 2.1.308 wrote for a teleported session (bodies redacted).
+// Cloud lines carry remoteSourced; each assistant content block is its own line.
+const line = (fields: Record<string, unknown>) => JSON.stringify(fields);
+export const cloudPrompt = (text: string, timestamp: string) =>
+  line({ type: "user", remoteSourced: true, timestamp, message: { role: "user", content: text } });
+export const cloudAssistant = (
+  block: { type: "text"; text: string } | { type: "tool_use"; id: string },
+  stop: "end_turn" | "tool_use" | "stop_sequence",
+) =>
+  line({
+    type: "assistant",
+    remoteSourced: true,
+    message: { role: "assistant", content: [block], stop_reason: stop },
+  });
+export const cloudToolResult = (id: string) =>
+  line({
+    type: "user",
+    remoteSourced: true,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "…" }] },
+  });
+const cloudAttachment = line({ type: "attachment", remoteSourced: true, attachment: {} });
+const stopHookSummary = line({ type: "system", subtype: "stop_hook_summary", remoteSourced: true });
+/** Wraps cloud lines in the teleport's own header and its local continuation, prompt and reply. */
+export const teleportTranscript = (cloud: ReadonlyArray<string>) =>
+  [
+    line({ type: "queue-operation", operation: "enqueue" }),
+    line({ type: "queue-operation", operation: "dequeue" }),
+    ...cloud.flatMap((entry) =>
+      entry.includes('"type":"user"') && !entry.includes("tool_result")
+        ? [entry, cloudAttachment]
+        : entry.includes('"stop_reason":"end_turn"')
+          ? [entry, stopHookSummary]
+          : [entry],
+    ),
+    line({
+      type: "user",
+      isMeta: true,
+      message: { role: "user", content: "This session is being continued from another machine." },
+    }),
+    line({ type: "system", subtype: "informational" }),
+    line({ type: "user", message: { role: "user", content: "Reply with OK only." } }),
+    line({ type: "last-prompt" }),
+    line({ type: "cost-state" }),
+    line({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "OK" }],
+        stop_reason: "end_turn",
+      },
+    }),
+  ].join("\n") + "\n";
+export const TELEPORT_RESULT = line({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  num_turns: 1,
+  session_id: "b29613b5-0000-4000-8000-000000000001",
+  total_cost_usd: 0.0064,
+  modelUsage: { "claude-haiku-5-5": {} },
+});
+
 // Representative synthetic refusals, not captured native output or exhaustive vendor wording.
 export const SYNTHETIC_FOLDER_TRUST_REFUSALS = [
   "Error: This folder is not trusted.\r\n",
@@ -121,6 +185,7 @@ export const makeCliHarness = Effect.fnUntraced(function* (
   options: {
     readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode>;
     readonly rejectPtySpawn?: boolean;
+    readonly fileSystem?: Partial<FileSystem.FileSystem>;
   } = {},
 ) {
   const fake = new FakePty();
@@ -166,6 +231,8 @@ export const makeCliHarness = Effect.fnUntraced(function* (
         Layer.provide(
           Layer.mergeAll(
             Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            FileSystem.layerNoop(options.fileSystem ?? {}),
+            Path.layer,
             Layer.succeed(
               PtyAdapter.PtyAdapter,
               PtyAdapter.PtyAdapter.of({

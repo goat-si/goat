@@ -42,6 +42,49 @@ If `goat` or `goat start` reports an already running server, connect to that ser
 instead. Stop it before starting a replacement, or use a different `--base-dir`
 for an independent server.
 
+### Install with npm
+
+GOAT is distributed as an npm-installable tarball in
+[GOAT Releases](https://github.com/goat-si/goat-releases/releases), rather than
+through an npm registry package. The unscoped `goat` registry package is an
+unrelated blockchain toolkit; `t3` is upstream T3 Code.
+
+With Node.js 20.11 or newer and npm installed, install the latest stable release:
+
+```bash
+npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz
+goat --version
+goat help
+```
+
+For an exact stable or nightly version, copy its tag from GOAT Releases and use
+that release's `goat-npm.tgz` URL. For example, in a POSIX shell:
+
+```bash
+# Enter the version from the release tag, without the leading v.
+read -r GOAT_VERSION
+npm install --global "https://github.com/goat-si/goat-releases/releases/download/v${GOAT_VERSION}/goat-npm.tgz"
+```
+
+This route becomes available with the first release containing `goat-npm.tgz`;
+older releases require the archive installer above. The tarball has the private
+identity `@goat-si/goat` and exposes `goat` plus the legacy `t3` command. This does
+not claim that npm scope is available or published. If you already have a separate
+`t3` command, use a dedicated npm prefix rather than forcing npm to overwrite it.
+
+The first invocation downloads the exact version's CLI archive and checks its
+SHA-256 against `SHA256SUMS`. Later invocations stay pinned to that npm package's
+version. To update, install the target release's tarball again with the same npm
+prefix. For a custom prefix, use `npm --prefix <prefix> install --global <URL>`
+and put that prefix's executable directory on `PATH`. Native `goat update` can
+update the server runtime but does not change an npm-owned launcher pin.
+
+For a clean Linux or cloud machine, set up its
+[OpenCodex Child](./providers-codex.md#use-opencodex-home) on that same machine,
+install GOAT above, then run `goat serve`. Add the environment's
+[MCP URL](./outside-agents.md#get-the-mcp-url) to your agent and authorize it
+through the normal sign-in flow. OpenCodex serves the provider; GOAT serves MCP.
+
 ### Intel Macs
 
 There is no `goat` executable for Intel Macs (the desktop app is available). To
@@ -99,7 +142,9 @@ terminal, open **Settings → General → About** and choose **Install** next to
 **goat command**. On macOS and Linux it adds a `goat` link to a folder on your
 `PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
 terminal afterwards. **Remove** takes it off again. If you already have `t3`
-from npm, it stays as it is.
+from npm, it stays as it is. With both GOAT and GOAT (Nightly) installed, `goat`
+runs the app you installed it from. If it runs the other app, choose **Remove** and
+then **Install** in the app you want.
 
 ### Windows Subsystem for Linux
 
@@ -123,18 +168,19 @@ command cannot reach the app, start or update the desktop app and try again.
 
 ## Mobile app
 
-Install GOAT from the
-[App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or
-[Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code).
-The phone connects to a server on another machine. Follow
+GOAT's mobile app for iPhone, iPad and Android is in development and is not in the
+App Store or Google Play yet. Today you can get it two ways:
+
+- **iPhone and iPad:** through TestFlight, which is invite-only for now.
+- **iPhone, iPad or Android:** build it from source and install it on your own
+  device, following the [mobile app README](../../apps/mobile/README.md).
+
+The phone connects to a GOAT server on another machine. Follow
 [remote access](./remote-access.md) to pair it directly or over Tailscale.
 
-Store links and QR codes are also available in **Settings → General → Mobile app**
-on web and desktop. The store apps work with both stable and Nightly servers. Test builds are optional:
-
-- **iPhone and iPad:** TestFlight is invite-only.
-- **Android:** download an APK from the
-  [Android beta releases](https://github.com/pingdotgg/t3code/releases?q=android-beta-).
+The "T3 Code" app in the App Store and Google Play belongs to T3 Code, the <!-- goat-rename: legacy -->
+project GOAT is forked from. It is not GOAT and cannot connect to a GOAT server,
+which runs a newer server protocol than that app.
 
 If the app crashes during launch, open Settings → Diagnostics on the next launch
 that succeeds. It lists startup crashes from the last 7 days with the error and

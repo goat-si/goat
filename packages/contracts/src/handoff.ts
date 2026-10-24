@@ -47,6 +47,8 @@ export const Handoff = Schema.Struct({
   resolvedAt: Schema.optional(Schema.DateTimeUtc),
   resolvedBy: Schema.optional(TrimmedNonEmptyString),
   actor: HandoffActor,
+  /** A computer use grant's approved apps; a grant without them admits every app. */
+  apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type Handoff = typeof Handoff.Type;
 
@@ -82,10 +84,10 @@ const PROVIDER_SETTINGS_HANDOFF_PATHS: ReadonlySet<string> = new Set([
 export const isProviderHandoffPath = (path: string) => PROVIDER_SETTINGS_HANDOFF_PATHS.has(path);
 
 /**
- * An unattended thread's request to use this host's screen. Approving it is admission for the
- * thread until the handoff's expiry, not approval of each action; ending it early moves the
- * approved handoff to cancelled. Like provider handoffs it expires on a clock, because the
- * person usually answers after the bot or scheduled turn that asked has ended.
+ * A thread's request to use this host's screen, or the listed apps on it. Approving it is
+ * admission for the thread until the handoff's expiry, not approval of each action; ending it
+ * early moves the approved handoff to cancelled. Like provider handoffs it expires on a clock,
+ * because the person often answers after the bot or scheduled turn that asked has ended.
  */
 export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
 
@@ -177,9 +179,22 @@ export type HandoffErrorReason = typeof HandoffErrorReason.Type;
 
 export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffError", {
   reason: HandoffErrorReason,
+  /**
+   * A person approved a provider change and GOAT could not apply it, or cannot tell whether it
+   * did. A field beside reason, so older clients still decode the error as invalid_request.
+   */
+  outcome: Schema.optionalKey(Schema.Literals(["apply_failed", "apply_unknown"])),
+  /** The change's own message, built by the server, for an outcome. */
+  detail: Schema.optionalKey(Schema.String),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
   override get message() {
+    if (this.outcome === "apply_failed")
+      return this.detail === undefined
+        ? "GOAT could not apply this change."
+        : `GOAT could not apply this change: ${this.detail}`;
+    if (this.outcome === "apply_unknown")
+      return `This change may have been applied${this.detail === undefined ? "" : ` (${this.detail})`}. Check the provider with Diagnose before you approve it again.`;
     return {
       not_found: "This handoff no longer exists.",
       expired: "This handoff expired. Ask for a new one.",

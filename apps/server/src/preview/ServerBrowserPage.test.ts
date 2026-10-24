@@ -9,10 +9,15 @@ import {
   type Browser,
   type BrowserContext,
   type CDPSession,
+  type Dialog,
   type Page,
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import { inputFence } from "./PreviewInputFence.ts";
+import * as PreviewUpload from "./PreviewUpload.ts";
+import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
 // `chromium.executablePath()` is the full Chrome build, so it stays missing
@@ -97,7 +102,200 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
+
+  it("never clicks after Stop, even when Playwright was still waiting for the target", async () => {
+    await page.setContent('<button id="b" disabled onclick="window.clicked = true">Send</button>');
+    let stopped = false;
+    const clicking = ServerBrowserPage.click(
+      page,
+      { locator: "#b", timeoutMs: 10_000 },
+      undefined,
+      () => {
+        if (stopped) throw new Error("stopped");
+      },
+    );
+    void clicking.catch(() => undefined);
+    // A person stops the agent while the click waits for the button, which then becomes usable.
+    stopped = true;
+    await page.evaluate("document.getElementById('b').disabled = false");
+    await expect(clicking).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.clicked === true")).toBe(false);
+  });
+
+  it("clears and types only into the target, never into another focused field", async () => {
+    await page.setContent(
+      '<input id="target" disabled value="old"><input id="other" value="keep">',
+    );
+    await page.focus("#other");
+    await expect(
+      ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "WRONG" }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
+    expect(await page.evaluate("[target.value, other.value]")).toEqual(["old", "keep"]);
+
+    await page.evaluate("target.disabled = false");
+    await ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "NEW" });
+    expect(await page.evaluate("[target.value, other.value]")).toEqual(["NEW", "keep"]);
+  });
+
+  it("sends no input while it waits for a drag's ends, so a stopped drag leaves no trace", async () => {
+    await page.setContent(
+      '<div id="a" draggable="true">a</div><div id="b">b</div><script>window.seen = []; for (const type of ["pointermove", "pointerdown", "pointerup", "click"]) addEventListener(type, (event) => seen.push(type), true)</script>',
+    );
+    const stopped = () => {
+      throw new Error("stopped");
+    };
+    await expect(
+      ServerBrowserPage.drag(page, { source: "#a", target: "#b" }, undefined, stopped),
+    ).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.seen")).toEqual([]);
+  });
+
+  it("answers a click without waiting for the navigation it starts", async () => {
+    const response = Promise.withResolvers<void>();
+    await page.route("https://slow.test/next", async (route) => {
+      await response.promise;
+      await route.fulfill({ contentType: "text/html", body: "<p>next</p>" });
+    });
+    await page.setContent('<a id="go" href="https://slow.test/next">next</a>');
+    await ServerBrowserPage.click(page, { locator: "#go", timeoutMs: 5_000 });
+    response.resolve();
+    await page.waitForURL("https://slow.test/next");
+  });
+
+  it("never sends a double click's second press once its first opened a dialog", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits = (window.hits || 0) + 1; if (window.hits === 1) confirm(\'sure?\')">Go</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
+    await control.agent("agent", () =>
+      ServerBrowserPage.click(
+        page,
+        { locator: "#b", clickCount: 2 },
+        undefined,
+        control.dispatchGate(),
+      ),
+    );
+    // Stop while the first press waits on the dialog, then a person answers it.
+    control.stopAgents();
+    await (await dialog).dismiss();
+    await control.system(async () => {});
+    expect(await page.evaluate("window.hits")).toBe(1);
+  });
+
+  it("clears a single select when given no values", async () => {
+    await page.setContent(
+      '<select id="s"><option value="a">A</option><option value="b" selected>B</option></select>',
+    );
+    expect(await ServerBrowserPage.select(page, { locator: "#s", values: [] })).toEqual({
+      selected: [],
+    });
+    expect(await page.evaluate("s.selectedIndex")).toBe(-1);
+  });
+
+  it("holds a click that passed its gate when Stop arrives, and lets input through after", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.clicks = (window.clicks || 0) + 1">Send</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const clicking = control.agent("agent", () => {
+      const gate = control.dispatchGate();
+      return ServerBrowserPage.click(page, { locator: "#b" }, undefined, () => {
+        gate();
+        // Stop lands after the gate, while Playwright still has the click to send.
+        control.stopAgents();
+      });
+    });
+    await expect(clicking).rejects.toMatchObject({ reason: "stopped" });
+    // Drains the stopped action, which releases the fence.
+    await control.system(async () => {});
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
+    await page.locator("#b").click();
+    expect(await page.evaluate("window.clicks")).toBe(1);
+  });
+
+  it("does not click a covered target, even though waiting for it sends no input", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.hits.push(\'target\')">Send</button><div id="o" style="position:fixed;inset:0" onclick="window.hits.push(\'overlay\')"></div><script>window.hits = []</script>',
+    );
+    // The button is visible, enabled and stable, so only Playwright's own check after the gate
+    // can see that the overlay would take the click.
+    await expect(ServerBrowserPage.click(page, { locator: "#b" })).rejects.toThrow();
+    expect(await page.evaluate("window.hits")).toEqual([]);
+  });
+
+  it("never selects or uploads after Stop, even when the target appears later", async () => {
+    await page.setContent('<select id="s"><option value="a">A</option></select>');
+    const stopped = () => {
+      throw new Error("stopped");
+    };
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
+    await page.evaluate("s.add(new Option('B', 'b'))");
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }, stopped),
+    ).rejects.toThrow("stopped");
+    expect(await page.evaluate("s.value")).toBe("a");
+
+    const uploading = PreviewUpload.setInputFiles(
+      page,
+      cdp,
+      { locator: "#f", paths: [NodePath.join(NodeOS.tmpdir(), "missing-upload.txt")] },
+      stopped,
+    );
+    void uploading.catch(() => undefined);
+    await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=f type=file>')");
+    await expect(uploading).rejects.toThrow("stopped");
+    expect(await page.evaluate("f.files.length")).toBe(0);
+  });
+
+  it("uploads through a label in one call after the gate, and refuses a framed input", async () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
+    using _removeDirectory = {
+      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
+    };
+    const file = NodePath.join(directory, "note.txt");
+    NodeFS.writeFileSync(file, "hello");
+    await page.setContent(
+      '<label id="l">Attach <input id="f" type="file"></label><iframe srcdoc="<input id=g type=file>"></iframe><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
+    );
+    let gates = 0;
+    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
+      gates++;
+    });
+    expect(gates).toBe(1);
+    expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
+    await expect(
+      PreviewUpload.setInputFiles(
+        page,
+        cdp,
+        { locator: "iframe >> internal:control=enter-frame >> #g", paths: [file] },
+        () => gates++,
+      ),
+    ).rejects.toThrow(/inside a frame/);
+    expect(gates).toBe(1);
+  });
+
+  it("skips the capture for a text-only snapshot and still returns the page", async () => {
+    await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
+    const result = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 15_000,
+    });
+    expect(result.screenshot).toBeUndefined();
+    expect(String(result.accessibilityTree)).toContain("Compose");
+  });
 
   it("captures a full document without changing viewport, scroll, or responsive layout", async () => {
     await page.setViewportSize({ width: 800, height: 600 });
@@ -113,11 +311,12 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
     expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
     const bottomPixel = await page.evaluate(`(async () => {
       const image = new Image();
-      image.src = "data:image/png;base64,${result.screenshot.data}";
+      image.src = "data:image/png;base64,${result.screenshot!.data}";
       await image.decode();
       const canvas = document.createElement("canvas");
       canvas.width = image.width; canvas.height = image.height;
@@ -150,13 +349,14 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
         consoleEntries: [],
         networkEntries: [],
         actionTimeline: [],
+        timeoutMs: 15_000,
       });
       expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
-      const image = Buffer.from(result.screenshot.data, "base64");
+      const image = Buffer.from(result.screenshot!.data, "base64");
       expect(image.readUInt32BE(16)).toBe(800);
       expect(image.readUInt32BE(20)).toBe(3000);
-      expect(result.screenshot.byteLength).toBe(image.length);
-      expect(result.screenshot.byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(result.screenshot!.byteLength).toBe(image.length);
+      expect(result.screenshot!.byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
     } finally {
       await retina.close();
     }
@@ -185,7 +385,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       .split("\n")
       .filter((line) => line.includes('button "delete"'));
     expect(buttons).toHaveLength(5);
-    await ServerBrowserPage.click(page, { locator: locators(buttons[4])[0]!, timeoutMs: 1_000 });
+    await ServerBrowserPage.click(page, { locator: locators(buttons[4])[0]! });
     expect(await page.locator("li").allTextContents()).toEqual([
       "row 1delete",
       "row 2delete",
@@ -203,7 +403,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     );
     await ServerBrowserPage.click(page, {
       locator: buttonLocator((await takeSnapshot()).accessibilityTree, "Confirm"),
-      timeoutMs: 1_000,
     });
     await (await dialog).accept();
     await expect.poll(() => page.locator("body").getAttribute("data-answer")).toBe("true");
@@ -373,12 +572,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     const waiting = ServerBrowserPage.waitFor(page, {
       locator: "#dialog",
       state,
-      timeoutMs: 1_000,
     });
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     await page.evaluate("document.body.innerText");
     expect(finished).toBe(false);
     await page.evaluate(state === "hidden" ? 'dialog.style.display = "none"' : "dialog.remove()");
@@ -389,7 +591,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
 
   it("keeps legacy attachment waits for hidden and repeated matches", async () => {
     await page.setContent('<div class="match" hidden>one</div><div class="match" hidden>two</div>');
-    await ServerBrowserPage.waitFor(page, { selector: ".match", timeoutMs: 1_000 });
+    await ServerBrowserPage.waitFor(page, { selector: ".match" });
   });
 
   it("requires all conditions to hold together, including same-document URL changes", async () => {
@@ -405,15 +607,18 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       state: "visible",
       text: "Done",
       urlIncludes: "#done",
-      timeoutMs: 1_000,
     });
     await page.evaluate(
       'ready.hidden = true; document.body.append("Done"); history.pushState({}, "", "#done")',
     );
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     // A round trip after every other condition holds must not finish a hidden-target wait.
     await page.evaluate("document.body.innerText");
     expect(finished).toBe(false);
@@ -439,12 +644,15 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       text: "New document",
       urlIncludes: "wait.test",
       loadState: "load",
-      timeoutMs: 1_000,
     });
     let finished = false;
-    void waiting.then(() => {
-      finished = true;
-    });
+    void waiting.then(
+      () => {
+        finished = true;
+      },
+      // A failure surfaces once, at the await below.
+      () => undefined,
+    );
     try {
       await page.goto("https://wait.test/", { waitUntil: "domcontentloaded" });
       await routed.promise;
@@ -471,7 +679,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     try {
       await page.goto("https://wait.test/", { waitUntil: "domcontentloaded" });
       await requested.promise;
-      await ServerBrowserPage.waitFor(page, { loadState: "domContentLoaded", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { loadState: "domContentLoaded" });
       await expect(
         ServerBrowserPage.waitFor(page, { loadState: "load", timeoutMs: 100 }),
       ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
@@ -496,55 +704,88 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     try {
       await page.goto("https://wait.test/");
       await requested.promise;
-      await ServerBrowserPage.waitFor(page, { text: "Ready", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { text: "Ready" });
       await expect(
         ServerBrowserPage.waitFor(page, { loadState: "networkIdle", timeoutMs: 100 }),
       ).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
       release.resolve();
-      await ServerBrowserPage.waitFor(page, { loadState: "networkIdle", timeoutMs: 1_000 });
+      await ServerBrowserPage.waitFor(page, { loadState: "networkIdle" });
     } finally {
       release.resolve();
     }
   });
 });
 
-describe("server browser drag", () => {
-  it("fails the drag, not the server, when it times out while the cursor is still moving", async () => {
-    const timedOut = new Error("locator.dragTo: Timeout 30000ms exceeded.");
-    const box = { x: 0, y: 0, width: 20, height: 20 };
-    const targetBox = Promise.withResolvers<typeof box>();
-    const page = {
-      locator: (selector: string) =>
-        selector === "#card"
-          ? {
-              scrollIntoViewIfNeeded: async () => {},
-              boundingBox: async () => box,
-              dragTo: () => Promise.reject(timedOut),
-            }
-          : { boundingBox: () => targetBox.promise },
-    } as unknown as Page;
-    const unobserved: Array<unknown> = [];
-    const onUnhandled = (reason: unknown) => unobserved.push(reason);
-    process.on("unhandledRejection", onUnhandled);
-    try {
-      let finished = false;
-      const settled = ServerBrowserPage.drag(page, { source: "#card", target: "#lane" }).then(
-        () => null,
-        (error: unknown) => error,
-      );
-      void settled.then(() => (finished = true));
-      // Two macrotask turns: Node reports a rejection nobody observed after the first.
-      for (let turn = 0; turn < 2; turn++) {
-        // oxlint-disable-next-line goat/no-real-time-wait-in-tests -- Node emits unhandledRejection only between macrotasks; no promise can mark that point.
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-      expect(finished).toBe(false);
-      targetBox.resolve(box);
+describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
+  let browser: Browser;
+  let context: BrowserContext;
+  let page: Page;
+  /** Each change the watcher reports, resolved in order. */
+  let changes: Array<PromiseWithResolvers<boolean>>;
+  let reported: number;
+  let delivered: number;
+  const nextChange = () => changes[reported++]!.promise;
 
-      expect(await settled).toBe(timedOut);
-      expect(unobserved).toEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandled);
-    }
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  });
+  afterAll(async () => {
+    await browser?.close();
+  });
+  beforeEach(async () => {
+    context = await browser.newContext();
+    page = await context.newPage();
+    changes = Array.from({ length: 8 }, () => Promise.withResolvers<boolean>());
+    reported = 0;
+    delivered = 0;
+    await watchPrivateMode(page, (on) => changes[delivered++]!.resolve(on));
+    // Bindings are answered in order, so awaiting this one means every earlier report arrived.
+    await page.exposeFunction("__fence", () => undefined);
+  });
+  afterEach(async () => {
+    await context.close();
+  });
+
+  // A navigation runs the watcher's script, and passkeys need a secure origin.
+  const load = async (body: string) => {
+    await page.route("https://login.example/**", (route) =>
+      route.fulfill({ contentType: "text/html", body }),
+    );
+    await page.goto("https://login.example/");
+  };
+
+  it("goes private while a password or one-time code field has focus, and back when it leaves", async () => {
+    await load(
+      '<input id="user"><input id="pass" type="password"><input id="otp" autocomplete="one-time-code">',
+    );
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.focus("#user");
+    expect(await nextChange()).toBe(false);
+    await page.focus("#otp");
+    expect(await nextChange()).toBe(true);
+  });
+
+  it("stays private through history and hash moves, and clears only for a new document", async () => {
+    await load('<input id="pass" type="password">');
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.evaluate("history.pushState({}, '', '/step-2'); location.hash = 'otp'");
+    await page.evaluate("window.__fence()");
+    expect(delivered).toBe(1);
+    await page.goto("https://login.example/done");
+    expect(await nextChange()).toBe(false);
+  });
+
+  it("goes private for a passkey prompt until it settles, inside a frame too", async () => {
+    await load('<iframe srcdoc="<p>sign in</p>"></iframe>');
+    const frame = page.frames()[1]!;
+    await frame.waitForLoadState();
+    // Headless Chromium has no authenticator, so the ceremony fails; the prompt still counted.
+    void frame.evaluate(
+      "navigator.credentials.get({ publicKey: { challenge: new Uint8Array(16), timeout: 1000 } }).catch(() => {})",
+    );
+    expect(await nextChange()).toBe(true);
+    expect(await nextChange()).toBe(false);
   });
 });

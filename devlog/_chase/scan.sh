@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Scan GOAT against upstream T3 for a chase cycle (see devlog/_chase/020_cycle_runbook.md).
-# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [--delta] [target-ref, default origin/dev]
+# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [--delta] [--names] [target-ref, default origin/dev]
 # --delta checks only the fork delta registry and exits 1 on a problem; it needs no upstream remote.
-# Read-only apart from fetching upstream main and origin.
+# --names reports names the current rules miss after rewriting a disposable upstream worktree.
+# Default: read-only apart from fetching. --names creates and removes its own sibling worktree.
 set -euo pipefail
 
 fetch=1
 commits=0
 delta_only=0
+names=0
 target=origin/dev
 for arg in "$@"; do
   case "$arg" in
     --no-fetch) fetch=0 ;;
     --commits) commits=1 ;;
     --delta) delta_only=1 ;;
-    -h | --help) sed -n '2,5p' "$0"; exit 0 ;;
+    --names) names=1 ;;
+    -h | --help) sed -n '2,6p' "$0"; exit 0 ;;
     *) target=$arg ;;
   esac
 done
@@ -135,6 +138,33 @@ leaks=$(git diff "$base" "$up" -- apps packages ':!*.md' |
   awk -v pattern="$t3_name" '/^\+\+\+ b\// { file = substr($0, 7); next } $0 ~ pattern { count[file]++ } END { for (f in count) printf "  %4d %s\n", count[f], f }' |
   sort -rn)
 if [ -n "$leaks" ]; then printf '%s\n' "$leaks"; else echo "  none"; fi
+
+# A subshell keeps this cleanup independent of --commits' temporary-file trap.
+scan_names() (
+  names_dir=$(mktemp -d "$(dirname "$PWD")/goat-chase-names.XXXXXX")
+  names_added=0
+  trap 'if [ "$names_added" = 1 ]; then
+    git -c core.hooksPath=/dev/null worktree remove --force "$names_dir"
+  else
+    rmdir "$names_dir"
+  fi' EXIT
+  # No project setup or install is needed: the current rename script uses Node built-ins only.
+  git -c core.hooksPath=/dev/null worktree add --detach "$names_dir" "$up" >/dev/null
+  names_added=1
+  node scripts/goat-rename.ts --apply --root "$names_dir" >"$names_dir/rename-apply.log"
+  names_result=0
+  node scripts/goat-rename.ts --check --root "$names_dir" --limit 20 >"$names_dir/rename-check.log" || names_result=$?
+  # Exit 1 means uncovered names, a classification report rather than a failed scan. Crashes fail.
+  if [ "$names_result" -gt 1 ] || ! grep -Eq '^[0-9]+ lines with T3 residue in [0-9]+ files, [0-9]+ dropped paths$' "$names_dir/rename-check.log"; then
+    cat "$names_dir/rename-check.log"
+    return 1
+  fi
+  echo
+  echo "## upstream names not covered by rename rules (full $up tree after --apply)"
+  cat "$names_dir/rename-check.log"
+)
+
+if [ "$names" = 1 ]; then scan_names; fi
 
 if [ "$commits" = 1 ]; then
   echo

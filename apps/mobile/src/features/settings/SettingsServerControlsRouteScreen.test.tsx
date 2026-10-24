@@ -1,4 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS, type ServerSettingsPatch } from "@goat/contracts";
+import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
 import { AsyncResult } from "effect/reactivity";
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -79,7 +80,26 @@ vi.mock("./components/SettingsEnvironmentFilterHeader", () => ({
 }));
 vi.mock("./components/DatabaseStorageNotice", () => ({ DatabaseStorageNotice: () => null }));
 vi.mock("./components/SettingsSection", () => ({ SettingsSection: Children }));
-vi.mock("./components/SettingsChoiceRow", () => ({ SettingsChoiceRow: () => null }));
+vi.mock("./components/SettingsChoiceRow", () => ({
+  SettingsChoiceRow: ({
+    label,
+    selected,
+    disabled,
+    onPress,
+  }: {
+    label: string;
+    selected: boolean;
+    disabled?: boolean;
+    onPress: () => void;
+  }) => (
+    <button aria-pressed={selected} disabled={disabled} onClick={onPress}>
+      {label}
+    </button>
+  ),
+}));
+vi.mock("./components/StandingInstructionsSettings", () => ({
+  StandingInstructionsSettings: () => null,
+}));
 vi.mock("./components/SettingsSwitchRow", () => ({
   SettingsSwitchRow: ({
     label,
@@ -129,6 +149,7 @@ vi.mock("./settings-environment-filter", () => ({
 }));
 
 import {
+  SettingsEnvironmentAgentBehaviorRouteScreen,
   SettingsEnvironmentMaintenanceRouteScreen,
   SettingsEnvironmentSourceControlRouteScreen,
 } from "./SettingsServerControlsRouteScreen";
@@ -200,6 +221,27 @@ describe("maintenance automatic server updates", () => {
 });
 
 describe("SettingsServerControlsRouteScreen", () => {
+  it("writes the GOAT tool listing to the environment and keeps it environment-wide", async () => {
+    const shippedDefault = DEFAULT_SERVER_SETTINGS.agentToolListing;
+    const other: AgentToolListing = shippedDefault === "core" ? "full" : "core";
+    const choice = (listing: AgentToolListing) =>
+      buttonStartingWith(listing === "core" ? "Core" : "All tools");
+    act(() => root.render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    expect(choice(shippedDefault).getAttribute("aria-pressed")).toBe("true");
+    expect(choice(shippedDefault).textContent).toContain("(default)");
+
+    await act(async () => choice(other).click());
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "local",
+      input: { patch: { agentToolListing: other } },
+    });
+
+    // A project has no override for this key, so the choice is not offered there.
+    mocks.projectSelected = true;
+    act(() => root.render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    expect(choice(other).disabled).toBe(true);
+  });
+
   it("sends a draft saved during a pending write once that write settles", async () => {
     const pending = Promise.withResolvers<AsyncResult.Success<void>>();
     mocks.updateSettings.mockReturnValueOnce(pending.promise);
@@ -225,6 +267,14 @@ describe("SettingsServerControlsRouteScreen", () => {
 function button(label: string) {
   const result = Array.from(container.querySelectorAll("button")).find(
     (element) => element.textContent === label || element.getAttribute("aria-label") === label,
+  );
+  if (!result) throw new Error(`Missing button: ${label}`);
+  return result;
+}
+
+function buttonStartingWith(label: string) {
+  const result = Array.from(container.querySelectorAll("button")).find((element) =>
+    element.textContent?.startsWith(label),
   );
   if (!result) throw new Error(`Missing button: ${label}`);
   return result;

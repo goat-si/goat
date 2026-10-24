@@ -121,6 +121,7 @@ export const PREVIEW_RECORDING_SAVE_CHANNEL = "desktop:preview-recording-save";
 export const PREVIEW_RECORDING_FRAME_CHANNEL = "desktop:preview-recording-frame";
 export const PREVIEW_STATE_CHANGE_CHANNEL = "desktop:preview-state-change";
 export const PREVIEW_POINTER_EVENT_CHANNEL = "desktop:preview-pointer-event";
+export const PREVIEW_SERVER_TAB_CAPTURE_CHANNEL = "desktop:preview-server-tab-capture";
 export const PREVIEW_OPEN_LINK_CHANNEL = "desktop:preview-open-link";
 
 export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
@@ -136,3 +137,6 @@ export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-
 export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";
 export const TAKE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:take-legacy-local-storage";
 export const COMPLETE_LEGACY_LOCAL_STORAGE_CHANNEL = "desktop:complete-legacy-local-storage";
+
+export const GET_WINDOW_MATERIAL_STATE_CHANNEL = "desktop:get-window-material-state";
+export const WINDOW_MATERIAL_STATE_CHANNEL = "desktop:window-material-state-changed";

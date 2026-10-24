@@ -1,4 +1,6 @@
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
@@ -15,6 +17,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import { UPDATE_CHECK_SETTLE_WAIT } from "../updates/updateFailures.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export class DesktopLifecycleRelaunchError extends Schema.TaggedError<DesktopLifecycleRelaunchError>()(
@@ -96,17 +99,52 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
   },
 );
 
+interface QuitState {
+  phase: "running" | "waiting" | "allowed";
+  /** When the backend shutdown began; null while a quit still decides on a pending update. */
+  waitingSinceNanos: bigint | null;
+}
+
+// Longer than a backend's stop budget (SIGTERM, 5s grace, SIGKILL, 1s wait),
+// so a double Cmd-Q at the start of a normal quit cannot cut the backend stop
+// short and orphan it.
+const SHUTDOWN_STALL_THRESHOLD = Duration.seconds(10);
+
+const startWaitingForShutdown = Effect.fn("desktop.lifecycle.startWaitingForShutdown")(function* (
+  quit: QuitState,
+) {
+  quit.phase = "waiting";
+  quit.waitingSinceNanos = yield* Clock.monotonicTimeNanos;
+});
+
+// While a quit waits on shutdown, `quitting` makes activation open nothing. If
+// that shutdown stalls, a repeated Quit or SIGTERM is the user's only way out
+// short of SIGKILL. A quit still preparing a downloaded update is not stalled.
+const exitIfShutdownStalled = Effect.fn("desktop.lifecycle.exitIfShutdownStalled")(function* (
+  quit: QuitState,
+  source: string,
+) {
+  const pendingMs =
+    quit.waitingSinceNanos === null
+      ? 0
+      : Number(((yield* Clock.monotonicTimeNanos) - quit.waitingSinceNanos) / 1_000_000n);
+  if (quit.waitingSinceNanos === null || pendingMs < Duration.toMillis(SHUTDOWN_STALL_THRESHOLD)) {
+    yield* logLifecycleInfo("quit already in progress", { source, pendingMs });
+    return;
+  }
+  yield* logLifecycleError("desktop shutdown stalled; exiting without it", { source, pendingMs });
+  const electronApp = yield* ElectronApp.ElectronApp;
+  yield* electronApp.exit(0);
+});
+
 function handleBeforeQuit(
   event: Electron.Event,
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
-  allowQuit: () => boolean,
-  markQuitAllowed: () => void,
-  beginQuit: () => boolean,
-  finishQuit: () => void,
+  quit: QuitState,
 ): void {
-  if (allowQuit()) {
+  if (quit.phase === "allowed") {
     void runEffect(
       Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
@@ -118,7 +156,13 @@ function handleBeforeQuit(
   }
 
   event.preventDefault();
-  if (!beginQuit()) return;
+  if (quit.phase === "waiting") {
+    void runEffect(exitIfShutdownStalled(quit, "before-quit"));
+    return;
+  }
+  // Claimed before the effect runs, so a second Quit cannot start a second shutdown.
+  quit.phase = "waiting";
+  quit.waitingSinceNanos = null;
   void runEffect(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
@@ -128,16 +172,22 @@ function handleBeforeQuit(
       const update = yield* updates.getState;
       if (
         !(yield* Ref.get(state.quitting)) &&
-        update.installPolicy === "install-on-quit" &&
+        // Quitting stops every backend, so restart-when-idle has its idle moment here too.
+        // Only a paused policy leaves a downloaded update for later.
+        update.installPolicy !== "paused" &&
         update.downloadedVersion !== null
       ) {
         yield* (yield* DesktopWindow.DesktopWindow).flushMainWindowBounds;
+        // A running refresh check settles within its deadline; waiting for it keeps quit
+        // from skipping the downloaded update.
         const installation = yield* updates.installPrepared(update.downloadedVersion, {
-          waitForCheck: false,
+          waitForCheck: true,
+          checkWait: UPDATE_CHECK_SETTLE_WAIT,
         });
         if (installation.accepted)
           return installation.failed ? ("failed" as const) : ("installing" as const);
       }
+      yield* startWaitingForShutdown(quit);
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
       yield* requestDesktopShutdownAndWait(
@@ -155,9 +205,15 @@ function handleBeforeQuit(
       // The guard owns this handler promise only. After an accepted installation,
       // isInstallActive decides whether a later quit belongs to the updater or
       // should retry ordinary shutdown after native installer recovery.
-      finishQuit();
-      if (result !== "shutdown") return;
-      markQuitAllowed();
+      if (result !== "shutdown") {
+        // The updater may already own the quit (before-quit-for-update); keep that.
+        if (quit.phase === "waiting") {
+          quit.phase = "running";
+          quit.waitingSinceNanos = null;
+        }
+        return;
+      }
+      quit.phase = "allowed";
       void runEffect(
         Effect.gen(function* () {
           const electronApp = yield* ElectronApp.ElectronApp;
@@ -172,7 +228,12 @@ function quitFromSignal(
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
+  quit: QuitState,
 ): void {
+  if (quit.phase === "waiting") {
+    void runEffect(exitIfShutdownStalled(quit, signal));
+    return;
+  }
   void runEffect(
     Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ signal });
@@ -180,8 +241,10 @@ function quitFromSignal(
       const state = yield* DesktopState.DesktopState;
       const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
       if (wasQuitting) return;
+      yield* startWaitingForShutdown(quit);
       yield* logLifecycleInfo("process signal received", { signal });
       yield* requestDesktopShutdownAndWait();
+      quit.phase = "allowed";
       yield* electronApp.quit;
     }).pipe(Effect.withSpan("desktop.lifecycle.processSignal")),
   );
@@ -224,9 +287,7 @@ export const make = DesktopLifecycle.of({
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const context = yield* Effect.context<DesktopLifecycleRegistrationServices>();
     const runEffect = Effect.runPromiseWith(context);
-    let quitAllowed = false;
-    let updaterQuitAllowed = false;
-    let quitInProgress = false;
+    const quit: QuitState = { phase: "running", waitingSinceNanos: null };
     yield* electronTheme.onUpdated(() => {
       void runEffect(
         desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
@@ -236,7 +297,7 @@ export const make = DesktopLifecycle.of({
       // Electron's updater owns the remaining quit/install/relaunch sequence.
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
-      updaterQuitAllowed = true;
+      quit.phase = "allowed";
       // This event is synchronous and the updater's quit proceeds as soon as
       // the listener returns, so a forked destroyAll would race the quit
       // and windows could still be open when the process exits (visible on
@@ -252,22 +313,7 @@ export const make = DesktopLifecycle.of({
       );
     });
     yield* electronApp.on("before-quit", (event: Electron.Event) => {
-      handleBeforeQuit(
-        event,
-        runEffect,
-        () => quitAllowed || updaterQuitAllowed,
-        () => {
-          quitAllowed = true;
-        },
-        () => {
-          if (quitInProgress) return false;
-          quitInProgress = true;
-          return true;
-        },
-        () => {
-          quitInProgress = false;
-        },
-      );
+      handleBeforeQuit(event, runEffect, quit);
     });
     yield* electronApp.on("activate", () => {
       void runEffect(
@@ -292,10 +338,10 @@ export const make = DesktopLifecycle.of({
 
     if (environment.platform !== "win32") {
       yield* addScopedListener(process, "SIGINT", () => {
-        quitFromSignal("SIGINT", runEffect);
+        quitFromSignal("SIGINT", runEffect, quit);
       });
       yield* addScopedListener(process, "SIGTERM", () => {
-        quitFromSignal("SIGTERM", runEffect);
+        quitFromSignal("SIGTERM", runEffect, quit);
       });
     }
   }).pipe(Effect.withSpan("desktop.lifecycle.register")),

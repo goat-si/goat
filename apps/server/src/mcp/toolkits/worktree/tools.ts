@@ -26,6 +26,7 @@ import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as WorktreeInventoryService from "../../WorktreeInventoryService.ts";
 import * as WorktreeMcpService from "../../WorktreeMcpService.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -95,7 +96,7 @@ const WorktreeInventoryTool = Tool.make(agentSurfaceRegistry["worktree.inventory
 
 const WorktreeRemoveTool = Tool.make(agentSurfaceRegistry["worktree.remove"].name, {
   description: agentSurfaceRegistry["worktree.remove"].description,
-  parameters: WorktreeMcpRemoveInput,
+  parameters: withClientRequestId(WorktreeMcpRemoveInput),
   success: WorktreeMcpRemoveResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

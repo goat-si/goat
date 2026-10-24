@@ -5,6 +5,7 @@ import {
   classifyLinux,
   classifyWindows,
   MAC_GRANTS_REASON,
+  MAC_STANDALONE_REASON,
   parseMacGrants,
   withMacGrants,
   ldconfigLibraries,
@@ -272,6 +273,14 @@ describe("macOS", () => {
       "Another user is signed in at this Mac's screen. Computer use needs jun signed in there.",
     );
     expect(classifyDarwin({ uid: 501, consoleUid: null, user: "jun" }).capability).toBe("partial");
+  });
+
+  it("is unavailable under a standalone server, whose grants would land on the launching terminal", () => {
+    expect(classifyDarwin({ uid: 501, consoleUid: 501, user: "jun", standalone: true })).toEqual({
+      capability: "unavailable",
+      reason: MAC_STANDALONE_REASON,
+      environment: [],
+    });
   });
 
   it("reads the grants from check_permissions", () => {

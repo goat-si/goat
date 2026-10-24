@@ -56,6 +56,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import * as FileSystem from "effect/FileSystem";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference } from "@goat/shared/mcpApp";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -67,7 +68,11 @@ import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import packageJson from "../../../package.json" with { type: "json" };
+import {
+  makeCodexReplayTurn,
+  codexReplayPreamble,
+  makeCodexReplayTranscript,
+} from "./CodexReplay.testkit.ts";
 
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
@@ -104,6 +109,11 @@ const GOAT_MEMORY_TOOLS = [
 ];
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
+const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
+  ChildProcess.make("git", args, { cwd, env: isolatedGitEnv() });
+const decodeThreadConfig = Schema.decodeUnknownEffect(
+  Schema.Struct({ config: Schema.Record(Schema.String, Schema.Unknown) }),
+);
 const encodeStringJson = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
 
 const wp4Memory = () =>
@@ -341,7 +351,7 @@ describe("CodexAdapterV2 runtime policy", () => {
         kind: "untrusted",
         value: "Filtered to overdue",
       });
-      assert.isDefined(withGoat.additionalContext?.["t3_code_runtime"]);
+      assert.isDefined(withGoat.additionalContext?.["goat_code_runtime"]);
     }),
   );
 
@@ -359,11 +369,9 @@ describe("CodexAdapterV2 runtime policy", () => {
           });
         assert.deepEqual((yield* turn(false)).additionalContext, buildCodexDevelopmentContext());
         const withGoat = (yield* turn(true)).additionalContext;
-        assert.deepEqual(
-          withGoat?.t3_code_development,
-          buildCodexDevelopmentContext().t3_code_development,
-        );
-        assert.isDefined(withGoat?.t3_code_orchestration_01);
+        assert.isDefined(withGoat?.goat_code_development);
+        assert.deepInclude(withGoat, buildCodexDevelopmentContext());
+        assert.isDefined(withGoat?.goat_code_orchestration_01);
       }),
   );
 });
@@ -663,164 +671,6 @@ function makeCodexTestTurnInput(input: {
   };
 }
 
-function makeCodexReplayTurn(input: {
-  readonly id: string;
-  readonly status: "inProgress" | "completed" | "interrupted" | "failed";
-}): Record<string, unknown> {
-  const terminal =
-    input.status === "completed" || input.status === "interrupted" || input.status === "failed";
-  return {
-    id: input.id,
-    items: [],
-    itemsView: "notLoaded",
-    status: input.status,
-    error: null,
-    startedAt: 1782622440,
-    completedAt: terminal ? 1782622450 : null,
-    durationMs: null,
-  };
-}
-
-function codexReplayPreamble(input: {
-  readonly nativeThreadId: string;
-  readonly nativeTurnId: string;
-  readonly prompt: string;
-  readonly sentPrompt?: string;
-}): Array<CodexReplay.CodexAppServerReplayEntry> {
-  return [
-    {
-      type: "expect_outbound",
-      label: "initialize",
-      frame: {
-        id: 1,
-        method: "initialize",
-        params: {
-          clientInfo: { name: "T3 Code", title: "T3 Code", version: packageJson.version },
-          capabilities: {
-            experimentalApi: true,
-            optOutNotificationMethods: ["turn/diff/updated"],
-            extensions: {
-              "io.modelcontextprotocol/ui": { mimeTypes: ["text/html;profile=mcp-app"] },
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "initialize",
-      frame: {
-        id: 1,
-        result: {
-          userAgent: "T3 Code/0.156.1",
-          codexHome: "/tmp/codex-home",
-          platformFamily: "unix",
-          platformOs: "macos",
-        },
-      },
-    },
-    { type: "expect_outbound", label: "initialized", frame: { method: "initialized" } },
-    {
-      type: "expect_outbound",
-      label: "thread/start",
-      frame: {
-        id: 2,
-        method: "thread/start",
-        params: { config: CodexAdapterV2.CODEX_THREAD_CONFIG },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "thread/start",
-      frame: {
-        id: 2,
-        result: {
-          thread: {
-            id: input.nativeThreadId,
-            sessionId: input.nativeThreadId,
-            forkedFromId: null,
-            preview: "",
-            ephemeral: false,
-            modelProvider: "openai",
-            createdAt: 1782622440,
-            updatedAt: 1782622440,
-            status: { type: "idle" },
-            path: `/tmp/${input.nativeThreadId}.jsonl`,
-            cwd: "/workspace",
-            cliVersion: "0.144.0",
-            source: "vscode",
-            threadSource: null,
-            agentNickname: null,
-            agentRole: null,
-            gitInfo: null,
-            name: null,
-            turns: [],
-          },
-          model: "gpt-5.4",
-          modelProvider: "openai",
-          serviceTier: null,
-          cwd: "/workspace",
-          instructionSources: [],
-          approvalPolicy: "on-request",
-          approvalsReviewer: "user",
-          sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false },
-          reasoningEffort: "medium",
-        },
-      },
-    },
-    {
-      type: "expect_outbound",
-      label: "turn/start",
-      frame: {
-        id: 3,
-        method: "turn/start",
-        params: {
-          threadId: input.nativeThreadId,
-          input: [{ type: "text", text: input.sentPrompt ?? input.prompt }],
-          cwd: "/workspace",
-          model: "gpt-5.4",
-          approvalPolicy: "never",
-          approvalsReviewer: "user",
-          sandboxPolicy: { type: "dangerFullAccess" },
-          summary: "detailed",
-        },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "turn/start",
-      frame: {
-        id: 3,
-        result: { turn: makeCodexReplayTurn({ id: input.nativeTurnId, status: "inProgress" }) },
-      },
-    },
-    {
-      type: "emit_inbound",
-      label: "turn/started",
-      frame: {
-        method: "turn/started",
-        params: {
-          threadId: input.nativeThreadId,
-          turn: makeCodexReplayTurn({ id: input.nativeTurnId, status: "inProgress" }),
-        },
-      },
-    },
-  ];
-}
-
-function makeCodexReplayTranscript(input: {
-  readonly scenario: string;
-  readonly entries: ReadonlyArray<CodexReplay.CodexAppServerReplayEntry>;
-}): CodexReplay.CodexAppServerReplayTranscript {
-  return {
-    provider: "codex",
-    protocol: "codex.app-server",
-    version: "0.144.0",
-    scenario: input.scenario,
-    entries: input.entries,
-  };
-}
-
 function withReplayRequestId(
   entry: CodexReplay.CodexAppServerReplayEntry,
   id: number,
@@ -834,6 +684,7 @@ describe("CodexAdapterV2 session initialize", () => {
   const openReplaySession = (
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
+    ownerThreadId?: ThreadId,
   ) =>
     Effect.gen(function* () {
       const driver = yield* CodexReplay.makeReplayDriver(
@@ -841,13 +692,18 @@ describe("CodexAdapterV2 session initialize", () => {
         beforeEmitInbound === undefined ? {} : { beforeEmitInbound },
       );
       let initializeRequests = 0;
+      let processEnvironment: NodeJS.ProcessEnv = {};
+      const threadConfigs: unknown[] = [];
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
         clientFactory: {
           open: (openInput) =>
-            Layer.build(CodexReplay.layerReplayWithDriver(driver)).pipe(
+            Effect.sync(() => {
+              processEnvironment = openInput.environment;
+            }).pipe(
+              Effect.andThen(Layer.build(CodexReplay.layerReplayWithDriver(driver))),
               Effect.flatMap((context) =>
                 Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
               ),
@@ -858,6 +714,7 @@ describe("CodexAdapterV2 session initialize", () => {
                     request: (method, params) =>
                       Effect.sync(() => {
                         if (method === "initialize") initializeRequests++;
+                        if (method === "thread/start") threadConfigs.push(params);
                       }).pipe(Effect.andThen(client.request(method, params))),
                   }) satisfies CodexClient.CodexAppServerClient["Service"],
               ),
@@ -877,7 +734,7 @@ describe("CodexAdapterV2 session initialize", () => {
         serverConfig: yield* makeReplayServerConfig(transcript.scenario).pipe(Effect.orDie),
       });
       const runtime = yield* adapter.openSession({
-        threadId: ThreadId.make(`thread-${transcript.scenario}`),
+        threadId: ownerThreadId ?? ThreadId.make(`thread-${transcript.scenario}`),
         providerSessionId: ProviderSessionId.make(`provider-session-${transcript.scenario}`),
         modelSelection: CODEX_TEST_MODEL_SELECTION,
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
@@ -890,14 +747,27 @@ describe("CodexAdapterV2 session initialize", () => {
             runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
           }),
         initializeRequests: () => initializeRequests,
+        processEnvironment: () => processEnvironment,
+        threadConfigs,
       };
     });
 
   const replayPreamble = (nativeThreadId: string) =>
     codexReplayPreamble({ nativeThreadId, nativeTurnId: "unused", prompt: "unused" });
 
-  it.effect("sends one initialize when two threads start on a fresh session at once", () =>
+  it.effect("isolates credentials for two threads sharing a Codex process (#934)", () =>
     Effect.gen(function* () {
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      for (const name of ["first", "second"])
+        yield* sessions.set({
+          environmentId: EnvironmentId.make("fixture"),
+          threadId: ThreadId.make(`thread-concurrent-${name}`),
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          providerSessionId: `credential-${name}`,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: `Bearer fixture-${name}`,
+          browserToolsAvailable: false,
+        });
       const initializeAwaitingResponse = yield* Deferred.make<void>();
       const releaseInitialize = yield* Deferred.make<void>();
       // The transcript allows exactly one handshake: a second `initialize`
@@ -918,6 +788,7 @@ describe("CodexAdapterV2 session initialize", () => {
                 Effect.andThen(Deferred.await(releaseInitialize)),
               )
             : Effect.void,
+        ThreadId.make("thread-concurrent-first"),
       );
 
       const first = yield* session
@@ -931,6 +802,18 @@ describe("CodexAdapterV2 session initialize", () => {
 
       const providerThreads = [yield* Fiber.join(first), yield* Fiber.join(second)];
       assert.equal(session.initializeRequests(), 1);
+      assert.equal(session.processEnvironment().GOAT_ACP_MCP_AUTHORIZATION, "");
+      for (const [index, name] of ["first", "second"].entries()) {
+        const { config } = yield* decodeThreadConfig(session.threadConfigs[index]);
+        assert.equal(
+          config["shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION"],
+          `Bearer fixture-${name}`,
+        );
+        assert.equal(
+          config["shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT"],
+          "http://127.0.0.1:43123/mcp",
+        );
+      }
       assert.sameMembers(
         providerThreads.map((providerThread) => providerThread.nativeThreadRef?.nativeId),
         ["concurrent-first", "concurrent-second"],
@@ -1084,9 +967,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* Fiber.join(timer);
           }),
       };
+      let processEnvironment: NodeJS.ProcessEnv = {};
       const clientFactory: CodexAdapterV2.CodexAppServerClientFactoryShape = {
         open: (openInput) =>
           Effect.gen(function* () {
+            processEnvironment = openInput.environment;
             const driver = yield* CodexReplay.makeReplayDriver(
               transcript,
               beforeEmitInbound ? { beforeEmitInbound } : {},
@@ -1219,6 +1104,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
       return {
         runtime,
+        processEnvironment,
         providerThread,
         threadId,
         serverConfig,
@@ -3080,8 +2966,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           hasGoatMcp: true,
         });
         assert.include(
-          params.additionalContext?.t3_code_orchestration_01?.value ?? "",
-          "goat_task_create",
+          params.additionalContext?.goat_code_orchestration_01?.value ?? "",
+          "task.create",
         );
         const entries = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "work" });
         const transcript = makeCodexReplayTranscript({
@@ -4347,28 +4233,21 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         );
         const replayDriver = yield* CodexReplay.makeReplayDriver(localTranscript);
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-        assert.equal(
-          Number(yield* spawner.exitCode(ChildProcess.make("git", ["init", "--quiet"], { cwd }))),
-          0,
-        );
+        assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, ["init", "--quiet"]))), 0);
         assert.equal(
           Number(
             yield* spawner.exitCode(
-              ChildProcess.make(
-                "git",
-                [
-                  "-c",
-                  "user.name=Test",
-                  "-c",
-                  "user.email=test@example.com",
-                  "commit",
-                  "--allow-empty",
-                  "--quiet",
-                  "-m",
-                  "Initial commit",
-                ],
-                { cwd },
-              ),
+              gitCommand(cwd, [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "--allow-empty",
+                "--quiet",
+                "-m",
+                "Initial commit",
+              ]),
             ),
           ),
           0,
@@ -4494,7 +4373,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "Initial commit",
           ],
         ]) {
-          assert.equal(Number(yield* spawner.exitCode(ChildProcess.make("git", args, { cwd }))), 0);
+          assert.equal(Number(yield* spawner.exitCode(gitCommand(cwd, args))), 0);
         }
         yield* Effect.gen(function* () {
           const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -6455,6 +6334,328 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       childTurnCompleted(RESUME_CHILD_TURN_2),
     ],
   });
+  it.effect("wakes the parent when a native child finishes after the parent's turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entries = resumeSubagentTranscript.entries;
+        const labelIndex = (label: string) =>
+          entries.findIndex((entry) => entry.type === "emit_inbound" && entry.label === label);
+        const rootCompleted = labelIndex("turn/completed/root");
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: RESUME_SCENARIO,
+            entries: [
+              ...entries.slice(0, labelIndex(`turn/started/${RESUME_CHILD_TURN_1}`) + 1),
+              ...entries.slice(rootCompleted - 1, rootCompleted + 1),
+              childAgentMessage({
+                id: "child-late-answer",
+                text: "NATIVE_CHILD_16900_DONE",
+                turnId: RESUME_CHILD_TURN_1,
+                completedAtMs: 1782622480000,
+                afterMs: 60_000,
+              }),
+              childTurnCompleted(RESUME_CHILD_TURN_1),
+            ],
+          }),
+        );
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-late-child"),
+            text: RESUME_PROMPT,
+          }),
+        );
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
+        assert.equal(harness.terminalEvents()[0]?.status, "completed");
+        assert.lengthOf(harness.continuationRequests, 0);
+
+        yield* TestClock.adjust("60 seconds");
+        yield* harness.awaitUntil(
+          () => harness.subagentUpdates().at(-1)?.subagent.result === "NATIVE_CHILD_16900_DONE",
+          "replay condition",
+        );
+        assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "completed");
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.include(harness.continuationRequests[0]?.detail, "NATIVE_CHILD_16900_DONE");
+        assert.equal(harness.continuationRequests[0]?.delivery, "message_text");
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
+  const lateChildPrefix = () => {
+    const entries = resumeSubagentTranscript.entries;
+    const labelIndex = (label: string) =>
+      entries.findIndex((entry) => entry.type === "emit_inbound" && entry.label === label);
+    const rootCompleted = labelIndex("turn/completed/root");
+    return {
+      spawned: entries.slice(0, labelIndex(`turn/started/${RESUME_CHILD_TURN_1}`) + 1),
+      rootFinished: entries.slice(rootCompleted - 1, rootCompleted + 1),
+    };
+  };
+
+  it.effect("names a late child spawned without a prompt in its wake", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { spawned, rootFinished } = lateChildPrefix();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: RESUME_SCENARIO,
+            entries: [
+              ...spawned.map((entry) =>
+                entry.type === "emit_inbound" &&
+                entry.label === "item/completed/subAgentActivity-started"
+                  ? {
+                      ...entry,
+                      frame: {
+                        method: "item/completed",
+                        params: {
+                          item: {
+                            type: "collabAgentToolCall",
+                            id: "call-codex-resume-spawn",
+                            tool: "spawnAgent",
+                            status: "completed",
+                            senderThreadId: RESUME_NATIVE_THREAD,
+                            receiverThreadIds: [RESUME_CHILD_THREAD],
+                            agentsStates: {},
+                          },
+                          threadId: RESUME_NATIVE_THREAD,
+                          turnId: RESUME_NATIVE_TURN,
+                          completedAtMs: 1782622441000,
+                        },
+                      },
+                    }
+                  : entry,
+              ),
+              ...rootFinished,
+              childAgentMessage({
+                id: "child-late-answer",
+                text: "UNPROMPTED_CHILD_DONE",
+                turnId: RESUME_CHILD_TURN_1,
+                completedAtMs: 1782622480000,
+                afterMs: 60_000,
+              }),
+              childTurnCompleted(RESUME_CHILD_TURN_1),
+            ],
+          }),
+        );
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-unprompted-child"),
+            text: RESUME_PROMPT,
+          }),
+        );
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
+        yield* TestClock.adjust("60 seconds");
+        yield* harness.awaitUntil(
+          () => harness.continuationRequests.length > 0,
+          "replay condition",
+        );
+        const subagent = harness.subagentUpdates().at(-1)?.subagent;
+        assert.equal(subagent?.prompt, "");
+        assert.equal(
+          harness.continuationRequests[0]?.detail,
+          `Subagent completed: ${subagent?.id}\n\nResult:\nUNPROMPTED_CHILD_DONE`,
+        );
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
+  it.effect("wakes the root only when its direct child finishes, not a grandchild", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const grandchildThread = "native-codex-resume-grandchild-thread";
+        const grandchildTurn = "native-codex-resume-grandchild-turn";
+        const { spawned, rootFinished } = lateChildPrefix();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: RESUME_SCENARIO,
+            entries: [
+              ...spawned,
+              {
+                type: "emit_inbound",
+                label: "item/completed/grandchild-spawn",
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    item: {
+                      type: "subAgentActivity",
+                      id: "call-codex-grandchild-spawn",
+                      kind: "started",
+                      agentThreadId: grandchildThread,
+                      agentPath: "/root/resume_agent/grandchild",
+                    },
+                    threadId: RESUME_CHILD_THREAD,
+                    turnId: RESUME_CHILD_TURN_1,
+                    completedAtMs: 1782622441500,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/started/grandchild",
+                frame: {
+                  method: "turn/started",
+                  params: {
+                    threadId: grandchildThread,
+                    turn: makeCodexReplayTurn({ id: grandchildTurn, status: "inProgress" }),
+                  },
+                },
+              },
+              ...rootFinished,
+              {
+                type: "emit_inbound",
+                label: "item/completed/grandchild-answer",
+                afterMs: 30_000,
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    item: {
+                      type: "agentMessage",
+                      id: "grandchild-answer",
+                      text: "GRANDCHILD_DONE",
+                      phase: "final_answer",
+                      memoryCitation: null,
+                    },
+                    threadId: grandchildThread,
+                    turnId: grandchildTurn,
+                    completedAtMs: 1782622470000,
+                  },
+                },
+              },
+              {
+                type: "emit_inbound",
+                label: "turn/completed/grandchild",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: grandchildThread,
+                    turn: makeCodexReplayTurn({ id: grandchildTurn, status: "completed" }),
+                  },
+                },
+              },
+              childAgentMessage({
+                id: "child-late-answer",
+                text: "CHILD_AFTER_GRANDCHILD",
+                turnId: RESUME_CHILD_TURN_1,
+                completedAtMs: 1782622500000,
+                afterMs: 30_000,
+              }),
+              childTurnCompleted(RESUME_CHILD_TURN_1),
+            ],
+          }),
+        );
+
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-late-grandchild"),
+            text: RESUME_PROMPT,
+          }),
+        );
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
+
+        yield* TestClock.adjust("30 seconds");
+        yield* harness.awaitUntil(
+          () =>
+            harness.subagentUpdates().some((event) => event.subagent.result === "GRANDCHILD_DONE"),
+          "replay condition",
+        );
+        assert.lengthOf(harness.continuationRequests, 0);
+
+        yield* TestClock.adjust("30 seconds");
+        yield* harness.awaitUntil(
+          () => harness.continuationRequests.length > 0,
+          "replay condition",
+        );
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.include(harness.continuationRequests[0]?.detail, "CHILD_AFTER_GRANDCHILD");
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
+  it.effect("leaves a late child's result to the root's next turn when one is running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const secondPrompt = "Wait for the sub-agent.";
+        const secondTurn = "native-codex-resume-root-turn-2";
+        const { spawned, rootFinished } = lateChildPrefix();
+        // Reuse the preamble's turn/start exchange under the session's next request id.
+        const secondTurnStart = codexReplayPreamble({
+          nativeThreadId: RESUME_NATIVE_THREAD,
+          nativeTurnId: secondTurn,
+          prompt: secondPrompt,
+        })
+          .slice(-3)
+          .map((entry) =>
+            entry.type !== "runtime_exit" &&
+            typeof entry.frame === "object" &&
+            entry.frame !== null &&
+            "id" in entry.frame
+              ? { ...entry, frame: { ...entry.frame, id: 4 } }
+              : entry,
+          );
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario: RESUME_SCENARIO,
+            entries: [
+              ...spawned,
+              ...rootFinished,
+              ...secondTurnStart,
+              childAgentMessage({
+                id: "child-late-answer",
+                text: "CHILD_DURING_SECOND_TURN",
+                turnId: RESUME_CHILD_TURN_1,
+                completedAtMs: 1782622480000,
+              }),
+              childTurnCompleted(RESUME_CHILD_TURN_1),
+              {
+                type: "emit_inbound",
+                label: "turn/completed/root-2",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: RESUME_NATIVE_THREAD,
+                    turn: makeCodexReplayTurn({ id: secondTurn, status: "completed" }),
+                  },
+                },
+              },
+            ],
+          }),
+        );
+
+        const turnInput = (index: number, text: string) =>
+          Effect.gen(function* () {
+            return {
+              ...makeCodexTestTurnInput({
+                threadId: harness.threadId,
+                providerThread: harness.providerThread,
+                now: yield* DateTime.now,
+                attemptId: RunAttemptId.make(`attempt-codex-active-root-${index}`),
+                text,
+              }),
+              runOrdinal: index,
+              providerTurnOrdinal: index,
+            };
+          });
+        yield* harness.runtime.startTurn(yield* turnInput(1, RESUME_PROMPT));
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
+        yield* harness.runtime.startTurn(yield* turnInput(2, secondPrompt));
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 2, "turn 2 terminal");
+        assert.equal(harness.subagentUpdates().at(-1)?.subagent.result, "CHILD_DURING_SECOND_TURN");
+        assert.lengthOf(harness.continuationRequests, 0);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
   it.effect.each(["model/rerouted"] as const)(
     "keeps %s child metadata when an older lookup finishes later",
     (method) =>
@@ -6697,7 +6898,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }, "resumed subagent completion");
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
-        assert.lengthOf(harness.continuationRequests, 0);
+        // The first child turn finished inside the root turn; only the resume wakes it.
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.include(harness.continuationRequests[0]?.detail, "CODEX_RESUME_DONE");
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
@@ -8517,7 +8720,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     );
   });
 
-  it.effect("adds the session MCP server without replacing launch-argument servers", () =>
+  it.effect("configures Codex shells with the thread MCP credential (#934)", () =>
     Effect.gen(function* () {
       const scenario = "launch-mcp-servers";
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
@@ -8530,7 +8733,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         browserToolsAvailable: true,
       });
       const requests: Array<unknown> = [];
-      yield* makeCodexReplayHarness(
+      const { processEnvironment } = yield* makeCodexReplayHarness(
         makeCodexReplayTranscript({
           scenario,
           entries: codexReplayPreamble({
@@ -8545,6 +8748,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             if (method === "thread/start") requests.push(params);
           }),
       );
+      assert.equal(processEnvironment.GOAT_ACP_MCP_ENDPOINT, "");
+      assert.equal(processEnvironment.GOAT_ACP_MCP_AUTHORIZATION, "");
       assert.deepEqual(requests, [
         {
           cwd: "/workspace",
@@ -8552,6 +8757,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           config: {
             "tools.update_plan.enabled": true,
             mcp_optional_startup_grace_ms: 10_000,
+            "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
+            "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
+            "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",
+            "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "mcp_servers.goat": {
               url: "http://127.0.0.1:43123/mcp",
               disabled_tools: GOAT_MEMORY_TOOLS,

@@ -2,6 +2,17 @@ export const CLI_RELEASE_REPOSITORY = "goat-si/goat-releases";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
 export const CLI_RELEASE_BASE_URL_ENV = "GOAT_RELEASE_BASE_URL";
+// A private tarball identity, not a claim to an npm registry package or scope.
+export const CLI_NPM_PACKAGE_NAME = "@goat-si/goat";
+export const CLI_NPM_LAUNCHER_ASSET = "goat-npm.tgz";
+
+export function cliNpmPackageUrl(version: string): string {
+  return `${cliReleaseDownloadBaseUrl(version)}/${CLI_NPM_LAUNCHER_ASSET}`;
+}
+
+export function cliNpmExecCommand(version: string): string {
+  return `npm exec --yes --package=${cliNpmPackageUrl(version)} -- goat`;
+}
 
 /**
  * Kept in step with the build_linux_cli matrix, build_windows_arm64_cli, and

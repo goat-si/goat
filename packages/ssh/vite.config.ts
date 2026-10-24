@@ -9,6 +9,11 @@ export default defineConfig({
     environment: "node",
     hookTimeout: 180_000,
     testTimeout: 180_000,
-    setupFiles: ["../shared/src/testing/longTempDir.ts"],
+    setupFiles: [
+      "../shared/src/testing/longTempDir.ts",
+      "../shared/src/testing/providerEnv.ts",
+      "../shared/src/testing/gitEnv.setup.ts",
+    ],
+    globalSetup: ["../shared/src/testing/gitConfigGuard.ts"],
   },
 });

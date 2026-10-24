@@ -17,6 +17,7 @@ import {
 } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
+import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
 import {
   effectiveSnoozed,
   threadWokeAt,
@@ -617,7 +618,7 @@ export function buildMultiSelectThreadContextMenuItems(input: {
   ];
 }
 
-function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
+export function isSidebarSubagentThread(thread: Pick<SidebarThreadSummary, "lineage">): boolean {
   return thread.lineage.relationshipToParent === "subagent";
 }
 
@@ -846,12 +847,11 @@ export function resolveSidebarRowThreadId(
 }
 
 export function filterSidebarV2VisibleThreads<
-  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "sideChatOf"> & {
-    environmentId: string;
-    projectId: string;
-    id?: SidebarThreadSummary["id"];
-    deletedAt?: SidebarThreadSummary["deletedAt"];
-  },
+  T extends Pick<SidebarThreadSummary, "archivedAt" | "lineage" | "sideChatOf"> &
+    SidebarProjectScopeInput & {
+      id?: SidebarThreadSummary["id"];
+      deletedAt?: SidebarThreadSummary["deletedAt"];
+    },
 >(
   threads: readonly T[],
   scopedProjectKeys: ReadonlySet<string> | null,
@@ -868,10 +868,7 @@ export function filterSidebarV2VisibleThreads<
       );
       if (!retainedArchivedKeys.has(key)) return false;
     }
-    return (
-      scopedProjectKeys === null ||
-      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)
-    );
+    return isInSidebarProjectScope(thread, scopedProjectKeys);
   });
 }
 
@@ -1823,7 +1820,9 @@ export function sortLogicalProjectsForSidebar<
 
 export function sortSidebarV2ProjectGroups<
   TProject extends LogicalSidebarProject,
-  TThread extends ScopedSidebarThread & Pick<SidebarThreadSummary, "lineage">,
+  TThread extends ScopedSidebarThread &
+    Pick<SidebarThreadSummary, "lineage" | "sideChatOf"> &
+    SidebarProjectScopeInput,
 >(
   projects: readonly TProject[],
   threads: readonly TThread[],

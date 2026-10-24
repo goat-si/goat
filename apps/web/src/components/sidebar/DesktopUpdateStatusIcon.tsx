@@ -1,5 +1,11 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-import { CheckIcon, CircleArrowUpIcon, DownloadIcon, RotateCwIcon } from "~/components/solar";
+import {
+  CheckIcon,
+  CircleArrowUpIcon,
+  DownloadIcon,
+  RotateCwIcon,
+  TriangleAlertIcon,
+} from "~/components/solar";
 import type { AnimationEventHandler } from "react";
 
 const DOWNLOAD_PROGRESS_RADIUS = 14;
@@ -8,6 +14,7 @@ const DOWNLOAD_PROGRESS_CIRCUMFERENCE = 2 * Math.PI * DOWNLOAD_PROGRESS_RADIUS;
 export type DesktopUpdateStatusIconState =
   | "idle"
   | "checking"
+  | "check-failed"
   | "available"
   | "downloading"
   | "downloaded"
@@ -132,6 +139,9 @@ export function DesktopUpdateStatusIcon({
   }
   if (status === "downloaded") return <DesktopUpdateDownloadedIcon size={size} />;
   if (status === "everything") return <CircleArrowUpIcon className={glyphSize(size)} />;
+  if (status === "check-failed") {
+    return <TriangleAlertIcon className={`${glyphSize(size)} text-warning`} />;
+  }
 
   return (
     <RefreshIcon

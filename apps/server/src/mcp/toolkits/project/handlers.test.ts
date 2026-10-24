@@ -1484,7 +1484,7 @@ it.effect("tells the agent how to restore a missing project folder, and watches 
     expect(launch.result).toMatchObject({
       code: "invalid_request",
       message:
-        'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_project_clone {remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}, or point the project at an existing checkout with goat_project_update {projectId:"project", workspaceRoot}, then launch again.',
+        'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_call {path:"project.clone", args:{remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}}, or point the project at an existing checkout with goat_call {path:"project.update", args:{projectId:"project", workspaceRoot}}, then launch again.',
     });
     expect(launch.registrations).toEqual([]);
   }),

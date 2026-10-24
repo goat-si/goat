@@ -59,6 +59,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composerCapabilityItems": {
+      "types": "./src/composerCapabilityItems.ts",
+      "default": "./src/composerCapabilityItems.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"
@@ -66,6 +70,10 @@
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
+    },
+    "./computerUse/readinessSteps": {
+      "types": "./src/computerUse/readinessSteps.ts",
+      "default": "./src/computerUse/readinessSteps.ts"
     },
     "./computerUseGrant": {
       "types": "./src/computerUseGrant.ts",
@@ -450,6 +458,10 @@
     "./work-log/item-detail": {
       "types": "./src/work-log/itemDetail.ts",
       "default": "./src/work-log/itemDetail.ts"
+    },
+    "./work-log/computer-use": {
+      "types": "./src/work-log/computerUse.ts",
+      "default": "./src/work-log/computerUse.ts"
     },
     "./work-log/file-change-diff": {
       "types": "./src/work-log/fileChangeDiff.ts",

@@ -4,6 +4,8 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2TurnItem,
 } from "@goat/contracts";
+import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
 import {
   compactDynamicToolOutput,
   omitToolOutputImageData,
@@ -16,6 +18,7 @@ const MAX_DYNAMIC_VALUE_BYTES = 16_384;
 const MAX_ON_DEMAND_BYTES = 256 * 1024;
 
 type FileChangeItem = Extract<OrchestrationV2TurnItem, { type: "file_change" }>;
+type DynamicToolItem = Extract<OrchestrationV2TurnItem, { type: "dynamic_tool" }>;
 
 function truncateDetail(
   value: string | undefined,
@@ -135,7 +138,7 @@ export function projectTurnItemForWire(item: OrchestrationV2TurnItem): Orchestra
       const output = compactDynamicToolOutput(rawOutput);
       return {
         ...projected,
-        input: summarizeDynamicValue(item.input),
+        input: projectDynamicInput(item),
         ...(output === undefined ? {} : { output }),
         ...(hasDynamicValue(rawOutput) ? { outputOmitted: true } : {}),
       };
@@ -162,6 +165,23 @@ function hasDynamicValue(value: unknown): boolean {
   if (typeof value === "string") return value.trim().length > 0;
   if (Array.isArray(value)) return value.length > 0;
   return typeof value !== "object" || Object.keys(value).length > 0;
+}
+
+/**
+ * A goat_call keeps its path when its arguments are summarized: clients label it, and draw a page
+ * it rendered, as the tool that path names.
+ */
+function projectDynamicInput(item: DynamicToolItem): unknown {
+  const input = summarizeDynamicValue(item.input);
+  const isCall = resolveGoatMcpShippedToolId(item.toolName) === "goat_call";
+  const { path } = isCall ? goatCallTarget(item.input) : {};
+  return input !== item.input &&
+    typeof input === "object" &&
+    input !== null &&
+    typeof path === "string" &&
+    path.length <= 200
+    ? { ...input, path }
+    : input;
 }
 
 function boundDynamicValue(value: unknown): unknown {

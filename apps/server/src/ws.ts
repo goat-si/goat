@@ -14,7 +14,7 @@ import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
 import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
-import * as HubNodes from "./hubNodes/HubNodes.ts";
+import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
@@ -104,6 +104,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
+  type ApplicationStoredEvent,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -180,6 +181,7 @@ import * as ServerConfig from "./config.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -223,11 +225,15 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
+  shouldPublishShellApplicationEvent,
+  subagentShellState,
   skipUnchangedThreadShells,
   toShellApplicationEvent,
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import { type PreparedRunRetryServices, retryPreparedRun } from "./mcp/launchWatchRearm.ts";
 import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -1096,6 +1102,9 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projects = yield* ProjectStore.ProjectStoreV2;
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
+    let subagents = subagentShellState([], 0);
+    const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
+      shouldPublishShellApplicationEvent(stored, subagents.ids, subagents);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
@@ -1122,6 +1131,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           latestSequence: applicationEvents.latestApplicationSequence,
         }),
       );
+      subagents = subagentShellState(base.threads, base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: { ...base, projects: enriched.projects } as OrchestrationV2ShellSnapshot,
@@ -1184,6 +1194,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           applicationEvents.streamProjectedApplicationEvents({
             afterSequence,
             project: toShellApplicationEvent,
+            filter: filterSubagentTranscript,
           }),
         ),
       );
@@ -1274,16 +1285,21 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         });
       }
 
+      const activeSubagents = yield* threadManagement.listActiveSubagentThreadIds();
+      subagents = subagentShellState(activeSubagents, highWater);
+
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       const replay = toShellStream(
-        applicationEvents.readApplicationEvents({
-          afterSequence: input.afterSequence,
-          throughSequence: highWater,
-          // A row a newer build wrote (e.g. after a downgrade) must not fail
-          // every shell resubscribe. The live tail below resumes from
-          // highWater, so a dropped row never hides later events.
-          skipUnknownEventTypes: true,
-        }),
+        applicationEvents
+          .readApplicationEvents({
+            afterSequence: input.afterSequence,
+            throughSequence: highWater,
+            // A row a newer build wrote (e.g. after a downgrade) must not fail
+            // every shell resubscribe. The live tail below resumes from
+            // highWater, so a dropped row never hides later events.
+            skipUnknownEventTypes: true,
+          })
+          .pipe(Stream.filter(filterSubagentTranscript)),
       );
       return composeShellStreamWithEnrichment({
         initial: initialEnrichmentItems(loaded),
@@ -1330,7 +1346,7 @@ export const layerWsRpc = (
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
-        | ThreadLaunchService.ThreadLaunchService
+        | PreparedRunRetryServices
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
         | ChannelBotDirectory.ChannelBotDirectory
@@ -2014,13 +2030,29 @@ export const layerWsRpc = (
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
-            ...(config.otlpTracesUrl !== undefined ? { otlpTracesUrl: config.otlpTracesUrl } : {}),
+            ...(config.otlpTracesUrl !== undefined
+              ? {
+                  otlpTracesUrl: config.otlpTracesUrl,
+                  otlpTracesSource: config.otlpTracesSource,
+                  otlpTracesVariable: config.otlpTracesVariable,
+                }
+              : {}),
             otlpTracesEnabled: config.otlpTracesUrl !== undefined,
             ...(config.otlpMetricsUrl !== undefined
-              ? { otlpMetricsUrl: config.otlpMetricsUrl }
+              ? {
+                  otlpMetricsUrl: config.otlpMetricsUrl,
+                  otlpMetricsSource: config.otlpMetricsSource,
+                  otlpMetricsVariable: config.otlpMetricsVariable,
+                }
               : {}),
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
-            ...(config.otlpLogsUrl !== undefined ? { otlpLogsUrl: config.otlpLogsUrl } : {}),
+            ...(config.otlpLogsUrl !== undefined
+              ? {
+                  otlpLogsUrl: config.otlpLogsUrl,
+                  otlpLogsSource: config.otlpLogsSource,
+                  otlpLogsVariable: config.otlpLogsVariable,
+                }
+              : {}),
             otlpLogsEnabled: config.otlpLogsUrl !== undefined,
           },
           settings,
@@ -2203,9 +2235,8 @@ export const layerWsRpc = (
               enqueuePublicOrchestrationCommand(
                 command,
                 startup,
-                // A retry also restarts the preparation work the launch owns.
                 (command.type === "prepared-run.retry"
-                  ? threadLaunch.retryPreparation(command)
+                  ? retryPreparedRun(command).pipe(Effect.provide(intakeContext))
                   : ThreadMessageIntake.dispatchCommand(
                       ThreadManagementService.withCreationProvenance(command, {
                         createdBy: "user",
@@ -2517,15 +2548,7 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
-        [WS_METHODS.serverCheckComputerUse]: (_input) =>
-          Effect.serviceOption(CuaDriver.CuaDriver).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.succeed({ platform: "other", running: false } as const),
-                onSome: (driver) => driver.status,
-              }),
-            ),
-          ),
+        ...(yield* PreviewSessions.makePreviewSessionRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -2944,6 +2967,7 @@ export const layerWsRpc = (
         [WS_METHODS.cloudInstallRelayClient]: (_input) => installRelayClient(relayClient),
         [WS_METHODS.pullRequestsList]: (input) => pullRequests.list(input),
         [WS_METHODS.pullRequestsListStats]: (input) => pullRequests.listStats(input),
+        [WS_METHODS.pullRequestsFilterOptions]: (input) => pullRequests.filterOptions(input),
         [WS_METHODS.pullRequestsRoutingIdentity]: (input) => pullRequests.routingIdentity(input),
         [WS_METHODS.pullRequestsRouting]: (input) => pullRequests.routing(input),
         [WS_METHODS.pullRequestsSummary]: (input) =>
@@ -3643,25 +3667,6 @@ export const layerWsRpc = (
     }),
   );
 
-export const makeHubNodesHandlers = Effect.gen(function* () {
-  const hubNodes = yield* HubNodes.HubNodes;
-  return WsHubNodesRpcGroup.middleware(RpcInstrumentation).of({
-    [WS_METHODS.hubNodesList]: () => hubNodes.snapshot,
-    [WS_METHODS.hubNodesSubscribe]: () => hubNodes.changes,
-    [WS_METHODS.hubNodesAdd]: (input) =>
-      Effect.flatMap(DateTime.now, (now) =>
-        hubNodes.add(input, {
-          addedBy: { kind: "user", at: DateTime.formatIso(now) },
-          beforeSave: Effect.void,
-        }),
-      ),
-    [WS_METHODS.hubNodesRemove]: (input) => hubNodes.remove(input),
-    [WS_METHODS.hubNodesCheck]: (input) => hubNodes.check(input),
-    [WS_METHODS.hubNodesImport]: (input) => hubNodes.importProfiles(input),
-    [WS_METHODS.hubNodesDismissNotice]: (input) => hubNodes.dismissNotice(input.id),
-  });
-});
-
 // RpcServer's default sends a socket-level Defect frame instead, and the client
 // ends every pending request on the socket with it.
 export const WS_RPC_SERVER_OPTIONS = {
@@ -3674,6 +3679,7 @@ export const layer = Layer.unwrap(
     const connectionCatalogBroker = yield* ConnectionCatalogBroker.ConnectionCatalogBroker;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
+    const previewSessions = yield* PreviewSessions.PreviewSessions;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshHostSetup = yield* SshHostSetup.SshHostSetup;
@@ -3690,6 +3696,7 @@ export const layer = Layer.unwrap(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
+    const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3771,7 +3778,12 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate),
+                  Layer.succeed(PreviewSessions.PreviewSessions, previewSessions),
+                ),
+              ),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
@@ -3801,7 +3813,12 @@ export const layer = Layer.unwrap(
                   }),
                 ),
               ),
-              Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches),
+                  Layer.succeed(LaunchWatchService.LaunchWatchService, launchWatches),
+                ),
+              ),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

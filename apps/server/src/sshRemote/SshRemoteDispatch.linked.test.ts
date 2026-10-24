@@ -28,7 +28,10 @@ const LINK: LinkedHosts.LinkedHostCredential = {
   token: "link-token",
 };
 
-type Answer = { readonly status: number } | { readonly result: unknown };
+type Answer =
+  | { readonly status: number }
+  | { readonly result: unknown }
+  | { readonly rpcError: string };
 
 /**
  * Runs body against a dispatch with one linked host and an SSH manager that
@@ -41,8 +44,10 @@ const withLinkedHost = <A, E>(
     readonly args?: unknown;
   }) => Answer,
   body: Effect.Effect<A, E, SshRemoteDispatch.SshRemoteDispatch>,
+  serverVersion = LINK.host.serverVersion,
 ) =>
   Effect.gen(function* () {
+    const link = { ...LINK, host: { ...LINK.host, serverVersion } };
     const record: Array<{
       url: string;
       authorization: string | null;
@@ -79,6 +84,12 @@ const withLinkedHost = <A, E>(
         args: request.params?.arguments,
       });
       if ("status" in reply) return new Response(null, { status: reply.status });
+      if ("rpcError" in reply)
+        return Response.json({
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32602, message: reply.rpcError },
+        });
       return Response.json({ jsonrpc: "2.0", id: request.id, result: reply.result });
     });
     const noSsh = () => Effect.die("A linked host must not use SSH");
@@ -98,8 +109,8 @@ const withLinkedHost = <A, E>(
     });
     const links = LinkedHosts.LinkedHosts.of({
       changes: Stream.empty,
-      list: Effect.succeed([LINK.host]),
-      find: (name) => Effect.succeed(name === "box" ? Option.some(LINK) : Option.none()),
+      list: Effect.succeed([link.host]),
+      find: (name) => Effect.succeed(name === "box" ? Option.some(link) : Option.none()),
       names: Effect.succeed(["box"]),
       link: () => Effect.die("unused"),
       unlink: () => Effect.die("unused"),
@@ -196,7 +207,7 @@ describe("SshRemoteDispatch with a linked host", () => {
         _tag: "Failure",
         failure: {
           reason: "remote_refused",
-          message: expect.stringContaining("goat_host_link_create"),
+          message: expect.stringContaining('goat_call {path:"host_link.create"}'),
         },
       });
     }),
@@ -298,6 +309,41 @@ describe("SshRemoteDispatch with a linked host", () => {
       expect(
         record.filter((entry) => entry.method === "tools/call").map((entry) => entry.tool),
       ).toEqual(["goat_project_list"]);
+    }),
+  );
+
+  it.effect.each([
+    ["0.1.0-test", "task_status"],
+    ["0.1.3", "goat_task_read"],
+  ] as const)("calls a host at %s by the name it answers to: %s", ([version, sent]) =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withLinkedHost(
+        () => ({ result: { structuredContent: { taskId: "t" } } }),
+        call("goat_task_read", false),
+        version,
+      );
+      expect(result._tag).toBe("Success");
+      expect(record.at(-1)).toMatchObject({ method: "tools/call", tool: sent });
+    }),
+  );
+
+  it.effect("answers remote_outdated for a tool the host lacks, without running it here", () =>
+    Effect.gen(function* () {
+      const { result, record } = yield* withLinkedHost(
+        (request) =>
+          request.method === "tools/call"
+            ? { rpcError: `Tool '${request.tool}' not found` }
+            : { result: {} },
+        call("goat_provider_sync_read", false),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          reason: "remote_outdated",
+          message: expect.stringContaining("GOAT on box does not have goat_provider_sync_read"),
+        },
+      });
+      expect(record.at(-1)).toMatchObject({ tool: "goat_provider_sync_status" });
     }),
   );
 

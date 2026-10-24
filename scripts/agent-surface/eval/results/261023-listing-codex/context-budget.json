@@ -1,0 +1,106 @@
+{
+  "commit": "d03528657cf7eb0a04faa02f99e07b5cac23d160",
+  "dirty": false,
+  "tokenEstimate": "utf8 bytes / 4",
+  "listing": {
+    "tools": 202,
+    "modelFacingBytes": 212421,
+    "descriptionBytes": 38888,
+    "inputSchemaBytes": 147933,
+    "outputSchemaBytes": 501251,
+    "toolsListBytes": 728777,
+    "largest": [
+      {
+        "name": "goat_thread_launch",
+        "bytes": 10313
+      },
+      {
+        "name": "goat_ssh_thread_launch",
+        "bytes": 9776
+      },
+      {
+        "name": "goat_schedule_create",
+        "bytes": 5678
+      },
+      {
+        "name": "goat_schedule_update",
+        "bytes": 5315
+      },
+      {
+        "name": "goat_task_create",
+        "bytes": 5065
+      },
+      {
+        "name": "goat_goal_apply",
+        "bytes": 4541
+      },
+      {
+        "name": "goat_origin_report_wait",
+        "bytes": 3768
+      },
+      {
+        "name": "goat_memory_upsert",
+        "bytes": 3365
+      },
+      {
+        "name": "goat_preview_navigate",
+        "bytes": 2992
+      },
+      {
+        "name": "goat_preview_logs",
+        "bytes": 2868
+      }
+    ]
+  },
+  "harnesses": [
+    {
+      "harness": "Codex (code mode)",
+      "carrier": "turn additionalContext + collaboration-mode developer instructions; resent on change or after compaction",
+      "delivery": "harness may defer",
+      "instructionBytes": 25226,
+      "firstPromptBytes": 237647,
+      "laterTurnBytes": 0
+    },
+    {
+      "harness": "Claude",
+      "carrier": "appended system prompt, resident on every request",
+      "delivery": "harness may defer",
+      "instructionBytes": 22208,
+      "firstPromptBytes": 234629,
+      "laterTurnBytes": 0
+    },
+    {
+      "harness": "OpenCode",
+      "carrier": "session instructions entry, resident; rewritten when it changes",
+      "delivery": "listed",
+      "instructionBytes": 22224,
+      "firstPromptBytes": 234645,
+      "laterTurnBytes": 0
+    },
+    {
+      "harness": "Cursor",
+      "carrier": "prepended to the first user message; runtime block appended to every message",
+      "delivery": "listed",
+      "instructionBytes": 22328,
+      "firstPromptBytes": 234749,
+      "laterTurnBytes": 2150
+    },
+    {
+      "harness": "ACP",
+      "carrier": "prepended to the first prompt and after mode change or compaction; runtime block on every prompt",
+      "delivery": "listed",
+      "instructionBytes": 24519,
+      "firstPromptBytes": 236940,
+      "laterTurnBytes": 2040
+    },
+    {
+      "harness": "Pi",
+      "carrier": "system prompt sections, resident on every request",
+      "delivery": "harness may defer",
+      "instructionBytes": 20072,
+      "firstPromptBytes": 232493,
+      "laterTurnBytes": 0
+    }
+  ],
+  "wakes": null
+}

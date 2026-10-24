@@ -84,7 +84,7 @@ import {
 } from "../textGeneration/TextGenerationPresets.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
-import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import { makePullRequestSetup } from "./pullRequestSetup.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
@@ -92,6 +92,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import type { ChangeRequest } from "@goat/contracts";
 
@@ -721,7 +722,7 @@ export const make = Effect.gen(function* () {
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-  const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+  const runPullRequestSetup = yield* makePullRequestSetup;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -2439,7 +2440,7 @@ export const make = Effect.gen(function* () {
     ) {
       return remembered.value;
     }
-    // invalidateStatus bumps the epoch. A read that started before a T3 git
+    // invalidateStatus bumps the epoch. A read that started before a GOAT git
     // action, or before a newer read finished, must not replace their state.
     const epoch = prLookupEpoch(cwd);
     const value = yield* read;
@@ -2712,6 +2713,9 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  // A user is waiting on these, so a host's background rate-limit pause must not refuse them.
+  const asUserAction = Effect.provideService(SourceControlRateLimit.Interactive, true);
+
   const resolvePullRequest: GitManager["Service"]["resolvePullRequest"] = Effect.fn(
     "resolvePullRequest",
   )(function* (input) {
@@ -2723,7 +2727,7 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
     return { pullRequest };
-  });
+  }, asUserAction);
 
   const ensureNoTrackedChanges = Effect.fn("ensureNoTrackedChanges")(function* (
     cwd: string,
@@ -2758,26 +2762,6 @@ export const make = Effect.gen(function* () {
   const preparePullRequestThread: GitManager["Service"]["preparePullRequestThread"] = Effect.fn(
     "preparePullRequestThread",
   )(function* (input) {
-    const maybeRunSetupScript = (worktreePath: string) => {
-      if (!input.threadId) {
-        return Effect.void;
-      }
-      return projectSetupScriptRunner
-        .runForThread({
-          threadId: input.threadId,
-          projectCwd: input.cwd,
-          worktreePath,
-        })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("GitManager.preparePullRequestThread setup script failed", {
-              threadId: input.threadId,
-              worktreePath,
-              cause: error,
-            }).pipe(Effect.asVoid),
-          ),
-        );
-    };
     return yield* Effect.gen(function* () {
       const normalizedReference = normalizePullRequestReference(input.reference);
       const rootWorktreePath = yield* canonicalizeExistingPath(input.cwd);
@@ -2914,7 +2898,7 @@ export const make = Effect.gen(function* () {
         // Only when the checkout actually moved: another thread may be running in this worktree,
         // and re-running the setup script under it buys nothing when the code did not change.
         if (refreshed.moved) {
-          yield* maybeRunSetupScript(worktreePath);
+          yield* runPullRequestSetup(input, worktreePath);
         }
 
         return {
@@ -3017,6 +3001,7 @@ export const make = Effect.gen(function* () {
         },
         {
           worktreesDirectory: yield* readWorktreesDirectory,
+          skipSetupHook: input.threadId !== undefined,
           submodules: yield* projectSettingsFor(input).pipe(
             Effect.map(({ settings }) => settings.worktreeSubmodules),
             Effect.orElseSucceed(() => null),
@@ -3024,7 +3009,7 @@ export const make = Effect.gen(function* () {
         },
       );
       yield* ensureExistingWorktreeUpstream(worktree.worktree.path);
-      yield* maybeRunSetupScript(worktree.worktree.path);
+      yield* runPullRequestSetup(input, worktree.worktree.path);
 
       return {
         pullRequest,
@@ -3033,7 +3018,7 @@ export const make = Effect.gen(function* () {
         isOnPullRequestHead: true,
       };
     }).pipe(Effect.ensuring(invalidateStatus(input.cwd)));
-  });
+  }, asUserAction);
 
   const runFeatureBranchStep = Effect.fn("runFeatureBranchStep")(function* (
     settings: SourceControlTextGenerationSettings,
@@ -3278,6 +3263,7 @@ export const make = Effect.gen(function* () {
         ),
       );
     },
+    asUserAction,
   );
 
   return GitManager.of({

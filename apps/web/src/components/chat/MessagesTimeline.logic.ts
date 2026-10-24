@@ -55,7 +55,7 @@ import {
 } from "@goat/contracts";
 import type { ThreadRunSummary } from "@goat/client-runtime/state/shell";
 import {
-  resolveGoatMcpToolDefinition,
+  resolveGoatMcpItemCall,
   type GoatMcpToolPresentation,
 } from "@goat/shared/goatMcpToolPresentation";
 import { compactDynamicToolOutput } from "@goat/shared/toolOutput";
@@ -186,8 +186,8 @@ export function workEntryDisplayLabel(entry: WorkLogEntry, workspaceRoot: string
 export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload">) {
   const item = entry.structuredPayload;
   if (item?.type !== "dynamic_tool") return null;
-  if (resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "thread-read") return null;
-  const input = item.input;
+  if (resolveGoatMcpItemCall(item).definition?.summaryAction !== "thread-read") return null;
+  const { input } = resolveGoatMcpItemCall(item);
   const threadId =
     input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
   return typeof threadId === "string" && threadId.trim().length > 0 ? threadId.trim() : null;
@@ -1362,7 +1362,7 @@ function withoutSubagentDelegationRows(entries: ReadonlyArray<TimelineEntry>) {
       item?.type !== "dynamic_tool" ||
       item.runId === null ||
       (item.status !== "running" && item.status !== "completed") ||
-      resolveGoatMcpToolDefinition(item.toolName)?.summaryAction !== "delegate"
+      resolveGoatMcpItemCall(item).definition?.summaryAction !== "delegate"
     )
       return true;
     const output = compactDynamicToolOutput(item.output);
@@ -2251,7 +2251,8 @@ function replaceStreamingMessageRows(
     return null;
   }
   const replacements = new Map<ChatMessage, Extract<TimelineEntry, { kind: "message" }>>();
-  for (const [index, entry] of timelineEntries.entries()) {
+  for (let index = 0; index < timelineEntries.length; index += 1) {
+    const entry = timelineEntries[index]!;
     const previousEntry = previousEntries[index]!;
     if (entry === previousEntry) continue;
     if (

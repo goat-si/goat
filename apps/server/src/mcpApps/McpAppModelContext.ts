@@ -1,5 +1,6 @@
 import type { ThreadId, TurnItemId } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -86,7 +87,7 @@ export const layer = Layer.effect(
             OR run.thread_id <> context.thread_id
           )
         ORDER BY context.updated_at, context.item_id
-      `.pipe(Effect.mapError(fail));
+      `.pipe(NodeSqliteClient.readOnly, Effect.mapError(fail));
     });
 
     return McpAppModelContext.of({ set, forThread });

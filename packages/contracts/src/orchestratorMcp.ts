@@ -34,6 +34,7 @@ import {
 import { ModelSelection } from "./modelSelection.ts";
 import { OrchestratorMcpRunFailure } from "./orchestratorMcpFailure.ts";
 import { HostPressureAdvice } from "./hostPressure.ts";
+import { OrchestratorMcpCloudTask } from "./orchestratorMcpCloudTask.ts";
 import { PullRequestState } from "./pullRequest.ts";
 import {
   ThreadLinkedPullRequest,
@@ -41,6 +42,7 @@ import {
   ThreadPullRequestLinkSource,
 } from "./threadPullRequest.ts";
 import { ThreadResult } from "./threadResult.ts";
+import { TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
@@ -49,7 +51,6 @@ import {
   OrchestrationV2TaskRole,
   ReviewLedgerEntry,
   ReviewLedgerEntryInput,
-  OrchestrationV2CloudTask,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
   OrchestrationV2CreationSource,
@@ -63,7 +64,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { PermissionProfile } from "./permissionProfiles.ts";
+import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -251,22 +252,6 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
 });
 export type OrchestratorMcpDelegateTaskInput = typeof OrchestratorMcpDelegateTaskInput.Type;
 
-export const OrchestratorMcpCloudTask = Schema.Struct({
-  taskId: Schema.String.check(Schema.isMaxLength(512)),
-  status: OrchestrationV2CloudTask.fields.status,
-  tracking: OrchestrationV2CloudTask.fields.tracking,
-  url: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  prUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2048))),
-  branch: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
-  progress: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  summary: Schema.optional(Schema.String.check(Schema.isMaxLength(4000))),
-  localChangesExcluded: Schema.Boolean,
-  localChangesIncluded: OrchestrationV2CloudTask.fields.localChangesIncluded,
-  error: Schema.optional(Schema.String.check(Schema.isMaxLength(1000))),
-  updatedAt: IsoDateTime,
-});
-export type OrchestratorMcpCloudTask = typeof OrchestratorMcpCloudTask.Type;
-
 export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   cloudTask: Schema.optional(OrchestratorMcpCloudTask),
   taskId: NodeId,
@@ -312,6 +297,8 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   }),
   /** Set when this machine is under resource pressure; see goat_host_status placement. */
   pressure: Schema.optional(HostPressureAdvice),
+  /** Set when the remote host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpDelegateTaskResult = typeof OrchestratorMcpDelegateTaskResult.Type;
 
@@ -601,7 +588,7 @@ export const OrchestratorMcpThreadListResult = Schema.Struct({
   /** Null when several projects are listed. */
   projectId: Schema.NullOr(ProjectId),
   host: OrchestratorMcpResultHost,
-  /** The calling thread, or null when the caller is not a T3 thread. */
+  /** The calling thread, or null when the caller is not a GOAT thread. */
   currentThreadId: Schema.NullOr(ThreadId),
   threads: Schema.Array(OrchestratorMcpThreadListItem),
   nextCursor: Schema.NullOr(NonNegativeInt),
@@ -812,6 +799,8 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   host: Schema.optional(OrchestratorMcpHost),
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  /** What the turn this message starts may use, as a person's `@computer` / `@browser` would. */
+  capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
   permissionProfileCeiling: Schema.optional(PermissionProfile),
@@ -826,6 +815,8 @@ export const OrchestratorMcpThreadSendDelivered = Schema.Struct({
   taskId: Schema.optional(NodeId),
   status: OrchestrationV2RunStatus,
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
+  /** Set when the host has not confirmed it enforces the forwarded goatclaw ceiling. */
+  ceiling: Schema.optional(GoatclawCeilingAdvice),
 });
 export type OrchestratorMcpThreadSendDelivered = typeof OrchestratorMcpThreadSendDelivered.Type;
 /**
@@ -862,6 +853,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  /** When the waited run ended; absent while it runs, and from hosts that predate it. */
+  completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
 });
@@ -1146,6 +1139,8 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  runCount: Schema.optional(NonNegativeInt),
+  lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   /** For webhook tasks: the public T3 Connect URL, shown only to a caller that may start the task's runs. */
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:

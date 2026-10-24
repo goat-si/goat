@@ -278,7 +278,7 @@ it.effect("bounds excluded candidates to ten pages and follows the unfiltered ro
     assert.deepStrictEqual(omitted!.items, []);
     assert.include(
       Renderer.memoryContextText(omitted),
-      "More GOAT memories exist than fit here; use goat_memory_search or goat_memory_read to find them.",
+      'More GOAT memories exist than fit here; use goat_call {path:"memory.search"} or goat_call {path:"memory.read"} to find them.',
     );
     assert.strictEqual(f.pageReads(), 10);
     // Remove all but a single excluded first page; the next page must reach the eligible row.
@@ -337,7 +337,7 @@ it.effect(
       const framed = Renderer.memoryContextText(selected);
       assert.include(
         framed,
-        "More GOAT memories exist than fit here; use goat_memory_search or goat_memory_read to find them.",
+        'More GOAT memories exist than fit here; use goat_call {path:"memory.search"} or goat_call {path:"memory.read"} to find them.',
       );
       const restored = yield* snapshots.revalidate(selected!, { threadId, runId }, f.currentPolicy);
       assert.strictEqual(Renderer.memoryContextText(restored), framed);

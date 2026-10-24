@@ -974,6 +974,7 @@ it.effect("keeps a queued message queued when promoted into a run that Stop reac
           threadId,
           runId: first.runId,
           holdQueue: true,
+          reason: "Stopped by an agent: superseded",
         });
 
         const promoteError = yield* orchestrator
@@ -993,6 +994,12 @@ it.effect("keeps a queued message queued when promoted into a run that Stop reac
         const queued = projection.runs.find((run) => run.id === queuedRun.id);
         assert.equal(queued?.status, "queued");
         assert.isTrue(queued?.queueHeld);
+        const result = projection.turnItems.find((item) => item.type === "run_interrupt_result");
+        // An agent's Stop must not read as the user's once the provider turn ends.
+        assert.equal(
+          result?.type === "run_interrupt_result" ? result.message : null,
+          "Stopped by an agent: superseded",
+        );
       }).pipe(Effect.provide(layer));
     }),
   ),

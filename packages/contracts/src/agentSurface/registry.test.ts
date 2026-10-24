@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { type AgentSurfaceEntry, agentSurfaceRegistry } from "./registry.ts";
 import {
   deprecatedReplacement,
+  isKeyedWrite,
   legacyAgentSurfacePaths,
   legacyToolNameTargets,
   listedToolName,
@@ -208,5 +209,20 @@ describe("agent surface metadata", () => {
         expect(example.title.trim(), entry.path).not.toBe("");
         expect(["ok", "error", "needs_human"], entry.path).toContain(example.expect["status"]);
       }
+  });
+
+  it("names a read that settles the unknown outcome of every keyed write", () => {
+    const reconcileOf = (entry: AgentSurfaceEntry) => entry.reconcile;
+    for (const entry of entries.filter((candidate) => isKeyedWrite(candidate))) {
+      expect(entry.effect, entry.path).not.toBe("read");
+      const read = resolveAgentSurfaceEntry(reconcileOf(entry) ?? "");
+      expect(read?.effect, entry.path).toBe("read");
+      const threadRead =
+        (entry.resource === "ssh" && entry.verb.startsWith("thread_")) ||
+        entry.path === "cloud_agent.launch";
+      expect(read?.resource, entry.path).toBe(threadRead ? "thread" : entry.resource);
+      // A write routed to another host is settled by reading that host.
+      if (entry.hostRoutable) expect(read?.hostRoutable, entry.path).toBe(true);
+    }
   });
 });

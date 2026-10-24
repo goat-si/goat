@@ -55,7 +55,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
+  expect(entries).toHaveLength(203); // Includes saved HTML page reconciliation alongside the existing agent tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -492,7 +492,6 @@ const via = {
 };
 // legacy: the shipped name over HTTP /mcp, which resolves it to the listed tool before dispatch.
 type Route = keyof typeof via | "legacy";
-const RPC_INTERNAL_ERROR = 'rpc error: {"code":-32603';
 const ROUTES: ReadonlyArray<Route> = [
   ...(Object.keys(via) as ReadonlyArray<keyof typeof via>),
   "legacy",
@@ -510,7 +509,6 @@ describe("agent surface access", () => {
         const [legacy] = entry.legacyNames;
         for (const caller of Object.keys(callers) as ReadonlyArray<Caller>) {
           let directOutcome: Outcome | undefined;
-          let directDied = false;
           for (const route of ROUTES) {
             // goat_call refuses to call itself by design.
             if (route === "goat_call" && entry.path === "surface.call") continue;
@@ -545,18 +543,10 @@ describe("agent surface access", () => {
               ),
             );
             const classified = classify(entry.path, result);
-            if (route === "direct") directDied = textOf(result) === INERT_SERVICE_DEFECT;
-            // Over HTTP, an image tool that dies answers with JSON-RPC's internal error under any
-            // name; it is the same death the direct route caught on an inert service.
-            const diedOverHttp =
-              route === "legacy" && directDied && textOf(result).startsWith(RPC_INTERNAL_ERROR);
             // The envelope turns a refusal inside a successful value into an error; that is a
             // domain answer after access passed, so it still counts as reaching the handler.
             const outcome =
-              (route === "goat_call" &&
-                classified === "unexpected" &&
-                directOutcome === "reached") ||
-              diedOverHttp
+              route === "goat_call" && classified === "unexpected" && directOutcome === "reached"
                 ? "reached"
                 : classified;
             if (route === "direct") directOutcome = outcome;
@@ -726,9 +716,10 @@ it("resolves paths, canonical names and legacy names to one entry without collis
 
 it.effect("lists canonical names and keeps legacy names callable, unlisted and deprecated", () =>
   Effect.gen(function* () {
-    const http = yield* serveCatalogOverHttp(callers);
-    const listed = yield* http.listToolNames("thread");
-    expect(listed.toSorted()).toEqual(entries.map(listedToolName).sort());
+    const http = yield* serveCatalogOverHttp(callers, "full");
+    const listed = (yield* http.listTools("thread")).map((tool) => tool.name);
+    const forThreads = entries.filter((entry) => entry.requires !== "client");
+    expect(listed.toSorted()).toEqual(forThreads.map(listedToolName).sort());
     expect(listed).toContain("goat_task_create");
     expect(listed).not.toContain("delegate_task");
     const callBody = (name: string) =>
@@ -820,11 +811,8 @@ it.effect("goat_describe answers at three depths with availability for this call
     expect((yield* detail(readOnly, "goat_call")).available).toEqual({ now: true });
     expect((yield* detail(thread, "thread.send")).inputSchema).toMatchObject({ type: "object" });
 
-    const missing = yield* asCaller(thread)(
-      server.callTool({ name: "goat_describe", arguments: { path: "teleport" } }),
-    );
-    expect(missing.isError).toBe(true);
-    expect(textOf(missing)).toContain("no resource or path named teleport");
+    // A name that is no path or resource is searched, never answered with absence.
+    expect(yield* describe(thread, "teleport")).toMatchObject({ depth: "search", total: 0 });
   }).pipe(Effect.provide(registered)),
 );
 

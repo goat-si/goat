@@ -24,7 +24,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import migration from "../persistence/Migrations/094_HubNodes.ts";
+import migration from "../persistence/Migrations/095_HubNodes.ts";
 import * as HubNodeRepository from "./HubNodeRepository.ts";
 import * as HubNodes from "./HubNodes.ts";
 
@@ -187,6 +187,7 @@ const fixture = Effect.gen(function* () {
       Effect.sync(() => {
         listeners.push(listener);
       }),
+    onReady: () => Effect.void,
   });
   const ssh = SshRemoteDispatch.SshRemoteDispatch.of({
     proxyEndpoint: () => Effect.die("unused"),

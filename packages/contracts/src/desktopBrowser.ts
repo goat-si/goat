@@ -27,3 +27,23 @@ export const DesktopBrowserCommand = Schema.Union([
   }),
 ]);
 export type DesktopBrowserCommand = typeof DesktopBrowserCommand.Type;
+
+/** An agent's pointer on a desktop tab, as the browser host relays it to the app window. */
+export interface DesktopPreviewPointerEvent {
+  tabId: string;
+  phase: "move" | "click";
+  x: number;
+  y: number;
+  sequence: number;
+  createdAt: string;
+}
+
+/**
+ * A screenshot of a server tab starting or settling. Chromium answers one with the guest's next
+ * frame, and a guest parked outside the window composites none, so the app keeps it painting.
+ */
+export interface DesktopPreviewCaptureEvent {
+  threadId: string;
+  tabId: string;
+  capturing: boolean;
+}

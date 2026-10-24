@@ -1,7 +1,14 @@
 /**
- * Do not import t3code modules from the string body. The Pi process resolves
+ * Do not import GOAT modules from the string body. The Pi process resolves
  * `@earendil-works/pi-coding-agent` and `typebox` from the user's pi install.
  */
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
+import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
+import {
+  canonicalToolName,
+  legacyAgentSurfacePaths,
+  resolveAgentSurfaceEntry,
+} from "@goat/contracts/agentSurface/resolve";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import { COMPUTER_USE_INSTRUCTIONS } from "@goat/provider-core/server/runtimeInstructions";
@@ -26,6 +33,24 @@ export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
  */
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
 
+/**
+ * Every path and name goat_call resolves to a read, by the resolver goat_call itself uses.
+ * goat_call is annotated destructive so clients ask before it; a call naming a read runs as one.
+ */
+const GOAT_CALL_READ_TARGETS = [
+  ...new Set([
+    ...Object.values(agentSurfaceRegistry).flatMap((entry) => [
+      entry.path,
+      canonicalToolName(entry),
+      entry.name,
+      ...entry.legacyNames,
+    ]),
+    ...legacyAgentSurfacePaths.keys(),
+  ]),
+]
+  .filter((name) => resolveAgentSurfaceEntry(name)?.effect === "read")
+  .toSorted();
+
 export const PI_GOAT_MCP_EXTENSION_SOURCE = `\
 import { stripFrontmatter, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as NodeFSP from "node:fs/promises";
@@ -39,6 +64,8 @@ const RUNTIME_MODE_ENV = ${JSON.stringify(GOAT_PI_RUNTIME_MODE_ENV)};
 const EXTENSION_PATH_ENV = ${JSON.stringify(GOAT_PI_MCP_EXTENSION_PATH_ENV)};
 const CUA_ENV = ${JSON.stringify(GOAT_CUA_MCP_ENV)};
 const CUA_GATE_ENV = ${JSON.stringify(GOAT_CUA_GATE_ENV)};
+const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
+const GOAT_CALL_READ_TARGETS = new Set(${JSON.stringify(GOAT_CALL_READ_TARGETS)});
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
 const DEVELOPMENT_INSTRUCTIONS = ${JSON.stringify(GOAT_DEVELOPMENT_INSTRUCTIONS)};
 const COMPUTER_USE_INSTRUCTIONS = ${JSON.stringify(COMPUTER_USE_INSTRUCTIONS)};
@@ -62,6 +89,7 @@ type McpTool = {
   readonly inputSchema?: Record<string, unknown>;
   readonly annotations?: { readonly readOnlyHint?: boolean };
   readonly outputSchema?: Record<string, unknown>;
+  readonly _meta?: Record<string, unknown>;
 };
 
 function env(name: string): string | undefined {
@@ -437,7 +465,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     if (changed) return replacement;
   });
 
-  // Pi deliberately leaves permission policy to extensions. T3's injected
+  // Pi deliberately leaves permission policy to extensions. GOAT's injected
   // bridge uses Pi's public blocking tool hook so the shared runtime modes
   // keep their normal meaning without replacing or shadowing Pi's runtime.
   // Only Pi's own search is known to be read-only. An extension that replaces
@@ -447,20 +475,27 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     pi.getAllTools().some((tool) => tool.name === "tool_search" && tool.sourceInfo?.path === "builtin:tool-search");
 
   const readOnlyMcpTools = new Set<string>();
-  const isReadOnlyMcpTool = (name: string) => {
+  const ownsTool = (name: string) => {
     const extensionPath = env(EXTENSION_PATH_ENV);
-    if (extensionPath === undefined || !readOnlyMcpTools.has(name) || typeof pi.getAllTools !== "function") return false;
+    if (extensionPath === undefined || typeof pi.getAllTools !== "function") return false;
     // A user extension may own the same name. Only our registered HTTP bridge
-    // may inherit the canonical T3 server's read-only annotation.
+    // may inherit the canonical GOAT server's read-only annotation.
     return pi.getAllTools().some((tool) => tool.name === name &&
       typeof tool.sourceInfo?.path === "string" &&
       NodePath.resolve(tool.sourceInfo.path) === NodePath.resolve(extensionPath));
+  };
+  const isReadOnlyMcpTool = (name: string) => readOnlyMcpTools.has(name) && ownsTool(name);
+  const isReadThroughGoatCall = (name: string, input: unknown) => {
+    if (name !== "mcp__goat__goat_call" || typeof input !== "object" || input === null) return false;
+    const path = (input as { readonly path?: unknown }).path;
+    return typeof path === "string" && GOAT_CALL_READ_TARGETS.has(path) && ownsTool(name);
   };
 
   pi.on("tool_call", async (event, ctx) => {
     const mode = runtimeMode();
     if (mode === "full-access") return;
-    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) || isReadOnlyMcpTool(event.toolName)) {
+    if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) ||
+      isReadOnlyMcpTool(event.toolName) || isReadThroughGoatCall(event.toolName, event.input)) {
       return;
     }
     if (mode === "auto-accept-edits" && FILE_CHANGE_TOOLS.has(event.toolName)) {
@@ -500,15 +535,6 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   // Tool exposure arrived with registerMcpServer in Pi 0.99. Keep the HTTP
   // bridge as the credential owner: mcp.json overrides native registrations.
   const supportsExposure = "registerMcpServer" in pi && typeof pi.registerMcpServer === "function";
-  // Listed names, plus the shipped ones a server from before the listing flip still lists.
-  const directTools = new Set([
-    "goat_provider_list",
-    "goat_task_create",
-    "goat_task_read",
-    "orchestrator_capabilities",
-    "delegate_task",
-    "task_status",
-  ]);
   let deferOptionalTools = supportsExposure;
   let catalog: ReadonlyArray<McpTool> = [];
 
@@ -523,7 +549,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       const name = tool.name;
       const registeredName = \`mcp__goat__\${name}\`;
       if (tool.annotations?.readOnlyHint === true) readOnlyMcpTools.add(registeredName);
-      const exposure = deferOptionalTools && !directTools.has(name) ? "deferred" : "direct";
+      // The server marks its resident tools; Pi defers the rest only while tool_search can find them.
+      const exposure = deferOptionalTools && tool._meta?.[ALWAYS_LOAD_META_KEY] !== true ? "deferred" : "direct";
       pi.registerTool({
         name: registeredName,
         label: name,
@@ -584,11 +611,14 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     // in history or guidance. Eagerly load GOAT schemas, including after tree
     // restores, while retaining deferred exposure for Pi's allowlist rules.
     // Pi still applies --tools/--exclude-tools to this active loadout.
-    const required = [
+    // A restored loadout can also drop the always-load tools, and tool_search never finds a
+    // direct tool, so they come back on every model.
+    const required = new Set([
       ...(hasToolSearch ? ["tool_search"] : []),
+      ...catalog.filter((tool) => tool._meta?.[ALWAYS_LOAD_META_KEY] === true).map((tool) => "mcp__goat__" + tool.name),
       ...(ctx.model?.api === "openai-completions" ? catalog.map((tool) => "mcp__goat__" + tool.name) : []),
-    ];
-    const missing = required.filter((name) => !active.includes(name));
+    ]);
+    const missing = [...required].filter((name) => !active.includes(name));
     if (missing.length > 0) pi.setActiveTools([...active, ...missing]);
   };
 

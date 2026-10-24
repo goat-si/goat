@@ -11,7 +11,7 @@ import {
   type HtmlRenderReference,
 } from "./htmlRender.ts";
 import { MCP_APP_OUTPUT_KEY, readMcpAppReference, type McpAppReference } from "./mcpApp.ts";
-import { resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
+import { resolveGoatMcpItemCall, resolveGoatMcpShippedToolId } from "./goatMcpToolPresentation.ts";
 
 const MAX_PARSED_BYTES = 16_384;
 const MAX_METADATA_BYTES = 8_192;
@@ -197,9 +197,11 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
 
 export function htmlRenderFromToolItem(item: {
   readonly toolName: string | null | undefined;
+  readonly input?: unknown;
   readonly output?: unknown;
 }): HtmlRenderReference | undefined {
-  if (resolveGoatMcpShippedToolId(item.toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
+  const { toolName } = resolveGoatMcpItemCall(item);
+  if (resolveGoatMcpShippedToolId(toolName) !== HTML_RENDER_TOOL_NAME) return undefined;
   const output = compactDynamicToolOutput(item.output);
   return output?.isError ? undefined : output?.htmlRender;
 }
@@ -282,6 +284,50 @@ export function toolOutputImageBlocks(value: unknown): ReadonlyArray<unknown> {
  */
 export function toolOutputImages(value: unknown): ReadonlyArray<ToolOutputImage> {
   return toolOutputImageBlocks(value).flatMap((block) => readToolOutputImage(block) ?? []);
+}
+
+/**
+ * Readers prefer an MCP result's structured output, but an image such as a computer-use
+ * screenshot travels only in `content`, so that content stays beside it.
+ */
+export function mcpToolResultOutput(result: {
+  readonly content?: unknown;
+  readonly structuredContent?: unknown;
+}): unknown {
+  const { content, structuredContent } = result;
+  if (structuredContent === undefined || structuredContent === null) {
+    return content ?? undefined;
+  }
+  return toolOutputImageBlocks(content).length === 0
+    ? structuredContent
+    : { content, structuredContent };
+}
+
+const BASE64_IMAGE_DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
+
+/**
+ * A harness that reports an MCP result as its text and structured output, as Claude does,
+ * leaves the images in the raw tool result, so those blocks come back beside that output.
+ */
+export function mcpToolResultWithRawImages(output: unknown, rawContent: unknown): unknown {
+  if (toolOutputImageBlocks(output).length > 0 || toolOutputImageBlocks(rawContent).length === 0) {
+    return output;
+  }
+  const structuredContent =
+    Predicate.isObject(output) && output.structuredContent != null
+      ? output.structuredContent
+      : output;
+  return { content: rawContent, structuredContent };
+}
+
+/** An image a provider sent as a base64 data URL, as the image block the parser reads. */
+export function imageBlockFromDataUrl(
+  url: string,
+): { readonly type: "image"; readonly mimeType: string; readonly data: string } | undefined {
+  const [, mimeType, data] = BASE64_IMAGE_DATA_URL.exec(url) ?? [];
+  if (mimeType === undefined || data === undefined) return undefined;
+  const block = { type: "image" as const, mimeType, data };
+  return readToolOutputImage(block) === null ? undefined : block;
 }
 
 export function omitToolOutputImageData(value: unknown): unknown {

@@ -1,7 +1,8 @@
 # CI
 
 goat-si/goat keeps three workflows active: `.github/workflows/goat-ci.yml` runs CI, `goat-nightly.yml` publishes
-nightlies after a manual goat-ci run on `dev`, and `close-outside-prs.yml` closes pull requests from
+nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to stable
+([stable promotion](../docs/internals/release-channels.md#stable-promotion)), and `close-outside-prs.yml` closes pull requests from
 forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate` and `result`, the pinned
@@ -29,7 +30,7 @@ or `ubuntu-24.04` and keeps the matrix off it. Custom labels live on GitHub, so 
 re-registered with its default labels rejoins the matrix pool; restore one with
 `gh api -X PUT repos/goat-si/goat/actions/runners/<id>/labels -f 'labels[]=goat' -f 'labels[]=epyc-light'`.
 
-`close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`main`)
+`close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`dev`)
 with a write token, so the guard pins it to the `opened` and `reopened` events and to
 `pull-requests: write`, and pins its single `close` job by a hash of the reviewed job. A
 command blocklist cannot prove that a script never fetches or runs pull request code, so any edit
@@ -40,11 +41,17 @@ updates the hash in the guard.
 
 goat-ci runs on pull requests and by hand. It does not run on push, so merging into `dev` starts
 nothing. On a pull request the `goat-scope` job diffs the merge commit against its base, and
-`.github/scripts/goat-ci-scope.cjs` picks the matrix tasks the changed files reach through the
-workspace dependencies in the `package.json` files. Documentation alone runs only `check`. A file
-the script cannot place, any `package.json`, a workflow, a script, or the lockfile runs everything.
+`.github/scripts/goat-ci-scope.cjs` picks the matrix. A pull request, draft or ready, gets a quick
+run: `check`, `typecheck`, and `test-changed`, the test files beside the changed files that
+`vp run check:changed` runs before a push (`scripts/lib/changed-tests.ts`, so the two never pick
+different files). Documentation alone runs only `check`, and a change with no tests beside it skips
+`test-changed`. The full suite runs on request: the `ci:full` label, or a manual run of the branch.
+`goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
 
-The two slow suites follow the static import graph that `.github/scripts/goat-ci-imports.cjs` reads
+The `ci:affected` label replaces the quick run with the tasks the changed files reach through the
+workspace dependencies in the `package.json` files. A file the script cannot place, any
+`package.json`, a workflow, a script, or the lockfile runs everything there. Its two slow suites
+follow the static import graph that `.github/scripts/goat-ci-imports.cjs` reads
 from the sources (relative imports, package `exports`, `vi.mock`, literal dynamic imports, and
 `new URL(…, import.meta.url)`). The server suite runs only the test files that import a changed
 file, in one to four shards, plus files that name a changed file in a string (a script a test
@@ -54,12 +61,13 @@ changed data file is neither imported nor named anywhere. The memory growth suit
 change under `apps/server/src/memory` or `apps/server/src/persistence` reaches it. The `goat-scope`
 job summary lists each chosen server test file and the change that reached it.
 
-A draft runs `check` and `typecheck`; marking it ready runs its full scope. Labels widen a run as
-soon as they are added: `ci:full` runs everything, `ci:server` the full server suite, and
-`ci:memory` the memory growth suite. Any other label starts a run whose jobs all skip under the name
+Labels widen a run as soon as they are added: `ci:full` runs everything, `ci:affected` what the
+changes reach, `ci:server` adds the full server suite, and `ci:memory` the memory growth suite.
+Any other label starts a run whose jobs all skip under the name
 `goat-ci (label ignored)`, so it neither cancels the real run nor puts a skipped check with a real
 name on the commit. `goat-ci-result` is the one check to read: it fails when goat-scope or any
-selected task failed or was cancelled.
+selected task failed or was cancelled, and its notice says whether the run was quick and names the
+label and the command that start the full run.
 
 A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
 (the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
@@ -68,12 +76,11 @@ dispatch cannot cancel it. A successful `lane=all` run on `dev` marks its commit
 newest green commit ([release channels](../docs/internals/release-channels.md)); goat-ci names
 manual runs `goat-ci <lane> on <branch>` and the nightly checks that name.
 
-Path selection trades a little coverage for runner time, so `dev` needs a full run regularly. A
-GitHub `schedule` trigger would run only from the default branch, `main`, whose goat-ci is an older
-copy, and the guard does not allow `schedule`. The daily full run is therefore a manual
-`lane=all` dispatch on `dev` (`gh workflow run goat-ci.yml --ref dev`) from a scheduler outside
-GitHub. Moving it into the workflow means promoting `goat-ci.yml` to `main` and allowing `schedule`
-in the guard.
+The quick run trades coverage for runner time, so `dev` needs a full run regularly. A
+GitHub `schedule` trigger runs from the default branch, `dev`, but the guard does not allow
+`schedule` in goat-ci. The daily full run is therefore a manual `lane=all` dispatch on `dev`
+(`gh workflow run goat-ci.yml --ref dev`) from a scheduler outside GitHub. Moving it into the
+workflow only means allowing `schedule` in the guard.
 
 Pull requests merge when `goat-ci-result` is green on their exact head, without first catching up
 with `dev`, so batch merging also runs `lane=all` on `dev` after about every five merges

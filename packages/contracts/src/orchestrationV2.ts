@@ -85,6 +85,8 @@ import {
 } from "./providerRuntime.ts";
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
+export * from "./providerReplay.ts";
+
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
 
@@ -541,7 +543,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
 
 /**
- * The provider owns its conversation, so it cannot take messages; T3 delegate_task children
+ * The provider owns its conversation, so it cannot take messages; GOAT delegate_task children
  * (`creationSource: "mcp"`) can.
  */
 export function isProviderNativeSubagentThread(
@@ -1235,13 +1237,18 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   ]),
   status: Schema.Literals(["pending", "resolved", "expired", "cancelled"]),
   responseCapability: Schema.Union([
-    Schema.Struct({ type: Schema.Literal("live"), providerSessionId: ProviderSessionId }),
+    Schema.Struct({
+      type: Schema.Literal("live"),
+      providerSessionId: ProviderSessionId,
+      supportsFeedback: Schema.optional(Schema.Boolean),
+    }),
     Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
   ]),
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
   decision: Schema.optional(ProviderApprovalDecision),
+  feedback: Schema.optional(Schema.String),
   answers: Schema.optional(ProviderUserInputAnswers),
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
@@ -2904,6 +2911,11 @@ export const OrchestrationV2Command = Schema.Union([
     reason: Schema.optional(Schema.String),
     /** A cascade is a no-op once this task is no longer a delegated descendant. */
     stopCascadeFrom: Schema.optional(ThreadId),
+    /**
+     * False when the caller stops the thread's delegated tasks itself, as the server's tree walks
+     * do under their caller's dispatch limit. Otherwise Stop also stops every task under the thread.
+     */
+    stopDelegatedTasks: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.create"),
@@ -3292,6 +3304,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
+    feedback: Schema.optional(Schema.String),
     answers: Schema.optional(ProviderUserInputAnswers),
     attachmentsByQuestionId: Schema.optional(UserInputAttachments),
     respondedBy: Schema.optional(UserInputRespondedBy),
@@ -3478,6 +3491,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     watch: Schema.NullOr(ThreadPullRequestWatch),
     /** With `watch: null`, the state the ended watch keeps instead of its last saved one. */
     endedWatch: Schema.optional(ThreadPullRequestWatch),
+    /** The pull request merged or closed: wakes this watch queued and that have not started are dropped. */
+    dropQueuedWakes: Schema.optional(Schema.Literal(true)),
     wake: Schema.optional(
       Schema.Struct({
         messageId: MessageId,
@@ -4091,49 +4106,3 @@ export const OrchestrationV2RpcSchemas = {
     output: OrchestrationV2CommandOutputFrame,
   },
 } as const;
-
-export const ProviderReplayEntry = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("expect_outbound"),
-    label: Schema.optional(TrimmedNonEmptyString),
-    frame: Schema.Unknown,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("emit_inbound"),
-    label: Schema.optional(TrimmedNonEmptyString),
-    frame: Schema.Unknown,
-    afterMs: Schema.optional(NonNegativeInt),
-  }),
-  Schema.Struct({
-    type: Schema.Literal("runtime_exit"),
-    status: Schema.Literals(["success", "error", "cancelled"]),
-    error: Schema.optional(Schema.Unknown),
-  }),
-]);
-export type ProviderReplayEntry = typeof ProviderReplayEntry.Type;
-
-export const ProviderReplayTranscript = Schema.Struct({
-  provider: TrimmedNonEmptyString,
-  protocol: TrimmedNonEmptyString,
-  version: TrimmedNonEmptyString,
-  scenario: TrimmedNonEmptyString,
-  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  entries: Schema.Array(ProviderReplayEntry),
-});
-export type ProviderReplayTranscript = typeof ProviderReplayTranscript.Type;
-
-export const ProviderReplayTranscriptHeader = Schema.Struct({
-  type: Schema.Literal("transcript_start"),
-  provider: TrimmedNonEmptyString,
-  protocol: TrimmedNonEmptyString,
-  version: TrimmedNonEmptyString,
-  scenario: TrimmedNonEmptyString,
-  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-});
-export type ProviderReplayTranscriptHeader = typeof ProviderReplayTranscriptHeader.Type;
-
-export const ProviderReplayNdjsonRecord = Schema.Union([
-  ProviderReplayTranscriptHeader,
-  ProviderReplayEntry,
-]);
-export type ProviderReplayNdjsonRecord = typeof ProviderReplayNdjsonRecord.Type;

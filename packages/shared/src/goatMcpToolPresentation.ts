@@ -1,3 +1,6 @@
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+
 export type GoatMcpToolLogo = "t3-code";
 
 export interface GoatMcpToolPresentation {
@@ -81,6 +84,7 @@ export type GoatMcpToolSummaryAction =
   | "browser"
   | "device"
   | "html-preview"
+  | "html-list"
   | "html-render"
   | "channel-message"
   | "channel-reply"
@@ -621,6 +625,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
+  goat_html_list: tool(["List", "Listing", "Listed", "saved HTML pages"], "html-list"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   channel_ingest: tool(
     ["Message", "Messaging", "Messaged", "GOAT's front desk"],
@@ -652,7 +657,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
 };
 
 /**
- * The T3 orchestration tool inventory, used to gate loose name matching on
+ * The GOAT orchestration tool inventory, used to gate loose name matching on
  * both the server (ACP MCP identity recovery) and the client (logo branding).
  */
 // Read-side only: persisted activity can retain names from before the GOAT rename.
@@ -788,7 +793,7 @@ function normalizeGoatMcpToolLabel(value: string): string {
 }
 
 /**
- * ACP agents disagree on how the injected T3 server prefixes its tools:
+ * ACP agents disagree on how the injected GOAT server prefixes its tools:
  * `mcp__goat__x` (Claude/Cursor), `goat.x` (Codex), plus single
  * underscore, colon, slash, dash, and space separators seen from registry
  * agents. The prefix match is deliberately loose because the display-name
@@ -865,3 +870,38 @@ export function resolveGoatMcpToolPresentation(
   const definition = resolveGoatMcpToolDefinition(toolName);
   return definition === null ? null : { displayName: definition.displayName, logo: "t3-code" };
 }
+
+/**
+ * The GOAT tool an item ran, the arguments it ran with, and that tool's definition. For goat_call
+ * that is the tool its path names and its args, so clients label, link and render the call as
+ * that tool; any other item is itself.
+ */
+export function resolveGoatMcpItemCall(item: {
+  readonly toolName: string | null | undefined;
+  readonly input?: unknown;
+}): {
+  readonly toolName: string | null | undefined;
+  readonly input: unknown;
+  readonly definition: GoatMcpToolDefinition | null;
+  readonly presentation: GoatMcpToolPresentation | null;
+} {
+  const input: unknown = item.input;
+  // However the call spelled them, as the server read it: {path, args}, {name, arguments}, ...
+  const target =
+    resolveGoatMcpShippedToolId(item.toolName) === "goat_call" ? goatCallTarget(input) : {};
+  const path = target.path;
+  const entry = typeof path === "string" ? resolveAgentSurfaceEntry(path) : undefined;
+  const args = isRecord(target.args) ? target.args : {};
+  const call =
+    entry === undefined || entry.resource === "surface"
+      ? { toolName: item.toolName, input }
+      : { toolName: entry.name, input: args };
+  return {
+    ...call,
+    definition: resolveGoatMcpToolDefinition(call.toolName),
+    presentation: resolveGoatMcpToolPresentation(call.toolName),
+  };
+}
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);

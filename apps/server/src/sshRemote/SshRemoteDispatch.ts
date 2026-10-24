@@ -1,6 +1,7 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { advertisesMemoryTools } from "./remoteToolNames.ts";
+import { advertisesMemoryTools, remoteToolName } from "./remoteToolNames.ts";
+export { refusedByRemote } from "./remoteRefusal.ts";
 import {
   AttachmentCreateUploadUrlInput,
   AttachmentCreateUploadUrlResult,
@@ -71,6 +72,7 @@ import {
   type RemoteDirectoryEntry,
   type RemoteWorktree,
 } from "./remoteBrowse.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 /**
  * Lets an agent in this environment reach another machine over SSH: list the
@@ -88,7 +90,8 @@ export class SshRemoteDispatchError extends Data.TaggedError("SshRemoteDispatchE
   /**
    * host_unavailable: SSH, the tunnel, or the remote server could not be
    * reached or did not answer in time. remote_refused: the remote answered
-   * and refused; remoteCode carries its failure code when it sent one.
+   * and refused; remoteCode carries its failure code when it sent one. remote_outdated: the
+   * remote has no such tool, so nothing ran there; this machine never runs it locally instead.
    * caller_changed: the caller's modes changed while the call was in flight.
    */
   readonly reason: SshDispatchFailureReason;
@@ -506,7 +509,7 @@ export function linkedHostFolder(alias: string, cwd: string): SshBrowseResult | 
   if (/^(?:\/\/|\\\\)/u.test(trimmed))
     return `${alias} is a linked host; network share paths are not supported there. Pass the local absolute path of one of its projects.`;
   if (!windows && !trimmed.startsWith("/"))
-    return `${alias} is a linked host, so cwd must be an absolute path there, not ${trimmed}. goat_project_list with host "${alias}" shows its project folders.`;
+    return `${alias} is a linked host, so cwd must be an absolute path there, not ${trimmed}. ${goatCallText("project.list")} with host "${alias}" shows its project folders.`;
   // Resolve . and .. so the path compares with the host's stored project roots.
   const [root, ...rest] = trimmed.split(/[\\/]+/u);
   const parts: Array<string> = [];
@@ -716,7 +719,7 @@ const make = Effect.gen(function* () {
   const linkExpired = (alias: string) =>
     failure(
       "remote_refused",
-      `${alias} no longer accepts this machine's link; it expired or was revoked there. Create a pairing code on ${alias} with goat auth pairing create and call goat_host_link_create again.`,
+      `${alias} no longer accepts this machine's link; it expired or was revoked there. Create a pairing code on ${alias} with goat auth pairing create and call ${goatCallText("host_link.create")} again.`,
     );
   /**
    * `wake` resumes a stopped machine; only explicit agent work passes it. Polling through
@@ -758,7 +761,7 @@ const make = Effect.gen(function* () {
     if (Option.isSome(yield* linkedFor(alias))) {
       return yield* failure(
         "invalid_request",
-        `${alias} is a linked GOAT host reached over HTTPS, so SSH tools cannot reach it. Use goat_project_list and the goat_thread_* tools with host "${alias}", or goat_ssh_thread_launch with a folder that exists there.`,
+        `${alias} is a linked GOAT host reached over HTTPS, so SSH tools cannot reach it. Use ${goatCallText("project.list")} and the thread.* paths through goat_call with host "${alias}", or ${goatCallText("ssh.thread_launch")} with a folder that exists there.`,
       );
     }
     const hosts = yield* knownHosts;
@@ -770,7 +773,7 @@ const make = Effect.gen(function* () {
     if (!ownedCloudMachine && !hosts.some((entry) => entry.alias === alias)) {
       return yield* failure(
         "host_unknown",
-        `${alias} is not in this machine's SSH config or known_hosts. It is not a linked host either. Call goat_ssh_host_list or goat_host_link_list for the hosts it can reach.`,
+        `${alias} is not in this machine's SSH config or known_hosts. It is not a linked host either. Call ${goatCallText("ssh.host_list")} or ${goatCallText("host_link.list")} for the hosts it can reach.`,
       );
     }
     return {
@@ -938,7 +941,7 @@ const make = Effect.gen(function* () {
     if (parsed._tag === "NotADirectory") {
       return yield* failure(
         "invalid_request",
-        `${parsed.path || "(empty path)"} does not exist or is not a directory on ${target.alias}, so nothing was started there. Pick an existing folder with goat_ssh_browse, or clone the repository on ${target.alias} first.`,
+        `${parsed.path || "(empty path)"} does not exist or is not a directory on ${target.alias}, so nothing was started there. Pick an existing folder with ${goatCallText("ssh.browse")}, or clone the repository on ${target.alias} first.`,
       );
     }
     return {
@@ -1047,7 +1050,7 @@ const make = Effect.gen(function* () {
       if (Option.isNone(result))
         return yield* failure(
           "host_unavailable",
-          `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry goat_provider_diagnose.`,
+          `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry ${goatCallText("provider.diagnose")}.`,
         );
       return result.value;
     }
@@ -1578,7 +1581,7 @@ const make = Effect.gen(function* () {
     if (broad !== null) {
       return yield* failure(
         "invalid_request",
-        `${folder.path} on ${target.alias} is ${broad}. A thread there gets everything below it as its workspace, and the folder becomes a project on ${target.alias}. Pick a project folder inside it with goat_ssh_browse, or pass allowBroadWorkspaceRoot:true only if the user explicitly asked to use this folder.`,
+        `${folder.path} on ${target.alias} is ${broad}. A thread there gets everything below it as its workspace, and the folder becomes a project on ${target.alias}. Pick a project folder inside it with ${goatCallText("ssh.browse")}, or pass allowBroadWorkspaceRoot:true only if the user explicitly asked to use this folder.`,
       );
     }
     // Re-check the caller before each remote change: SSH steps take seconds,
@@ -1595,7 +1598,7 @@ const make = Effect.gen(function* () {
         if (folder.gitRoot === null && Option.isNone(linked)) {
           return yield* failure(
             "invalid_request",
-            `${folder.path} on ${target.alias} is not inside a Git repository, so it cannot get a worktree. Omit workspace to run in the folder itself, or pick a folder goat_ssh_browse marks isGitRepository.`,
+            `${folder.path} on ${target.alias} is not inside a Git repository, so it cannot get a worktree. Omit workspace to run in the folder itself, or pick a folder ${goatCallText("ssh.browse")} marks isGitRepository.`,
           );
         }
         const baseRef = input.workspace.baseRef?.trim() || folder.branch;
@@ -1704,7 +1707,7 @@ const make = Effect.gen(function* () {
       if (Option.isSome(linked)) {
         return yield* failure(
           "remote_refused",
-          `${folder.path} is not a project on ${target.alias}. A linked host cannot be browsed, so it only runs threads in its existing projects: add the folder as a project on ${target.alias}, or pick one from goat_project_list with host "${target.alias}".`,
+          `${folder.path} is not a project on ${target.alias}. A linked host cannot be browsed, so it only runs threads in its existing projects: add the folder as a project on ${target.alias}, or pick one from ${goatCallText("project.list")} with host "${target.alias}".`,
         );
       }
       if (!session.ceilingApplied) {
@@ -1871,7 +1874,7 @@ const make = Effect.gen(function* () {
         | null
         | undefined;
       notes.push(
-        `The thread lives in the GOAT environment on ${target.alias}. Read it with goat_thread_read and send to it with goat_thread_send, passing host "${target.alias}" and this threadId. The user can watch it by connecting to ${target.alias} (${Option.isSome(linked) ? "Settings → Connections, with a pairing URL from that host" : "Settings → Connections → SSH"}).`,
+        `The thread lives in the GOAT environment on ${target.alias}. Read it with ${goatCallText("thread.read")} and send to it with ${goatCallText("thread.send")}, passing host "${target.alias}" and this threadId. The user can watch it by connecting to ${target.alias} (${Option.isSome(linked) ? "Settings → Connections, with a pairing URL from that host" : "Settings → Connections → SSH"}).`,
       );
       return {
         host: target.alias,
@@ -1967,7 +1970,7 @@ const make = Effect.gen(function* () {
       const answer = yield* callAcpMcpTool({
         endpoint: new URL("/mcp", link.host.baseUrl).toString(),
         authorization: `Bearer ${link.token}`,
-        tool: call.tool,
+        tool: remoteToolName(call.tool, link.host.serverVersion),
         arguments: call.arguments,
         beforeToolCall: stillAuthorized,
       }).pipe(
@@ -1975,10 +1978,10 @@ const make = Effect.gen(function* () {
         Effect.catch((error) => {
           if (!(error instanceof AcpMcpBridgeError)) return Effect.fail(error);
           if (error.kind === "http" && error.status === 401) return Effect.fail(linkExpired(alias));
-          if (isUnknownToolRefusal(error, call.tool))
+          if (isUnknownToolRefusal(error, remoteToolName(call.tool, link.host.serverVersion)))
             return Effect.fail(
               failure(
-                "remote_refused",
+                "remote_outdated",
                 missingRemoteToolMessage(alias, call.tool, link.host.serverVersion),
               ),
             );
@@ -2026,7 +2029,7 @@ const make = Effect.gen(function* () {
         ? Effect.mapError(() =>
             failure(
               "host_unavailable",
-              `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry ${call.tool}.`,
+              `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry goat_call {path:"${call.tool}"}.`,
             ),
           )
         : unavailable(target.alias),
@@ -2075,7 +2078,7 @@ const make = Effect.gen(function* () {
         const answer = yield* callAcpMcpTool({
           endpoint: new URL("mcp", bootstrap.httpBaseUrl).toString(),
           authorization: `Bearer ${session.token}`,
-          tool: call.tool,
+          tool: remoteToolName(call.tool, bootstrap.remoteServerVersion),
           arguments: call.arguments,
           beforeToolCall: stillAuthorized,
         }).pipe(Effect.timeoutOption(call.timeoutMs));
@@ -2128,10 +2131,12 @@ const make = Effect.gen(function* () {
                 )
               : attempt(true);
           }
-          if (isUnknownToolRefusal(error, call.tool)) {
+          if (
+            isUnknownToolRefusal(error, remoteToolName(call.tool, bootstrap.remoteServerVersion))
+          ) {
             return Effect.fail(
               failure(
-                "remote_refused",
+                "remote_outdated",
                 missingRemoteToolMessage(target.alias, call.tool, bootstrap.remoteServerVersion),
               ),
             );
@@ -2155,7 +2160,7 @@ const make = Effect.gen(function* () {
           : Effect.fail(
               failure(
                 "host_unavailable",
-                `Call goat_ssh_host_prepare for ${target.alias}, then call goat_ssh_host_status until setup completes; retry ${call.tool}.`,
+                `Call ${goatCallText("ssh.host_prepare")} for ${target.alias}, then call ${goatCallText("ssh.host_status")} until setup completes; retry goat_call {path:"${call.tool}"}.`,
               ),
             ),
       ),

@@ -8,7 +8,8 @@
 > `clientRequestId`는 인자 다이제스트와 함께 원자적으로 예약하고, 결과가 기록되기 전에 끊긴 키는 `unknown_outcome`으로 남겨 자동 재실행을 막는다.
 > `goat_call`은 직접 MCP 호출과 같은 단일 검사 경로를 쓰고, `goat_eval`은 측정으로 필요가 입증될 때까지 보류한다.
 > 런타임 승인은 사람의 클라이언트 세션 또는 `orchestration:operate`와 `orchestration:approve`를 모두 가진 외부 MCP 클라이언트만, 그 밖의 사람 단계는 사람의 클라이언트 세션만 해결한다.
-> 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D20)과 선행 사례 비교를 끝에 둔다.
+> 모든 하네스의 기본 도구 목록은 core(`goat_describe`, `goat_call`)이고, `agentToolListing: "full"`이 되돌리는 길이다(D21).
+> 생성된 참조 문서는 저장소에 커밋하지 않고 실행 중인 서버가 제공한다. 결정 기록(D1–D22)과 선행 사례 비교를 끝에 둔다.
 
 This page uses two labels. **Now** describes `dev` as of 2026-10-23 with source
 paths. **Proposed** is design that does not exist yet. Unlabeled text in a Proposed
@@ -138,6 +139,43 @@ outlive the call. A test fails when an entry claims `"key"` and its input schema
 has no `clientRequestId`.
 
 ### Idempotency
+
+**Now.** Writes the registry marks `idempotency: "key"` reserve their key in
+`mcp_request_reservations` through
+[ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
+where the declaration admits the write, after every caller check, so direct calls
+and `goat_call` share it and a replay passes the checks again. A handler that
+authorizes inside its body (SSH launch's profile and role checks, the worktree
+credential) declares `admission: "handler"` and admits after them. Services also
+authorize inside (provider settings, lane claims), so the reservation records the
+caller's grant as the launch resolves it: its runtime and interaction modes, its
+goatclaw capabilities, ceiling and host allowlist (narrowed by a forwarded ceiling
+or a role's profile), and a client's scopes and read-only state. A replay is
+answered only while the caller still holds at least that grant, with a client's
+scopes reauthorized live. The
+reservation is its own statement, not part of each domain's transaction; the gap
+between it and the recorded outcome is what `unknown` covers. A transient
+refusal that ran nothing frees the key, other failures replay, and a failure that
+may have left effects, an interrupt, or a row an earlier server process left
+running stays `unknown` and never runs again; its refusal names the read that settles
+it, on the same host for a routed write. Only completed keys expire, after
+24 hours.
+
+Every other write records an `idempotencyReason` in the registry instead, and
+[idempotency.test.ts](../../packages/contracts/src/agentSurface/idempotency.test.ts)
+fails a write that has neither, apart from an allowlist of writes not yet
+converted (#1029) that only shrinks. A keyed write's reconcile read must be a
+registered read, host-routable when the write is. Writes that deduplicate in
+their own domain keep that store on purpose. Thread send, interrupt, retry and
+update, thread create-many, task create and cancel, review findings and
+schedule create turn the key into a stable orchestration command id: its
+receipt commits in the same transaction as the command, which the separate
+reservation statement cannot, and lives longer than 24 hours. Routed thread
+writes forward the key, so the host that runs them deduplicates it there. Goal
+apply stores the key with the goal it creates, channel ingest uses it as the
+message key in the channel ledger, and a secret request's key is how a later
+call collects the answer. Moving these onto the reservation would add a second,
+weaker record of the same request.
 
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),
@@ -362,9 +400,13 @@ examples as tests.
 
 ## Discovery: `goat_describe`
 
-**Now.** An agent learns tools from `tools/list`: 191 names with long
-descriptions, all loaded into context. Whether a tool works for this caller is
-found out by calling it.
+**Now.** `tools/list` gives the agents GOAT runs the core listing by default: `goat_describe` and
+`goat_call` (D21). An agent finds every other capability with `goat_describe` and runs it
+through `goat_call`; each tool also stays callable by its own names. MCP clients, including
+other GOAT hosts, keep the full listing (D22): a host's dispatch reads a remote's `tools/list` to
+learn which launch arguments and memory tools it supports, and hosts on older versions have no
+other way. A client's `tools/list` result names the listing agents get in
+`_meta["goat/agentToolListing"]`, which is how the D8 runner checks a core arm.
 
 **Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 
@@ -387,16 +429,72 @@ keeps large tool sets out of context
 **Now.** `goat_describe` answers at the three depths from the
 [registry](../../packages/contracts/src/agentSurface/registry.ts), reading input and output
 schemas from the tools this server actually serves, with `surfaceVersion` at the top.
-`available` reports only the static refusals the server is sure of (thread-only,
-client-only, read-only client, not served); goatclaw capabilities, lanes, `host`,
-examples, and related paths are not in it yet. `query` returns up to 20 paths whose path,
+`available` reports the refusals the server is sure of before a call: thread-only,
+client-only, read-only client, not served, and for a GOAT thread the goatclaw capability its
+effective profile lacks, judged as the call gate judges it. A profile that does not resolve
+reports its reason on every write that needs a capability. What depends on the call's
+arguments or the moment, such as a host allowlist, lanes left, and `host`, is still judged
+only when the call is made; examples and related paths are not in it yet. `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
 
-**Proposed (later).** A `core` listing profile shows only the meta tools, the
-operation verbs, and the most used tools. It is opt-in per provider instance and
-measured against the full listing before it becomes a default.
+**Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
+visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
+callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
+`available.now` refuses for the caller, except that a profile that does not resolve hides
+nothing, because a client keeps its listing for the session. The server setting `agentToolListing` picks `full` (every
+other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
+`_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
+tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
+a harness that regresses, and a change to the setting or to the goatclaw policy sends
+`notifications/tools/list_changed`.
+[context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness
+receives under the default listing, and `goat-ci` fails when a harness goes over 6 KiB of
+instructions, 6 KiB of listing, 12 KiB for its first prompt, or 300 B on each later turn.
+
+Known risk of the core default: an agent in a shell harness that does not find a tool in its
+listing can work around it by calling `/mcp` from the shell, which prints its thread credential
+into the transcript. Until [#1062](https://github.com/goat-si/goat/issues/1062) is fixed the core
+listing makes that path more likely; `agentToolListing: "full"` avoids it for a harness that
+shows it.
+
+### Measured: D8
+
+The paired campaign `cmvl7drv2` ([#1064](https://github.com/goat-si/goat/pull/1064)) ran 10 ABBA
+pairs of full against core on each of 4 tasks, 80 runs one at a time, on Codex code mode with
+`claude-opus-5-5`. Before each run the runner switched `agentToolListing` and read `tools/list`
+back: every core run saw only `goat_describe` and `goat_call`, and every full run saw 147 tools.
+
+| Task                       | Median model turns, full | Median model turns, core | Verdict                                           |
+| -------------------------- | ------------------------ | ------------------------ | ------------------------------------------------- |
+| read-control (single call) | 2–2                      | 2–5                      | fail: the control may rise by at most one turn    |
+| wait-running               | 2–6                      | 2–8                      | fail                                              |
+| fan-out-review             | 3–14                     | 3–13                     | fail: fewer than 10 clean successful runs per arm |
+| launch-and-wait            | 3–5                      | 3–6.5                    | fail                                              |
+
+No task's failure rate rose; only the upper end of the turn range did, since code mode batches
+calls. The recorded failed calls show the cause: first calls in MCP-style argument shapes.
+Agents called `goat_describe` with `name` 28 times and with `resource`, `verb` or `tool` 7
+times, and called `goat_call` with `name` and `arguments`, `input`, `tool`, or `resource` and
+`verb` 10 times. Each refusal named the right fields and the next call worked, so both meta
+tools now accept those MCP-style shapes
+([#1065](https://github.com/goat-si/goat/pull/1065)). A rerun of the campaign on top of that
+change stopped at 50 of 80 runs without a verdict; its partial medians are close to the first
+campaign's, and failed calls in core runs fell from 28 to 4. Two core runs were excluded because the agent worked around the
+listing from the shell ([#1062](https://github.com/goat-si/goat/issues/1062)).
+
+Two full-listing sets are kept as references and are not paired with anything: Codex code mode
+(48 runs) and Claude on the MacBook Pro (rescored, original rows unchanged). The Claude arm of the
+paired campaign has not run.
+
+A third Claude reference, not paired: `claudeAgent` `claude-opus-4-8` with the full listing, on
+`fan-out-review` only, had 10 of 10 clean successful runs, each answering in its fourth run after
+three reviews, with median model turns of 7 to 9.5, a median of 5.5 tool calls, and a median wall
+time of 55.3 s. Its rows are in `scripts/agent-surface/eval/results/261024-full-claude-mbp-fanout/`
+([#1069](https://github.com/goat-si/goat/pull/1069)). The one recurring failed call was
+`goat_provider_list` called with an `args` wrapper, refused with a message that named the legacy
+tool name ([#1068](https://github.com/goat-si/goat/issues/1068)).
 
 ## Calling: `goat_call`
 
@@ -428,8 +526,8 @@ destructive, so a client that prompts before destructive tools still prompts bef
 target reached through it. The checked-handler wrapper records the original typed error,
 and `goat_call` uses it only to classify by a literal the envelope's table declares; the
 message is always the text the direct call shows, so free-text reasons the direct path
-scrubs never leave through it. Writes count as unkeyed until the registry gains
-`idempotency`, and routed calls set `meta.host`.
+scrubs never leave through it. A write the registry keys counts as deduplicated when it
+carries a `clientRequestId`, and routed calls set `meta.host`.
 
 **Now.** A direct `tools/call` by a legacy name runs the listed tool. The `/mcp` auth
 middleware swaps the name for the listed one before Effect's MCP core sees the request,
@@ -557,6 +655,11 @@ Around it, a human step reaches an agent in several shapes:
 | Decisions                    | `DecisionItem` by id                                                             | agent or person, per item                | answer delivered as a thread message                                                                                                                             |
 | Cloud launch consent         | `needs_human` from a thread; outside one, a refusal naming a decision GOAT filed | person approving the handoff or decision | agent calls launch again with the same arguments and `handoffId` or `decisionId`; the approval binds a digest of the launch and its holder and starts one launch |
 
+`delegate_task` and `goat_thread_launch` onto a cloud provider have no consent handoff and
+take no `decisionId`: they refuse a turn a person did not start and point to
+`goat_cloud_launch` on the machine that holds the account, since it does not take a remote
+holder while goatclaw is on.
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
@@ -614,10 +717,18 @@ give the person a terminal route.
 host. Writes forward the caller's runtime ceiling. Since
 [#758](https://github.com/goat-si/goat/pull/758), a follow-up `thread.send` with
 `host` also forwards the caller's goatclaw ceiling as `permissionProfileCeiling`,
-and the origin refuses a destination that has not shown it enforces ceilings
-instead of falling back to the relay, which would deliver without one. Remote
-servers answer only to the tool names they shipped with
-([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)).
+and a send that carries one never falls back to the relay, which would deliver
+without it. A destination that has not yet confirmed it enforces ceilings still
+gets the launch or send, and the result's `ceiling` field says so; a launch to a
+destination that cannot accept a ceiling at all is still refused. Remote
+servers built before canonical names answer only to the tool names they shipped with
+([ADR-0007](../../structure/decisions/ADR-0007-mcp-tool-names.md)), so the origin sends a
+host-routed call under its canonical name only to a remote whose `serverVersion` is past
+0.1.2, and under the shipped name otherwise, which every version accepts; the steps a
+remote launch runs inside the dispatcher keep shipped names
+([remoteToolNames.ts](../../apps/server/src/sshRemote/remoteToolNames.ts)). A remote that
+has no such tool answers `failed_precondition` with reason `remote_outdated`, and the
+call never runs locally instead.
 The origin checks the calling thread's capability before forwarding, plus
 `threads.remote` and the profile's host allowlist for every machine a write names:
 `host` on a host-routable entry, and each argument listed for it in
@@ -625,7 +736,8 @@ The origin checks the calling thread's capability before forwarding, plus
 as on cordon or SSH setup). This holds for writes that declare no capability of
 their own, such as `thread.watch`. A `host` that names something else, such as a
 git forge or the address of a machine being added, is not listed; a test pins
-which arguments are.
+which arguments are. A write that lets placement pick the machine, such as
+`thread.reschedule` without `targetHost`, picks only among the allowlist.
 A thread launched or sent with a forwarded ceiling is bound to it on the
 destination, so its own calls there are checked against it. Other host-routed writes
 arrive as the origin's dispatch session, and the destination relies on the origin's
@@ -635,19 +747,18 @@ check.
 
 - Forwarding stays with the origin server. A meta tool, the CLI, or a composed
   step names a `host`, and the origin's router builds the ceiling, claims the
-  lane, and translates canonical names to legacy ones when the remote's
-  `serverVersion` predates the listing flip.
+  lane, and picks the tool name the remote answers to.
 - `meta.host` says where a call ran. Remote errors keep their `reason` and gain
   `details.host`.
-- A remote too old for a requested feature answers `failed_precondition` with
-  reason `remote_outdated`. It never falls back to running locally.
 
 ## Audit
 
 **Now.** Each MCP call records one anonymous `mcp.tool.invoked` analytics event
 with no ids or text. Orchestration receipts record commands. The decision inbox
 keeps an append-only audit of actor, profile, action, target, and outcome, and
-handoff transitions are events with actors.
+handoff transitions are events with actors. A keyed write's reservation records
+principal, profile id, ceiling, host, path, argument digest, receipt id, and
+outcome.
 
 **Proposed.** Analytics stays anonymous. Every write through the invocation
 function records principal, profile id, effective ceiling, host, path, argument
@@ -684,7 +795,10 @@ and policy once describe ships.
 
 **Now.** The desktop app writes a launcher to `<GOAT home>/bin/goat` (`goat.cmd`
 on Windows) at start and rewrites it on update
-([DesktopCliShim.ts](../../apps/desktop/src/app/DesktopCliShim.ts)). **Settings →
+([DesktopCliShim.ts](../../apps/desktop/src/app/DesktopCliShim.ts)). Nightly writes
+`<GOAT home>/bin/nightly/goat` instead: both channels share the GOAT home, and the
+launcher is each thread's `GOAT_CLI_PATH`, so one shared file would hand every thread
+whichever app started last. **Settings →
 General → About → Install** links it into the first writable folder among
 `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, and `~/bin` on macOS
 (`~/.local/bin` and `~/bin` on Linux), or adds its folder to the user `PATH` on
@@ -742,13 +856,21 @@ packages gain `/usr/bin/goat`, and the welcome wizard offers the install once.
 The CLI resolves a credential for the origin server only:
 
 1. `GOAT_ACP_MCP_ENDPOINT` and `GOAT_ACP_MCP_AUTHORIZATION`, which GOAT sets for
-   ACP agents' processes, so `goat` inside such a thread has exactly that thread's
-   grant. Other providers do not get them yet
-   ([#934](https://github.com/goat-si/goat/issues/934)). When they are present and invalid, the CLI fails; it never falls
+   Claude Code, ACP (including Grok and Antigravity), Muse and Pi agent
+   processes, Codex thread shell environments, and GOAT thread terminals, so `goat` uses the same credential as
+   that thread's MCP connection. A terminal started before a credential exists
+   gets empty markers; restart it after the provider attaches. A revoked credential
+   stays invalid in existing shells. When the variables are present and invalid, the CLI fails; it never falls
    back to a stored login, which could carry more authority.
 2. A session from `goat login`, which pairs with the local server and must yield an
    `mcp-client` credential, the only outside subject `/mcp` accepts
    ([EnvironmentAuth.ts](../../apps/server/src/auth/EnvironmentAuth.ts)).
+
+Cursor's local SDK exposes no per-agent process environment, and OpenCode's local
+server shares one process across threads; their native shells do not receive a
+thread credential. External OpenCode servers and cloud agents do not have a
+supported route to the origin's thread MCP credential. Their GOAT thread terminals
+use the destination environment's credential like other providers.
 
 `--host` is routing, not a credential. The CLI sends the call with `host` to the
 origin, which applies lane admission and ceiling forwarding; calling a remote
@@ -813,21 +935,21 @@ per-flow `next.call` hints become the operation, so the agent waits on one handl
 
 ## Rollout
 
-Each PR ships on its own and leaves `tools/list` unchanged until the flip.
+Each PR shipped on its own and left `tools/list` unchanged until the flip (row 10).
 
-| #   | Ships                                                                         | State                                                                                                                                                                      |
-| --- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                 |
-| 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                 |
-| 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774) |
-| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                 |
-| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                 |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Proposed                                                                                                                                                                   |
-| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                       |
-| 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                   |
-| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                 |
-| 10  | Listing flip, verb normalization, remote name translation                     | Started: canonical names callable as unlisted aliases ([#906](https://github.com/goat-si/goat/pull/906))                                                                   |
-| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                       |
+| #   | Ships                                                                         | State                                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Registry and parity test                                                      | Shipped ([#211](https://github.com/goat-si/goat/pull/211))                                                                                                                                                                |
+| 2   | Handoff record, cards, SSH continuations                                      | Shipped ([#212](https://github.com/goat-si/goat/pull/212))                                                                                                                                                                |
+| 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774)                                                |
+| 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started ([#773](https://github.com/goat-si/goat/pull/773))                                                                                                                                                                |
+| 5   | One invocation function, `goat_call`, `goat_describe`                         | Started ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                                                                |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                                                                     |
+| 7   | Operations over existing stores; durable provider sync                        | Started ([#920](https://github.com/goat-si/goat/pull/920): `operation.*` for tasks and SSH setup; then provider syncs and approved provider changes)                                                                      |
+| 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                                                                  |
+| 9   | Registry-generated CLI commands and credentials                               | Started ([#935](https://github.com/goat-si/goat/pull/935))                                                                                                                                                                |
+| 10  | Listing flip, verb normalization, remote name translation                     | Shipped: aliases ([#906](https://github.com/goat-si/goat/pull/906)); core listing mode ([#1026](https://github.com/goat-si/goat/pull/1026)); core by default with a CI budget (D21); normalization and translation (#781) |
+| 11  | `goat_eval`                                                                   | Gated on measurement                                                                                                                                                                                                      |
 
 Testing follows the repository rules: focused tests per behavior, effect worker
 draining instead of sleeps, and one real-client pass for cards.
@@ -879,31 +1001,32 @@ every gate runs per step (D7).
 
 ## Decision log
 
-| #   | Decision                                                                                                                                                          | Why                                                                                                                                              | Rejected                                       |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
-| D1  | Three statuses; unfinished work is `ok` with a required `meta.operation`                                                                                          | Accepting work succeeded; a fourth status splits every caller's branch; a required handle keeps "accepted" from reading as "done"                | A `running` status                             |
-| D2  | Add `resource_exhausted`, `failed_precondition`, `unknown_outcome`; compute `retryable` per call; keep reasons in handlers                                        | The surface already produces these; per-code retry flags would retry launches that may have started; a classifier cannot recover collapsed codes | Folding them into `unavailable` and `conflict` |
-| D3  | `clientRequestId` reserves atomically with an argument digest; unrecorded outcomes stay `unknown`                                                                 | Replaying a stored result for other arguments corrupts silently; redispatch after a crash duplicates side effects                                | "Same id returns the first result"             |
-| D4  | Opaque cursors; fan-out lists that cannot continue say `truncated`                                                                                                | One shape; no false continuation                                                                                                                 | Numeric offsets everywhere                     |
-| D5  | `operation.*` over existing stores with signed handles                                                                                                            | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                   | A new operations table first                   |
-| D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                   | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                        | Meta tools with their own access class         |
-| D7  | Gates apply per step; composition holds no lane or grant                                                                                                          | Lanes and ceilings are claimed by the work they bound                                                                                            | Pre-admitting a whole program                  |
-| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs                                        | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                             | S-expression syntax; replay by index           |
-| D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                               | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                             | A third store; leaving the paths inconsistent  |
-| D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                               | Progressive discovery; cache safety; remotes differ                                                                                              | Loading every schema                           |
-| D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                            | `get` and `read` both exist today                                                                                                                | Renaming now                                   |
-| D12 | The CLI authenticates to the origin only and fails closed; `--host` is routing                                                                                    | Ceiling forwarding and lane admission happen at the origin                                                                                       | Local credentials for remotes                  |
-| D13 | Write receipts double as the audit; spans and `traceparent` across hosts                                                                                          | One record answers who, under which grant, and where                                                                                             | Ids in analytics                               |
-| D14 | Served reference (describe, `/llms.txt`, `--help`) instead of committed pages                                                                                     | The registry is the catalog; committed pages would be a second one                                                                               | `docs/reference/` pages                        |
-| D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                                                    | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                               | Adopting the tasks extension now               |
-| D16 | Every list and fan-out discloses loss in fields: read `limit + 1` before claiming more exists, and never report a request as complete when part of it was skipped | aside-codemode shipped the same silent-loss bug six times before writing the invariant                                                           | Loss text inside values                        |
-| D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                     | A human status that does not hold makes agents hand back work no person can fix                                                                  | Inferring human steps from messages            |
-| D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                            | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                       | A wall-clock threshold                         |
-| D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                        | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                 | Renaming paths to match shipped names          |
-| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                           | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                           | Registering alias tools, which would list them |
+| #   | Decision                                                                                                                                                                           | Why                                                                                                                                                                                                                                                                                                                                                         | Rejected                                                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| D1  | Three statuses; unfinished work is `ok` with a required `meta.operation`                                                                                                           | Accepting work succeeded; a fourth status splits every caller's branch; a required handle keeps "accepted" from reading as "done"                                                                                                                                                                                                                           | A `running` status                                                                           |
+| D2  | Add `resource_exhausted`, `failed_precondition`, `unknown_outcome`; compute `retryable` per call; keep reasons in handlers                                                         | The surface already produces these; per-code retry flags would retry launches that may have started; a classifier cannot recover collapsed codes                                                                                                                                                                                                            | Folding them into `unavailable` and `conflict`                                               |
+| D3  | `clientRequestId` reserves atomically with an argument digest; unrecorded outcomes stay `unknown`                                                                                  | Replaying a stored result for other arguments corrupts silently; redispatch after a crash duplicates side effects                                                                                                                                                                                                                                           | "Same id returns the first result"                                                           |
+| D4  | Opaque cursors; fan-out lists that cannot continue say `truncated`                                                                                                                 | One shape; no false continuation                                                                                                                                                                                                                                                                                                                            | Numeric offsets everywhere                                                                   |
+| D5  | `operation.*` over existing stores with signed handles                                                                                                                             | Smallest change giving one handle; a signature separates "issued but lost" from "never issued"                                                                                                                                                                                                                                                              | A new operations table first                                                                 |
+| D6  | One invocation function for direct calls, `goat_call`, the CLI, and composition                                                                                                    | Equivalence by construction; `readsAsCaller` would refuse outside clients                                                                                                                                                                                                                                                                                   | Meta tools with their own access class                                                       |
+| D7  | Gates apply per step; composition holds no lane or grant                                                                                                                           | Lanes and ceilings are claimed by the work they bound                                                                                                                                                                                                                                                                                                       | Pre-admitting a whole program                                                                |
+| D8  | Gate `goat_eval` on a stated measurement; if built: JSON, array refs, ordered `map`, fixed journal, no server-run programs                                                         | Code-mode harnesses already compose; replay by call index after fresh reads can reuse a receipt for a different call                                                                                                                                                                                                                                        | S-expression syntax; replay by index                                                         |
+| D9  | Handoffs own continuations, the inbox owns decisions; all human steps return `needs_human`; one resolver predicate; wake on resolve                                                | Nine contracts today; the two approval paths disagree; agents parse prose to learn a person must act                                                                                                                                                                                                                                                        | A third store; leaving the paths inconsistent                                                |
+| D10 | `goat_describe` adds `query`, `surfaceVersion`, `host`, and availability per caller                                                                                                | Progressive discovery; cache safety; remotes differ                                                                                                                                                                                                                                                                                                         | Loading every schema                                                                         |
+| D11 | `read` and `cancel` are standard verbs; synonyms normalize at the flip                                                                                                             | `get` and `read` both exist today                                                                                                                                                                                                                                                                                                                           | Renaming now                                                                                 |
+| D12 | The CLI authenticates to the origin only and fails closed; `--host` is routing                                                                                                     | Ceiling forwarding and lane admission happen at the origin                                                                                                                                                                                                                                                                                                  | Local credentials for remotes                                                                |
+| D13 | Write receipts double as the audit; spans and `traceparent` across hosts                                                                                                           | One record answers who, under which grant, and where                                                                                                                                                                                                                                                                                                        | Ids in analytics                                                                             |
+| D14 | Served reference (describe, `/llms.txt`, `--help`) instead of committed pages                                                                                                      | The registry is the catalog; committed pages would be a second one                                                                                                                                                                                                                                                                                          | `docs/reference/` pages                                                                      |
+| D15 | Stay independent of MCP versions; `operation` can map to MCP tasks and `needs_human` to `input_required` later                                                                     | MCP removed sessions and moved tasks in 2026-07-28; tracking each revision would churn the surface                                                                                                                                                                                                                                                          | Adopting the tasks extension now                                                             |
+| D16 | Every list and fan-out discloses loss in fields: read `limit + 1` before claiming more exists, and never report a request as complete when part of it was skipped                  | aside-codemode shipped the same silent-loss bug six times before writing the invariant                                                                                                                                                                                                                                                                      | Loss text inside values                                                                      |
+| D17 | `needs_human` only with a handoff a person can act on; a block nobody can clear stays `error`                                                                                      | A human status that does not hold makes agents hand back work no person can fix                                                                                                                                                                                                                                                                             | Inferring human steps from messages                                                          |
+| D18 | The D8 gate is a written protocol with paired ABBA runs, an oracle per workload, and model turns as the primary metric                                                             | Agent-level timing hid real gains behind per-turn cost in aside-codemode; fewer turns and bytes were the measurable effect                                                                                                                                                                                                                                  | A wall-clock threshold                                                                       |
+| D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                                         | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                                                                                                                                                                                                                            | Renaming paths to match shipped names                                                        |
+| D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                                                                                                                                                                                                      | Registering alias tools, which would list them                                               |
+| D21 | Every agent GOAT runs gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback; CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KiB per harness; D8 verifies the default and tunes the core set rather than gating it                                                                                                                                                                          | Opt-in core, measured before it became the default                                           |
+| D22 | The core listing applies to thread callers (agents GOAT runs); MCP clients, including SSH dispatch, linked hosts, and outside agents, keep the full listing                        | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed; the diet targets what GOAT injects into the agents it runs. Follow-up: [#1066](https://github.com/goat-si/goat/issues/1066) lets outside clients opt into core and moves remotes to a versioned capability record | Origins learning launch arguments through `goat_describe`, which does not help older origins |
 
 ## Open questions
 
 - Which providers the `goat_eval` measurement runs on, and who owns the task set.
-- Whether `tools/list` should move to the `core` profile by default.
 - How long a legacy name stays callable for SSH hosts that update rarely.

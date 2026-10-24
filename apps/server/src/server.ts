@@ -20,6 +20,7 @@ import * as Path from "effect/Path";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as ChannelLayers from "./channels/ChannelLayers.ts";
 import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
 import * as FleetHealth from "./fleet/health/layer.ts";
@@ -170,6 +171,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -183,7 +185,9 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
+import { MuseUsageHome } from "@goat/provider-muse/server";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
@@ -255,7 +259,7 @@ const HTTP_ROUTER_CONFIG = {
 } as const;
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
-// T3's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
+// GOAT's primary transport is long-lived WebSocket RPC, whose Effect scope finalizer
 // already closes the websocket gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
@@ -349,6 +353,7 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       AntigravityUsage.layer,
+      MuseUsageHome.layer,
       CodexUsageHistory.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
@@ -758,6 +763,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
+  CloudFolderTrust.layer,
   ReplayMarkers.layer,
   Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
 ).pipe(
@@ -829,7 +835,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer,
+      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
       CloudProviderAutoSetup.layer,
     ),
   ),
@@ -890,6 +896,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -966,7 +973,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer,
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
@@ -1007,7 +1014,7 @@ const layerMakeRoutes = Layer.mergeAll(
     SshDeviceAdd.layer.pipe(
       Layer.provideMerge(
         SshHostSetup.layer.pipe(
-          Layer.provide(MaintenanceAudit.layer),
+          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
           Layer.provideMerge(
             ProviderHostSync.layer.pipe(
               Layer.provide(
@@ -1082,7 +1089,7 @@ const layerMakeRoutes = Layer.mergeAll(
 const layerMakeServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
-    // Before anything opens the database: one server per T3 home.
+    // Before anything opens the database: one server per GOAT home.
     const ownership = yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath);
     const activation = yield* Deferred.make<void>();
     const awaitActivation = Deferred.await(activation);

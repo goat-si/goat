@@ -1,6 +1,7 @@
 import {
   type FleetOwnerKey,
   type ModelSelection,
+  type PermissionProfile,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
@@ -56,6 +57,11 @@ export interface RescheduleRequest {
   readonly project?: { readonly cwd: string; readonly canonicalKey: string | null };
   /** A person's choice of destination; otherwise placement chooses. */
   readonly targetHost?: string | null;
+  /**
+   * The caller's goatclaw host allowlist. When placement chooses, it chooses only among these,
+   * since the MCP gate can check only a host the arguments name.
+   */
+  readonly allowedHosts?: ReadonlyArray<string>;
   /** Skip only the wait for an unreachable host to be Lost. */
   readonly force?: boolean;
   /**
@@ -63,6 +69,10 @@ export interface RescheduleRequest {
    * right before every remote write; a lower mode than runtimeMode, or a failure, stops the move.
    */
   readonly authorize?: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  /** The caller's goatclaw profile, bound to the moved thread on the destination. */
+  readonly permissionProfileCeiling?: PermissionProfile;
+  /** Brings the destination's goatclaw policy up to date before the ceiling is forwarded to it. */
+  readonly prepareCeiling?: (host: string) => Effect.Effect<void>;
 }
 
 export type RescheduleRefusal =
@@ -321,6 +331,9 @@ const make = Effect.gen(function* () {
         title,
         branch,
       });
+      const ceiling = request.permissionProfileCeiling;
+      if (ceiling !== undefined && request.prepareCeiling !== undefined)
+        yield* request.prepareCeiling(target);
       const launched = yield* dispatch
         .launchThread(
           {
@@ -348,6 +361,7 @@ const make = Effect.gen(function* () {
             modelSelection,
             runtimeMode: request.runtimeMode,
             callerRuntimeMode: request.runtimeMode,
+            ...(ceiling === undefined ? {} : { permissionProfileCeiling: ceiling }),
           },
           recheck(request).pipe(Effect.asVoid),
         )
@@ -374,6 +388,16 @@ const make = Effect.gen(function* () {
       if (error instanceof RescheduleNotAllowed) {
         yield* claims.release(request.clientRequestId);
         return refused("not_allowed", error.message);
+      }
+      // Refused before launching, so the request may place again once the destination updates.
+      if (error.remoteCode === "permission_profile_unsupported") {
+        yield* claims.release(request.clientRequestId);
+        return refused(
+          "unsupported_remote",
+          target +
+            " cannot hold the caller's goatclaw ceiling (permission_profile_unsupported): " +
+            clip(error.message),
+        );
       }
       // Only a launch that provably never started frees the request to place again.
       if (error.launchMayHaveStarted === false) yield* claims.release(request.clientRequestId);
@@ -449,6 +473,14 @@ const make = Effect.gen(function* () {
             }
             // Confirmed absent: retry on the same host, where the branch name also guards a repeat.
             pinned = claim.targetHost;
+            // The pin outranks placement, so it must also pass the caller's allowlist.
+            if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
+              return refused(
+                "not_allowed",
+                "An earlier attempt of this move was placed on " +
+                  pinned +
+                  ", which the caller's goatclaw profile does not allow; nothing is launched.",
+              );
           }
 
           if (request.attempt >= MAX_ATTEMPTS_PER_WORKER) {
@@ -468,12 +500,18 @@ const make = Effect.gen(function* () {
           }
 
           const requested = pinned ?? request.targetHost ?? null;
+          const allowed = requested === null ? request.allowedHosts : undefined;
           const placed = yield* placement.place({
             owner: request.owner,
             modelSelection: request.modelSelection,
             fallbackChain: null,
             // Moved work runs on another machine over SSH, never here or back on the old host.
-            hostSelector: requested === null ? { exclude: [null] } : { hosts: [requested] },
+            hostSelector:
+              requested !== null
+                ? { hosts: [requested] }
+                : allowed === undefined
+                  ? { exclude: [null] }
+                  : { hosts: allowed, exclude: [null] },
             project: { host: null, projectId: null, cwd: request.project?.cwd ?? null },
             avoidHosts: [request.ref.host],
           });
@@ -486,9 +524,15 @@ const make = Effect.gen(function* () {
                 : [];
             return refused(
               "no_capacity",
-              (requested === null
-                ? "No host can take the work"
-                : requested + " cannot take the work") +
+              (requested !== null
+                ? requested + " cannot take the work"
+                : allowed === undefined
+                  ? "No host can take the work"
+                  : allowed.length === 0
+                    ? "The caller's goatclaw profile allows no host to take the work"
+                    : "No host the caller's goatclaw profile allows (" +
+                      allowed.join(", ") +
+                      ") can take the work") +
                 (reasons.length === 0 ? "." : " (" + reasons.join("; ") + ")."),
             );
           }

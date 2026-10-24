@@ -329,14 +329,23 @@ export const isProviderAvailable = (snapshot: ServerProvider): boolean =>
 export const isProviderTextGenerationCapable = (snapshot: ServerProvider): boolean =>
   snapshot.supportsTextGeneration !== false;
 
+export const OtlpEndpointSource = Schema.Literals(["environment", "bootstrap", "settings"]);
+export type OtlpEndpointSource = typeof OtlpEndpointSource.Type;
+
 export const ServerObservability = Schema.Struct({
   logsDirectoryPath: TrimmedNonEmptyString,
   localTracingEnabled: Schema.Boolean,
   otlpTracesUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpTracesSource: Schema.optional(OtlpEndpointSource),
+  otlpTracesVariable: Schema.optional(TrimmedNonEmptyString),
   otlpTracesEnabled: Schema.Boolean,
   otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpMetricsSource: Schema.optional(OtlpEndpointSource),
+  otlpMetricsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpMetricsEnabled: Schema.Boolean,
   otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
+  otlpLogsSource: Schema.optional(OtlpEndpointSource),
+  otlpLogsVariable: Schema.optional(TrimmedNonEmptyString),
   otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type ServerObservability = typeof ServerObservability.Type;
@@ -932,7 +941,7 @@ export class ServerProviderUpdateError extends Schema.TaggedError<ServerProvider
 }
 
 export const ServerSelfUpdateInput = Schema.Struct({
-  /** Exact npm version of the `t3` package to install (never a dist-tag, so
+  /** Exact GOAT release version to install (never a channel, so
       the server and the acknowledging client agree on what was requested). */
   targetVersion: TrimmedNonEmptyString,
   continueRunningThreads: Schema.optionalKey(Schema.Boolean),

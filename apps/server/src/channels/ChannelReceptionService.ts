@@ -1765,7 +1765,7 @@ const make = Effect.gen(function* () {
           text:
             "Couldn't finish: " +
             task.title +
-            " — " +
+            ": " +
             (event.payload.summary ?? event.payload.reason),
         };
       case "task.moved":

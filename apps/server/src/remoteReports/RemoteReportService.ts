@@ -76,6 +76,10 @@ const BindingRow = Schema.Struct({
   lastSequence: NonNegativeInt,
 });
 const decodeBindingRows = Schema.decodeUnknownEffect(Schema.Array(BindingRow));
+/** relay_send: 0 no relay, 1 relay (an origin older than turn capabilities), 2 relay with them. */
+const RELAY_WITH_CAPABILITIES = 2;
+const relaySendLevel = (value: RemoteReportBindingInput) =>
+  value.relaySend !== true ? 0 : value.relayCapabilities === true ? RELAY_WITH_CAPABILITIES : 1;
 const decodeBindingInput = Schema.decodeUnknownEffect(RemoteReportBindingInput);
 const decodeReportInput = Schema.decodeUnknownEffect(RemoteOriginReportInput);
 const decodeRelayInput = Schema.decodeUnknownEffect(RemoteRelaySend);
@@ -197,7 +201,7 @@ const make = Effect.gen(function* () {
     yield* sql`
       INSERT INTO remote_report_bindings
         (thread_id, correlation_id, origin_label, origin_thread_id, read_key_hash, relay_send, created_at)
-      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${value.relaySend === true ? 1 : 0}, ${createdAt})
+      VALUES (${threadId}, ${value.correlationId}, ${value.originLabel}, ${value.originThreadId}, ${value.readKeyHash}, ${relaySendLevel(value)}, ${createdAt})
     `.pipe(Effect.mapError(storage));
   });
   const unbind = Effect.fn("RemoteReportService.unbind")(function* (threadId: ThreadId) {
@@ -214,14 +218,21 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(storage));
     yield* PubSub.publish(signals, undefined);
   });
-  const append = Effect.fn("RemoteReportService.append")(function* (
-    threadId: ThreadId,
-    value: RemoteOriginReportInput,
-    relay: RemoteRelaySend | null,
-  ) {
+  // Read once per report: the run active now is the run that made it, even if a restart
+  // replaces it before the report is stored.
+  const liveShell = Effect.fn("RemoteReportService.liveShell")(function* (threadId: ThreadId) {
     const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
     if (shell === null || shell.deletedAt !== null)
       return yield* new RemoteReportError({ reason: "thread_deleted" });
+    return shell;
+  });
+  type LiveShell = Effect.Success<ReturnType<typeof liveShell>>;
+  const append = Effect.fn("RemoteReportService.append")(function* (
+    threadId: ThreadId,
+    shell: LiveShell,
+    value: RemoteOriginReportInput,
+    relay: RemoteRelaySend | null,
+  ) {
     const runId = shell.activeRunId;
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const result = yield* sql
@@ -229,7 +240,12 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const binding = (yield* bindingForThread(threadId))[0];
           if (binding === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
-          if (relay !== null && binding.relaySend !== 1)
+          if (
+            relay !== null &&
+            (binding.relaySend === 0 ||
+              ((relay.capabilities?.length ?? 0) > 0 &&
+                binding.relaySend !== RELAY_WITH_CAPABILITIES))
+          )
             return yield* new RemoteReportError({ reason: "relay_unsupported" });
           // A retried relay is the same request, even after the origin collected it.
           if (relay?.clientRequestId !== undefined) {
@@ -280,10 +296,11 @@ const make = Effect.gen(function* () {
     input: RemoteOriginReportInput,
   ) {
     const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
-    return yield* append(threadId, value, null).pipe(
+    const shell = yield* liveShell(threadId);
+    return yield* append(threadId, shell, value, null).pipe(
       Effect.catchIf(
         (error) => error.reason === "not_bound",
-        () => reportToLauncher(threadId, value),
+        () => reportToLauncher(threadId, shell, value),
       ),
     );
   });
@@ -294,11 +311,9 @@ const make = Effect.gen(function* () {
    */
   const reportToLauncher = Effect.fn("RemoteReportService.reportToLauncher")(function* (
     threadId: ThreadId,
+    shell: LiveShell,
     value: RemoteOriginReportInput,
   ) {
-    const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(unavailable));
-    if (shell === null || shell.deletedAt !== null)
-      return yield* new RemoteReportError({ reason: "thread_deleted" });
     const parentId = shell.lineage.parentThreadId;
     const subagents =
       shell.launchedBy === undefined &&
@@ -316,6 +331,7 @@ const make = Effect.gen(function* () {
       kind: value.status,
       summary: value.summary,
       source: "agent",
+      standalone: value.status === "needs_input",
     });
     if (value.status === "needs_input") {
       const key = `origin-report:${threadId}:${NodeCrypto.randomUUID()}`;
@@ -325,7 +341,7 @@ const make = Effect.gen(function* () {
           commandId: CommandId.make(`server:${key}`),
           threadId: launcherId,
           messageId: MessageId.make(`message:${key}`),
-          text: `${text}\nRead the thread with goat_thread_read {threadId: "${threadId}"} and answer it with goat_thread_send.`,
+          text: `${text}\nRead the thread with goat_call {path: "thread.read", args: {threadId: "${threadId}"}} and answer it with goat_call {path: "thread.send"}.`,
           attachments: [],
           createdBy: "agent",
           creationSource: "server",
@@ -340,10 +356,9 @@ const make = Effect.gen(function* () {
     } else {
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       yield* sql`INSERT INTO remote_report_inbox
-        (origin_thread_id, correlation_id, kind, text, created_at)
-        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text}, ${createdAt})`.pipe(
-        Effect.mapError(storage),
-      );
+        (origin_thread_id, correlation_id, kind, text, run_id, created_at)
+        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text},
+          ${shell.activeRunId}, ${createdAt})`.pipe(Effect.mapError(storage));
     }
     return { sequence: 0, delivery: "launcher" as const };
   });
@@ -354,6 +369,7 @@ const make = Effect.gen(function* () {
     const value = yield* decodeRelayInput(input).pipe(Effect.mapError(invalid));
     return yield* append(
       threadId,
+      yield* liveShell(threadId),
       {
         status: "progress",
         summary: `Asked to relay goat_thread_send to thread ${value.threadId} on ${value.host}.`,
@@ -632,7 +648,7 @@ const make = Effect.gen(function* () {
       : {
           originLabel: binding.originLabel,
           originThreadId: binding.originThreadId,
-          relaySend: binding.relaySend === 1,
+          relaySend: binding.relaySend !== 0,
         };
   });
   const relayReceipt = Effect.fn("RemoteReportService.relayReceipt")(function* (

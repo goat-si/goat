@@ -1,5 +1,10 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/contracts";
-import { makeLocalFileTracer, makeTraceSink, type SignalExport } from "@goat/shared/observability";
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  type SignalExport,
+  type TraceSink,
+} from "@goat/shared/observability";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as SharedObservability from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
@@ -24,6 +29,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as Tracer from "effect/Tracer";
 import { OtlpExporter, OtlpLogger, OtlpTracer } from "effect/observability";
+
+import desktopPackageJson from "../../package.json" with { type: "json" };
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
@@ -362,19 +369,19 @@ const resolveOtlpEndpoints = Effect.gen(function* () {
       otel,
       "traces",
       { url: Option.getOrUndefined(environment.otlpTracesUrl), export: signalExport },
-      persisted.otlpTracesUrl,
+      { bootstrapUrl: undefined, settingsUrl: persisted.otlpTracesUrl },
     ),
     metrics: OtelEnvironment.resolveSignalEndpoint(
       otel,
       "metrics",
       { url: Option.getOrUndefined(environment.otlpMetricsUrl), export: signalExport },
-      persisted.otlpMetricsUrl,
+      { bootstrapUrl: undefined, settingsUrl: persisted.otlpMetricsUrl },
     ),
     logs: OtelEnvironment.resolveSignalEndpoint(
       otel,
       "logs",
       { url: Option.getOrUndefined(environment.otlpLogsUrl), export: signalExport },
-      persisted.otlpLogsUrl,
+      { bootstrapUrl: undefined, settingsUrl: persisted.otlpLogsUrl },
     ),
     warnings: otel.warnings,
     resourceAttributes: otel.resourceAttributes,
@@ -587,13 +594,27 @@ const layerBackendOutputLogFactory = Layer.effect(
   }),
 );
 
+// Stable and nightly apps can run at once and append to the same desktop.trace.ndjson, so
+// each local span record names the app that wrote it, as an OTLP resource would.
+function withTraceResource(
+  sink: TraceSink,
+  resourceAttributes: Readonly<Record<string, string>>,
+): TraceSink {
+  return {
+    ...sink,
+    push: (record) =>
+      sink.push(record.type === "effect-span" ? { ...record, resourceAttributes } : record),
+  };
+}
+
 const layerTelemetry = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const endpoints = yield* resolveOtlpEndpoints;
     const resource = {
       serviceName: "goat-desktop",
-      serviceVersion: environment.appVersion,
+      // Unpackaged runs launch a script, so Electron reports its own version.
+      serviceVersion: environment.isPackaged ? environment.appVersion : desktopPackageJson.version,
       attributes: {
         "service.namespace": "goat",
         "service.runtime": "desktop",
@@ -661,7 +682,7 @@ const layerTelemetry = Layer.unwrap(
           maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,
           maxFiles: DESKTOP_LOG_FILE_MAX_FILES,
           batchWindowMs: DESKTOP_TRACE_BATCH_WINDOW_MS,
-          sink,
+          sink: withTraceResource(sink, { "service.version": environment.appVersion }),
           ...(delegate ? { delegate } : {}),
         });
 

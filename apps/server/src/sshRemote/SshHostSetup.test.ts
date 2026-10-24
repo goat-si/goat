@@ -2,6 +2,8 @@ import * as PermissionSettings from "../serverSettings.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- expected paths mirror the host's native join.
+import * as NodePath from "node:path";
 import { expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
@@ -18,7 +20,6 @@ import {
   SshPreflightReport,
   SSH_PREFLIGHT_STEP_ORDER,
   type SshHostResult,
-  type SshHostStatus,
 } from "@goat/contracts";
 import * as HostKey from "@goat/ssh/hostKey";
 import * as FileSystem from "effect/FileSystem";
@@ -44,101 +45,26 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient } from "effect/http";
 
-import * as MaintenanceAudit from "../maintenance/MaintenanceAudit.ts";
 import * as ServerConfig from "../config.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { dependencies } from "./testkit/SshHostSetupTestkit.ts";
+import { dependencies, baseDependencies } from "./testkit/SshHostSetupTestkit.ts";
 import * as SshHostSetup from "./SshHostSetup.ts";
 import * as SshDeviceAdd from "./SshDeviceAdd.ts";
 import * as HubNodes from "../hubNodes/HubNodes.ts";
 import * as Broker from "../connections/ConnectionCatalogBroker.ts";
 import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 
-const target = { alias: "box", hostname: "box", username: null, port: null };
+import { target, stopped, invocation, fixture } from "./testkit/SshRuntimeUpdateFixture.ts";
+import {
+  prepareFixture,
+  preparationRefusals,
+  preparePolicy,
+} from "./testkit/SshHostPrepareFixture.ts";
 const encodeSshPreflightReport = Schema.encodeEffect(SshPreflightReport);
-const stopped: SshHostStatus = {
-  host: "box",
-  state: "stopped",
-  runtimeVersion: "0.4.2",
-  requestedVersion: "0.4.3-owner",
-};
-const invocation: McpInvocationScope = {
-  environmentId: EnvironmentId.make("owner"),
-  requestNamespace: "client:ssh",
-  capabilities: new Set(["orchestration"]),
-  issuedAt: 0,
-  thread: undefined,
-  client: { sessionId: "client", label: "Agent", access: "full-access" },
-  grantedScopes: ["environment:maintain"],
-  reauthorize: () => Effect.void,
-};
-
-const fixture = Effect.gen(function* () {
-  let snapshot: SshHostResult = { kind: "ok", status: stopped };
-  const events: string[] = [];
-  const updates: { host: string; confirmReplacement: boolean }[] = [];
-  const fs = yield* FileSystem.FileSystem.pipe(Effect.provide(NodeServices.layer));
-  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-audit-" });
-  const config = yield* ServerConfig.ServerConfig.pipe(
-    Effect.provide(
-      ServerConfig.layerTest(process.cwd(), baseDir).pipe(Layer.provide(NodeServices.layer)),
-    ),
-  );
-  const audit = yield* MaintenanceAudit.MaintenanceAudit.pipe(
-    Effect.provide(
-      MaintenanceAudit.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(NodeServices.layer, Layer.succeed(ServerConfig.ServerConfig, config)),
-        ),
-      ),
-    ),
-  );
-  const dispatch = Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
-    publishSetupOutcome: () => Effect.succeed(true),
-    runtimeStatus: () => Effect.sync(() => snapshot),
-    beginSetupOperation: (_host, { operationId }) =>
-      Effect.succeed({ operationId, generation: 1, stage: "runtime" }),
-    runtimeUpdate: (host, options) =>
-      fs.readFileString(`${config.stateDir}/maintenance-audit.jsonl`).pipe(
-        Effect.orDie,
-        Effect.tap((line) =>
-          Effect.sync(() => {
-            expect(JSON.parse(line.trim())).toMatchObject({
-              operationId: options.operationId,
-              outcome: "requested",
-            });
-          }),
-        ),
-        Effect.andThen(
-          Effect.sync(() => {
-            events.push("update");
-            updates.push({ host, confirmReplacement: options.confirmReplacement });
-            snapshot = { kind: "ok", status: { ...stopped, state: "update_waiting" } };
-            return snapshot;
-          }),
-        ),
-      ),
-  });
-  const setup = Context.get(
-    yield* Layer.build(
-      SshHostSetup.layer.pipe(
-        Layer.provide(Layer.succeed(MaintenanceAudit.MaintenanceAudit, audit)),
-        Layer.provide(dispatch),
-        Layer.provide(dependencies),
-      ),
-    ),
-    SshHostSetup.SshHostSetup,
-  );
-  const scope: McpInvocationScope = {
-    ...invocation,
-    reauthorize: (required) =>
-      Effect.sync(() => {
-        expect(required).toEqual(["environment:maintain"]);
-        events.push("authorize");
-      }),
-  };
-  return { setup, scope, events, updates, journal: `${config.stateDir}/maintenance-audit.jsonl` };
-});
+// Setup writes and compares the host's native paths, and Windows OpenSSH's `ssh -G` echoes them
+// unchanged, so expected paths and canned `ssh -G` output use the same join.
+const managedSshFile = (home: string, file: string) =>
+  NodePath.join(home, ".ssh", "goat-hosts", file);
 
 it.effect.each([undefined, "when_idle"] as const)(
   "defaults to when_idle after live authorization (mode=%s)",
@@ -232,66 +158,58 @@ it.effect.each([false, true])(
     }),
 );
 
-it.effect(
-  "a thread with only orchestration:read can update when idle or ask to update now, and cannot prepare",
-  () =>
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const seen: Array<ReadonlyArray<string>> = [];
-      const threadScope: McpInvocationScope = {
-        ...f.scope,
-        client: undefined,
-        readOnly: false,
-        thread: {
-          threadId: ThreadId.make("caller"),
-          providerSessionId: "session",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-        },
-        grantedScopes: ["orchestration:read"],
-        reauthorize: (required) => Effect.sync(() => void seen.push(required)),
-      };
-      const caller = { kind: "mcp" as const, scope: threadScope };
-      expect(yield* f.setup.update({ host: "box", mode: "now" }, caller)).toMatchObject({
-        kind: "needs_human",
-        next: { after: "approval", call: "goat_ssh_host_status" },
-      });
-      expect(seen).toEqual([["orchestration:read"]]);
-      expect(f.updates).toEqual([]);
+it.effect("a thread with only orchestration:read can update when idle or ask to update now", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const seen: Array<ReadonlyArray<string>> = [];
+    const threadScope: McpInvocationScope = {
+      ...f.scope,
+      client: undefined,
+      readOnly: false,
+      thread: {
+        threadId: ThreadId.make("caller"),
+        providerSessionId: "session",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      },
+      grantedScopes: ["orchestration:read"],
+      reauthorize: (required) => Effect.sync(() => void seen.push(required)),
+    };
+    const caller = { kind: "mcp" as const, scope: threadScope };
+    expect(yield* f.setup.update({ host: "box", mode: "now" }, caller)).toMatchObject({
+      kind: "needs_human",
+      next: { after: "approval", call: "goat_ssh_host_status" },
+    });
+    expect(seen).toEqual([["orchestration:read"]]);
+    expect(f.updates).toEqual([]);
 
-      expect(
-        yield* f.setup
-          .update(
-            { host: "box", mode: "now" },
-            { kind: "mcp", scope: { ...threadScope, readOnly: true } },
-          )
-          .pipe(Effect.flip),
-      ).toMatchObject({ requiredScope: "orchestration:read" });
-      const denied = yield* f.setup.prepare({ host: "box" }, caller).pipe(Effect.flip);
-      expect(denied).toMatchObject({ requiredScope: "environment:maintain" });
-      expect(denied.message).toContain("goat_ssh_runtime_update");
-      expect(f.updates).toEqual([]);
-      expect(seen).toEqual([["orchestration:read"]]);
-
-      // An idle update cannot interrupt work, so the thread starts it and is reauthorized live.
-      expect(yield* f.setup.update({ host: "box", mode: "when_idle" }, caller)).toMatchObject({
-        kind: "ok",
-        status: { state: "update_waiting" },
-      });
-      expect(f.updates).toEqual([{ host: "box", confirmReplacement: false }]);
-      expect(seen.length).toBeGreaterThan(1);
-      expect(
-        seen.every((scopes) => scopes.length === 1 && scopes[0] === "orchestration:read"),
-      ).toBe(true);
-      expect(
-        yield* f.setup
-          .update(
-            { host: "box", mode: "when_idle" },
-            { kind: "mcp", scope: { ...threadScope, readOnly: true } },
-          )
-          .pipe(Effect.flip),
-      ).toMatchObject({ requiredScope: "orchestration:read" });
-      expect(f.updates).toHaveLength(1);
-    }),
+    expect(
+      yield* f.setup
+        .update(
+          { host: "box", mode: "now" },
+          { kind: "mcp", scope: { ...threadScope, readOnly: true } },
+        )
+        .pipe(Effect.flip),
+    ).toMatchObject({ requiredScope: "orchestration:read" });
+    // An idle update cannot interrupt work, so the thread starts it and is reauthorized live.
+    expect(yield* f.setup.update({ host: "box", mode: "when_idle" }, caller)).toMatchObject({
+      kind: "ok",
+      status: { state: "update_waiting" },
+    });
+    expect(f.updates).toEqual([{ host: "box", confirmReplacement: false }]);
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.every((scopes) => scopes.length === 1 && scopes[0] === "orchestration:read")).toBe(
+      true,
+    );
+    expect(
+      yield* f.setup
+        .update(
+          { host: "box", mode: "when_idle" },
+          { kind: "mcp", scope: { ...threadScope, readOnly: true } },
+        )
+        .pipe(Effect.flip),
+    ).toMatchObject({ requiredScope: "orchestration:read" });
+    expect(f.updates).toHaveLength(1);
+  }),
 );
 
 it.effect.each(["read-only", "missing-grant", "missing-reauthorize", "revoked"] as const)(
@@ -513,7 +431,7 @@ it.effect.each(
       const operation = { operationId: "prepare-one", generation: 1, stage: "runtime" as const };
       const pin = "box ssh-ed25519 AAAA\n";
       const config = "Host box\n HostName box\n User deploy\n Port 2222\n";
-      const resolved = `hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile ${home}/.ssh/goat-hosts/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`;
+      const resolved = `hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile ${managedSshFile(home, "box.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`;
       const key = vi
         .spyOn(HostKey, "probeHostKey")
         .mockReturnValue(
@@ -1013,8 +931,8 @@ it.effect(
       yield* Deferred.await(fenced);
       expect(yield* Deferred.isDone(upload)).toBe(false);
       expect(removed).toEqual([
-        "/fixture-forget/.ssh/goat-hosts/box.conf",
-        "/fixture-forget/.ssh/goat-hosts/box.known_hosts",
+        managedSshFile("/fixture-forget", "box.conf"),
+        managedSshFile("/fixture-forget", "box.known_hosts"),
       ]);
       latePhase?.({ target, phase: "starting" });
       yield* Deferred.succeed(upload, undefined);
@@ -1155,7 +1073,7 @@ it.effect.each([
                       )!;
                       const file = destination.slice('UserKnownHostsFile="'.length, -1);
                       paths.push(file);
-                      expect(file).not.toBe(`${home}/.ssh/known_hosts`);
+                      expect(file).not.toBe(NodePath.join(home, ".ssh", "known_hosts"));
                       return processOutput("", stderr, 255);
                     }),
                 }),
@@ -1187,6 +1105,7 @@ it.effect(
   "approval copy names the server, negotiated algorithm, account and each next action",
   () =>
     Effect.gen(function* () {
+      const policy = yield* preparePolicy();
       const fs = yield* FileSystem.FileSystem;
       const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-copy-test-" });
       const created: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
@@ -1239,7 +1158,7 @@ it.effect(
               run: () =>
                 Effect.succeed(
                   processOutput(
-                    `hostname box\nuser root\nport 2222\nhostkeyalias box\nuserknownhostsfile ${directory}/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
+                    `hostname box\nuser root\nport 2222\nhostkeyalias box\nuserknownhostsfile ${managedSshFile(home, "box.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
                   ),
                 ),
             }),
@@ -1268,7 +1187,8 @@ it.effect(
                 }),
             }),
           ),
-          Layer.provide(dependencies),
+          Layer.provide(policy.layer),
+          Layer.provide(baseDependencies),
         );
         const setup = Context.get(yield* Layer.build(serviceLayer), SshHostSetup.SshHostSetup);
         const input = { address: "box", alias: "box" };
@@ -1421,7 +1341,7 @@ it.effect.each(["pinned", "key_changed", "expired", "authorization_revoked"] as 
               run: () =>
                 Effect.succeed(
                   processOutput(
-                    `hostname build.example\nuser deploy\nport 22\nhostkeyalias build\nuserknownhostsfile ${home}/.ssh/goat-hosts/build.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
+                    `hostname build.example\nuser deploy\nport 22\nhostkeyalias build\nuserknownhostsfile ${managedSshFile(home, "build.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
                   ),
                 ),
             }),
@@ -1607,7 +1527,7 @@ it.effect("preflight normalizes typed destinations and rejects configured alias 
             .pipe(Effect.flip),
         ).toMatchObject({
           reason: "invalid_request",
-          message: expect.stringContaining(`${home}/.ssh/config`),
+          message: expect.stringContaining(NodePath.join(home, ".ssh", "config")),
         });
       }
     }).pipe(Effect.ensuring(Effect.sync(() => discover.mockRestore())));
@@ -1781,7 +1701,7 @@ it.effect.each([true, false])(
                 Effect.succeed(
                   args?.includes("-G")
                     ? processOutput(
-                        `hostname cursor-2\nuser ubuntu\nport 22\nhostkeyalias goat-cursor-2-e25449c9\nuserknownhostsfile ${home}/.ssh/goat-hosts/goat-cursor-2-e25449c9.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
+                        `hostname cursor-2\nuser ubuntu\nport 22\nhostkeyalias goat-cursor-2-e25449c9\nuserknownhostsfile ${managedSshFile(home, "goat-cursor-2-e25449c9.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
                       )
                     : processOutput("", stderr, 255),
                 ),
@@ -1997,4 +1917,69 @@ it.effect("preflight marks GOAT's managed aliases and keeps long personal aliase
       expect((yield* encodeSshPreflightReport(personal)).destination.alias).toBe(longAlias);
     }).pipe(Effect.ensuring(Effect.sync(() => discover.mockRestore())));
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "an owner-profile thread with only orchestration:read prepares an allowed pinned host",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* prepareFixture();
+      expect(yield* f.setup.prepare({ host: "box" }, f.caller)).toMatchObject({
+        status: { state: "preparing", phase: "uploading" },
+      });
+      expect(f.preparations).toEqual(["box"]);
+    }),
+);
+
+it.effect.each(preparationRefusals.map(([reason, requirement]) => ({ reason, requirement })))(
+  "refuses preparation when $reason",
+  ({ reason, requirement }) =>
+    Effect.gen(function* () {
+      const f = yield* prepareFixture(reason);
+      const denied = yield* f.setup.prepare({ host: "box" }, f.caller).pipe(Effect.flip);
+      expect(denied.message).toContain(requirement);
+      expect(denied.message).toContain(
+        "Ask a person to open Settings → Connections and press Retry on box (or Update runtime when it offers one)",
+      );
+      expect(f.preparations).toEqual([]);
+    }),
+);
+
+it.effect.each(["revoke", "revoke-remote", "revoke-credential"] as const)(
+  "%s between admission and job execution stops preparation",
+  (reason) =>
+    Effect.gen(function* () {
+      const f = yield* prepareFixture(reason);
+      const result = yield* f.setup.prepare({ host: "box" }, f.caller);
+      expect(result).toMatchObject({
+        status: { state: "failed", failure: { reason: "authorization_revoked" } },
+      });
+      const expected: Record<typeof reason, string> = {
+        revoke: "hub.manage",
+        "revoke-remote": "threads.remote",
+        "revoke-credential": "Credential revoked",
+      };
+      expect(result.status?.detail).toContain(expected[reason]);
+      expect(result.status?.failure?.fix.instruction).toContain("Retry on box");
+      expect(f.preparations).toEqual([]);
+    }),
+);
+
+it.effect.each(["client", "mcp"] as const)(
+  "a non-thread %s without environment:maintain cannot prepare a pinned host",
+  (kind) =>
+    Effect.gen(function* () {
+      const f = yield* prepareFixture();
+      expect(
+        yield* f.setup
+          .prepare(
+            { host: "box" },
+            kind === "client"
+              ? { kind, sessionId: AuthSessionId.make("unprivileged") }
+              : { kind, scope: { ...f.caller.scope, thread: undefined } },
+          )
+          .pipe(Effect.flip),
+      ).toMatchObject({ requiredScope: "environment:maintain" });
+      expect(f.preparations).toEqual([]);
+    }),
 );

@@ -44,7 +44,7 @@ import {
   latestNativeContextUsage,
 } from "@goat/provider-core/server/handoffBudget";
 import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
-import { sideChatNoteFor } from "./SideChatNote.ts";
+import { sideChatNote } from "./SideChatNote.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -224,6 +224,19 @@ export const layer: Layer.Layer<
               }),
             )
             .pipe(Effect.catchCause(() => Effect.succeed(false))),
+        loadRunInterruptReason: () =>
+          projectionStore
+            .getThreadRecords(input.threadId, ["turnItems"], {
+              turnItemTypes: ["run_interrupt_request"],
+              turnItemRunIds: [input.runId],
+            })
+            .pipe(
+              Effect.map(({ turnItems }) => {
+                const request = turnItems.find((item) => item.type === "run_interrupt_request");
+                return request?.type === "run_interrupt_request" ? request.message : undefined;
+              }),
+              Effect.catchCause(() => Effect.succeed(undefined)),
+            ),
       };
     };
 
@@ -835,7 +848,7 @@ export const layer: Layer.Layer<
           providerSessionId,
           modelSelection: run.modelSelection,
           runtimePolicy: resolvedRuntimePolicy,
-          ...RunExecutionService.runMemoryPrepareInput({ run, message, projection }),
+          ...RunExecutionService.runPrepareInput({ run, message, projection }),
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
@@ -1276,7 +1289,7 @@ export const layer: Layer.Layer<
         attempts: projection.attempts,
       });
       const restartNote = [
-        sideChatNoteFor(projection.thread, userText),
+        yield* sideChatNote(projectionStore, projection.thread, userText),
         restartCancelledWork.length === 0
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork),
@@ -1570,6 +1583,7 @@ export const layer: Layer.Layer<
         shouldStartProviderTurn: runControls.shouldStartProviderTurn,
         shouldFinalizeRun: runControls.shouldFinalizeRun,
         hasUnpairedRunInterruptRequest: runControls.hasUnpairedRunInterruptRequest,
+        loadRunInterruptReason: runControls.loadRunInterruptReason,
         message: {
           messageId: message.id,
           text: userText,

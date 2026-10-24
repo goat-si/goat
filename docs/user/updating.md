@@ -23,7 +23,19 @@ Each row has a checkbox, and **Update** runs the checked rows of the tab you are
 on. Machines GOAT cannot update are listed under **Skipped** with the reason,
 such as a machine that is offline or needs a manual update. Use the notice or
 **Settings → Connections** for those. Server updates appear only after that
-version is published to npm; remote desktop apps do not wait for npm.
+version's CLI archives and checksums are available in GOAT Releases; desktop apps
+use their own release feed.
+
+For an [npm tarball installation](./install.md#install-with-npm), update the
+launcher by reinstalling the target release's `goat-npm.tgz` from
+https://github.com/goat-si/goat-releases/releases. Use the same npm prefix as the
+original install: `npm --prefix <prefix> install --global <release-tarball-URL>`.
+The npm launcher remains pinned until that reinstall; `goat update` does not
+rewrite npm-owned files. For the latest stable tarball with your default prefix:
+
+```bash
+npm install --global https://github.com/goat-si/goat-releases/releases/latest/download/goat-npm.tgz
+```
 
 Updates never interrupt running threads. A machine with running threads shows
 **waits for idle** and starts once they finish. Remote machines go first, and
@@ -100,18 +112,21 @@ stop an idle runtime GOAT owns, use **Forget host**; remote projects and files s
 
 GOAT (Nightly) downloads each new nightly by itself, and GOAT downloads each
 new stable release. Once an update is downloaded, the app restarts to install
-it when every local server reports that no agent work is running.
+it when every local server reports that no agent work is running, or installs it
+when you quit the app. If the app cannot check for updates, the update button next
+to Settings shows a warning with the reason; click it to check again.
 
 Choose the behaviour in **Settings → General → Update installation**:
 
-- **Restart when idle** (default) installs as soon as all local servers are idle.
+- **Restart when idle** (default) installs as soon as all local servers are idle,
+  or when you quit the app.
 - **Install on quit** waits until you quit the app.
 - **Paused** stops automatic downloads and installs; you can still update from
   the version row.
 
 A server running inside WSL cannot report whether it is idle yet, so while one
-is running, **Restart when idle** does not install. Choose **Install on quit**
-or install from the version row instead. Remote runtimes the app started over
+is running, **Restart when idle** installs only when you quit the app or install
+from the version row. Remote runtimes the app started over
 SSH move to the app's version the next time they are idle; until then the
 connection notice says the runtime will be replaced when its work finishes.
 
@@ -192,8 +207,9 @@ there before refreshing to find newer versions. The same setting controls whethe
 GOAT downloads model catalog updates, so with it off new models may not appear
 until you enable it and refresh provider status.
 
-Install App Store or Google Play releases as usual. The mobile app can also
-download updates in the background and apply them when you next leave the app.
+GOAT's mobile app has no App Store or Google Play release yet; TestFlight
+installs new TestFlight builds. The mobile app can also download updates in the
+background and apply them when you next leave the app.
 It saves drafts and queued messages before restarting. If you keep the app open
 for a long time, it may ask to install immediately; choosing **Later** leaves the
 update queued for the next suitable moment.

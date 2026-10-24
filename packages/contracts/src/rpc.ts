@@ -5,7 +5,17 @@ import {
   Handoff,
   HandoffError,
 } from "./handoff.ts";
-import { CuaHostStatus } from "./cua.ts";
+import {
+  ComputerUseStopAllResult,
+  ComputerUseStopInput,
+  ComputerUseStopResult,
+  CuaHostStatus,
+} from "./cua.ts";
+import {
+  PreviewSessionControlInput,
+  PreviewSessionControlResult,
+  PreviewSessionsSnapshot,
+} from "./previewSession.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -222,6 +232,8 @@ import {
   PullRequestListResult,
   PullRequestListStatsInput,
   PullRequestListStatsResult,
+  PullRequestFilterOptions,
+  PullRequestFilterOptionsInput,
   PullRequestOperationError,
   PullRequestReactionInput,
   PullRequestRef,
@@ -588,6 +600,11 @@ export const WS_METHODS = {
 
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
+  computerUseStop: "computerUse.stop",
+  computerUseStopAll: "computerUse.stopAll",
+  computerUseResume: "computerUse.resume",
+  previewSessionsSubscribe: "previewSessions.subscribe",
+  previewSessionsControl: "previewSessions.control",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -659,6 +676,7 @@ export const WS_METHODS = {
   // Boat cloud machines this environment manages as SSH hosts
   cloudMachinesList: "cloudMachines.list",
   cloudAgentsListRuns: "cloudAgents.listRuns",
+  // Deprecated since GOAT 0.1.2; only older clients call these. Remove in GOAT 0.2.0.
   cloudAgentsListFolderTrust: "cloudAgents.listFolderTrust",
   cloudAgentsAcceptFolderTrust: "cloudAgents.acceptFolderTrust",
   cloudMachinesConfigure: "cloudMachines.configure",
@@ -680,6 +698,7 @@ export const WS_METHODS = {
 
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
+  pullRequestsFilterOptions: "pullRequests.filterOptions",
   pullRequestsSummary: "pullRequests.summary",
   pullRequestsRouting: "pullRequests.routing",
   pullRequestsRoutingIdentity: "pullRequests.routingIdentity",
@@ -763,6 +782,42 @@ const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, 
   error: EnvironmentAuthorizationError,
 });
 
+/** Ends one thread's control of this host's screen, killing its driver transport. */
+const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: ComputerUseStopInput,
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The kill switch: every thread's control on this host ends, unattended admissions included. */
+const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopAllResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Hands the screen back to agents after a person's input or takeover paused them. */
+const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Every browser and desktop preview session on this host, again whenever one changes. */
+const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
+  payload: Schema.Struct({}),
+  success: PreviewSessionsSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/** A person's takeover, hand back, stop or kill switch on a preview session. */
+const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
+  payload: PreviewSessionControlInput,
+  success: PreviewSessionControlResult,
+  error: EnvironmentAuthorizationError,
+});
+
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
@@ -774,7 +829,7 @@ const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, 
     instanceId: Schema.optional(ProviderInstanceId),
     cwd: Schema.optional(TrimmedNonEmptyString),
     fresh: Schema.optional(Schema.Boolean),
-    /** Explicit user request: bypass T3-owned caches and rediscover models.
+    /** Explicit user request: bypass GOAT-owned caches and rediscover models.
      * Background status refreshes must not open agent sessions. */
     refreshModels: Schema.optional(Schema.Boolean),
   }),
@@ -1210,6 +1265,12 @@ const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
 const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
   payload: PullRequestListStatsInput,
   success: PullRequestListStatsResult,
+  error: PullRequestRpcError,
+});
+
+const WsPullRequestsFilterOptionsRpc = Rpc.make(WS_METHODS.pullRequestsFilterOptions, {
+  payload: PullRequestFilterOptionsInput,
+  success: PullRequestFilterOptions,
   error: PullRequestRpcError,
 });
 
@@ -2171,13 +2232,19 @@ const WsCloudAgentsListRunsRpc = Rpc.make(WS_METHODS.cloudAgentsListRuns, {
   success: CloudRunListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
-/** Claude Code folder trust for this environment's projects, for the cloud agents panel. */
+/**
+ * Claude Code folder trust for this environment's projects, for the cloud agents panel.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
 const WsCloudAgentsListFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsListFolderTrust, {
   payload: CloudFolderTrustListInput,
   success: CloudFolderTrustListResult,
   error: Schema.Union([OrchestratorMcpFailure, EnvironmentAuthorizationError]),
 });
-/** Answers a project folder's Claude Code trust prompt now, without starting a cloud session. */
+/**
+ * Answers a project folder's Claude Code trust prompt now, without starting a cloud session.
+ * Deprecated since GOAT 0.1.2: only older clients call it. Remove in GOAT 0.2.0.
+ */
 const WsCloudAgentsAcceptFolderTrustRpc = Rpc.make(WS_METHODS.cloudAgentsAcceptFolderTrust, {
   payload: CloudFolderTrustAcceptInput,
   success: CloudFolderTrust,
@@ -2303,6 +2370,11 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
+  WsComputerUseStopRpc,
+  WsComputerUseStopAllRpc,
+  WsComputerUseResumeRpc,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
@@ -2402,6 +2474,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
+  WsPullRequestsFilterOptionsRpc,
   WsPullRequestsSummaryRpc,
   WsPullRequestsRoutingRpc,
   WsPullRequestsRoutingIdentityRpc,

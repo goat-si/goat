@@ -2,6 +2,7 @@ import * as FleetSync from "../goatclaw/FleetSync.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
+  type GoatclawCeilingAdvice,
   IsoDateTime,
   isOrchestrationV2WorkActive,
   isProviderAvailable,
@@ -80,6 +81,7 @@ import { derive } from "@goat/provider-core/server/IdAllocator";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
+import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -113,6 +115,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 
 import {
   delegatedTaskProgress,
@@ -146,6 +149,7 @@ import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { statusFromShell } from "./threadStatus.ts";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // Resolved per call: RemoteDispatchCoordinator → LaunchWatchService → PressureNudger →
 // HostStatusMcpService → HostThreadsMcpService → this module is an import cycle, so the
@@ -358,6 +362,11 @@ function threadManagementFailure(error: unknown): OrchestratorMcpFailure {
   }
 }
 
+// Without a reason, a Stop reads as the user's (see RunExecutionService.USER_STOP_REASON).
+function agentStopReason(reason: string | undefined): string {
+  return reason === undefined ? "Stopped by an agent" : `Stopped by an agent: ${reason}`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -435,6 +444,8 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     schedule: task.schedule,
     nextRunAt: task.nextRunAt,
     lastRunStatus: task.lastRunStatus,
+    runCount: task.runCount,
+    lastRunAt: task.lastRunAt,
     ...webhookUrlFields(task.webhook, mayRun),
     ...(task.webhook === undefined
       ? {}
@@ -1597,19 +1608,10 @@ const make = Effect.gen(function* () {
 
     const inheritsOptions =
       instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
-    let options = inheritsOptions ? inheritedSelection.options : undefined;
-    if (requestedOptions !== undefined) {
-      const selections = new Map(
-        (requestedOptions.length === 0 ? [] : (options ?? [])).map((selection) => [
-          selection.id,
-          selection,
-        ]),
-      );
-      for (const selection of requestedOptions) {
-        selections.set(selection.id, selection);
-      }
-      options = [...selections.values()];
-    }
+    const options = overrideOptionSelections(
+      inheritsOptions ? inheritedSelection.options : undefined,
+      requestedOptions,
+    );
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
       supportedRuntimeModes: provider.supportedRuntimeModes,
@@ -2447,7 +2449,15 @@ const make = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
-        if (existing !== undefined) return yield* finishTaskWait(scope, taskId, key, input);
+        const acknowledge = (ceiling: GoatclawCeilingAdvice | undefined) =>
+          finishTaskWait(scope, taskId, key, input).pipe(
+            Effect.map((delegated) =>
+              ceiling === undefined ? delegated : { ...delegated, ceiling },
+            ),
+          );
+        // A replay or a concurrent duplicate forwards nothing itself, and whether the call that
+        // launched carried a ceiling is not recorded, so neither says anything about one.
+        if (existing !== undefined) return yield* acknowledge(undefined);
         yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
         yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
         const target = yield* resolveRemoteTarget(scope, parent, {
@@ -2460,7 +2470,9 @@ const make = Effect.gen(function* () {
           host,
           worktree: remote.workspace?.type === "worktree",
         });
-        if (admitted.enabled) yield* FleetSync.syncBeforeForwarding(fleet, host);
+        const ceilingAdvice = admitted.enabled
+          ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+          : undefined;
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -2563,7 +2575,7 @@ const make = Effect.gen(function* () {
           isRemoteDispatchError(launched.failure) &&
           launched.failure.reason === "duplicate_task"
         )
-          return yield* finishTaskWait(scope, taskId, key, input);
+          return yield* acknowledge(undefined);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -2623,7 +2635,7 @@ const make = Effect.gen(function* () {
             summary:
               refusal !== null
                 ? `Remote launch refused on host ${host}; nothing was launched (${refusal}).`
-                : `launch outcome unknown; inspect goat_thread_list with host ${host} before retrying`,
+                : `launch outcome unknown; inspect ${goatCallText("thread.list")} with host ${host} before retrying`,
           }).pipe(
             Effect.provideService(
               ThreadManagementService.ThreadManagementService,
@@ -2632,7 +2644,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(threadManagementFailure),
           );
         }
-        return yield* finishTaskWait(scope, taskId, key, input);
+        return yield* acknowledge(ceilingAdvice);
       }
 
       const providers = yield* loadProviders;
@@ -3083,13 +3095,14 @@ const make = Effect.gen(function* () {
       });
       const stopChild = Effect.gen(function* () {
         const commandId = stableCommandId({ scope, requestKey: key, operation: "cancel-task" });
-        const reason = input.reason;
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: childThreadId,
-            ...(reason === undefined ? {} : { reason }),
+            stopDelegatedTasks: false,
+            reason,
             stopCascadeFrom: scope.thread.threadId,
           })
           .pipe(
@@ -3248,7 +3261,7 @@ const make = Effect.gen(function* () {
         if ((yield* permissions.resolve(scope, parent.thread.runtimeMode)).enabled)
           return yield* failure(
             "capability_denied",
-            "With goatclaw enabled, use goat_thread_launch or goat_task_create so every child inherits its permission profile.",
+            `With goatclaw enabled, use ${goatCallText("thread.launch")} or ${goatCallText("task.create")} so every child inherits its permission profile.`,
           );
         const parentNodeId = parentRun.rootNodeId;
         const providers = yield* loadProviders;
@@ -3635,15 +3648,11 @@ const make = Effect.gen(function* () {
       const result = yield* threadManagement
         .sendToThread({
           projectId: target.thread.projectId,
-          commandId: stableCommandId({
-            scope,
-            requestKey: key,
-            operation: "thread-send",
-          }),
+          commandId: admissionId,
           threadId: input.threadId,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
           messageId,
-          text: input.message,
+          ...withTurnCapabilities({ text: input.message }, input.capabilities ?? []),
           attachments: [],
           mode,
           createdBy: "agent",
@@ -3693,6 +3702,9 @@ const make = Effect.gen(function* () {
         ...(result.pendingRequestIds === undefined
           ? {}
           : { pendingRequestIds: result.pendingRequestIds }),
+        ...(result.run?.completedAt == null
+          ? {}
+          : { completedAt: DateTime.formatIso(result.run.completedAt) }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     threadStatus: (scope, input) =>
@@ -3752,16 +3764,18 @@ const make = Effect.gen(function* () {
             run.status !== "queued" && !ThreadManagementService.isTerminalRunStatus(run.status),
         );
         const commandId = stableCommandId({ scope, requestKey: key, operation: "thread-stop" });
+        const reason = agentStopReason(input.reason);
         yield* threadManagement
           .dispatch({
             type: "thread.stop",
             commandId,
             threadId: input.threadId,
-            ...(input.reason === undefined ? {} : { reason: input.reason }),
+            stopDelegatedTasks: false,
+            reason,
           })
           .pipe(Effect.mapError(stopFailure));
         yield* threadManagement
-          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason: input.reason })
+          .stopDelegatedTasks({ threadId: input.threadId, commandId, reason })
           .pipe(Effect.mapError(stopFailure));
         return {
           threadId: input.threadId,
@@ -3780,7 +3794,7 @@ const make = Effect.gen(function* () {
           }),
           threadId: input.threadId,
           ...(input.runId === undefined ? {} : { runId: input.runId }),
-          ...(input.reason === undefined ? {} : { reason: input.reason }),
+          reason: agentStopReason(input.reason),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -3822,7 +3836,7 @@ const make = Effect.gen(function* () {
       if (run.status !== "failed" || run.workspacePreparation === undefined)
         return yield* failure(
           "invalid_request",
-          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with goat_thread_send instead.`,
+          `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with ${goatCallText("thread.send")} instead.`,
         );
       yield* threadLaunch
         .retryPreparation({

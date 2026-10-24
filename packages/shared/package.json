@@ -23,6 +23,10 @@
       "types": "./src/cuaDriverRelease.ts",
       "import": "./src/cuaDriverRelease.ts"
     },
+    "./computerUseObservation": {
+      "types": "./src/computerUseObservation.ts",
+      "import": "./src/computerUseObservation.ts"
+    },
     "./cuaDriverManifest": {
       "types": "./src/cuaDriverManifest.ts",
       "import": "./src/cuaDriverManifest.ts"
@@ -335,6 +339,10 @@
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"
     },
+    "./turnCapabilities": {
+      "types": "./src/turnCapabilities.ts",
+      "import": "./src/turnCapabilities.ts"
+    },
     "./composerContextLegacy": {
       "types": "./src/composerContextLegacy.ts",
       "import": "./src/composerContextLegacy.ts"
@@ -415,6 +423,10 @@
       "types": "./src/testing/fileNames.ts",
       "import": "./src/testing/fileNames.ts"
     },
+    "./testing/gitEnv": {
+      "types": "./src/testing/gitEnv.ts",
+      "import": "./src/testing/gitEnv.ts"
+    },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
@@ -482,10 +494,6 @@
     "./hostClassification": {
       "types": "./src/hostClassification.ts",
       "import": "./src/hostClassification.ts"
-    },
-    "./dateTime": {
-      "types": "./src/dateTime.ts",
-      "import": "./src/dateTime.ts"
     },
     "./cliRelease": {
       "types": "./src/cliRelease.ts",

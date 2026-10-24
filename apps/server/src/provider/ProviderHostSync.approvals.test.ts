@@ -38,7 +38,7 @@ const agent = {
   scope: { ...threadScope, thread: { ...threadScope.thread!, threadId } },
 } as const;
 const RESTARTED =
-  "GOAT restarted on this machine before this host finished. Call goat_provider_host_matrix to see its state.";
+  'GOAT restarted on this machine before this host finished. Call goat_call {path:"provider.host_matrix"} to see its state.';
 
 const finishedRemote = {
   kind: "started",

@@ -214,44 +214,56 @@ export const layer = McpToolAccess.toLayer(
       ),
       // Agents never hold settings:write, so the environment-write gate decides, as for
       // goat_connection_add_ssh: a full-access caller can already edit settings itself.
-      channel_bot_home_claim: McpToolAccess.writesEnvironment((_, check) =>
-        Effect.gen(function* () {
-          const services = yield* Effect.context<Effect.Services<typeof check>>();
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          const home = yield* ChannelBotHome.ChannelBotHome;
-          // Inside the settings lock: the caller must still have full access and, when it
-          // holds a credential, that credential must still be live.
-          const stillAllowed = check.pipe(
-            Effect.andThen(Effect.suspend(() => scope.reauthorize?.([]) ?? Effect.void)),
-            Effect.provideContext(services),
-          );
-          return yield* home
-            .claimHere(
-              stillAllowed.pipe(
-                Effect.asVoid,
-                Effect.mapError(
-                  () =>
-                    new ServerSettingsError({
-                      settingsPath: HOME_CLAIM_REVOKED,
-                      operation: "normalize",
-                    }),
-                ),
-              ),
-            )
-            .pipe(
-              Effect.mapError((error) =>
-                error.settingsPath === HOME_CLAIM_REVOKED
-                  ? new OrchestratorMcpFailure({
-                      code: "capability_denied",
-                      message: HOME_CLAIM_DENIAL,
-                    })
-                  : new OrchestratorMcpFailure({
-                      code: "orchestration_error",
-                      message: "Could not save GOAT Bot's home on this machine.",
-                    }),
+      channel_bot_home_claim: McpToolAccess.writesEnvironment(
+        (input, check) =>
+          Effect.gen(function* () {
+            const services = yield* Effect.context<Effect.Services<typeof check>>();
+            const scope = yield* McpInvocationContext.McpInvocationContext;
+            const home = yield* ChannelBotHome.ChannelBotHome;
+            // Inside the settings lock: the caller must still have full access and, when it
+            // holds a credential, that credential must still be live.
+            const stillAllowed = check.pipe(
+              Effect.andThen(Effect.suspend(() => scope.reauthorize?.([]) ?? Effect.void)),
+              Effect.provideContext(services),
+            );
+            yield* stillAllowed.pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: HOME_CLAIM_DENIAL,
+                  }),
               ),
             );
-        }),
+            yield* McpToolAccess.admit(input);
+            return yield* home
+              .claimHere(
+                stillAllowed.pipe(
+                  Effect.asVoid,
+                  Effect.mapError(
+                    () =>
+                      new ServerSettingsError({
+                        settingsPath: HOME_CLAIM_REVOKED,
+                        operation: "normalize",
+                      }),
+                  ),
+                ),
+              )
+              .pipe(
+                Effect.mapError((error) =>
+                  error.settingsPath === HOME_CLAIM_REVOKED
+                    ? new OrchestratorMcpFailure({
+                        code: "capability_denied",
+                        message: HOME_CLAIM_DENIAL,
+                      })
+                    : new OrchestratorMcpFailure({
+                        code: "orchestration_error",
+                        message: "Could not save GOAT Bot's home on this machine.",
+                      }),
+                ),
+              );
+          }),
+        { admission: "handler" },
       ),
     } satisfies McpToolAccess.Handlers<typeof ChannelToolkit.tools>;
   }),

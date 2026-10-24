@@ -51,13 +51,16 @@ export const OrchestratorMcpFailureCode = Schema.Literals([
   "not_home",
   // fleet.pressure.admission is "block" and the target host is critical.
   "host_pressure",
+  // A routed call named a tool the remote GOAT is too old to have; nothing ran.
+  "remote_outdated",
 ]);
 export type OrchestratorMcpFailureCode = typeof OrchestratorMcpFailureCode.Type;
 
 /**
  * host_unavailable: SSH, the tunnel, or the remote server did not answer. ssh_failed: the SSH
  * call itself failed. remote_refused: the remote answered and refused, with its code in
- * remoteCode when it sent one. caller_changed: the caller's modes changed mid-call.
+ * remoteCode when it sent one. remote_outdated: the remote has no such tool, so nothing ran.
+ * caller_changed: the caller's modes changed mid-call.
  */
 export const SshDispatchFailureReason = Schema.Literals([
   "invalid_request",
@@ -65,6 +68,7 @@ export const SshDispatchFailureReason = Schema.Literals([
   "ssh_failed",
   "host_unavailable",
   "remote_refused",
+  "remote_outdated",
   "caller_changed",
 ]);
 export type SshDispatchFailureReason = typeof SshDispatchFailureReason.Type;
@@ -82,6 +86,18 @@ export const LinkedHostFailureReason = Schema.Literals([
 ]);
 export type LinkedHostFailureReason = typeof LinkedHostFailureReason.Type;
 
+/**
+ * A repeated clientRequestId (docs/internals/agent-surface.md#idempotency). in_progress: the
+ * first call is still running. idempotency_mismatch: the key was used with other arguments.
+ * outcome_unknown: the first call started and never recorded an outcome. None of them runs anything.
+ */
+export const ClientRequestReservationReason = Schema.Literals([
+  "in_progress",
+  "idempotency_mismatch",
+  "outcome_unknown",
+]);
+export type ClientRequestReservationReason = typeof ClientRequestReservationReason.Type;
+
 /** The literal of the domain failure an OrchestratorMcpFailure wraps. */
 export const OrchestratorMcpFailureReason = Schema.Union([
   SshDispatchFailureReason,
@@ -89,8 +105,11 @@ export const OrchestratorMcpFailureReason = Schema.Union([
   CloudMachineErrorReason,
   HandoffErrorReason,
   ProviderHostSyncErrorCode,
+  ClientRequestReservationReason,
   // A remote task with this id is already launching or launched.
   Schema.Literal("duplicate_task"),
+  // A pending upload's file could not be removed; the caller still owns it.
+  Schema.Literal("attachment_remove_failed"),
 ]);
 export type OrchestratorMcpFailureReason = typeof OrchestratorMcpFailureReason.Type;
 
@@ -109,5 +128,7 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
     mayHaveStarted: Schema.optionalKey(Schema.Boolean),
     /** The failure code a remote GOAT answered with, unchanged. */
     remoteCode: Schema.optionalKey(Schema.String),
+    /** The read path that tells whether a write with an unknown outcome happened. */
+    reconcile: Schema.optionalKey(Schema.String),
   },
 ) {}

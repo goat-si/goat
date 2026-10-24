@@ -42,27 +42,11 @@ import {
   windowsLongPathConfigEnv,
   existingBranchConflictDetail,
   isSameWorktreePath,
-  worktreeFolderName,
   worktreeListLinesToFields,
 } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { defaultCheckoutWorkers } from "./worktreeCheckout.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
-
-describe("worktreeFolderName", () => {
-  it("keeps POSIX folder names as before", () => {
-    assert.equal(worktreeFolderName('feature/a"b<c>|d.', "linux"), 'feature-a"b<c>|d.');
-    assert.equal(worktreeFolderName("con", "darwin"), "con");
-  });
-
-  it("avoids names Windows refuses", () => {
-    assert.equal(worktreeFolderName('feature/a"b<c>|d', "win32"), "feature-a-b-c--d");
-    assert.equal(worktreeFolderName("release/1.0. ", "win32"), "release-1.0");
-    assert.equal(worktreeFolderName("CON", "win32"), "CON-branch");
-    assert.equal(worktreeFolderName("lpt1.txt", "win32"), "lpt1.txt-branch");
-    assert.equal(worktreeFolderName("console", "win32"), "console");
-  });
-});
 
 describe("existing worktree branches", () => {
   // Paths from the mini host, where a retried launch hit branch_already_exists.
@@ -168,6 +152,79 @@ const makeFailedHandle = (stderr: string) =>
     exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
     stderr: Stream.encodeText(Stream.make(stderr)),
   });
+
+describe("Git output collection", () => {
+  // Git writes in arbitrary chunk sizes; one byte per chunk splits every
+  // multibyte character across reads.
+  const byteChunks = (text: string) =>
+    Stream.fromIterable(Array.from(new TextEncoder().encode(text), (byte) => Uint8Array.of(byte)));
+  const makeDriver = (output: { stdout?: string; stderr?: string }) =>
+    makeGitVcsDriverCore().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              ...makeSuccessfulHandle(""),
+              stdout: byteChunks(output.stdout ?? ""),
+              stderr: byteChunks(output.stderr ?? ""),
+            }),
+          ),
+        ),
+      ),
+    );
+
+  it.effect("returns the same split UTF-8 and NUL output with and without line callbacks", () =>
+    Effect.gen(function* () {
+      const stdout = "a\\b\0雪\nlast ";
+      const stderr = "Receiving é\r\nUpdating 雪\rdone";
+      const driver = yield* makeDriver({ stdout, stderr });
+      const input = { operation: "test.chunkedGitOutput", cwd: "/repo", args: ["status"] };
+      const expected = {
+        exitCode: 0,
+        stdout,
+        stderr,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      };
+
+      assert.deepEqual(yield* driver.execute(input), expected);
+
+      const stdoutLines: string[] = [];
+      const stderrLines: string[] = [];
+      const withCallbacks = yield* driver.execute({
+        ...input,
+        progress: {
+          onStdoutLine: (line) => Effect.sync(() => void stdoutLines.push(line)),
+          onStderrLine: (line) => Effect.sync(() => void stderrLines.push(line)),
+        },
+      });
+      assert.deepEqual(withCallbacks, expected);
+      assert.deepEqual(stdoutLines, ["a\\b\0雪", "last "]);
+      assert.deepEqual(stderrLines, ["Receiving é", "Updating 雪", "done"]);
+    }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+  );
+
+  it.effect("caps output without line callbacks", () =>
+    Effect.gen(function* () {
+      const driver = yield* makeDriver({ stderr: "é雪\rdone" });
+      const input = {
+        operation: "test.cappedGitOutput",
+        cwd: "/repo",
+        args: ["status"],
+        maxOutputBytes: 3,
+      };
+
+      const truncated = yield* driver.execute({ ...input, appendTruncationMarker: true });
+      assert.equal(truncated.stderr, "é\uFFFD");
+      assert.isTrue(truncated.stderrTruncated);
+
+      const error = yield* driver.execute(input).pipe(Effect.flip);
+      assert.equal(error.outputLength, 4);
+      assert.include(error.detail, "exceeded 3 bytes");
+    }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
+  );
+});
 
 const makeTmpDir = (
   prefix = "git-vcs-driver-test-",

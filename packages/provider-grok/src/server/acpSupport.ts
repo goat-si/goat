@@ -99,6 +99,7 @@ interface GrokAcpRuntimeInput extends Omit<
 > {
   readonly grokSettings: GrokAcpRuntimeGrokSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly processEnvironment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
 }
 
@@ -225,7 +226,7 @@ export const makeGrokAcpRuntime = Effect.fn("GrokAcpSupport.makeGrokAcpRuntime")
       spawn: buildGrokAcpSpawnInput(
         input.grokSettings,
         input.cwd,
-        input.environment,
+        { ...input.environment, ...input.processEnvironment },
         input.runtimeMode,
       ),
       authMethodId: resolveGrokAuthMethodId(input.environment),

@@ -3,12 +3,14 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeURL from "node:url";
 
 import { describe, expect, it } from "vite-plus/test";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 
 const repoRoot = NodeURL.fileURLToPath(new URL("../", import.meta.url));
 const git = (...args: string[]) =>
   // The index listing is several megabytes, past execFileSync's 1 MiB default.
   NodeChildProcess.execFileSync("git", args, {
     cwd: repoRoot,
+    env: isolatedGitEnv(),
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });

@@ -18,6 +18,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
+import { fromFailure } from "@goat/contracts/agentSurface/envelope";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -76,6 +77,8 @@ interface Fixture {
    */
   readonly crashAt?: { readonly when: (progress: Recorded) => boolean; readonly store: boolean };
   readonly remoteFailure?: Dispatch.SshRemoteDispatchError;
+  /** Holds each install until the test releases it, so settings can change meanwhile. */
+  readonly holdInstall?: boolean;
 }
 
 /** The encoded progress the fake handoff store holds. */
@@ -93,6 +96,8 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
   const progress = new Map<string, unknown>();
   const retained = new Map<string, unknown>();
   const crashed = yield* Deferred.make<void>();
+  const installing = yield* Deferred.make<void>();
+  const releaseInstall = yield* Deferred.make<void>();
   let crashUsed = false;
   const handoffOf = (input: Parameters<Handoffs.Handoffs["Service"]["create"]>[0]): Handoff => ({
     handoffId: TurnItemId.make(`handoff:${created.length}`),
@@ -246,8 +251,12 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
       }),
       Layer.mock(AcpRegistrySupport.AcpRegistryCatalog)({
         prepare: ({ agentId }) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             prepared.push(agentId);
+            if (fixture.holdInstall === true) {
+              yield* Deferred.succeed(installing, undefined);
+              yield* Deferred.await(releaseInstall);
+            }
             return { agentId, version: "3000.11.1", distribution: "binary", prepared: true };
           }),
       }),
@@ -271,6 +280,8 @@ const setup = Effect.fn("ProviderSettingsTest.setup")(function* (fixture: Fixtur
     boot,
     settings,
     crashed,
+    installing,
+    releaseInstall,
     created,
     prepared,
     remote,
@@ -382,6 +393,9 @@ it.effect("an approval by a person without providers:manage changes nothing", ()
         ),
       );
       expect(failed).toBeInstanceOf(HandoffError);
+      // The approver is told the change failed, not that their request was invalid.
+      expect(failed).toMatchObject({ reason: "invalid_request", outcome: "apply_failed" });
+      expect(failed.message).toMatch(/^GOAT could not apply this change: /);
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
@@ -472,6 +486,59 @@ it.effect("rejects linking a cloud provider to the wrong kind of instance", () =
         ),
       );
       expect(error.code).toBe("invalid_request");
+      expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
+    }),
+  ),
+);
+
+it.effect("an add whose linkTo cannot be linked is refused before it installs or saves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup();
+      const before = Object.keys(yield* fixture.instances);
+      // Devin from the registry cannot be Cursor Cloud's login source, and Claude is no cloud.
+      const adds = [cursorCloud, ProviderInstanceId.make("claudeAgent")].map((linkTo) => ({
+        action: "add" as const,
+        input: { acpAgentId: "devin", linkTo },
+      }));
+      for (const add of adds) {
+        const error = yield* Effect.flip(fixture.service.manage(add, managingClient));
+        expect(error.code).toBe("invalid_request");
+      }
+      // A retry after the refusal would otherwise add devin-2 beside a leftover devin.
+      expect(Object.keys(yield* fixture.instances)).toEqual(before);
+      expect(fixture.prepared).toEqual([]);
+      const approver = yield* setup({ capabilities: [] });
+      for (const add of adds) {
+        const error = yield* Effect.flip(approver.service.manage(add, threadScope));
+        expect(error.code).toBe("invalid_request");
+      }
+      expect(approver.created).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("tells a caller that a host too old for the provider tool needs updating", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup({
+        remoteFailure: new Dispatch.SshRemoteDispatchError({
+          reason: "remote_outdated",
+          message: "GOAT on box does not have goat_provider_update; it runs 0.1.0.",
+        }),
+      });
+      const failure = yield* Effect.flip(
+        fixture.service.manage(
+          { action: "update", input: { instanceId: cursorCloud, enabled: true, host: "box" } },
+          managingClient,
+        ),
+      );
+      expect(failure).toMatchObject({ code: "remote_outdated" });
+      // goat_call classifies it as a precondition, not an internal error, and nothing ran.
+      expect(fromFailure({ ...failure }, { effect: "write" })).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", reason: "remote_outdated", retryable: false },
+      });
       expect((yield* fixture.instances)[cursorCloud]).toBeUndefined();
     }),
   ),
@@ -647,6 +714,60 @@ it.effect("an add stopped between install and save resumes without installing ag
 );
 
 it.effect(
+  "a direct add whose cloud target is removed during its install is refused before saving",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const cloud = ProviderInstanceId.make("team-devin");
+        const fixture = yield* setup({
+          instances: { [cloud]: { driver: ProviderDriverKind.make("devinCloud") } },
+          holdInstall: true,
+        });
+        const adding = yield* fixture.service
+          .manage({ action: "add", input: { acpAgentId: "devin", linkTo: cloud } }, managingClient)
+          .pipe(Effect.flip, Effect.forkChild);
+        yield* Deferred.await(fixture.installing);
+        yield* fixture.settings.updateProviderInstance({ operation: "remove", instanceId: cloud });
+        yield* Deferred.succeed(fixture.releaseInstall, undefined);
+        expect((yield* Fiber.join(adding)).code).toBe("invalid_request");
+        expect(yield* fixture.instances).toEqual({});
+      }),
+    ),
+);
+
+it.effect("a resumed add whose cloud target changed while stopped is refused before saving", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cloud = ProviderInstanceId.make("team-devin");
+      const fixture = yield* setup({
+        capabilities: [],
+        instances: { [cloud]: { driver: ProviderDriverKind.make("devinCloud") } },
+        crashAt: { when: (p) => p.effects.install === "done", store: true },
+      });
+      yield* approveUntilCrash(fixture, {
+        action: "add",
+        input: { acpAgentId: "devin", linkTo: cloud },
+      });
+      // The plan was checked when it was made; the target is no longer a Devin Cloud.
+      yield* fixture.settings.updateProviderInstance({
+        operation: "upsert",
+        instanceId: cloud,
+        instance: { driver: ProviderDriverKind.make("cursorCloud") },
+      });
+
+      const restarted = yield* fixture.boot;
+      yield* restarted.resumeContinuations;
+      expect(Object.keys(yield* fixture.instances)).toEqual([cloud]);
+      expect((yield* restarted.readChange(handoff1))?.outcome).toMatchObject({
+        state: "failed",
+        reason: "invalid_request",
+        message: expect.stringContaining("needs a Cursor instance"),
+      });
+    }),
+  ),
+);
+
+it.effect(
   "an add stopped between save and link links the saved instance instead of a new one",
   () =>
     Effect.scoped(
@@ -789,6 +910,10 @@ it.effect("a host add that may have been sent is never sent again and names the 
         dropped.service.respond({ ...handoff1, action: "completed" }, "person-session" as never),
       );
       expect(refused).toBeInstanceOf(HandoffError);
+      // It may have landed on box: the approver is told to check before approving again.
+      expect(refused).toMatchObject({ reason: "invalid_request", outcome: "apply_unknown" });
+      expect(refused.message).toContain("connection reset");
+      expect(refused.message).toContain("Check the provider with Diagnose");
       yield* dropped.service.resumeContinuations;
       expect(dropped.remote).toHaveLength(1);
       expect((yield* dropped.service.readChange(handoff1))?.outcome).toMatchObject({

@@ -176,7 +176,7 @@ const readIdentityFile = (
 
 /**
  * The OpenAI account id in a ChatGPT id_token, read without verifying it:
- * analytics needs only a stable id. Codex CLI and T3's own sign-in both use it.
+ * analytics needs only a stable id. Codex CLI and GOAT's own sign-in both use it.
  */
 export const openAiUserId = (idToken: string) => {
   const payload = Base64Url.decodeString(idToken.split(".")[1] ?? "");

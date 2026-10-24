@@ -24,7 +24,11 @@ import {
   projectDomainEventForWire,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
-import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@goat/shared/toolOutput";
+import {
+  htmlRenderFromToolItem,
+  MAX_TOOL_OUTPUT_IMAGES,
+  toolOutputImages,
+} from "@goat/shared/toolOutput";
 
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const encodeTurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
@@ -166,6 +170,32 @@ describe("orchestration V2 wire projection", () => {
       summary: '"'.repeat(159) + "…",
       truncated: true,
     });
+  });
+
+  it("keeps a page rendered through goat_call when its input is too large to send", () => {
+    const htmlRender = { attachmentId: "thread-1-page", title: "Chart", height: 300 };
+    const page = (toolName: string, input: unknown) =>
+      projectTurnItemForWire({
+        ...base,
+        toolName,
+        input,
+        output: { status: "ok", value: { htmlRender } },
+      });
+    const html = "<p>" + "x".repeat(17_000) + "</p>";
+    // MCP's own {name, arguments} spelling, which goat_call also takes, keeps the page too.
+    for (const input of [
+      { path: "html.render", args: { html } },
+      { name: "html.render", arguments: { html } },
+    ]) {
+      const wrapped = page("mcp__goat__goat_call", input);
+      expect(
+        htmlRenderFromToolItem(wrapped as Parameters<typeof htmlRenderFromToolItem>[0]),
+        Object.keys(input).join(","),
+      ).toEqual(htmlRender);
+    }
+    // Another tool's path-shaped argument stays inside the summary.
+    const other = page("mcp__github__fetch_pr", { path: "html.render", body: html });
+    expect(other.type === "dynamic_tool" ? other.input : null).not.toHaveProperty("path");
   });
 
   it("truncates detail at a UTF-8 boundary without changing the source", () => {

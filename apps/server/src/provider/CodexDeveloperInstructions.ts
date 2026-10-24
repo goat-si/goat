@@ -1,9 +1,8 @@
-import { MEMORY_DATA_BOUNDARY_REMINDER } from "@goat/provider-core/server/memoryContext";
 import type { ProviderInteractionMode } from "@goat/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import {
   buildRuntimeInstructions,
-  COMPUTER_USE_INSTRUCTIONS,
+  COMPUTER_USE_INSTRUCTION_SECTIONS,
 } from "@goat/provider-core/server/runtimeInstructions";
 
 import {
@@ -21,7 +20,7 @@ export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
 
-The \`goat\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`goat_device_list\`, then \`goat_device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, using the exact launcher path returned by \`goat_device_open\`. Keep the host config and session flags returned by \`goat_device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`goat_device_screenshot\` when you need to see the screen. Prefer these tools and \`agent-device\` for opening and driving devices. Platform tools such as \`xcrun simctl\` and \`adb\` remain available for anything they do not cover, such as builds, logs, or port forwarding. If \`goat_device_list\` reports a platform as unavailable, say so.`;
+For iOS Simulator or Android Emulator work, run \`device.list\`, then \`device.open\` so the user can watch in their Device panel. Drive the device with the \`agent-device\` launcher path, host config, and session flags that \`device.open\` returns, on every command; prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device.screenshot\` to see the screen. \`xcrun simctl\` and \`adb\` stay available for builds, logs, and anything else. If \`device.list\` reports a platform unavailable, say so.`;
 
 export interface GoatToolAvailability {
   readonly browser: boolean;
@@ -35,6 +34,10 @@ const normalizeAvailability = (
 ): GoatToolAvailability =>
   typeof availability === "boolean" ? { browser: availability, device: false } : availability;
 
+/** Code mode defers nested MCP tools (openai/codex#32101), so it needs the two names spelled out. */
+const CODEX_CODE_MODE_TOOLS =
+  "In code mode, find GOAT tools with `tools.mcp__goat__goat_describe` and call them with `tools.mcp__goat__goat_call`.";
+
 /**
  * Describing `preview_*` or `device_*` tools that aren't in the turn's tool list would be worse
  * than saying nothing: the instructions actively steer the model away from Playwright,
@@ -44,9 +47,9 @@ const normalizeAvailability = (
 const toolInstructions = (availability: boolean | GoatToolAvailability): string => {
   const tools = normalizeAvailability(availability);
   return [
+    CODEX_CODE_MODE_TOOLS,
     tools.browser ? GOAT_BROWSER_TOOL_INSTRUCTIONS : "",
     tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : "",
-    MEMORY_DATA_BOUNDARY_REMINDER,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -184,15 +187,7 @@ If the user stays in Plan mode and asks for revisions after a prior \`<proposed_
 
 const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
-You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-Your active mode changes only when new developer instructions with a different \`<collaboration_mode>...</collaboration_mode>\` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
-
-## request_user_input availability
-
-Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
-
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+Default mode is active; only developer instructions with another \`<collaboration_mode>\` change it, never user requests or tool descriptions. Use \`request_user_input\` only when it is listed for this turn. Prefer reasonable assumptions and carry out the request; when a risky one cannot be settled locally, ask one concise plain-text question, never a multiple-choice question written as text.
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {
@@ -212,7 +207,7 @@ export function buildCodexDevelopmentContext(): Record<
   string,
   V2TurnStartParams__AdditionalContextEntry
 > {
-  return { t3_code_development: { kind: "application", value: GOAT_DEVELOPMENT_INSTRUCTIONS } };
+  return { goat_code_development: { kind: "application", value: GOAT_DEVELOPMENT_INSTRUCTIONS } };
 }
 
 /**
@@ -231,23 +226,23 @@ export function buildCodexAdditionalContext(
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
       GOAT_ORCHESTRATION_SECTIONS.map((section, index) => [
-        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+        `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
         { kind: "application" as const, value: section },
       ]),
     ),
-    t3_code_runtime: {
+    goat_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
-    // Its own entry keeps the runtime entry under the per-entry cap.
+    // Its own entries keep the runtime entry and each skill section under the per-entry cap.
     ...(typeof toolsAvailable !== "boolean" && toolsAvailable.computerUse === true
-      ? {
-          t3_code_runtime_computer_use: {
-            kind: "application" as const,
-            value: COMPUTER_USE_INSTRUCTIONS,
-          },
-        }
+      ? Object.fromEntries(
+          COMPUTER_USE_INSTRUCTION_SECTIONS.map((section, index) => [
+            `goat_code_runtime_computer_use_${String(index + 1).padStart(2, "0")}`,
+            { kind: "application" as const, value: section },
+          ]),
+        )
       : {}),
-    ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    ...(tools ? { goat_code_tools: { kind: "application", value: tools } } : {}),
   };
 }
