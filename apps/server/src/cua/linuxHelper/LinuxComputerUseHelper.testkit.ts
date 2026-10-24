@@ -89,6 +89,15 @@ export function fixtureDriver() {
     setValueEffect: "confirmed",
     loseNext: false,
     windowOpen: true,
+    /** Windows of other apps, listed before the fixture's own. */
+    otherWindows: [] as Array<{
+      pid: number;
+      window_id: number;
+      title: string;
+      is_on_screen: boolean;
+    }>,
+    /** Readiness captures by pid, for windows that capture differently from the fixture's. */
+    readinessImages: new Map<number, string>(),
     calls: [] as Array<{ tool: string; args: Readonly<Record<string, unknown>> }>,
     /** Answers the next input call instead of the fixture's own behavior. */
     nextAnswer: undefined as DriverToolResult | undefined,
@@ -108,6 +117,7 @@ export function fixtureDriver() {
         windows: !state.windowOpen
           ? []
           : [
+              ...state.otherWindows,
               {
                 pid: 10,
                 window_id: 20,
@@ -119,7 +129,12 @@ export function fixtureDriver() {
       });
     if (tool === "get_window_state") {
       if (args.include_accessibility_tree === false)
-        return ok({}, "", [{ mimeType: "image/png", data: state.readinessImage }]);
+        return ok({}, "", [
+          {
+            mimeType: "image/png",
+            data: state.readinessImages.get(Number(args.pid)) ?? state.readinessImage,
+          },
+        ]);
       state.snapshot++;
       const token = (index: number) => "s" + state.snapshot + ":" + index;
       const shot = args.include_screenshot !== false;
@@ -238,6 +253,8 @@ export async function connect(
   const session = detectLinuxSession(options.session ?? X11);
   const driver = fixtureDriver();
   const focus = { current: options.focus ?? NOT_SECURE };
+  /** AT-SPI answers for other processes, where they differ from the fixture's. */
+  const focusByPid = new Map<number, SecureFocus>();
   const clock = { now: 0 };
   // Armed, the next focus check waits until released, so a test can act while a request is
   // held inside the helper.
@@ -281,13 +298,13 @@ export async function connect(
       starts++;
       return driver.client;
     },
-    secureFocus: async () => {
+    secureFocus: async (pid) => {
       if (gate.armed) {
         gate.armed = false;
         gate.entered.resolve();
         await gate.release.promise;
       }
-      return focus.current;
+      return focusByPid.get(pid) ?? focus.current;
     },
     uinputWritable: async () => false,
     settle: async () => undefined,
@@ -383,6 +400,7 @@ export async function connect(
     clock,
     gate,
     starts: () => starts,
+    focusByPid,
     log,
     lastInput,
     /** Runs every armed signal check once, as its timer would. */

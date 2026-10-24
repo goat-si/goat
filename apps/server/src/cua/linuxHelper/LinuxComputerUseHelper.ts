@@ -77,6 +77,8 @@ export interface LinuxHelper {
 
 const SECURE_ROLE = "password text";
 const ACTIONS: ReadonlySet<string> = new Set(COMPUTER_USE_ACTIONS);
+/** Shown windows readiness tries before it settles for the best answer it has. */
+const READINESS_WINDOWS = 5;
 
 const refusal = (reason: ComputerUseRefusalReason, message: string): ComputerUseRefusal => ({
   outcome: "refused",
@@ -328,30 +330,41 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         facts.driver = { x11: flag("x11"), wayland: flag("wayland"), atspi: flag("atspi") };
         const list = await windows(deadlineMs);
         const shown = isRefusal(list)
-          ? undefined
-          : list.find((entry) => entry.is_on_screen !== false);
-        if (!shown) facts.capture = isRefusal(list) ? "failed" : "noWindow";
-        else {
-          // display_only: a readiness capture never stands in for the agent's own observation.
-          const capture = await call(
-            "get_window_state",
-            {
-              pid: shown.pid,
-              window_id: shown.window_id,
-              include_accessibility_tree: false,
-              display_only: true,
-              max_image_dimension: 256,
-            },
-            deadlineMs,
-          );
-          const image =
-            typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
-          const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
-          facts.capture = image === undefined ? "failed" : (colors ?? "failed");
-          // The tree is proven through AT-SPI directly: a driver read would replace the
-          // snapshot the agent's element tokens belong to.
-          const focus = await deps.secureFocus(shown.pid);
-          facts.tree = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
+          ? []
+          : list.filter((entry) => entry.is_on_screen !== false).slice(0, READINESS_WINDOWS);
+        if (shown.length === 0) facts.capture = isRefusal(list) ? "failed" : "noWindow";
+        // One window does not speak for the desktop: an app without accessibility, or a covered
+        // window that captures blank. The best answer among a few shown windows wins.
+        const captureRank = { varied: 3, uniform: 2, failed: 1, noWindow: 0, unproven: 0 } as const;
+        const treeRank = { ready: 2, empty: 1, unavailable: 0 } as const;
+        for (const window of shown) {
+          if (facts.capture !== "varied") {
+            // display_only: a readiness capture never stands in for the agent's own observation.
+            const capture = await call(
+              "get_window_state",
+              {
+                pid: window.pid,
+                window_id: window.window_id,
+                include_accessibility_tree: false,
+                display_only: true,
+                max_image_dimension: 256,
+              },
+              deadlineMs,
+            );
+            const image =
+              typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
+            const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
+            const found = image === undefined ? "failed" : (colors ?? "failed");
+            if (captureRank[found] > captureRank[facts.capture]) facts.capture = found;
+          }
+          if (facts.tree !== "ready") {
+            // The tree is proven through AT-SPI directly: a driver read would replace the
+            // snapshot the agent's element tokens belong to.
+            const focus = await deps.secureFocus(window.pid);
+            const found = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
+            if (treeRank[found] > treeRank[facts.tree]) facts.tree = found;
+          }
+          if (facts.capture === "varied" && facts.tree === "ready") break;
         }
       }
     }

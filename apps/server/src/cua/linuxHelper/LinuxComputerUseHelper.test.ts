@@ -366,6 +366,19 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("readiness does not let one window without accessibility or covered from view speak for the desktop", async () => {
+    const helper = await connect();
+    // Listed first: an app that never joined AT-SPI, whose covered window captures blank.
+    helper.driver.state.otherWindows = [
+      { pid: 30, window_id: 40, title: "Other", is_on_screen: true },
+    ];
+    helper.focusByPid.set(30, { known: false, secure: false, windows: 0 });
+    helper.driver.state.readinessImages.set(30, png(8, 4, false).toString("base64"));
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({ capture: "ready", tree: "ready" });
+    await helper.close();
+  });
+
   it("a capture whose bytes cannot be read does not prove capture", async () => {
     const helper = await connect();
     helper.driver.state.readinessImage = "UE5H";
