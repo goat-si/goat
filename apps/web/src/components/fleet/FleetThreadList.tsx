@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { cn } from "../../lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { useThreadContextDragHandle } from "../sidebar/useThreadContextDrag";
 import { FleetSubagents } from "./FleetSubagents";
 
 export const STATE_LABEL: Record<FleetThread["state"], string> = {
@@ -32,6 +33,13 @@ export function FleetThreadList({ threads }: { readonly threads: ReadonlyArray<F
 }
 
 function FleetThreadRow({ thread }: { readonly thread: FleetThread }) {
+  const dragHandle = useThreadContextDragHandle({
+    threadKey: thread.key,
+    title: thread.title,
+    disabled: thread.ref === null,
+    refs: thread.ref === null ? [] : [thread.ref],
+    unrestricted: true,
+  });
   const titleClass = "min-w-0 truncate";
   return (
     // The link stretches over the row so the subagent chip can be its own button beside the title.
@@ -47,6 +55,8 @@ function FleetThreadRow({ thread }: { readonly thread: FleetThread }) {
           <span className={titleClass}>{thread.title}</span>
         ) : (
           <Link
+            {...dragHandle}
+            draggable={false}
             to="/$environmentId/$threadId"
             params={buildThreadRouteParams(thread.ref)}
             className={cn(
