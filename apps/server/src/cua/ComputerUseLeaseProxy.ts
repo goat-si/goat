@@ -624,7 +624,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           Effect.gen(function* () {
             if (told || finished !== undefined || paused !== undefined || running !== current)
               return;
-            if (agentInput.isAgents(input.at, input.source)) return;
+            // Every event goes to the server, even one this agent's own call could explain: only
+            // the server sees every agent's calls, and with them when a run of cover is too long.
             told = yield* report(input);
           }),
         ),

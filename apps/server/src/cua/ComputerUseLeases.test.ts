@@ -950,3 +950,31 @@ it.effect("back-to-back agent calls hide a person's input for ten seconds at mos
     assert.equal(yield* leases.humanInput(thread, mine.controlId, 53_300, "pointer"), "paused");
   }).pipe(Effect.provide(freshLeases)),
 );
+
+it.effect(
+  "two agents taking turns hide a person's input for ten seconds at most between them",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.stopAll;
+      const mine = yield* leases.control(thread, Option.none());
+      const bots = yield* leases.control(other, Option.none());
+      // Each agent clicks every 800 ms, so its own cover lapses between clicks; offset by 400 ms,
+      // the two together never lapse.
+      yield* TestClock.adjust(30_000);
+      for (let call = 0; call < 60; call++) {
+        const at = 30_000 + call * 400;
+        const [owner, control] = call % 2 === 0 ? [other, bots] : [thread, mine];
+        const report = { call: String(call), kinds: ["pointer"] as const };
+        yield* leases.agentInput(owner, control.controlId, { ...report, state: "start", at });
+        yield* leases.agentInput(owner, control.controlId, {
+          ...report,
+          state: "end",
+          at: at + 100,
+        });
+        yield* TestClock.adjust(400);
+      }
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 53_300, "pointer"), "paused");
+    }).pipe(Effect.provide(freshLeases)),
+);

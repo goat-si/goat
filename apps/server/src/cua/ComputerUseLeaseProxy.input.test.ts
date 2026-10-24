@@ -6,22 +6,21 @@ import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.
 
 describe("ComputerUseLeaseProxy person and agent input", () => {
   it.effect(
-    "reports a person's input once, and never the agent's own input during or just after its call",
+    "reports every helper event to the server, even during the agent's own call, since only the server sees every agent's calls",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness({ humanInput: true });
+        // The server takes each one for an agent's: another agent may have a run of cover that,
+        // with this one's, lasts past the cap, and only the server can tell.
+        const h = yield* harness({ humanInput: true, acceptHuman: () => false });
         yield* h.push(active());
         yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
         assert.equal((yield* h.nextToDriver).id, 1);
-        // The click's own events, while it runs and as they surface after its answer.
         yield* h.hid("pointer");
+        assert.equal(yield* h.person, "pointer");
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         yield* h.nextToProvider;
         yield* h.hid("pointer");
-        yield* TestClock.adjust(1_000);
-        // Reported a second late, but from the click's moment.
-        yield* h.hid("pointer", 800);
-        // A person's key well after the click: the first thing that reaches the server.
+        assert.equal(yield* h.person, "pointer");
         yield* h.hid("keyboard");
         assert.equal(yield* h.person, "keyboard");
       }),

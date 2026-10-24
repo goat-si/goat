@@ -1,7 +1,7 @@
 /**
- * The lease proxy's record of its agent's own input calls (#1235): a local log its helper's
- * events are judged against, and reports that tell the server, so another agent's helper seeing
- * that input is not taken for a person.
+ * The lease proxy's record of its agent's own input calls (#1235): reports that tell the server,
+ * which judges every helper's events against all agents' calls, so one agent's input is not
+ * taken for a person. The local log only keeps each call's start and end paired.
  *
  * Reports go to the server one at a time, in the order they were made, so an end never overtakes
  * its start. A start is waited for: the call reaches the driver only once the server knows it.
@@ -9,7 +9,6 @@
  *
  * @module agentInputReports
  */
-import type { ComputerUseHumanInputSource } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -76,6 +75,5 @@ export const makeAgentInputReports = Effect.fn("agentInputReports.make")(functio
       const at = yield* Clock.currentTimeMillis;
       for (const call of log.endAll(at)) yield* end(call, at);
     }),
-    isAgents: (at: number, source: ComputerUseHumanInputSource) => log.isAgents(at, source),
   };
 });
