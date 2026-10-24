@@ -5,6 +5,7 @@ import {
   htmlRenderFromToolItem,
   imageBlockFromDataUrl,
   MAX_TOOL_OUTPUT_IMAGES,
+  mcpToolResultWithRawImages,
   mcpToolResultOutput,
   omitToolOutputImageData,
   toolOutputImages,
@@ -267,5 +268,26 @@ describe("imageBlockFromDataUrl", () => {
     expect(imageBlockFromDataUrl("data:image/svg+xml;base64,AAAA")).toBeUndefined();
     expect(imageBlockFromDataUrl("data:image/png,raw")).toBeUndefined();
     expect(imageBlockFromDataUrl("https://example.com/a.png")).toBeUndefined();
+  });
+});
+
+describe("mcpToolResultWithRawImages", () => {
+  // Claude reports an MCP result with structured output as its text and that output.
+  const claudeResult = { content: "Finder", structuredContent: { app: "Finder" } };
+  const rawContent = [
+    { type: "text", text: "Finder" },
+    { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+  ];
+
+  it("regression: brings back the screenshot only the raw tool result kept", () => {
+    const output = mcpToolResultWithRawImages(claudeResult, rawContent);
+    expect(toolOutputImages(output)).toEqual([{ mimeType: "image/png", data: "AAAA" }]);
+    expect(output).toMatchObject({ structuredContent: { app: "Finder" } });
+  });
+
+  it("leaves a result alone when the raw result has no image", () => {
+    expect(mcpToolResultWithRawImages(claudeResult, [{ type: "text", text: "Finder" }])).toBe(
+      claudeResult,
+    );
   });
 });
