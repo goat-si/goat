@@ -112,6 +112,7 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
@@ -343,6 +344,8 @@ const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
   Layer.provide(layerServerSettings),
 );
+
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
 
 const layerBackground = BackgroundPolicy.layer.pipe(
   Layer.provide(layerHostPowerMonitor),
@@ -829,7 +832,11 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
+      layerLinuxFrameSource,
+      ComputerUseLeases.layer.pipe(
+        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(layerLinuxFrameSource),
+      ),
       CloudProviderAutoSetup.layer,
     ),
   ),

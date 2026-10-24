@@ -53,6 +53,8 @@ export interface LaunchRequest {
   readonly message: string;
   readonly branch: string;
   readonly modelSelection: ModelSelection;
+  /** Where the worktree starts; the goal's own workspace when absent. */
+  readonly workspace?: { readonly baseRef: string; readonly startFromOrigin: boolean };
 }
 
 export interface Launched {
@@ -430,7 +432,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const { goal } = request;
         const runtimeMode = effectiveRuntimeMode(access, goal);
-        const workspace = goal.spec.workers.workspace;
+        const workspace = request.workspace ?? goal.spec.workers.workspace;
         if (request.host === null) {
           const projectId = goal.spec.project.projectId;
           if (projectId === null)

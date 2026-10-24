@@ -80,14 +80,60 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
     "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",
 };
 
-export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
-  human_input:
-    "A person is using this computer, so computer use is paused and your call did not run. Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
-  takeover:
-    "A person took over the screen, so computer use is paused and your call did not run. Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
-  private:
-    "A password or other secret field has focus on this computer, so computer use is paused and your call did not run. Do not retry now; observe the screen again after the person leaves it.",
+const PAUSE_STATE: Readonly<Record<ComputerUsePauseReason, string>> = {
+  human_input: "A person is using this computer, so computer use is paused",
+  takeover: "A person took over the screen, so computer use is paused",
+  private: "A password or other secret field has focus on this computer, so computer use is paused",
 };
+
+const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
+  human_input:
+    "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
+  takeover:
+    "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
+  private: "Do not retry now; observe the screen again after the person leaves it.",
+};
+
+const pauseMessage = (reason: ComputerUsePauseReason) =>
+  `${PAUSE_STATE[reason]} and your call did not run. ${PAUSE_NEXT[reason]}`;
+
+export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
+  human_input: pauseMessage("human_input"),
+  takeover: pauseMessage("takeover"),
+  private: pauseMessage("private"),
+};
+
+/**
+ * Tools that only read. One the driver already had when a pause or Stop cut it off changed
+ * nothing on the screen; any other tool, a script or batch included, may have acted.
+ */
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "check_permissions",
+  "health_report",
+  "get_guide",
+  "list_apps",
+  "list_windows",
+  "get_accessibility_tree",
+  "get_window_state",
+  "get_screen_size",
+  "get_cursor_position",
+  "verify_state",
+  "zoom",
+  "get_session",
+  "list_sessions",
+  "get_agent_cursor_state",
+]);
+
+export const MAY_HAVE_ACTED =
+  "This call was already with the driver when it was cut off, so it may already have acted. Never resend it unchanged, and observe the window before any later action.";
+export const READ_CUT_OFF =
+  "This read was cut off before it answered and changed nothing; read again before acting.";
+
+/** Why a cut-off call ended, worded without claiming it did not run. */
+export type Interruption =
+  | { readonly _tag: "end"; readonly reason: LeaseEnd }
+  | { readonly _tag: "pause"; readonly reason: ComputerUsePauseReason }
+  | { readonly _tag: "other"; readonly detail: ComputerUseRefusalDetail; readonly message: string };
 
 const scopeMessage = (
   reason: "app_not_approved" | "desktop_not_approved",
@@ -174,6 +220,10 @@ const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
 const UNCONFIRMED_DISPLAY =
   "GOAT could not confirm that computer use is on the screen GOAT gave it, so this did not run. Call list_windows, then try again.";
+/** For a call that reached the driver: its answer is withheld, but it may have acted. */
+const REPLY_WITHHELD =
+  "This call reached the driver, so it may already have acted, but GOAT could not confirm its answer is about the screen GOAT gave it and withheld it. Never resend it unchanged.";
+const REPLY_UNCONFIRMED = `${REPLY_WITHHELD} Call list_windows and observe the window before any later action.`;
 
 /**
  * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
@@ -299,6 +349,91 @@ interface Running {
   readonly manifest?: string | undefined;
 }
 
+const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
+  reason === "private" ? "private_mode" : "waiting_for_human";
+
+const interruptionDetail = (cause: Interruption): ComputerUseRefusalDetail =>
+  cause._tag === "end"
+    ? cause.reason
+    : cause._tag === "pause"
+      ? pausedDetail(cause.reason)
+      : cause.detail;
+
+/** What a call that never reached the driver is told: it did not run. */
+const interruptionRefusal = (cause: Interruption) =>
+  cause._tag === "end"
+    ? LEASE_END_MESSAGES[cause.reason]
+    : cause._tag === "pause"
+      ? PAUSE_MESSAGES[cause.reason]
+      : cause.message;
+
+/**
+ * The answer for a call the driver already had when a pause or end cut it off. The driver may
+ * have dispatched its input before its transport was killed, so this is not a refusal: an agent
+ * told "did not run" resends, and a resent keystroke can submit twice.
+ */
+const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interruption) => {
+  const read = tool !== undefined && READ_ONLY_TOOLS.has(tool);
+  const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
+  const detail = interruptionDetail(cause);
+  const text =
+    cause._tag === "pause"
+      ? `${PAUSE_STATE[cause.reason]}. ${sentence} ${PAUSE_NEXT[cause.reason]}`
+      : cause._tag === "end"
+        ? `${sentence} ${LEASE_END_MESSAGES[cause.reason]}`
+        : `${cause.message} ${sentence}`;
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    result: {
+      content: [{ type: "text", text }],
+      structuredContent: read
+        ? { code: "interrupted", detail }
+        : { effect: "unverifiable", code: "interrupted", detail },
+      isError: true,
+    },
+  });
+};
+
+/**
+ * The answer for a call whose reply names windows GOAT cannot place on its screen. The driver
+ * already acted on it, so only a read keeps the refusal; anything else may have landed.
+ */
+const offScreenAnswer = (
+  id: JsonRpcId,
+  method: string,
+  tool: string | undefined,
+  verdict: "other" | "unknown",
+) =>
+  tool !== undefined && READ_ONLY_TOOLS.has(tool)
+    ? refusal(
+        id,
+        method,
+        "wrong_display",
+        verdict === "other" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
+      )
+    : JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [
+            {
+              type: "text",
+              text:
+                verdict === "other"
+                  ? `${REPLY_WITHHELD} ${LEASE_END_MESSAGES.wrong_display}`
+                  : REPLY_UNCONFIRMED,
+            },
+          ],
+          structuredContent: {
+            effect: "unverifiable",
+            code: "interrupted",
+            detail: "wrong_display",
+          },
+          isError: true,
+        },
+      });
+
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
 ) {
@@ -386,17 +521,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   });
 
   /** Why the last child was cut off, for a call that was waiting when it happened. */
-  let lastInterruption: { readonly reason: ComputerUseRefusalDetail; readonly message: string } = {
-    reason: "helper_restarted",
-    message: LEASE_END_MESSAGES.helper_restarted,
-  };
+  let lastInterruption: Interruption = { _tag: "end", reason: "helper_restarted" };
 
-  /** Cancels and answers every outstanding call, then kills the child. */
-  const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (
-    reason: ComputerUseRefusalDetail,
-    message: string,
-  ) {
-    lastInterruption = { reason, message };
+  /**
+   * Cancels every outstanding call, kills the child, then answers each one. Every outstanding
+   * call reached the driver, so a tool call is answered as cut off, never as refused.
+   */
+  const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (cause: Interruption) {
+    lastInterruption = cause;
+    const message = interruptionRefusal(cause);
     const current = running;
     running = undefined;
     const pending = [...outstanding.values()];
@@ -420,7 +553,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     proven = undefined;
     ownAnswers.clear();
     for (const request of pending)
-      yield* options.output(refusal(request.id, request.method, reason, message));
+      yield* options.output(
+        request.method === "tools/call"
+          ? cutOff(request.id, request.tool, cause)
+          : refusal(request.id, request.method, interruptionDetail(cause), message),
+      );
   });
 
   const end = Effect.fn("ComputerUseLeaseProxy.end")(function* (reason: LeaseEnd) {
@@ -428,7 +565,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     finished = reason;
     yield* Deferred.succeed(ended, reason);
     yield* drawOverlay({ type: "end" });
-    yield* interrupt(reason, LEASE_END_MESSAGES[reason]);
+    yield* interrupt({ _tag: "end", reason });
     // Best effort and deny-only; a slow or stuck revoke cannot hold anything up.
     if (sessions.size > 0)
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
@@ -486,18 +623,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
               if (verdict === "other") {
                 yield* options.output(
-                  refusal(
-                    request.id,
-                    request.method,
-                    "wrong_display",
-                    LEASE_END_MESSAGES.wrong_display,
-                  ),
+                  offScreenAnswer(request.id, request.method, request.tool, "other"),
                 );
                 return yield* end("wrong_display");
               }
               if (verdict === "unknown")
                 return yield* options.output(
-                  refusal(request.id, request.method, "wrong_display", UNCONFIRMED_DISPLAY),
+                  offScreenAnswer(request.id, request.method, request.tool, "unknown"),
                 );
               if (verdict === "proof") proven = current;
             } else outstanding.delete(key);
@@ -551,9 +683,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     return current;
   });
 
-  const pausedDetail = (reason: ComputerUsePauseReason) =>
-    reason === "private" ? ("private_mode" as const) : ("waiting_for_human" as const);
-
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
   ) {
@@ -564,7 +693,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     paused = reason;
     if (!wasPaused) {
       yield* drawOverlay({ type: "pause", reason });
-      yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
+      yield* interrupt({ _tag: "pause", reason });
     }
     // A proxy told it is paused before it was ever active refuses its waiting calls now.
     yield* Deferred.succeed(confirmed, undefined);
@@ -595,13 +724,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused = undefined;
       if (finished === undefined) yield* start();
     } else if (missedPause !== undefined && finished === undefined && running !== undefined) {
-      yield* interrupt(pausedDetail(missedPause.last), PAUSE_MESSAGES[missedPause.last]);
+      yield* interrupt({ _tag: "pause", reason: missedPause.last });
       yield* start();
     } else if (narrowed && finished === undefined && running !== undefined) {
-      yield* interrupt(
-        "app_not_approved",
-        "An app this call used is no longer approved for this thread, so it was stopped. Observe again before acting.",
-      );
+      yield* interrupt({
+        _tag: "other",
+        detail: "app_not_approved",
+        message:
+          "An app this call used is no longer approved for this thread, so it was stopped. Observe again before acting.",
+      });
       yield* start();
     }
     yield* Deferred.succeed(confirmed, undefined);
@@ -759,28 +890,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         return undefined;
       const manifest = options.manifestStamp();
       if (manifest === undefined || manifest === before.manifest) return undefined;
-      yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
+      yield* interrupt({
+        _tag: "other",
+        detail: "helper_restarted",
+        message: LEASE_END_MESSAGES.helper_restarted,
+      });
       // Stopping the old child waits; an expiry or a driver exit may have ended the control.
       if (paused !== undefined || finished !== undefined) return undefined;
       // The child this refresh started, which the call may use as its own.
       return yield* start();
     }),
   );
-
-  /** The refusal for a call while a pause or end is applied or waiting to be; else undefined. */
-  const stoppedRefusal = (id: JsonRpcId, method: string | undefined) => {
-    const ending =
-      finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
-    const pausing =
-      paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
-    if (ending !== undefined) return refusal(id, method, ending, LEASE_END_MESSAGES[ending]);
-    if (pausing !== undefined)
-      return refusal(id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
-    return undefined;
-  };
-  /** As stoppedRefusal, for a call whose child was replaced with no stop recorded. */
-  const stoppedRefusalAlways = (id: JsonRpcId, method: string | undefined) =>
-    refusal(id, method, lastInterruption.reason, lastInterruption.message);
 
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);
@@ -820,7 +940,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (refused !== undefined) return yield* options.output(refused);
       if (admitted !== undefined && running !== admitted)
         return yield* options.output(
-          refusal(id, message.method, lastInterruption.reason, lastInterruption.message),
+          refusal(
+            id,
+            message.method,
+            interruptionDetail(lastInterruption),
+            interruptionRefusal(lastInterruption),
+          ),
         );
       if (needsProof && (running === undefined || proven !== running))
         return yield* options.output(
@@ -847,23 +972,61 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         );
       return;
     }
-    // The child a tools/call goes to; a later wait that replaced it means the call is not its.
-    let callChild: Running | undefined;
-    // Before the call reaches the driver: a capture must not see the overlay (#1321).
+    // The child this line goes to. A pause, end or replacement before the send below means the
+    // call never reached a driver, so it is refused; once sent, an interruption answers it as
+    // cut off instead (interrupt above).
+    const current = running;
+    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
+    // holds the lock (#1416), counts as applied: the call never reaches a child.
+    const notSent = (requestId: JsonRpcId) => {
+      const ending =
+        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+      const pausing =
+        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+      return ending !== undefined
+        ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
+        : pausing !== undefined
+          ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
+          : refusal(
+              requestId,
+              message?.method,
+              interruptionDetail(lastInterruption),
+              interruptionRefusal(lastInterruption),
+            );
+    };
+    const stillCurrent = () =>
+      running === current &&
+      paused === undefined &&
+      finished === undefined &&
+      stopping === undefined;
     if (isRequest && message?.method === "tools/call") {
-      const current = running;
-      callChild = current;
+      // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
         type: "call",
         id: JSON.stringify(id),
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
       });
-      // A pause or end that came while drawing, or that is waiting for a refresh to let go of
-      // the lock: refuse, whether or not it has stopped the driver yet. This call never ran.
-      const late = stoppedRefusal(id, message.method);
-      if (running !== current || late !== undefined)
-        return yield* options.output(late ?? stoppedRefusalAlways(id, message.method));
+      // A pause or end that came while drawing: refuse, whether or not it has stopped the
+      // driver yet. This call never ran.
+      if (!stillCurrent()) return yield* options.output(notSent(id));
+      if (options.onTarget !== undefined) {
+        const target = targetOf(message.params?.arguments);
+        if (
+          target !== undefined &&
+          (target.pid !== reported?.pid || target.windowId !== reported.windowId) &&
+          (yield* options.onTarget(target))
+        )
+          reported = target;
+        // The report waits on the server; a pause or end meanwhile must not let the call reach
+        // the child that replaced the one it was admitted under.
+        if (!stillCurrent()) return yield* options.output(notSent(id));
+      }
+    }
+    const cancelled = cancelledRequestKey(line);
+    if (cancelled !== undefined) {
+      outstanding.delete(cancelled);
+      yield* inputEnded(cancelled);
     }
     if (isRequest)
       outstanding.set(JSON.stringify(id), {
@@ -872,41 +1035,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
         unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
       });
-    const cancelled = cancelledRequestKey(line);
-    if (cancelled !== undefined) {
-      outstanding.delete(cancelled);
-      yield* inputEnded(cancelled);
-    }
-    if (isRequest && message?.method === "tools/call" && options.onTarget !== undefined) {
-      const target = targetOf(message.params?.arguments);
-      if (
-        target !== undefined &&
-        (target.pid !== reported?.pid || target.windowId !== reported.windowId) &&
-        (yield* options.onTarget(target))
-      )
-        reported = target;
-    }
     if (
       isRequest &&
       message?.method === "tools/call" &&
       postsInput(typeof message.params?.name === "string" ? message.params.name : "")
     )
       yield* inputStarted(JSON.stringify(id));
-    // The window report and the input record above can wait. A pause or end that came meanwhile
-    // has already answered this call if its child was cut off; one still pending refuses it here,
-    // with nothing between this check and the send.
-    if (isRequest && message?.method === "tools/call") {
-      const key = JSON.stringify(id);
-      if (!outstanding.has(key) || running !== callChild) return yield* inputEnded(key);
-      const late = stoppedRefusal(id, message.method);
-      if (late !== undefined) {
-        outstanding.delete(key);
-        yield* inputEnded(key);
-        return yield* options.output(late);
-      }
-    }
-    if (running === undefined) return;
-    yield* running.driver.send(line);
+    yield* current.driver.send(line);
   });
 
   yield* options.input.pipe(Stream.runForEach(handle));

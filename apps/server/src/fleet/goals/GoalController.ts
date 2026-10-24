@@ -44,6 +44,7 @@ import {
   type SlotObservation,
   targetKey,
 } from "./goalPlan.ts";
+import { GoalRecovery } from "./GoalRecovery.ts";
 import {
   type GoalRecord,
   GoalStore,
@@ -116,6 +117,7 @@ const make = Effect.gen(function* () {
   const fallback = yield* Fallback;
   const settings = yield* ServerSettings.ServerSettingsService;
   const hubDown = yield* HubDown;
+  const recovery = yield* GoalRecovery;
   // Goal work the hub-down policy paused since the last tick settled it.
   let pausedSinceSettle: Array<PausedGoalWork> = [];
 
@@ -132,6 +134,7 @@ const make = Effect.gen(function* () {
           (worker) =>
             Effect.gen(function* () {
               const reading = yield* runtime.observeWorker(owner, goal, worker);
+              yield* recovery.capture(goal, worker, reading);
               if (reading.kind !== "seen") return workers.set(worker.slot, reading);
               if (reading.result?.pullRequest != null) reported.add(reading.result.pullRequest);
               const threadHealth = yield* health.threadHealth({
@@ -340,6 +343,7 @@ const make = Effect.gen(function* () {
       const perform = (action: GoalAction) =>
         Effect.gen(function* () {
           if (action.type === "delete_row") {
+            yield* recovery.forget(goal.id);
             yield* store.remove(goal.id);
             return "deleted" as const;
           }
@@ -443,6 +447,19 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
+              // A later attempt starts from the work the one before it left, once that stopped.
+              const resume = yield* recovery.resume(goal, worker.slot, worker.attempt);
+              if (resume._tag !== "Start") {
+                failed = true;
+                if (resume._tag === "Refused")
+                  issues.push({
+                    condition: "Blocked",
+                    reason: "ResumeRefused",
+                    message: resume.message,
+                  });
+                workers.set(worker.slot, { ...worker, note: resume.message });
+                return;
+              }
               const work = yield* hubGate(placed.host, placed.modelSelection);
               if (work._tag === "Paused") return;
               if ((yield* claim(action.actionId, "launch", worker, placed.host)) !== null) return;
@@ -459,9 +476,12 @@ const make = Effect.gen(function* () {
                   actionId: action.actionId,
                   host: placed.host,
                   title: workerTitle(goal.title, worker.slot, worker.attempt),
-                  message: renderPrompt(goal, worker, branch),
+                  message:
+                    renderPrompt(goal, worker, branch) +
+                    (resume.note === null ? "" : "\n\n" + resume.note),
                   branch,
                   modelSelection: work._tag === "Hop" ? work.selection : placed.modelSelection,
+                  ...(resume.workspace === null ? {} : { workspace: resume.workspace }),
                 })
                 .pipe(Effect.result);
               if (launched._tag === "Success") {
@@ -766,6 +786,26 @@ const make = Effect.gen(function* () {
               }
               const nextId = launchActionId(goal, worker.slot, worker.attempt + 1);
               const selection = step._tag === "Relaunch" ? step.selection : worker.modelSelection;
+              if (worker.host === null) {
+                // Attempts on this machine restart here: the next attempt's launch resumes from this
+                // one's work once it stops, and its launch record makes this one an orphan to stop.
+                workers.set(worker.slot, {
+                  ...nextAttempt(
+                    goal,
+                    worker,
+                    "Restarts on this machine after " + action.reason + ".",
+                  ),
+                  modelSelection: selection,
+                });
+                note(
+                  "Normal",
+                  "Rescheduled",
+                  "Slot " + worker.slot + " restarts as attempt " + (worker.attempt + 1) + " here.",
+                  worker,
+                  null,
+                );
+                return;
+              }
               // One reschedule per run: the claim names the run; the next attempt's launch id is the
               // receiver's dedupe key.
               const rescheduleId =
