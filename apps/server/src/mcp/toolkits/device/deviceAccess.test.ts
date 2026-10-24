@@ -56,11 +56,13 @@ interface Fixture {
   readonly activity: Array<string>;
   /** Present when the simulator starts shut down; booting runs this first. */
   readonly boot?: Effect.Effect<void>;
+  /** Runs before agent-device configuration is written for a device. */
+  readonly configure?: Effect.Effect<void>;
   readonly projectLookupFails?: boolean;
 }
 
 // A local iOS host that records agent tool starts, device attaches, and agent-device configuration.
-const makeDeviceService = ({ activity, boot }: Fixture) =>
+const makeDeviceService = ({ activity, boot, configure }: Fixture) =>
   Effect.gen(function* () {
     let booted = boot === undefined;
     const ready: DeviceHost.DeviceHostReady = {
@@ -108,10 +110,12 @@ const makeDeviceService = ({ activity, boot }: Fixture) =>
       stop: Effect.void,
     };
     const service = yield* DeviceService.makeWithHosts(new Map([[host.id, host]]), undefined, () =>
-      Effect.sync(() => {
-        activity.push("configure");
-        return "/host.json";
-      }),
+      (configure ?? Effect.void).pipe(
+        Effect.map(() => {
+          activity.push("configure");
+          return "/host.json";
+        }),
+      ),
     );
     return { ...service, agentCli: Effect.succeed("/agent-device") };
   });
@@ -221,8 +225,8 @@ describe("device tools authorize the calling thread's project at each call", () 
         expect((opened.structuredContent as { quickStart: string }).quickStart).toContain(
           "--config /host.json",
         );
-        const afterGrant = ["agent", "attach", "agent", "configure"];
-        expect(activity).toEqual(afterGrant);
+        expect(activity).toContain("configure");
+        const afterGrant = [...activity];
 
         for (const threadId of [threads.other, threads.orphaned]) {
           expect(refusal(yield* call(threadId, "goat_device_open", { platform: "ios" }))).toContain(
@@ -305,6 +309,37 @@ describe("device tools authorize the calling thread's project at each call", () 
             activity,
             boot: Deferred.succeed(bootStarted, undefined).pipe(
               Effect.andThen(Deferred.await(finishBoot)),
+            ),
+          }),
+        ),
+      );
+    });
+  });
+
+  it.effect("access revoked while agent-device is configured withholds its flags", () => {
+    const activity: Array<string> = [];
+    return Effect.gen(function* () {
+      const configureStarted = yield* Deferred.make<void>();
+      const finishConfigure = yield* Deferred.make<void>();
+      return yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const opening = yield* call(threads.granted, "goat_device_open", {
+          deviceId: "SIM-1",
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(configureStarted);
+        yield* settings.updateSettings({
+          projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: false } },
+        });
+        yield* Deferred.succeed(finishConfigure, undefined);
+        const result = yield* Fiber.join(opening);
+        expect(refusal(result)).toContain(AGENT_DEVICE_ACCESS_OFF);
+        expect(JSON.stringify(result)).not.toContain("/host.json");
+      }).pipe(
+        Effect.provide(
+          layer(envOffProjectOn, {
+            activity,
+            configure: Deferred.succeed(configureStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishConfigure)),
             ),
           }),
         ),

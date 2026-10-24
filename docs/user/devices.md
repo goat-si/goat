@@ -87,9 +87,10 @@ To keep agents away from simulators, turn off **Agent device access** in
 **Settings → Integrations → Devices**, or in a project's settings for that
 project alone. This hides the device tools from agents started from then on,
 and agents already running are refused when they next list, open, or capture a
-device; they can still close one. A device an agent already opened stays
-reachable through the `agent-device` flags it was given until it is closed.
-Your own Device panel is unaffected.
+device; they can still close one. Turning off the environment-wide setting also
+stops GOAT's `agent-device` service. Turning it off only for a project leaves
+that service running, so an agent can keep using the `agent-device` flags it
+already received for a device it opened. Your own Device panel is unaffected.
 
 ## Remote connections
 

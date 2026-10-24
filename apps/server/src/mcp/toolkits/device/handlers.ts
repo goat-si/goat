@@ -188,7 +188,7 @@ const handlers = {
           after.devices.find(
             (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
           ) ?? target;
-        // Opening can boot for minutes; access revoked meanwhile must not hand over the device.
+        // Opening can boot for minutes; access revoked meanwhile must not configure agent-device.
         yield* authorizeThread(scope.thread.threadId);
         // Target the opened device: an EAS device and its agent-device daemon
         // exist only once its session runs, and Android ids change on boot.
@@ -224,6 +224,8 @@ const handlers = {
           shimDir,
           platform === "win32" ? "agent-device.cmd" : "agent-device",
         );
+        // Targeting can wait behind other device work; recheck before handing out its flags.
+        yield* authorizeThread(scope.thread.threadId);
         return {
           device,
           agentDevice: { command, targetArgs },
