@@ -1,10 +1,30 @@
 // @effect-diagnostics nodeBuiltinImport:off - Builds OSCrypt fixtures the way Chromium writes them.
 import * as NodeCrypto from "node:crypto";
 
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import { vi } from "vite-plus/test";
 
+const { keychainEntries } = vi.hoisted(() => ({ keychainEntries: [] as string[] }));
+vi.mock("@napi-rs/keyring", () => ({
+  Entry: class {
+    constructor(service: string) {
+      keychainEntries.push(service);
+    }
+    getPassword() {
+      return null;
+    }
+    setPassword() {}
+  },
+}));
+
+import * as DesktopConfig from "./DesktopConfig.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import type { SafeStorageKeyStore } from "./DesktopSafeStorageKeyMigration.ts";
 import * as DesktopSafeStorageSiblingKeys from "./DesktopSafeStorageSiblingKeys.ts";
 
@@ -123,3 +143,56 @@ describe("DesktopSafeStorageSiblingKeys", () => {
     }),
   );
 });
+it.effect("never reads sibling Keychain items for an opted-in dev run in an isolated home", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const tempRoot = yield* fs.makeTempDirectoryScoped();
+    const ciphertext = osCryptEncrypt("catalog", "nightly-secret", "v10", 1003);
+    const decryptWith = (env: Readonly<Record<string, string | undefined>>) =>
+      Effect.gen(function* () {
+        keychainEntries.length = 0;
+        const result = yield* Effect.gen(function* () {
+          const siblingKeys = yield* DesktopSafeStorageSiblingKeys.DesktopSafeStorageSiblingKeys;
+          return yield* siblingKeys.decrypt(ciphertext, acceptAll);
+        }).pipe(
+          Effect.provide(
+            DesktopSafeStorageSiblingKeys.layer.pipe(
+              Layer.provide(
+                DesktopEnvironment.layer({
+                  dirname: "/repo/apps/desktop/dist-electron",
+                  homeDirectory: `${tempRoot}/home`,
+                  platform: "darwin",
+                  processArch: "arm64",
+                  appVersion: "0.0.22",
+                  appPath: "/repo/apps/desktop",
+                  isPackaged: false,
+                  resourcesPath: "/repo/apps/desktop/resources",
+                  runningUnderArm64Translation: false,
+                }),
+              ),
+              Layer.provide(
+                Layer.mergeAll(
+                  NodeServices.layer,
+                  NodePath.layerPosix,
+                  DesktopConfig.layerTest(env),
+                ),
+              ),
+            ),
+          ),
+        );
+        return { result, keychainEntries: [...keychainEntries] };
+      });
+    const isolated = {
+      GOAT_HOME: `${tempRoot}/isolated-goat`,
+      VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+    };
+
+    // #1298: recovering an unreadable catalog would otherwise prompt for each sibling item.
+    const bypassed = yield* decryptWith({ ...isolated, GOAT_DEV_INSECURE_SECRET_STORAGE: "1" });
+    assert.deepStrictEqual(bypassed.result, Option.none());
+    assert.deepEqual(bypassed.keychainEntries, []);
+
+    const withoutOptIn = yield* decryptWith(isolated);
+    assert.include(withoutOptIn.keychainEntries, "GOAT Nightly Safe Storage");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

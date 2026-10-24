@@ -83,6 +83,8 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "preview.resetZoom",
   "commandPalette.toggle",
   "filePicker.toggle",
+  "files.copyPath",
+  "files.copyRelativePath",
   "projectSearch.toggle",
   "usage.open",
   "notes.new",

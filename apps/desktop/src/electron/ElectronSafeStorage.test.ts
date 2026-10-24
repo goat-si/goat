@@ -196,10 +196,48 @@ describe("ElectronSafeStorage", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
-  it.effect("keeps real encryption when it is available, even with the fallback enabled", () =>
+  it.effect("never touches the OS keychain when opted in, even if native encryption works", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-safe-storage-native-" });
+      // #1298: every read of the keychain item prompts an unsigned dev bundle on macOS.
+      isEncryptionAvailableMock.mockReturnValue(true);
+      const nativeBlob = Buffer.from("os-crypt:saved-before-opt-in", "utf8");
+      const result = yield* Effect.gen(function* () {
+        const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
+        const available = yield* safeStorage.isEncryptionAvailable;
+        const blob = yield* safeStorage.encryptString("secret-token");
+        const decrypted = yield* safeStorage.decryptString(blob);
+        const nativeError = yield* safeStorage.decryptString(nativeBlob).pipe(Effect.flip);
+        return { available, blob, decrypted, nativeError };
+      }).pipe(
+        Effect.provide(
+          makeSafeStorageLayer({
+            homeDirectory: `${tempRoot}/home`,
+            isPackaged: false,
+            env: {
+              GOAT_HOME: `${tempRoot}/isolated-goat`,
+              VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+              GOAT_DEV_INSECURE_SECRET_STORAGE: "1",
+            },
+          }),
+        ),
+      );
+      assert.isTrue(result.available);
+      assert.isTrue(textDecoder.decode(result.blob).startsWith("goat-dev-plaintext:v1:"));
+      assert.equal(result.decrypted, "secret-token");
+      // Ciphertext from before the opt-in stays on disk; reading it needs the flag turned off.
+      assert.instanceOf(result.nativeError, ElectronSafeStorage.ElectronSafeStorageDecryptError);
+      assert.equal(isEncryptionAvailableMock.mock.calls.length, 0);
+      assert.equal(encryptStringMock.mock.calls.length, 0);
+      assert.equal(decryptStringMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.effect("keeps using the OS keychain without the opt-in", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const tempRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-safe-storage-default-" });
       isEncryptionAvailableMock.mockReturnValue(true);
       const blob = yield* Effect.gen(function* () {
         const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
@@ -212,7 +250,6 @@ describe("ElectronSafeStorage", () => {
             env: {
               GOAT_HOME: `${tempRoot}/isolated-goat`,
               VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
-              GOAT_DEV_INSECURE_SECRET_STORAGE: "1",
             },
           }),
         ),

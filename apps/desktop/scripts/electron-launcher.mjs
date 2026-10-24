@@ -15,13 +15,27 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
-const APP_BUNDLE_ID = isDevelopment
-  ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
-  : "com.t3tools.t3code";
-// The renderer scheme, plus the pre-D13 one that existing links use.
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["goat-dev", "t3code-dev"] : ["goat", "t3code"];
-const LAUNCHER_VERSION = 21;
+
+export function resolveMacLauncherIdentity(development) {
+  return {
+    // macOS shows CFBundleName in keychain and privacy prompts.
+    displayName: development ? "GOAT (Dev)" : "GOAT",
+    // The bundle earlier launchers built; removed when this one is rebuilt.
+    legacyDisplayName: development ? "T3 Code (Dev)" : "T3 Code (Alpha)",
+    // Unchanged on purpose: macOS keys privacy grants and URL handlers to the bundle id.
+    bundleId: development
+      ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
+      : "com.t3tools.t3code",
+    // The renderer scheme, plus the pre-D13 one that existing links use.
+    protocolSchemes: development ? ["goat-dev", "t3code-dev"] : ["goat", "t3code"],
+  };
+}
+
+const launcherIdentity = resolveMacLauncherIdentity(isDevelopment);
+const APP_DISPLAY_NAME = launcherIdentity.displayName;
+const APP_BUNDLE_ID = launcherIdentity.bundleId;
+const APP_PROTOCOL_SCHEMES = launcherIdentity.protocolSchemes;
+const LAUNCHER_VERSION = 22;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -114,6 +128,7 @@ export function makeDevelopmentEnvironmentScript(environment) {
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
     ["GOAT_PORT", environment.GOAT_PORT],
     ["GOAT_HOME", environment.GOAT_HOME],
+    ["GOAT_DEV_INSECURE_SECRET_STORAGE", environment.GOAT_DEV_INSECURE_SECRET_STORAGE],
     ["GOAT_COMMIT_HASH", environment.GOAT_COMMIT_HASH],
     ["GOAT_OTLP_TRACES_URL", environment.GOAT_OTLP_TRACES_URL],
     ["GOAT_OTLP_EXPORT_INTERVAL_MS", environment.GOAT_OTLP_EXPORT_INTERVAL_MS],
@@ -263,11 +278,11 @@ function ensureMacIconIcns(runtimeDir) {
   }
 }
 
-function resolveMacBundleInfoPlistStrings(executableName) {
+export function resolveMacBundleInfoPlistStrings(executableName, identity = launcherIdentity) {
   return {
-    CFBundleDisplayName: APP_DISPLAY_NAME,
-    CFBundleName: APP_DISPLAY_NAME,
-    CFBundleIdentifier: APP_BUNDLE_ID,
+    CFBundleDisplayName: identity.displayName,
+    CFBundleName: identity.displayName,
+    CFBundleIdentifier: identity.bundleId,
     CFBundleExecutable: executableName,
     CFBundleIconFile: "icon.icns",
     NSScreenCaptureUsageDescription:
@@ -387,6 +402,7 @@ function buildMacLauncher(electronBinaryPath) {
     return launcherBinaryPath;
   }
 
+  removeLegacyMacLauncherBundle(runtimeDir);
   NodeFS.rmSync(targetAppBundlePath, { recursive: true, force: true });
   // verbatimSymlinks keeps the framework's relative symlinks intact
   // (e.g. Resources -> Versions/Current/Resources). Without it cpSync
@@ -415,6 +431,22 @@ function buildMacLauncher(electronBinaryPath) {
   registerMacLauncherBundle(targetAppBundlePath);
 
   return launcherBinaryPath;
+}
+
+function removeLegacyMacLauncherBundle(runtimeDir) {
+  const legacyAppBundlePath = NodePath.join(
+    runtimeDir,
+    `${launcherIdentity.legacyDisplayName}.app`,
+  );
+  if (!NodeFS.existsSync(legacyAppBundlePath)) {
+    return;
+  }
+  // It shares the bundle id, so LaunchServices could keep routing URLs to the old name.
+  NodeChildProcess.spawnSync(
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+    ["-u", legacyAppBundlePath],
+  );
+  NodeFS.rmSync(legacyAppBundlePath, { recursive: true, force: true });
 }
 
 function isLinuxSetuidSandboxConfigured(electronBinaryPath) {

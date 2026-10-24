@@ -293,7 +293,8 @@ the parent when it finishes. A local `mode: "wait"` child stops with the turn wh
 blocking call it answers, unless that wait already timed out. `goat_task_cancel` stops
 either kind.
 
-Each delegated review round uses a new `goat_task_create` call with the original brief,
+Each delegated review round uses a new `goat_task_create` call with top-level
+`role: "review"`, which `goat_review_findings_record` requires, and the original brief,
 prior findings, responses, and unresolved objections. Track each round by its own `taskId` and use
 a distinct `clientRequestId` per round, stable across retries of that round.
 `childThreadId` is backing storage, not a target for another review round through
