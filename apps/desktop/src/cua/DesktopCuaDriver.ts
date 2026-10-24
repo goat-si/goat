@@ -60,6 +60,7 @@ import {
   type HelperHostOptions,
   type HelperSession,
 } from "./ComputerUseHelper.ts";
+import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makePrivateModeFollower } from "./privateModeWatch.ts";
 import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import {
@@ -406,22 +407,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     Effect.tap(() => noteHelper((state) => withRunning(state, false))),
     Effect.tap(() => Effect.sync(() => privateMode.detach())),
   );
-  const report = (requestId: string, status: "stopped" | "unavailable", message?: string) =>
-    closed
-      ? Effect.void
-      : publisher.publishCuaReport({
-          version: 1,
-          type: "cuaDriverReport",
-          requestId,
-          status,
-          ...(message === undefined ? {} : { message }),
-        });
-  const unavailable = (requestId: string) =>
-    report(
-      requestId,
-      "unavailable",
-      "Computer use is unavailable. Try again after the driver has stopped.",
-    );
+  const { report, unavailable, ungranted } = cuaDriverReports(publisher, () => closed);
 
   const restart = mutex.withPermits(1)(
     Effect.gen(function* () {
@@ -854,12 +840,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             yield* noteHelper((state) => withGrants(state, grants, true));
           }
           if (!grants.accessibility || !grants.screenRecording) {
-            yield* report(
+            yield* ungranted(
               request.requestId,
-              "unavailable",
-              selected.kind === "helper"
-                ? `Allow Accessibility and Screen Recording for ${COMPUTER_USE_HELPER_NAME} in System Settings, then restart computer use.`
-                : "Allow Accessibility and Screen Recording in System Settings, then restart computer use.",
+              grants,
+              selected.kind === "helper" ? "helper" : "app",
             );
             return;
           }
