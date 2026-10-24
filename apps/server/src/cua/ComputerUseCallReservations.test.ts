@@ -59,6 +59,33 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 
 describe("server computer-use call reservations", () => {
   it.effect(
+    "admits overlay cursor moves on a shared screen but refuses desktop moves (#1501)",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        for (const args of [
+          { x: 1, y: 1 },
+          { scope: "window", x: 1, y: 1 },
+          { pid: 42, window_id: 7, x: 1, y: 1 },
+          { target: { kind: "window", pid: 42, window_id: 7 }, x: 1, y: 1 },
+        ]) {
+          assert.equal((yield* f.reserve(f.a, args, "move_cursor")).status, "admitted");
+        }
+        for (const args of [
+          { scope: "desktop", x: 1, y: 1 },
+          { target: { kind: "desktop", display_id: "primary" }, x: 1, y: 1 },
+        ])
+          assert.deepEqual(yield* f.reserve(f.a, args, "move_cursor"), {
+            status: "refused",
+            detail: "screen_shared",
+          });
+        yield* f.close(f.a);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
     "refuses a call that takes the screen once another thread holds a grant, whatever the proxy has heard",
     () =>
       Effect.gen(function* () {

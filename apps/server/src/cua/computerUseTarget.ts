@@ -19,6 +19,12 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const integer = (value: unknown) =>
   typeof value === "number" && Number.isInteger(value) ? value : undefined;
 
+/** Both forms that cua-driver 0.37.0 accepts for an explicit desktop scope. */
+export function desktopScope(args: unknown): boolean {
+  const top = record(args);
+  return top?.scope === "desktop" || record(top?.target)?.kind === "desktop";
+}
+
 /** The window a call's arguments name, or undefined for a desktop, app or unnamed target. */
 export function targetOf(args: unknown): ComputerUseCallTarget | undefined {
   const top = record(args);
