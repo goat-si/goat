@@ -31,7 +31,7 @@ export const pendingRequestEntries = {
     description:
       "Read a pending or resolved user question, including status, responder, and resolution time when available. Reads only; use goat_pending_request_respond to answer or forward it to the user.",
     guide:
-      "Pass host and threadId for another machine. An outside MCP client token holding orchestration:approve can also read an approval's kind. Older remotes may omit status and provenance.",
+      "Pass host and threadId for another machine. An outside MCP client token holding orchestration:approve can also read an approval's kind and prompt. Older remotes may omit status and provenance.",
     effect: "read",
     hostRoutable: true,
     requires: "either",

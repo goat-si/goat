@@ -31,7 +31,7 @@ export const attachmentEntries = {
     toolkit: "attachment",
     summary: "Discard a pending upload.",
     description:
-      "Delete a pending attachment upload and its ownership record. File removal is best effort, so success can leave the file on disk. Already-delivered thread attachments are never deleted.",
+      "Delete a pending attachment upload and its ownership record. If the file cannot be removed, the call fails and the caller keeps ownership, so it can discard again. Already-delivered thread attachments are never deleted.",
     guide:
       "Only the caller that prepared the upload can discard it. Discard removes the pending file and its caller ownership record; the delivered thread copy remains separate.",
     effect: "destructive",

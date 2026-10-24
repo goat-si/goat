@@ -21,6 +21,7 @@ import * as CloudSource from "../../orchestration-v2/CloudTaskSourceService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskView } from "../cloudTaskView.ts";
 import { hostFailure } from "../hostFailure.ts";
+import { overrideOptionSelections } from "../modelOptionOverrides.ts";
 import { readAdvertisedModel } from "../OrchestratorMcpCapabilities.ts";
 
 import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -311,15 +312,22 @@ export const makeRemoteTaskTargets = (deps: RemoteTaskTargetDeps) => {
         "model_unavailable",
         "The selected model is not advertised on this host.",
       );
-    const options =
-      target.options ??
-      (instanceId === inherited.instanceId && model === inherited.model
+    const options = overrideOptionSelections(
+      instanceId === inherited.instanceId && model === inherited.model
         ? inherited.options
-        : undefined);
-    const invalid =
-      options === undefined
-        ? []
-        : invalidOptionSelections(options, advertisedOptionDescriptors(advertised.options ?? []));
+        : undefined,
+      target.options,
+    );
+    const descriptors = advertisedOptionDescriptors(advertised.options ?? []);
+    // The merge folds repeated ids together, so the request is checked on its own too.
+    const invalid = [
+      ...new Set([
+        ...(target.options === undefined
+          ? []
+          : invalidOptionSelections(target.options, descriptors)),
+        ...(options === undefined ? [] : invalidOptionSelections(options, descriptors)),
+      ]),
+    ];
     if (invalid.length > 0) return yield* failure("invalid_request", invalid.join(" "));
     const modelSelection: ModelSelection = {
       instanceId: provider.providerInstanceId,

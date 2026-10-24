@@ -158,7 +158,9 @@ GOAT Connect arrives.
 ## Defaults and inheritance
 
 General contains the model and workspace for new threads. Integrations controls agent browser
-access. Source Control contains automatic pull, the default pull request merge method and text
+access. Its **Agent tools** row, which chooses between GOAT's core tools and every tool for the
+agents GOAT runs, applies to the whole environment and has no project override. Source Control
+contains automatic pull, the default pull request merge method and text
 generation. The same rows edit environment defaults or project overrides depending on the
 project crumb.
 
