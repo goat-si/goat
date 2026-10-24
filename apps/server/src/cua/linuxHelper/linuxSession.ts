@@ -83,6 +83,9 @@ export const parseGnomeShellMajor = (output: string): number | null => {
   return match ? Number(match[1]) : null;
 };
 
+/** Methods this helper does not serve yet: the safety-signal watch (#1235). */
+const NOT_YET: ReadonlySet<string> = new Set(["watch", "unwatch"]);
+
 export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilities {
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
@@ -90,12 +93,15 @@ export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilitie
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
-        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
+        NOT_YET.has(method) ||
+        (session.unsupported !== undefined && method !== "capabilities" && method !== "permissions")
           ? "unsupported"
           : "supported",
       ]),
     ) as ComputerUseCapabilities["methods"],
     backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
+    // No watch yet, so neither signal; the server refuses unattended use until both are here.
+    signals: { privateMode: "unsupported", humanInput: "unsupported" },
   };
 }
 
