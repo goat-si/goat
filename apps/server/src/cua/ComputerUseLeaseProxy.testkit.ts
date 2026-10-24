@@ -61,6 +61,10 @@ export const harness = Effect.fn(function* (
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
+    /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
+    readonly manifestStamp?: () => string | undefined;
+    /** Holds the first driver's kill open until done, as a child slow to stop would. */
+    readonly firstKillGate?: Deferred.Deferred<void>;
     readonly acceptHuman?: () => boolean;
   } = {},
 ) {
@@ -75,6 +79,8 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const taken = yield* Queue.unbounded<string>();
+  const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const proxy = yield* runLeaseProxy({
@@ -102,7 +108,11 @@ export const harness = Effect.fn(function* (
             Queue.offer(agentCalls, report.state + " " + report.call),
         }
       : {}),
-    leaseUpdates: Stream.fromQueue(updates),
+    // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
+    leaseUpdates: Stream.fromQueue(updates).pipe(
+      Stream.tap((update) => Queue.offer(taken, update.state)),
+    ),
+    onLeaseUpdateApplied: (update) => Queue.offer(applied, update.state).pipe(Effect.asVoid),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
         toDriver: yield* Queue.unbounded<string>(),
@@ -122,6 +132,11 @@ export const harness = Effect.fn(function* (
           }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(
+            driver === drivers[0] && options.firstKillGate !== undefined
+              ? Deferred.await(options.firstKillGate)
+              : Effect.void,
+          ),
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
         ...(options.overlay
@@ -156,6 +171,7 @@ export const harness = Effect.fn(function* (
               ),
             ),
         }),
+    ...(options.manifestStamp === undefined ? {} : { manifestStamp: options.manifestStamp }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
         Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
@@ -180,6 +196,19 @@ export const harness = Effect.fn(function* (
     killed: Effect.suspend(() => Deferred.await(first.killed)),
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
+    /** The state of the next lease update the proxy pulled, before acting on it. */
+    taken: Queue.take(taken),
+    /** The state of the next lease update the proxy finished applying. */
+    applied: Queue.take(applied),
+    appliedQueued: Queue.size(applied),
+    /** Driver children started and not killed. */
+    liveDrivers: Effect.suspend(() =>
+      Effect.forEach(drivers, (driver) => Deferred.isDone(driver.killed)).pipe(
+        Effect.map((killed) => killed.filter((done) => !done).length),
+      ),
+    ),
+    /** Driver children started and not yet taken with restarted. */
+    startedQueued: Queue.size(started),
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),

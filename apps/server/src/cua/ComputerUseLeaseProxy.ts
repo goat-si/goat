@@ -28,8 +28,6 @@ import {
   type ComputerUseOverlayCommand,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
-  type ComputerUseRefusalDetail,
-  computerUseRefusalReason,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -40,8 +38,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-
 import {
   approvedApps,
   learnApps,
@@ -54,19 +52,21 @@ import {
   type Interruption,
   LEASE_END_MESSAGES,
   type LeaseEnd,
-  MAY_HAVE_ACTED,
   PAUSE_MESSAGES,
-  PAUSE_NEXT,
-  PAUSE_STATE,
-  READ_CUT_OFF,
-  READ_ONLY_TOOLS,
-  REPLY_UNCONFIRMED,
-  REPLY_WITHHELD,
   scopeMessage,
   SCREEN_SHARED,
   UNCONFIRMED_DISPLAY,
   WRONG_DISPLAY,
 } from "./ComputerUseLeaseMessages.ts";
+import {
+  cutOff,
+  interruptionDetail,
+  interruptionRefusal,
+  type JsonRpcId,
+  offScreenAnswer,
+  pausedDetail,
+  refusal,
+} from "./ComputerUseLeaseAnswers.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { makeAgentInputLog, postsInput } from "./agentInputLog.ts";
@@ -109,6 +109,15 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
+  /**
+   * Identifies the driver's capability manifest file as it is now (#1416), where the driver
+   * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
+   * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
+   * replacement can land in between.
+   */
+  readonly manifestStamp?: () => string | undefined;
+  /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
+  readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -201,7 +210,6 @@ const namedWindows = (value: unknown): ReadonlyArray<NamedWindow> | undefined =>
   return complete ? found : undefined;
 };
 
-type JsonRpcId = string | number;
 interface Envelope {
   readonly id?: JsonRpcId | null;
   readonly method?: string;
@@ -232,118 +240,15 @@ const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 /** Ids of the proxy's own requests to the driver; their answers never reach the provider. */
 const OWN_ID = "goat-proxy:";
 
-const refusal = (
-  id: JsonRpcId,
-  method: string | undefined,
-  detail: ComputerUseRefusalDetail,
-  message: string,
-  app?: string,
-) => {
-  const refused = { refused: computerUseRefusalReason(detail), detail };
-  return JSON.stringify(
-    method === "tools/call"
-      ? {
-          jsonrpc: "2.0",
-          id,
-          result: {
-            content: [{ type: "text", text: message }],
-            structuredContent: { ...refused, ...(app === undefined ? {} : { app }) },
-            isError: true,
-          },
-        }
-      : { jsonrpc: "2.0", id, error: { code: -32000, message, data: refused } },
-  );
-};
+/** A lease update that stops the current child, by what it means for a call. */
+type Stopping = { readonly pause: ComputerUsePauseReason } | { readonly end: LeaseEnd };
 
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
+  /** The driver's capability manifest as it was when this child started, when known. */
+  readonly manifest?: string | undefined;
 }
-
-const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
-  reason === "private" ? "private_mode" : "waiting_for_human";
-
-const interruptionDetail = (cause: Interruption): ComputerUseRefusalDetail =>
-  cause._tag === "end"
-    ? cause.reason
-    : cause._tag === "pause"
-      ? pausedDetail(cause.reason)
-      : cause.detail;
-
-/** What a call that never reached the driver is told: it did not run. */
-const interruptionRefusal = (cause: Interruption) =>
-  cause._tag === "end"
-    ? LEASE_END_MESSAGES[cause.reason]
-    : cause._tag === "pause"
-      ? PAUSE_MESSAGES[cause.reason]
-      : cause.message;
-
-/**
- * The answer for a call the driver already had when a pause or end cut it off. The driver may
- * have dispatched its input before its transport was killed, so this is not a refusal: an agent
- * told "did not run" resends, and a resent keystroke can submit twice.
- */
-const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interruption) => {
-  const read = tool !== undefined && READ_ONLY_TOOLS.has(tool);
-  const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
-  const detail = interruptionDetail(cause);
-  const text =
-    cause._tag === "pause"
-      ? `${PAUSE_STATE[cause.reason]}. ${sentence} ${PAUSE_NEXT[cause.reason]}`
-      : cause._tag === "end"
-        ? `${sentence} ${LEASE_END_MESSAGES[cause.reason]}`
-        : `${cause.message} ${sentence}`;
-  return JSON.stringify({
-    jsonrpc: "2.0",
-    id,
-    result: {
-      content: [{ type: "text", text }],
-      structuredContent: read
-        ? { code: "interrupted", detail }
-        : { effect: "unverifiable", code: "interrupted", detail },
-      isError: true,
-    },
-  });
-};
-
-/**
- * The answer for a call whose reply names windows GOAT cannot place on its screen. The driver
- * already acted on it, so only a read keeps the refusal; anything else may have landed.
- */
-const offScreenAnswer = (
-  id: JsonRpcId,
-  method: string,
-  tool: string | undefined,
-  verdict: "other" | "unknown",
-) =>
-  tool !== undefined && READ_ONLY_TOOLS.has(tool)
-    ? refusal(
-        id,
-        method,
-        "wrong_display",
-        verdict === "other" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
-      )
-    : JSON.stringify({
-        jsonrpc: "2.0",
-        id,
-        result: {
-          content: [
-            {
-              type: "text",
-              text:
-                verdict === "other"
-                  ? `${REPLY_WITHHELD} ${LEASE_END_MESSAGES.wrong_display}`
-                  : REPLY_UNCONFIRMED,
-            },
-          ],
-          structuredContent: {
-            effect: "unverifiable",
-            code: "interrupted",
-            detail: "wrong_display",
-          },
-          isError: true,
-        },
-      });
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
@@ -358,6 +263,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   /** Another thread holds apps on this screen; see takesScreen. */
   let shared = false;
   let running: Running | undefined;
+  /**
+   * Held while a lease update or a manifest refresh stops or starts a driver child, so one never
+   * replaces a child the other just started or stopped.
+   */
+  const lifecycle = yield* Semaphore.make(1);
+  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
+  let stopping: Stopping | undefined;
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
@@ -558,9 +470,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
+    // Read before the child starts: a change while it starts is caught by the next call.
+    const manifest = options.manifestStamp?.();
     const child = yield* Scope.fork(scope);
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
-    const current: Running = { driver, scope: child };
+    const current: Running = { driver, scope: child, manifest };
     running = current;
     if (driver.humanInput !== undefined && options.onHumanInput !== undefined) {
       const report = options.onHumanInput;
@@ -590,6 +504,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     }
     yield* readLines(current).pipe(Effect.forkIn(scope));
+    return current;
   });
 
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
@@ -652,15 +567,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   // The server is the authority: the first word for this control confirms it, anything else ends.
   yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) =>
-      update.state !== "ended" && update.controlId !== options.controlId
-        ? end("lost")
-        : update.state === "active"
-          ? activate(update)
+    Stream.runForEach((update) => {
+      const stop: Stopping | undefined =
+        update.state !== "ended" && update.controlId !== options.controlId
+          ? { end: "lost" }
           : update.state === "paused"
-            ? pause(update.reason)
-            : end(update.reason === "unauthorized" ? "lost" : update.reason),
-    ),
+            ? { pause: update.reason }
+            : update.state === "ended"
+              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
+              : undefined;
+      return Effect.gen(function* () {
+        // Known at once, before the update waits for the lock: a call judged meanwhile is
+        // refused before it reaches any child.
+        stopping = stop;
+        yield* lifecycle.withPermits(1)(
+          (stop !== undefined && "end" in stop
+            ? end(stop.end)
+            : stop !== undefined
+              ? pause(stop.pause)
+              : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
+          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
+        );
+      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
+    }),
     Effect.catchCause(() => Effect.void),
     Effect.andThen(end("lost")),
     Effect.forkScoped,
@@ -771,6 +700,36 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     return undefined;
   });
 
+  /**
+   * The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
+   * when it starts, so an idle child is replaced before the call is judged; every check after
+   * this one sees the new child.
+   */
+  const refreshManifest = lifecycle.withPermits(1)(
+    Effect.gen(function* () {
+      const before = running;
+      if (
+        options.manifestStamp === undefined ||
+        before === undefined ||
+        paused !== undefined ||
+        finished !== undefined ||
+        outstanding.size > 0
+      )
+        return undefined;
+      const manifest = options.manifestStamp();
+      if (manifest === undefined || manifest === before.manifest) return undefined;
+      yield* interrupt({
+        _tag: "other",
+        detail: "helper_restarted",
+        message: LEASE_END_MESSAGES.helper_restarted,
+      });
+      // Stopping the old child waits; an expiry or a driver exit may have ended the control.
+      if (paused !== undefined || finished !== undefined) return undefined;
+      // The child this refresh started, which the call may use as its own.
+      return yield* start();
+    }),
+  );
+
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);
     const id = message?.id;
@@ -796,7 +755,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
       // The child this call was admitted under. A pause, takeover or narrowed approval while it
       // waits replaces the child, and the call belongs to what was cut off, never to the next one.
-      const admitted = running;
+      // Only the manifest refresh may replace it for the call.
+      let admitted = running;
+      const refreshed = yield* refreshManifest;
+      if (refreshed !== undefined) admitted = refreshed;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));
@@ -852,19 +814,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // call never reached a driver, so it is refused; once sent, an interruption answers it as
     // cut off instead (interrupt above).
     const current = running;
-    const notSent = (requestId: JsonRpcId) =>
-      finished !== undefined
-        ? refusal(requestId, message?.method, finished, LEASE_END_MESSAGES[finished])
-        : paused !== undefined
-          ? refusal(requestId, message?.method, pausedDetail(paused), PAUSE_MESSAGES[paused])
+    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
+    // holds the lock (#1416), counts as applied: the call never reaches a child.
+    const notSent = (requestId: JsonRpcId) => {
+      const ending =
+        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+      const pausing =
+        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+      return ending !== undefined
+        ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
+        : pausing !== undefined
+          ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
           : refusal(
               requestId,
               message?.method,
               interruptionDetail(lastInterruption),
               interruptionRefusal(lastInterruption),
             );
+    };
     const stillCurrent = () =>
-      running === current && paused === undefined && finished === undefined;
+      running === current &&
+      paused === undefined &&
+      finished === undefined &&
+      stopping === undefined;
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
