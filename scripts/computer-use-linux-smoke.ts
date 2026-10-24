@@ -19,6 +19,7 @@ import * as NodeUtil from "node:util";
 
 import {
   admitComputerUseReply,
+  COMPUTER_USE_METHODS,
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseHelloReply,
   negotiateComputerUseVersion,
@@ -233,7 +234,7 @@ try {
   const capabilities = await request("capabilities");
   check(
     "capabilities name every method",
-    Object.keys(capabilities.result.methods).length === 13,
+    COMPUTER_USE_METHODS.every((method) => method in capabilities.result.methods),
     capabilities.result,
   );
   const permissions = await request("permissions");
