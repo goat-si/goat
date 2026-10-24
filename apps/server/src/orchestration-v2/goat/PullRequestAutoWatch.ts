@@ -37,6 +37,7 @@ export function newPullRequestWatch(
       passedChecks: ended.passedChecks,
       conflicting: ended.conflicting,
     }),
+    ...(ended?.owedChecks !== undefined && { owedChecks: ended.owedChecks }),
     ...(ended?.checksAwaitedSince !== undefined && {
       checksAwaitedSince: ended.checksAwaitedSince,
     }),

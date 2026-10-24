@@ -1237,13 +1237,18 @@ export const OrchestrationV2RuntimeRequest = Schema.Struct({
   ]),
   status: Schema.Literals(["pending", "resolved", "expired", "cancelled"]),
   responseCapability: Schema.Union([
-    Schema.Struct({ type: Schema.Literal("live"), providerSessionId: ProviderSessionId }),
+    Schema.Struct({
+      type: Schema.Literal("live"),
+      providerSessionId: ProviderSessionId,
+      supportsFeedback: Schema.optional(Schema.Boolean),
+    }),
     Schema.Struct({ type: Schema.Literal("message") }),
     Schema.Struct({ type: Schema.Literal("not_resumable"), reason: Schema.String }),
   ]),
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.NullOr(Schema.DateTimeUtc),
   decision: Schema.optional(ProviderApprovalDecision),
+  feedback: Schema.optional(Schema.String),
   answers: Schema.optional(ProviderUserInputAnswers),
   respondedBy: Schema.optional(UserInputRespondedBy),
 });
@@ -3294,6 +3299,7 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: RuntimeRequestId,
     decision: Schema.optional(ProviderApprovalDecision),
+    feedback: Schema.optional(Schema.String),
     answers: Schema.optional(ProviderUserInputAnswers),
     attachmentsByQuestionId: Schema.optional(UserInputAttachments),
     respondedBy: Schema.optional(UserInputRespondedBy),
