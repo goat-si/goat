@@ -239,6 +239,8 @@ jobs:
 
       # The test files beside the changes, as check:changed runs them: from the repository root,
       # whose Vitest config hands each file to its package's config. CI script tests use node:test.
+      # A selected file that no Vitest project collects fails here, so a quick run cannot pass
+      # without running a test it chose.
       - name: Test changed files
         if: matrix.task == 'test-changed'
         env:
@@ -250,7 +252,16 @@ jobs:
           test "$(( ${#files[@]} + ${#node_files[@]} ))" -gt 0
           if [ "${#files[@]}" -gt 0 ]; then
             echo "${#files[@]} changed Vitest files"
-            vp test run --passWithNoTests "${files[@]}"
+            listed="$RUNNER_TEMP/changed-tests-listed.json"
+            vp test list --filesOnly --json="$listed" "${files[@]}"
+            LISTED="$listed" node -e '
+              const path = require("node:path");
+              const listed = new Set(require(process.env.LISTED).map((entry) => path.relative(process.cwd(), entry.file)));
+              const missing = JSON.parse(process.env.CHANGED_TESTS).filter((file) => !listed.has(file));
+              for (const file of missing) console.log("::error file=" + file + "::no Vitest project collects this changed test file");
+              process.exit(missing.length > 0 ? 1 : 0);
+            '
+            vp test run "${files[@]}"
           fi
           if [ "${#node_files[@]}" -gt 0 ]; then
             echo "${#node_files[@]} changed node:test files"

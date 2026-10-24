@@ -486,4 +486,12 @@ describe("planRun", () => {
     assert.match(full.note, /^Full run/);
     assert.doesNotMatch(full.note, /quick/i);
   });
+
+  it("keeps the note on one output line when a changed file name holds a newline", async () => {
+    const file = 'evil\nmatrix={"include":[]}\r\nserver_files=["x"]';
+    const result = await plan(pr(), labels([AFFECTED_LABEL]), [file]);
+    assert.equal(result.full, true);
+    assert.doesNotMatch(result.note, /[\r\n]/);
+    assert.match(result.note, /evil matrix=/);
+  });
 });

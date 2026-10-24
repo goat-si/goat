@@ -523,6 +523,13 @@ const noChangedTests = () => ({ vitest: [], node: [] });
 
 /** One line for goat-ci-result: what kind of run this was and how to widen it. */
 function noteFor(result, branch = "<branch>") {
+  // GITHUB_OUTPUT takes one note=value line; a file name in a reason may hold a newline.
+  return oneLine(describeRun(result, branch));
+}
+
+const oneLine = (text) => text.replace(/[\r\n]+/g, " ");
+
+function describeRun(result, branch) {
   if (result.full) return "Full run: " + result.reasons.get("full") + ".";
   const ran = result.tasks.join(", ") || "nothing";
   const fullRun =
