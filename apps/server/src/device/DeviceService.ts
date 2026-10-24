@@ -840,7 +840,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             hostId: host.id,
             hostLabel: host.label,
             reason:
-              "Agent device access requires enabled device support, agent access, and an available simulator platform on this host.",
+              "Agent device access needs device support and Agent device access turned on in Settings → Integrations → Devices, and an available simulator platform on this host. Only a person can change those settings; ask the user.",
           });
         const { configPath, agentDeviceId } = yield* lifecycleLock.withPermit(
           Effect.gen(function* () {

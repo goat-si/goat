@@ -216,6 +216,7 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .callTool({ name: "goat_device_list", arguments: {} })
         .pipe(callWith(["preview"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(denied.isError).toBe(true);
+      expect(JSON.stringify(denied.content)).toContain("Settings → Integrations → Devices");
     }),
   ).pipe(Effect.provide(layerTest())),
 );
