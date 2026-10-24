@@ -1,4 +1,5 @@
-import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
+import { continuationOrigin } from "./ContinuationChain.ts";
+import { runTurnCapabilities } from "./TurnCapabilities.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
@@ -577,21 +578,9 @@ export function runMemoryPrepareInput(input: {
     "runs" | "messages"
   >;
 }): RunMemoryPrepareInput {
-  let { run, message } = input;
-  let depth = 0;
-  for (;;) {
-    const sourceId = run.restartContinuationOfRunId ?? run.usageLimitContinuationOfRunId;
-    if (sourceId === undefined) break;
-    if (depth >= MAX_CONTINUATION_CHAIN) return { memoryGrantCeiling: "none" };
-    const source = input.projection.runs.find((candidate) => candidate.id === sourceId);
-    const sourceMessage = input.projection.messages.find(
-      (candidate) => candidate.id === source?.userMessageId,
-    );
-    if (source === undefined || sourceMessage === undefined) return { memoryGrantCeiling: "none" };
-    run = source;
-    message = sourceMessage;
-    depth++;
-  }
+  const origin = continuationOrigin(input);
+  if (origin === undefined) return { memoryGrantCeiling: "none" };
+  const { run, message } = origin;
   const ordinary =
     message.createdBy === "user" &&
     (message.creationSource === "web" || message.creationSource === "mobile") &&
@@ -599,6 +588,11 @@ export function runMemoryPrepareInput(input: {
     run.delegatedTaskId === undefined;
   return { memoryGrantCeiling: ordinary ? null : (run.memoryGrantCeiling ?? "none") };
 }
+
+/** Everything prepare reads from the run: its memory ceiling and its capability chips. */
+export const runPrepareInput = (
+  input: Parameters<typeof runMemoryPrepareInput>[0] & Parameters<typeof runTurnCapabilities>[0],
+) => ({ ...runMemoryPrepareInput(input), turnCapabilities: runTurnCapabilities(input) });
 
 export interface RunExecutionServiceV2StartRootRunInput {
   readonly refreshMemoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["refreshMemoryContext"];

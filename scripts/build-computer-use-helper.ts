@@ -186,6 +186,34 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       channel: input.channel,
     }),
   );
+  // macOS shows this icon in System Settings' privacy lists and the permission drag panel,
+  // where the helper has to read as its own app beside GOAT.app (#1251).
+  const iconset = path.join(work, "AppIcon.iconset");
+  yield* fs.makeDirectory(iconset);
+  const iconSource = path.join(sourceDir, "icon-1024.png");
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const [suffix, pixels] of [
+      ["", size],
+      ["@2x", size * 2],
+    ] as const) {
+      const name = "icon_" + size + "x" + size + suffix + ".png";
+      yield* run("sips", [
+        "-z",
+        String(pixels),
+        String(pixels),
+        iconSource,
+        "--out",
+        path.join(iconset, name),
+      ]);
+    }
+  }
+  yield* run("iconutil", [
+    "-c",
+    "icns",
+    iconset,
+    "-o",
+    path.join(contents, "Resources", "AppIcon.icns"),
+  ]);
   // Cua Driver's MIT notices travel with every copy of the driver (#667).
   const notices = path.join(input.repoRoot, "apps/desktop/src/cua/notices");
   for (const name of yield* fs.readDirectory(notices))

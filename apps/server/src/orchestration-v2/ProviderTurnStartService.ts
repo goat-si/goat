@@ -848,7 +848,7 @@ export const layer: Layer.Layer<
           providerSessionId,
           modelSelection: run.modelSelection,
           runtimePolicy: resolvedRuntimePolicy,
-          ...RunExecutionService.runMemoryPrepareInput({ run, message, projection }),
+          ...RunExecutionService.runPrepareInput({ run, message, projection }),
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
