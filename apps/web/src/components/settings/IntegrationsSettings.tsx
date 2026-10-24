@@ -982,7 +982,7 @@ function DeviceIntegrationControls({
                 busy ||
                 pending !== null
               }
-              aria-label="Device hub"
+              aria-label="Simulators and emulators"
               onCheckedChange={(checked) =>
                 void update("hub", {
                   enabled: Boolean(checked),
