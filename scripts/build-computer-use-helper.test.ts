@@ -3,11 +3,14 @@ import * as NodeFS from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import { Command } from "effect/cli";
 
 import {
   AD_HOC_WARNING,
+  buildComputerUseHelperCommand,
   chooseSigningIdentity,
   helperBundleIdForChannel,
   helperDesignatedRequirement,
@@ -42,6 +45,20 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
+  it.effect("parses a default build without --ad-hoc (#1349)", () =>
+    Effect.gen(function* () {
+      // Off macOS the build stops at its platform check, so reaching it proves the flags parsed.
+      const exit = yield* Effect.exit(
+        Command.runWith(buildComputerUseHelperCommand, { version: "0.0.0" })(["--channel", "dev"]),
+      );
+      const message = String(Exit.isFailure(exit) ? exit.cause : "");
+      assert.include(message, "The helper builds on macOS only.");
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it("signs every channel, dev included, with the keychain's Developer ID and its team", () => {
     for (const channel of ["stable", "nightly", "dev"] as const)
       assert.deepEqual(

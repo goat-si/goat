@@ -397,7 +397,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   };
 }, Effect.scoped);
 
-const command = Command.make(
+export const buildComputerUseHelperCommand = Command.make(
   "build-computer-use-helper",
   {
     channel: Flag.Literals("channel", ["dev", "nightly", "stable"]).pipe(Flag.withDefault("dev")),
@@ -412,6 +412,8 @@ const command = Command.make(
       Flag.withDescription(
         "Sign a dev helper ad-hoc. Every rebuild then loses its macOS permissions.",
       ),
+      Flag.withDescription("defaults to false; Developer ID signing remains the default"),
+      Flag.optional,
     ),
     notaryProfile: Flag.String("notary-profile").pipe(
       Flag.withDescription("notarytool keychain profile; notarizes and staples when set."),
@@ -429,7 +431,7 @@ const command = Command.make(
           path.join(repoRoot, "apps/desktop/.computer-use-helper"),
         ),
         identity: Option.getOrUndefined(identity),
-        adHoc,
+        adHoc: Option.getOrElse(adHoc, () => false),
         notaryProfile: Option.getOrUndefined(notaryProfile),
       });
       yield* Effect.log(
@@ -447,7 +449,7 @@ const command = Command.make(
     }),
 );
 if (import.meta.main)
-  Command.run(command, { version: "0.0.0" }).pipe(
+  Command.run(buildComputerUseHelperCommand, { version: "0.0.0" }).pipe(
     Effect.provide(NodeServices.layer),
     NodeRuntime.runMain,
   );

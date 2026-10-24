@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import { makeObservationTracker, type DriverWindowState } from "./computerUseObservation.ts";
 import {
+  windowsDriverRead,
   windowsComputerUseReadiness,
   windowsObservationTarget,
   type WindowsHelperReadiness,
@@ -39,7 +40,8 @@ const fixtureRead = (snapshot: string, note?: string, agree?: boolean): DriverWi
   window_bounds: { width: 422, height: 262 },
   elements: [
     element(0, "Edit", "Note", ["set_value"], note === undefined ? {} : { value: note }),
-    element(1, "CheckBox", "Agree", ["invoke", "toggle"], agree ? { selected: true } : {}),
+    // The driver reports the box's ToggleState as selected, false included.
+    element(1, "CheckBox", "Agree", ["invoke", "toggle"], { selected: agree === true }),
     element(2, "Button", "Add one", ["invoke"]),
     element(3, "Button", "Focus secret", ["invoke"]),
     element(4, "Edit", "Secret", ["set_value"]),
@@ -69,7 +71,13 @@ const observe = (
 ) => {
   const target = windowsObservationTarget(facts);
   if ("outcome" in target) throw new Error(target.message);
-  return tracker.observe({ read, since, scope: "default", screenshot: true, ...target });
+  return tracker.observe({
+    read: windowsDriverRead(read),
+    since,
+    scope: "default",
+    screenshot: true,
+    ...target,
+  });
 };
 
 describe("Windows computer use observations (conformance)", () => {
@@ -91,13 +99,14 @@ describe("Windows computer use observations (conformance)", () => {
     );
     assert.equal(second.kind, "diff");
     if (second.kind !== "diff") return;
-    // The toggled Agree box now shows up through element state (#1231).
+    // The toggled Agree box shows up as checked, and was unchecked before (#1231, #1286).
     const agree = refs.find((entry) => entry.label === "Agree")?.ref ?? "";
+    assert.deepEqual(refs.find((entry) => entry.ref === agree)?.state, { checked: false });
     assert.deepEqual(
       second.changed.map((entry) => [entry.label, entry.ref, entry.value, entry.state]),
       [
         ["Note", note, "hello from GOAT", undefined],
-        ["Agree", agree, undefined, { selected: true }],
+        ["Agree", agree, undefined, { checked: true }],
       ],
     );
     assert.deepEqual([second.added, second.removed], [[], []]);
@@ -178,6 +187,80 @@ describe("Windows computer use observations (conformance)", () => {
       const result = windowsObservationTarget({ ...FACTS, ...change });
       assert.equal("reason" in result ? result.reason : "admitted", reason, JSON.stringify(change));
     }
+  });
+
+  it("reports mixed and expanded state from the helper's UI Automation read, joined by place", () => {
+    const at = (x: number) => ({ x, y: 100, w: 40, h: 20 });
+    const read: DriverWindowState = {
+      pid: PID,
+      window_id: WINDOW,
+      elements: [
+        // Indeterminate: the driver leaves selected out.
+        { element_index: 0, role: "CheckBox", label: "All", actions: ["toggle"], frame: at(0) },
+        { element_index: 1, role: "TreeItem", label: "Docs", actions: ["expand"], frame: at(50) },
+        { element_index: 2, role: "TreeItem", label: "Src", actions: ["expand"], frame: at(100) },
+        { element_index: 3, role: "TreeItem", label: "README", frame: at(150) },
+        { element_index: 4, role: "ComboBox", label: "Size", actions: ["expand"], frame: at(200) },
+        // The helper names two elements here, so neither is used.
+        {
+          element_index: 5,
+          role: "CheckBox",
+          label: "Twin",
+          selected: true,
+          actions: ["toggle"],
+          frame: at(250),
+        },
+        // Two driver elements in one place under one label: the helper's entry fits either, so
+        // neither takes it, and the list item keeps its own selected.
+        { element_index: 6, role: "ListItem", label: "Pair", selected: true, frame: at(300) },
+        { element_index: 7, role: "ListItem", label: "Pair", selected: false, frame: at(300) },
+      ],
+    };
+    const joined = windowsDriverRead(read, {
+      truncated: false,
+      elements: [
+        { frame: at(0), role: "CheckBox", label: "All", toggle: "indeterminate" },
+        { frame: at(50), role: "TreeItem", label: "Docs", expand: "collapsed" },
+        { frame: at(100), role: "TreeItem", label: "Src", expand: "partial" },
+        { frame: at(150), role: "TreeItem", label: "README", expand: "leaf" },
+        // Same place, another name: not this element.
+        { frame: at(200), role: "ComboBox", label: "Font", expand: "expanded" },
+        { frame: at(250), role: "CheckBox", label: "Twin", toggle: "off" },
+        { frame: at(250), role: "CheckBox", label: "Twin", toggle: "on" },
+        { frame: at(300), role: "ListItem", label: "Pair", toggle: "indeterminate" },
+      ],
+    });
+    const tracker = makeObservationTracker(() => "o1");
+    const target = windowsObservationTarget(FACTS);
+    if ("outcome" in target) throw new Error(target.message);
+    const observed = tracker.observe({
+      read: joined,
+      scope: "default",
+      screenshot: false,
+      ...target,
+    });
+    assert.equal(observed.kind, "full");
+    assert.deepEqual(
+      observed.kind === "full"
+        ? observed.elements.map((element) => [element.label, element.state])
+        : [],
+      [
+        ["All", { checked: "mixed" }],
+        ["Docs", { expanded: false }],
+        ["Src", { expanded: true }],
+        ["README", undefined],
+        ["Size", undefined],
+        ["Twin", { checked: true }],
+        ["Pair", { selected: true }],
+        ["Pair", { selected: false }],
+      ],
+    );
+    // Part of the tree cannot show an entry is unique, so a truncated answer adds nothing.
+    const partial = windowsDriverRead(read, {
+      truncated: true,
+      elements: [{ frame: at(0), role: "CheckBox", label: "All", toggle: "indeterminate" }],
+    });
+    assert.equal(partial.elements?.[0]?.checked, undefined);
   });
 });
 
