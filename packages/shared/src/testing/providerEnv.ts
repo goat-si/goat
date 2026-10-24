@@ -12,11 +12,14 @@ const KEPT_ENV = new Set([
   "GOAT_TEST_HEADLESS_SHELL",
 ]);
 
-if (process.env.GOAT_TEST_KEEP_PROVIDER_ENV !== "1") {
-  for (const key of Object.keys(process.env)) {
+export const removeAmbientProviderEnv = (env: NodeJS.ProcessEnv): void => {
+  if (env.GOAT_TEST_KEEP_PROVIDER_ENV === "1") return;
+  for (const key of Object.keys(env)) {
     if (KEPT_ENV.has(key)) continue;
     if (PROVIDER_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-      delete process.env[key];
+      delete env[key];
     }
   }
-}
+};
+
+removeAmbientProviderEnv(process.env);
