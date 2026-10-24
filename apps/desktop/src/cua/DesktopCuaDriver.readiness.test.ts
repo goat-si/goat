@@ -147,3 +147,39 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
       ),
   );
 });
+
+describe("macOS readiness transport", () => {
+  it.effect("reads readiness over the helper MCP child without opening a socket", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* helperFixture("darwin");
+        assert.isTrue((yield* test.verify).verified);
+        assert.equal(test.socketConnections(), 0);
+        assert.deepEqual(
+          test.helperLaunches.map(({ verify }) => verify),
+          [true],
+        );
+        const ready = test.readiness.at(-1)?.readiness;
+        assert.equal(ready?.helper, "authenticated");
+        assert.isTrue(ready ? computerUseReady(ready) : false);
+      }),
+    ),
+  );
+
+  it.effect("refuses authenticated readiness when the driver is not the MCP service's child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID + 1 }),
+        });
+        const result = yield* test.verify;
+        assert.isFalse(result.verified);
+        assert.equal(result.steps.at(-1)?.id, "identity");
+        assert.isFalse(result.steps.at(-1)?.ok);
+        assert.notEqual(test.readiness.at(-1)?.readiness.helper, "authenticated");
+      }),
+    ),
+  );
+});

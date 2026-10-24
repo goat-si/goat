@@ -154,6 +154,7 @@ export const fixture = Effect.fn(function* (
   let destroys = 0;
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   let clientsOpen = 0;
+  let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
@@ -165,21 +166,26 @@ export const fixture = Effect.fn(function* (
     manifestPath: string;
     environment: ReadonlyArray<{ name: string; value: string }>;
     direct: boolean;
+    verify: boolean;
   }> = [];
+  const createClient = (): Awaited<ReturnType<DesktopCuaDriverDependencies["connect"]>> => {
+    clientsOpen++;
+    return {
+      callTool: async (name, input) => {
+        toolCalls.push({ name, input: JSON.parse(input) });
+        const result = (options.tools ?? healthyTools())[name];
+        if (!result) throw new Error(`unexpected tool ${name}`);
+        return result;
+      },
+      uniffiDestroy: () => {
+        clientsOpen--;
+      },
+    };
+  };
   const dependencies: DesktopCuaDriverDependencies = {
     connect: async () => {
-      clientsOpen++;
-      return {
-        callTool: async (name, input) => {
-          toolCalls.push({ name, input: JSON.parse(input) });
-          const result = (options.tools ?? healthyTools())[name];
-          if (!result) throw new Error(`unexpected tool ${name}`);
-          return result;
-        },
-        uniffiDestroy: () => {
-          clientsOpen--;
-        },
-      };
+      socketConnections++;
+      return createClient();
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
@@ -206,6 +212,7 @@ export const fixture = Effect.fn(function* (
         manifestPath: helper.capabilityManifestPath,
         environment: helper.environment,
         direct: helper.direct === true,
+        verify: helper.verify === true,
       });
       const manifest = prepared.get(helper.capabilityManifestPath);
       launches.push({
@@ -242,6 +249,7 @@ export const fixture = Effect.fn(function* (
       };
       return {
         servicePid: () => (running ? HELPER_PID : undefined),
+        readinessPeer: () => (helper.verify && running ? createClient() : undefined),
         session: () => (running ? session : undefined),
         start: async () => {
           starts++;
@@ -479,6 +487,7 @@ export const fixture = Effect.fn(function* (
     grants: driver.grants,
     toolCalls,
     clientsOpen: () => clientsOpen,
+    socketConnections: () => socketConnections,
     request: (requestId: string, enabled = true) =>
       Queue.offer(requests, { version: 1, type: "cuaDriverRequest", requestId, enabled }),
     next: Queue.take(reports),

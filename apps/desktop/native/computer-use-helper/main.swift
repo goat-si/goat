@@ -896,6 +896,14 @@ func runMcp() -> Never {
   argv.forEach { free($0) }
   envp.forEach { free($0) }
   guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
+  // stdout belongs to MCP. Readiness binds the driver's reported parent to this service.
+  let greeting: [String: Any] = [
+    "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
+    "bundleId": service.bundleId,
+  ]
+  if let data = try? JSONSerialization.data(withJSONObject: greeting) {
+    FileHandle.standardError.write(data + Data([0x0A]))
+  }
   // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
   // service ends the driver it started. The driver is waited on without reaping below, so
   // `child` names it for as long as this process runs.
