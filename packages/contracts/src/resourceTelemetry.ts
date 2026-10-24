@@ -5,6 +5,7 @@ import { HostPowerSnapshot } from "./background.ts";
 import {
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
+  DesktopCuaWatch,
   DesktopCuaDetectionReport,
   DesktopCuaHumanInputReport,
   DesktopCuaPrivateModeReport,
@@ -362,6 +363,7 @@ export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
   DesktopCuaDriverRequest,
+  DesktopCuaWatch,
 ]);
 export type DesktopTelemetryControlMessage = typeof DesktopTelemetryControlMessage.Type;
 

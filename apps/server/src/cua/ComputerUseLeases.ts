@@ -185,10 +185,13 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
   const signals = yield* PubSub.sliding<void>(16);
+  // Wakes the desktop watch below; a new control does not wake proxies, so it has its own.
+  const watchKick = yield* PubSub.sliding<void>(1);
+  const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const controls = new Map<ThreadId, ControlRecord>();
   let paused: ComputerUsePauseReason | undefined;
-  const changed = PubSub.publish(signals, undefined).pipe(Effect.asVoid);
+  const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
 
   const live = Effect.fn("ComputerUseLeases.live")(function* (threadId?: ThreadId) {
     const rows = yield* sql<{ handoff_json: string | null }>`
@@ -258,6 +261,7 @@ const make = Effect.gen(function* () {
       ...(handoffId === undefined ? {} : { handoffId }),
     };
     controls.set(threadId, next);
+    yield* kick;
     // A proxy still holding the previous id hears it was replaced.
     if (existing !== undefined && existing.ended === undefined) yield* changed;
     return next as ComputerUseControl;
@@ -345,6 +349,31 @@ const make = Effect.gen(function* () {
       }),
       Effect.forkScoped,
     );
+
+  // The desktop's helper watches for secret fields and a person's input only while an agent
+  // controls this host (D7): from the first live control until the last one ends or expires.
+  if (Option.isSome(desktop)) {
+    const kicks = yield* PubSub.subscribe(watchKick);
+    const receiver = desktop.value;
+    yield* Effect.gen(function* () {
+      let watching = false;
+      for (;;) {
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        const expiries = [...controls.values()]
+          .filter((record) => record.ended === undefined)
+          .map((record) => DateTime.toEpochMillis(record.expiresAt))
+          .filter((expiresAt) => expiresAt > now);
+        const active = expiries.length > 0;
+        if (active !== watching) {
+          watching = active;
+          // A lost write is repaired when the desktop reconnects and hears the current value.
+          yield* receiver.setCuaWatch(active).pipe(Effect.ignore);
+        }
+        const woken = PubSub.take(kicks);
+        yield* active ? Effect.race(woken, Effect.sleep(Math.min(...expiries) - now)) : woken;
+      }
+    }).pipe(Effect.forkScoped);
+  }
 
   return ComputerUseLeases.of({
     active: (threadId) =>

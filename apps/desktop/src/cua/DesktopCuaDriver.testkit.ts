@@ -312,6 +312,7 @@ export const fixture = Effect.fn(function* (
     updateCancellations: Stream.empty,
     publishUpdateReport: () => Effect.void,
     cuaRequests: Stream.fromQueue(requests),
+    cuaWatch: Stream.empty,
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
   });
   const environment = DesktopEnvironment.layer({

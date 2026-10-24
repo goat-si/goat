@@ -69,6 +69,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly encoded: Stream.Stream<Uint8Array>;
     readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
+    /**
+     * Whether agents control this host, as this host's own server last said: the current value,
+     * then each change. Losing that server reads as false.
+     */
+    readonly cuaWatch: Stream.Stream<boolean>;
     readonly publishCuaReport: (report: DesktopCuaDriverReport) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
@@ -185,13 +190,26 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   interface CuaSource {
     readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
     requestId?: string;
+    /** The newest cuaWatch seq from this connection; an older one arrived late. */
+    watchSeq?: number;
   }
   let cuaSource: CuaSource | undefined;
+  const cuaWatching = yield* Ref.make(false);
+  const cuaWatchChanges = yield* PubSub.sliding<boolean>(1);
+  const setCuaWatching = (active: boolean) =>
+    Ref.getAndSet(cuaWatching, active).pipe(
+      Effect.flatMap((previous) =>
+        previous === active ? Effect.void : PubSub.publish(cuaWatchChanges, active),
+      ),
+      Effect.asVoid,
+    );
   const detachCuaSource = Effect.fn("DesktopTelemetryPublisher.detachCuaSource")(function* (
     source: CuaSource,
   ) {
     if (cuaSource !== source) return;
     cuaSource = undefined;
+    // No server, no agent controlling this host through it.
+    yield* setCuaWatching(false);
     if (source.requestId)
       yield* Queue.offer(cuaRequestQueue, {
         version: 1,
@@ -381,6 +399,14 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Queue.offer(updateCommitQueue, message).pipe(Effect.asVoid);
       case "cancelDesktopUpdate":
         return Queue.offer(updateCancellationQueue, message).pipe(Effect.asVoid);
+      case "cuaWatch":
+        return Effect.suspend(() => {
+          const source = cuaSource;
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !source) return Effect.void;
+          if (source.watchSeq !== undefined && message.seq < source.watchSeq) return Effect.void;
+          source.watchSeq = message.seq;
+          return setCuaWatching(message.active);
+        });
     }
   };
   const removeControlSource: DesktopTelemetryPublisher["Service"]["removeControlSource"] =
@@ -474,6 +500,15 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     encoded,
     encodedForSource,
     cuaRequests: Stream.fromQueue(cuaRequestQueue),
+    cuaWatch: Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(cuaWatchChanges);
+        return Stream.concat(
+          Stream.make(yield* Ref.get(cuaWatching)),
+          Stream.fromSubscription(subscription),
+        );
+      }),
+    ),
     publishCuaReport: (report) =>
       Effect.suspend(() =>
         cuaSource && cuaSource.requestId === report.requestId

@@ -19,6 +19,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -166,6 +167,46 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 });
+
+it.effect(
+  "tells the desktop to watch from the first live control until the last one ends or expires",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<boolean>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(sent));
+        // A second agent does not change what the desktop hears.
+        yield* leases.control(other, Option.none());
+        yield* leases.stop(thread);
+        assert.equal(yield* Queue.size(sent), 0);
+        yield* leases.stop(other);
+        assert.isFalse(yield* Queue.take(sent));
+
+        yield* leases.control(thread, Option.none());
+        assert.isTrue(yield* Queue.take(sent));
+        // An interactive control lapses after an hour without anyone ending it.
+        yield* TestClock.adjust("61 minutes");
+        assert.isFalse(yield* Queue.take(sent));
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
 
 it.effect(
   "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",

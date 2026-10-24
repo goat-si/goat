@@ -199,10 +199,25 @@ export class DesktopTelemetryReceiver extends Context.Service<
       requestId: string,
       enabled: boolean,
     ) => Effect.Effect<void, DesktopTelemetryControlError | DesktopTelemetryDescriptorUnavailable>;
+    /**
+     * Tells the desktop whether agents control this host, so its helper watches only then. A
+     * change gets the next seq; the current value goes out again when the desktop reconnects.
+     */
+    readonly setCuaWatch: (active: boolean) => Effect.Effect<void, DesktopTelemetryControlError>;
   }
 >()("goat/resourceTelemetry/DesktopTelemetryReceiver") {}
 
 const decodeMessage = Schema.decodeUnknownEffect(DesktopHostTelemetryMessage);
+
+/**
+ * The watch state after the server decides agents do or do not control the host: a change
+ * takes the next seq, the same value keeps the current one. seq 0 means nothing was sent yet.
+ */
+export const nextCuaWatch = (
+  current: { readonly seq: number; readonly active: boolean },
+  active: boolean,
+): { readonly seq: number; readonly active: boolean } =>
+  current.seq > 0 && current.active === active ? current : { seq: current.seq + 1, active };
 const encodeControlMessage = Schema.encodeEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
@@ -357,6 +372,15 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   // Every report counts: a dropped private-mode change would leave agents watching a secret.
   const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
   const controlMutex = yield* Semaphore.make(1);
+  const cuaWatch = yield* Ref.make<{ readonly seq: number; readonly active: boolean }>({
+    seq: 0,
+    active: false,
+  });
+  const sendCuaWatch = Ref.get(cuaWatch).pipe(
+    Effect.flatMap(({ seq, active }) =>
+      sendControlMessage({ version: 1, type: "cuaWatch", seq, active }),
+    ),
+  );
   const snapshotMutex = yield* Semaphore.make(1);
   const health = yield* Ref.make<DesktopTelemetryReceiverHealth>({
     status: config.desktopTelemetryFd === undefined ? "unavailable" : "starting",
@@ -530,6 +554,14 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
                 lastError: Option.none(),
               })),
             ),
+            // A desktop that reconnects starts without the server's current watch state.
+            Effect.andThen(
+              Ref.get(cuaWatch).pipe(
+                Effect.flatMap(({ seq }) =>
+                  seq === 0 ? Effect.void : Effect.ignore(sendCuaWatch),
+                ),
+              ),
+            ),
           );
         }
 
@@ -659,6 +691,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
         : sendControlMessage({ version: 1, type: "cuaDriverRequest", requestId, enabled }),
+    setCuaWatch: (active) =>
+      Ref.modify(cuaWatch, (current) => {
+        const next = nextCuaWatch(current, active);
+        return [next !== current, next];
+      }).pipe(Effect.flatMap((changed) => (changed ? sendCuaWatch : Effect.void))),
     latest: Ref.get(latest),
     changes: Stream.fromPubSub(changes),
     subscribe: snapshotMutex.withPermits(1)(
@@ -739,6 +776,7 @@ export const layerTest = (
       cuaSafety: overrides.cuaSafety ?? Stream.empty,
       requestCuaDriver: () =>
         Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
+      setCuaWatch: () => Effect.void,
       desktopUpdates:
         overrides.desktopUpdates ??
         Effect.succeed({
