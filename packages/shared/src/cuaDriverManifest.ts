@@ -139,7 +139,7 @@ export function cuaDriverCapabilityManifest(input: {
   const q = (value: string) => JSON.stringify(value);
   const tools = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
   return [
-    "# Written by GOAT at each driver start. See ADR-0020.",
+    "# Written by GOAT at each driver start. See ADR-0022.",
     "version: 3",
     "resources:",
     "  desktop:",
