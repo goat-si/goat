@@ -271,6 +271,34 @@ describe("makeSignalMonitor", () => {
     expect(m.arming.count).toBe(1);
   });
 
+  it("a check left over from an earlier watch never lets a second probe of the same window run", async () => {
+    const probes: Array<PromiseWithResolvers<SecureFocus>> = [];
+    const third = Promise.withResolvers<void>();
+    const m = monitor({
+      secureFocus: () => {
+        const probe = Promise.withResolvers<SecureFocus>();
+        if (probes.push(probe) === 3) third.resolve();
+        return probe.promise;
+      },
+    });
+    await m.signals.watch("a", [target]);
+    const earlier = m.runDeferred();
+    await m.signals.unwatch();
+    await m.signals.watch("b", [target]);
+    const current = m.runDeferred();
+    // Watch a's probe answers late, while watch b's first probe is still out.
+    probes[0]?.resolve(secure);
+    await earlier;
+    // The tick either skips the window being checked or starts a third, racing probe.
+    await Promise.race([m.tick(), third.promise]);
+    expect(probes).toHaveLength(2);
+    probes[1]?.resolve(secure);
+    await current;
+    expect(m.events.filter((entry) => entry.watchId === "b")).toEqual([
+      { watchId: "b", event: { type: "privateMode", active: true, target } },
+    ]);
+  });
+
   it("one window's slow focus probe holds back no other signal", async () => {
     const a = { pid: 10, windowId: 20 };
     const b = { pid: 11, windowId: 21 };

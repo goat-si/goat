@@ -72,7 +72,9 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   let lostReported = false;
   let lastEventAt = -Infinity;
   /** Targets whose focus check is running; each target is checked on its own. */
-  const checking = new Set<string>();
+  // Each running check owns its target's entry, so a check left over from an earlier watch
+  // never releases the entry a newer check holds.
+  const checking = new Map<string, object>();
 
   /** Reports a target inactive if it was active, and forgets it. */
   const release = (id: string, target: ComputerUseWindowTarget) => {
@@ -112,7 +114,8 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   ) => {
     const key = keyOf(target);
     if (checking.has(key)) return;
-    checking.add(key);
+    const owner = {};
+    checking.set(key, owner);
     try {
       if (!initial) {
         const open = await deps.windowOpen(target);
@@ -126,7 +129,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       }
       await readFocus(id, mine, target, initial);
     } finally {
-      checking.delete(key);
+      if (checking.get(key) === owner) checking.delete(key);
     }
   };
 
