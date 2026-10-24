@@ -13,7 +13,6 @@ import {
   ModelSelection,
   OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadInterruptResult,
-  type OrchestratorMcpRunFailure,
   OrchestratorMcpThreadWaitResult,
   type ProjectId,
   type RunId,
@@ -27,6 +26,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -48,6 +48,7 @@ import {
   addPendingRun,
   clearAttempts,
   dormantExpired,
+  endReported,
   EXCERPT_MAX_CHARS,
   failureFromRemoteStatus,
   finishedWake,
@@ -59,8 +60,10 @@ import {
   launchWatchId,
   type LaunchWatchTerminalStatus,
   type LaunchWatchWake,
+  type LaunchWatchRunDetails,
   type LaunchWatchWebhookTarget,
   newLaunchWatch,
+  noRunDetails,
   normalizeHost,
   outageWake,
   questionKey,
@@ -71,6 +74,7 @@ import {
   recordFailedAttempt,
   rearmRetriedRun,
   RemoteRunFailureStatus,
+  settleEnd,
   settleRun,
   wakeAttempt,
   watchExpired as expired,
@@ -178,15 +182,11 @@ export interface LaunchWatchServiceShape {
   readonly rearm: (
     input: LaunchWatchKey & { readonly runId: RunId },
   ) => Effect.Effect<void, LaunchWatchStoreError>;
-  /**
-   * Follows a run again on every watch of its thread once a retry moved it back to
-   * preparing under the same id. retryId names the retry, so a replay adds nothing.
-   */
+  /** Follows a run again on every watch of its thread once a retry moved it back to preparing. */
   readonly rearmRetried: (input: {
     readonly host: string | null | undefined;
     readonly threadId: ThreadId;
     readonly runId: RunId;
-    readonly retryId: string;
   }) => Effect.Effect<void, LaunchWatchStoreError>;
   /** The watch under this key, if any. */
   readonly find: (
@@ -241,6 +241,8 @@ type StepResult =
        * message was promoted into, which carries on its work.
        */
       readonly runId: RunId;
+      /** When it ended, where the step could read it. */
+      readonly end?: string | null;
     }
   | {
       readonly _tag: "Running";
@@ -253,31 +255,6 @@ type StepResult =
   | { readonly _tag: "LauncherGone" }
   | { readonly _tag: "CallerChanged" }
   | { readonly _tag: "Unreachable"; readonly error: string };
-
-interface Details {
-  readonly title: string | null;
-  readonly branch: string | null;
-  readonly worktreePath: string | null;
-  readonly excerpt: string | null;
-  readonly prUrl: string | null;
-  /**
-   * A registered cloud run GOAT could only link: its attach run ends without a result, so
-   * the completion webhook is not told it completed. The launching thread still hears why.
-   */
-  readonly linkOnlyRegistration: boolean;
-  /** Why the run failed before its agent's first message, when it did. */
-  readonly failure: OrchestratorMcpRunFailure | null;
-}
-
-const noDetails: Details = {
-  title: null,
-  branch: null,
-  worktreePath: null,
-  excerpt: null,
-  prUrl: null,
-  linkOnlyRegistration: false,
-  failure: null,
-};
 
 class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
 
@@ -526,11 +503,13 @@ export const make = Effect.gen(function* () {
       }
       const status = waited.result.run?.status;
       if (status !== undefined && isTerminalStatus(status)) {
+        const completedAt = waited.result.run?.completedAt;
         // The wait follows a promoted queued message into the run it joined.
         return {
           _tag: "Terminal",
           status,
           runId: waited.result.run?.id ?? runId,
+          end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
       const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
@@ -682,6 +661,7 @@ export const make = Effect.gen(function* () {
           turnItemTypes: ["assistant_message", "error"],
         },
       );
+      const run = records.runs.find((candidate) => candidate.id === runId) ?? null;
       return {
         title: shell?.title ?? null,
         branch: shell?.branch ?? null,
@@ -692,11 +672,9 @@ export const make = Effect.gen(function* () {
           (thread) =>
             thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
         ),
-        failure: runFailure(
-          records.runs.find((run) => run.id === runId) ?? null,
-          records.turnItems,
-        ),
-      } satisfies Details;
+        failure: runFailure(run, records.turnItems),
+        end: run?.completedAt == null ? null : DateTime.formatIso(run.completedAt),
+      } satisfies LaunchWatchRunDetails;
     });
 
   /**
@@ -768,7 +746,8 @@ export const make = Effect.gen(function* () {
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
         failure,
-      } satisfies Details;
+        end: head.recentRuns.find((run) => run.runId === runId)?.completedAt ?? null,
+      } satisfies LaunchWatchRunDetails;
     });
 
   /** Details make a wake more useful but never hold it back. */
@@ -778,12 +757,12 @@ export const make = Effect.gen(function* () {
       : remoteDetails(watch, watch.host, runId, status)
     ).pipe(
       Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
-      Effect.map(Option.getOrElse(() => noDetails)),
+      Effect.map(Option.getOrElse(() => noRunDetails)),
       Effect.catch((error) =>
         Effect.logDebug("launch watch: details unavailable", {
           watchId: watch.id,
           cause: error,
-        }).pipe(Effect.as(noDetails)),
+        }).pipe(Effect.as(noRunDetails)),
       ),
     );
 
@@ -902,20 +881,17 @@ export const make = Effect.gen(function* () {
     incarnation: string,
     runId: RunId,
     result: StepResult,
-    details: Details,
-    retry: string | undefined,
+    details: LaunchWatchRunDetails,
   ) =>
     locked(
       Effect.uninterruptible(
         Effect.gen(function* () {
           const watch = current(watchId, incarnation);
-          // A retry while the step was out makes what it read stale; the run is followed afresh.
           if (
             watch === undefined ||
             watch.recovery !== undefined ||
             watch.detached ||
-            !watch.pendingRuns.includes(runId) ||
-            watch.retriedRuns[runId]?.at(-1) !== retry
+            !watch.pendingRuns.includes(runId)
           )
             return 0;
           const now = yield* Clock.currentTimeMillis;
@@ -937,15 +913,21 @@ export const make = Effect.gen(function* () {
             case "Terminal": {
               missingEscalations.delete(watchId);
               const endedRunId = result.runId;
-              // A promoted message ends with the run it joined; that run is reported once.
-              if (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) {
+              const end = result.end ?? details.end;
+              // A promoted message ends with the run it joined, and a run retried in place may
+              // still sit at the end already reported; either is reported once.
+              if (
+                (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) ||
+                endReported(watch, endedRunId, end)
+              ) {
                 yield* keep(settleRun(recordContact(watch, now), runId, now));
                 return 0;
               }
               const title = details.title ?? watch.title;
+              const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
               const sent = yield* deliver(
                 watch,
-                finishedWake({ watch, runId: endedRunId, status: result.status, ...details }),
+                finishedWake(wake),
                 details.linkOnlyRegistration
                   ? undefined
                   : {
@@ -960,9 +942,11 @@ export const make = Effect.gen(function* () {
                 yield* keep(sent.watch);
                 return RETRY_MS;
               }
-              const settled = settleRun(recordContact(sent.watch, now), runId, now);
+              const contacted = recordContact(sent.watch, now);
               yield* keep({
-                ...(endedRunId === runId ? settled : settleRun(settled, endedRunId, now)),
+                ...(endedRunId === runId
+                  ? settleEnd(contacted, runId, end, now)
+                  : settleRun(settleRun(contacted, runId, now), endedRunId, now)),
                 title,
               });
               return 0;
@@ -1698,9 +1682,8 @@ export const make = Effect.gen(function* () {
         const details =
           result._tag === "Terminal"
             ? yield* detailsFor(watch, result.runId, result.status)
-            : noDetails;
-        const retry = watch.retriedRuns[runId]?.at(-1);
-        const pause = yield* apply(watchId, incarnation, runId, result, details, retry).pipe(
+            : noRunDetails;
+        const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {
               watchId,
@@ -1894,7 +1877,7 @@ export const make = Effect.gen(function* () {
         const rearmed = [...watches.values()].flatMap((watch) => {
           if (watch.host !== host || watch.threadId !== input.threadId) return [];
           if (watch.recovery !== undefined || watch.detached || expired(watch, now)) return [];
-          const next = rearmRetriedRun(watch, input.runId, input.retryId, now);
+          const next = rearmRetriedRun(watch, input.runId, now);
           return next === watch ? [] : [next];
         });
         if (rearmed.length === 0) return;

@@ -40,7 +40,7 @@ export const run1 = RunId.make("run-1");
 export const run2 = RunId.make("run-2");
 
 type Dispatch = Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
-type WaitAnswer = Effect.Effect<
+export type WaitAnswer = Effect.Effect<
   ThreadManagementService.ThreadManagementWaitResult,
   ThreadManagementService.ThreadManagementError
 >;

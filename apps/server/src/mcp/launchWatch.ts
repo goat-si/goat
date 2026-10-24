@@ -105,13 +105,14 @@ export const LaunchWatch = Schema.Struct({
   /** The most recently reported runs, so a run is never reported twice. */
   reportedRuns: Schema.Array(RunId),
   /**
-   * The retries of each run retried in place, by run id, oldest first. A retry reuses its run
-   * id, so the report of its end takes ids from the latest; a replayed retry, even an older
-   * one returning early while a newer one runs, adds nothing.
+   * When each reported run ended (its completedAt). A run retried in place keeps its id, so
+   * this tells a later end from the one already reported, and that end gets ids of its own.
    */
-  retriedRuns: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(
+  reportedEnds: Schema.Record(Schema.String, Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  /** Runs retried while their end was still owed, followed once more after it is reported. */
+  followAgain: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** The most recently reported pending requests, keyed by questionKey. */
   reportedQuestions: Schema.Array(Schema.String),
   /** Number of the last outage episode that ended; the next one counts from it. */
@@ -172,9 +173,36 @@ export const LaunchWatchDocument = Schema.Struct({
 });
 export type LaunchWatchDocument = typeof LaunchWatchDocument.Type;
 
+/** What a follower reads about a run that ended, for its report. */
+export interface LaunchWatchRunDetails {
+  readonly title: string | null;
+  readonly branch: string | null;
+  readonly worktreePath: string | null;
+  readonly excerpt: string | null;
+  readonly prUrl: string | null;
+  /**
+   * A registered cloud run GOAT could only link: its attach run ends without a result, so
+   * the completion webhook is not told it completed. The launching thread still hears why.
+   */
+  readonly linkOnlyRegistration: boolean;
+  /** Why the run failed before its agent's first message, when it did. */
+  readonly failure: OrchestratorMcpRunFailure | null;
+  /** When the run ended (its completedAt), telling a retried run's ends apart. */
+  readonly end: string | null;
+}
+
+export const noRunDetails: LaunchWatchRunDetails = {
+  title: null,
+  branch: null,
+  worktreePath: null,
+  excerpt: null,
+  prUrl: null,
+  linkOnlyRegistration: false,
+  failure: null,
+  end: null,
+};
+
 const REPORTED_LIMIT = 20;
-/** Retries remembered per run, so a replay of any of them is recognized. */
-const RETRIES_KEPT = 20;
 /** Failed contacts in a row before the launcher hears that the host is unavailable. */
 export const OUTAGE_NOTICE_FAILURES = 3;
 const BACKOFF_BASE_MS = 30_000;
@@ -246,7 +274,8 @@ export function newLaunchWatch(input: {
     title: input.title,
     pendingRuns: [],
     reportedRuns: [],
-    retriedRuns: {},
+    reportedEnds: {},
+    followAgain: [],
     reportedQuestions: [],
     lastEpisode: 0,
     outage: null,
@@ -303,46 +332,56 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
     ...watch,
     pendingRuns: watch.pendingRuns.filter((pending) => pending !== runId),
     reportedRuns: keepRecent(watch.reportedRuns, runId),
+    followAgain: watch.followAgain.filter((again) => again !== runId),
     updatedAt: now,
   };
 }
 
 /**
- * Follows a run again after a retry moved it back to preparing under the same id. Only a
- * run this watch follows or reported is affected, and a retry already recorded is a replay.
+ * Follows a run again after a retry moved it back to preparing under the same id. A reported
+ * run is owed again; one still owed is followed once more after the end it is owed for, which
+ * the retry replaces. Nothing tells a replayed retry from a new one, and nothing needs to: an
+ * end already reported settles without a second report.
  */
-export function rearmRetriedRun(
-  watch: LaunchWatch,
-  runId: RunId,
-  retryId: string,
-  now: number,
-): LaunchWatch {
-  const followed = watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId);
-  const retries = watch.retriedRuns[runId] ?? [];
-  if (!followed || retries.includes(retryId)) return watch;
-  const pendingRuns = watch.pendingRuns.includes(runId)
-    ? watch.pendingRuns
-    : [...watch.pendingRuns, runId];
-  const reportedRuns = watch.reportedRuns.filter((reported) => reported !== runId);
-  const known: ReadonlySet<string> = new Set([...pendingRuns, ...reportedRuns]);
-  const retriedRuns = Object.fromEntries(
-    Object.entries({
-      ...watch.retriedRuns,
-      [runId]: [...retries, retryId].slice(-RETRIES_KEPT),
-    }).filter(([id]) => known.has(id)),
-  );
-  // An unqueued wake for the superseded end is never sent, so its attempts go with it.
-  const { [runWakeIds(watch, runId).commandId]: _superseded, ...deliveryAttempts } =
-    watch.deliveryAttempts;
+export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  if (watch.pendingRuns.includes(runId)) {
+    return watch.followAgain.includes(runId)
+      ? watch
+      : { ...watch, followAgain: [...watch.followAgain, runId], updatedAt: now };
+  }
+  if (!watch.reportedRuns.includes(runId)) return watch;
   return {
     ...watch,
-    pendingRuns,
-    reportedRuns,
-    retriedRuns,
-    deliveryAttempts,
+    pendingRuns: [...watch.pendingRuns, runId],
+    reportedRuns: watch.reportedRuns.filter((reported) => reported !== runId),
     armedAt: now,
     updatedAt: now,
   };
+}
+
+/** Whether this end of a run is the one the watch already reported. */
+export const endReported = (watch: LaunchWatch, runId: RunId, end: string | null) =>
+  end !== null && watch.reportedEnds[runId] === end;
+
+/**
+ * Settles a run whose end was just reported, remembering that end. A run retried while it was
+ * owed stays owed once more, to follow the retry to an end of its own.
+ */
+export function settleEnd(
+  watch: LaunchWatch,
+  runId: RunId,
+  end: string | null,
+  now: number,
+): LaunchWatch {
+  // An end that could not be read still marks the run as reported once.
+  const ended = { ...watch, reportedEnds: { ...watch.reportedEnds, [runId]: end ?? "unknown" } };
+  if (watch.followAgain.includes(runId)) {
+    return { ...ended, followAgain: watch.followAgain.filter((again) => again !== runId) };
+  }
+  const settled = settleRun(ended, runId, now);
+  const known: ReadonlySet<string> = new Set([...settled.pendingRuns, ...settled.reportedRuns]);
+  const kept = Object.entries(settled.reportedEnds).filter(([id]) => known.has(id));
+  return { ...settled, reportedEnds: Object.fromEntries(kept) };
 }
 
 /** A dormant watch is dropped this long after its last change. */
@@ -492,14 +531,17 @@ const wakeIds = (watch: LaunchWatch, event: string) => ({
   messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
 });
 
-/** The retry a run's next report belongs to, if it was retried in place. */
-const latestRetry = (watch: LaunchWatch, runId: RunId) => watch.retriedRuns[runId]?.at(-1);
-
-/** A run's end. Each retry of a run retried in place ends under ids of its own. */
-const runWakeIds = (watch: LaunchWatch, runId: RunId) => {
-  const retry = latestRetry(watch, runId);
-  return wakeIds(watch, retry === undefined ? `run:${runId}` : `run:${runId}:retry:${retry}`);
-};
+/**
+ * A run's end. The first keeps the ids it always had; a later end of a run retried in place
+ * is named by when it ended.
+ */
+const runWakeIds = (watch: LaunchWatch, runId: RunId, end: string | null | undefined) =>
+  wakeIds(
+    watch,
+    watch.reportedEnds[runId] === undefined
+      ? `run:${runId}`
+      : `run:${runId}:end:${end ?? "unknown"}`,
+  );
 
 export function finishedWake(input: {
   readonly watch: LaunchWatch;
@@ -511,6 +553,8 @@ export function finishedWake(input: {
   readonly excerpt: string | null;
   /** Why the run failed before its agent's first message, when it did. */
   readonly failure?: OrchestratorMcpRunFailure | null;
+  /** When the run ended, if known; a run retried in place reports each end under its own ids. */
+  readonly end?: string | null;
 }): LaunchWatchWake {
   const { watch } = input;
   if (input.status === "failed" && input.excerpt === null && input.failure != null) {
@@ -531,7 +575,7 @@ export function finishedWake(input: {
     `${brief?.cut === true ? `The message continues; read it with ${read}.` : `Read the thread with ${read}.`} ${stopHint(watch)}`,
   ];
   return {
-    ...runWakeIds(watch, input.runId),
+    ...runWakeIds(watch, input.runId, input.end),
     text: lines.join("\n"),
     notification: {
       source: { kind: "background_task" },
@@ -614,6 +658,7 @@ function launchFailedWake(input: {
   readonly status: LaunchWatchTerminalStatus;
   readonly title: string | null;
   readonly failure: OrchestratorMcpRunFailure;
+  readonly end?: string | null;
 }): LaunchWatchWake {
   const { watch, failure } = input;
   const name = named(watch, input.title);
@@ -650,7 +695,7 @@ function launchFailedWake(input: {
     EXCERPT_MAX_CHARS,
   );
   return {
-    ...runWakeIds(watch, input.runId),
+    ...runWakeIds(watch, input.runId, input.end),
     text: lines.join("\n"),
     notification: {
       source: { kind: "background_task" },

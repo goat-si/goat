@@ -904,7 +904,7 @@ const make = Effect.gen(function* () {
             },
             decodeRetry,
           )
-      ).pipe(Effect.tap((result) => rearmAfterRetry(launchWatches, scope, input, result))),
+      ).pipe(Effect.tap((result) => rearmAfterRetry(launchWatches, input, result))),
     readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
     reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),
     configureReplication: (scope, input) =>
