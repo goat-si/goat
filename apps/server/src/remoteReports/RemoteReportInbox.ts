@@ -33,6 +33,49 @@ export interface PendingReport {
 }
 const decodeEntries = Schema.decodeUnknownEffect(Schema.Array(Entry));
 
+/** The most report text one turn starts with, separators included. */
+const PENDING_REPORT_MAX_CHARS = 16_000;
+/** A folded run of progress stays small enough to share a turn with other reports. */
+const FOLDED_PROGRESS_MAX_CHARS = PENDING_REPORT_MAX_CHARS / 2;
+
+/**
+ * Stores a report for the origin's next turn. Progress that follows this lane's waiting progress
+ * folds into it, keeping every report's text, so a chatty lane does not page a later question
+ * behind dozens of rows. The fold replaces the row instead of updating it: a turn that already
+ * read the old row consumes only that row, and the folded one repeats it next turn rather than
+ * losing the new report.
+ */
+export const storeInboxReport = Effect.fn("RemoteReportInbox.store")(function* (
+  sql: SqlClient.SqlClient,
+  report: {
+    readonly originThreadId: ThreadId;
+    readonly correlationId: string;
+    readonly kind: string;
+    readonly text: string;
+    readonly runId: string | null;
+    readonly createdAt: string;
+  },
+) {
+  let text = report.text;
+  if (report.kind === "progress") {
+    const [latest] = yield* sql<{ id: number; kind: string; text: string }>`
+      SELECT id, kind, text FROM remote_report_inbox
+      WHERE origin_thread_id = ${report.originThreadId} AND correlation_id = ${report.correlationId}
+      ORDER BY id DESC LIMIT 1`;
+    if (
+      latest?.kind === "progress" &&
+      latest.text.length + 2 + text.length <= FOLDED_PROGRESS_MAX_CHARS
+    ) {
+      yield* sql`DELETE FROM remote_report_inbox WHERE id = ${latest.id}`;
+      text = `${latest.text}\n\n${text}`;
+    }
+  }
+  yield* sql`INSERT INTO remote_report_inbox
+    (origin_thread_id, correlation_id, kind, text, run_id, created_at)
+    VALUES (${report.originThreadId}, ${report.correlationId}, ${report.kind}, ${text},
+      ${report.runId}, ${report.createdAt})`;
+});
+
 export class RemoteReportInbox extends Context.Service<
   RemoteReportInbox,
   {
@@ -70,7 +113,7 @@ const make = Effect.gen(function* () {
     for (const row of rows) {
       // The cap includes the separators added by framePendingReports.
       const size = row.text.length + (texts.length === 0 ? 0 : 2);
-      if (characters + size > 16_000) break;
+      if (characters + size > PENDING_REPORT_MAX_CHARS) break;
       texts.push(row.text);
       reports.push({
         kind: row.kind,
