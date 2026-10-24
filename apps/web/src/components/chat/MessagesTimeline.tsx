@@ -43,6 +43,7 @@ import {
 import { type TimelineEntry } from "../../session-logic";
 import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { type ChatFileAttachment, type TurnDiffSummary } from "../../types";
+import { type OpenTurnDiff } from "../../diffPanelStore";
 import { ArrowRightIcon, BotIcon, MinimizeIcon as Minimize2Icon } from "~/components/solar";
 import { ChevronDown, ChevronRight } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
@@ -218,7 +219,7 @@ interface MessagesTimelineProps {
   paintOnly?: boolean;
   /** Off where another region already speaks the thread's status, like a subagent's bar. */
   announceTurnStatus?: boolean;
-  onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  onOpenTurnDiff: OpenTurnDiff;
   onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
   parentThreadLink?: {
     readonly threadId: ThreadId;

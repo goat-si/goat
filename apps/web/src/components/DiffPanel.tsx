@@ -53,7 +53,11 @@ import {
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../lib/diffRendering";
-import { resolveDiffPanelTurn } from "./DiffPanel.logic";
+import {
+  DiffPanelAwaitingCheckpoint,
+  DiffPanelEditNotice,
+  useDiffPanelTurn,
+} from "./diffs/DiffPanelTurn";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
@@ -281,20 +285,16 @@ export default function DiffPanel({
     turn: selectedTurn,
     awaitingCheckpoint,
     runActive: selectedRunActive,
-  } = resolveDiffPanelTurn({
+    edit: selectedEdit,
+    editPatch,
+  } = useDiffPanelTurn({
+    threadRef: routeThreadRef,
+    selection: diffSelection,
     orderedSummaries: orderedTurnDiffSummaries,
-    selectedRunId,
+    environmentId: activeThread?.environmentId,
     activeRunId: activeThread?.runtime?.activeRunId,
     latestRunId: activeThread?.latestRun?.runId,
   });
-
-  useEffect(() => {
-    if (!routeThreadRef || diffSelection.kind !== "turn" || awaitingCheckpoint) return;
-    useDiffPanelStore.getState().reconcileTurnSelection(
-      routeThreadRef,
-      orderedTurnDiffSummaries.map((summary) => summary.runId),
-    );
-  }, [awaitingCheckpoint, diffSelection, orderedTurnDiffSummaries, routeThreadRef]);
 
   const selectedCheckpointTurnCount = selectedTurn?.checkpointTurnCount;
   const latestTurn = orderedTurnDiffSummaries[0];
@@ -304,14 +304,16 @@ export default function DiffPanel({
       : awaitingCheckpoint || selectedTurn?.runId === latestTurn?.runId
         ? "Latest turn"
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
-  const reviewSectionId = selectedTurn ? `turn:${selectedTurn.runId}` : selectedGitScope;
+  const reviewSectionId = selectedTurn
+    ? `turn:${selectedTurn.runId}`
+    : (selectedEdit && `edit:${selectedEdit.itemId}`) || selectedGitScope;
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : GIT_REVIEW_SCOPES[selectedGitScope].title;
+    : (selectedEdit && "Edit") || GIT_REVIEW_SCOPES[selectedGitScope].title;
   const selectedCheckpointRange =
     typeof selectedCheckpointTurnCount === "number"
       ? {
@@ -358,11 +360,12 @@ export default function DiffPanel({
   const preview = branchDiffPreview.data;
   const gitDiff = selectedGitSource?.diff;
 
-  const selectedPatch = selectedTurn ? activeCheckpointDiff.data?.diff : gitDiff;
+  const turnPatch = selectedTurn ? activeCheckpointDiff : editPatch;
+  const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
   const isSelectedPatchTruncated = !selectedTurn && selectedGitSource?.truncated === true;
-  const selectedPatchQuery = selectedTurn ? activeCheckpointDiff : branchDiffPreview;
+  const selectedPatchQuery = turnPatch ?? branchDiffPreview;
   const isLoadingSelectedPatch = selectedPatchQuery.isPending && selectedPatchQuery.data === null;
-  const selectedPatchError = selectedTurn ? activeCheckpointDiff.error : branchDiffPreview.error;
+  const selectedPatchError = selectedPatchQuery.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const lazySource =
@@ -1018,13 +1021,9 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : awaitingCheckpoint ? (
-        <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
-          {selectedRunActive
-            ? "This turn's changes appear here when it finishes."
-            : "No checkpoint for this turn yet."}
-        </div>
-      ) : selectedRunId !== null && orderedTurnDiffSummaries.length === 0 ? (
+      ) : awaitingCheckpoint && !selectedEdit ? (
+        <DiffPanelAwaitingCheckpoint runActive={selectedRunActive} />
+      ) : selectedRunId !== null && !selectedEdit && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
@@ -1039,6 +1038,7 @@ export default function DiffPanel({
       ) : (
         <>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+            {selectedEdit && <DiffPanelEditNotice runActive={selectedRunActive} />}
             {isSelectedPatchTruncated && !lazySource && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 This preview exceeds the size limit. Changes shown are incomplete.
