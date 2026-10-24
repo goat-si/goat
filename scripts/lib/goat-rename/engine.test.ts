@@ -34,6 +34,22 @@ describe("applyTextRules", () => {
     const scoped: TextRule = { ...rules[1]!, scope: (path) => path.startsWith("apps/") };
     expect(applyTextRules("infra/x.ts", "T3CODE_HOME", [scoped]).text).toBe("T3CODE_HOME");
   });
+
+  it("holds an exact keep through apply while the rest of the line still renames", () => {
+    const keeps = [
+      {
+        id: "alias",
+        pattern: /(?<=set\.)T3CODE_HOME\b/g,
+        reason: "legacy alias",
+        holdsOnApply: true,
+      },
+      { id: "scan-only", pattern: /T3CODE_PORT/g, reason: "scan mask" },
+    ] as const;
+    const source = "set.T3CODE_HOME T3CODE_HOME T3CODE_PORT";
+    const result = applyTextRules("a.ts", source, rules, keeps);
+    expect(result.text).toBe("set.T3CODE_HOME GOAT_HOME GOAT_PORT");
+    expect(result.hits.get("env")).toBe(2);
+  });
 });
 
 describe("applyPathRules", () => {
