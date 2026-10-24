@@ -524,12 +524,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }, Effect.uninterruptible);
 
   /** Whether an active update drops an app the control allows now. */
-  const narrows = (update: ComputerUseLeaseUpdate) =>
-    Effect.gen(function* () {
-      if (update.state !== "active" || !(yield* Deferred.isDone(confirmed))) return false;
-      const next = approvedApps(update.apps);
-      return next !== undefined && (apps === undefined || [...apps].some((app) => !next.has(app)));
-    });
+  const narrows = Effect.fn("ComputerUseLeaseProxy.narrows")(function* (
+    update: ComputerUseLeaseUpdate,
+  ) {
+    if (update.state !== "active" || !(yield* Deferred.isDone(confirmed))) return false;
+    const next = approvedApps(update.apps);
+    return next !== undefined && (apps === undefined || [...apps].some((app) => !next.has(app)));
+  });
 
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
