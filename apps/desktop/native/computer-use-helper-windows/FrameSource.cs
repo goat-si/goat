@@ -37,7 +37,8 @@ namespace Goat.ComputerUse
         sealed class Target
         {
             public string Key;
-            public int Pid;
+            /// <summary>Kept wide: a pid past int's range matches no process and is windowGone.</summary>
+            public long Pid;
             public long WindowId;
             /// <summary>Lowercase app ids the control approved; null allows every app the driver admits.</summary>
             public HashSet<string> Apps;
@@ -115,7 +116,7 @@ namespace Goat.ComputerUse
             object key, pid, windowId, maxWidth, intervalMs, apps;
             if (entry == null ||
                 !entry.TryGetValue("key", out key) || !(key is string) || ((string)key).Length == 0 ||
-                !entry.TryGetValue("pid", out pid) || !(pid is int) || (int)pid <= 0 ||
+                !entry.TryGetValue("pid", out pid) || !(pid is int || pid is long) || Convert.ToInt64(pid) <= 0 ||
                 // Window 0 is valid on the wire and simply matches no window: windowGone.
                 !entry.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long) || Convert.ToInt64(windowId) < 0 ||
                 !entry.TryGetValue("maxWidth", out maxWidth) || !(maxWidth is int) || (int)maxWidth <= 0 ||
@@ -130,7 +131,7 @@ namespace Goat.ComputerUse
             return new Target
             {
                 Key = (string)key,
-                Pid = (int)pid,
+                Pid = Convert.ToInt64(pid),
                 WindowId = Convert.ToInt64(windowId),
                 Apps = approved,
                 MaxWidth = Math.Min((int)maxWidth, MaxWidth),
@@ -192,12 +193,14 @@ namespace Goat.ComputerUse
         /// <summary>One JPEG of the target window, or {unavailable: reason}.</summary>
         Dictionary<string, object> Capture(Target target)
         {
+            if (target.Pid > int.MaxValue) return Unavailable("windowGone");
+            int pid = (int)target.Pid;
             IntPtr window = new IntPtr(target.WindowId);
-            Dictionary<string, object> facts = WindowsFacts.Window(target.Pid, target.WindowId);
+            Dictionary<string, object> facts = WindowsFacts.Window(pid, target.WindowId);
             if (!(bool)facts["exists"] || !(bool)facts["ownerMatches"]) return Unavailable("windowGone");
             if (GetAncestor(window, GA_ROOT) != window) return Unavailable("windowUnknown");
-            if (IsGoat(target.Pid)) return Unavailable("appNotApproved");
-            if (target.Apps != null && !Approved(target.Pid, target.Apps)) return Unavailable("appNotApproved");
+            if (IsGoat(pid)) return Unavailable("appNotApproved");
+            if (target.Apps != null && !Approved(pid, target.Apps)) return Unavailable("appNotApproved");
             if (!(bool)facts["sameSession"] || (bool)facts["elevatedTarget"]) return Unavailable("unsupported");
             // The lock screen or a UAC prompt holds the input desktop: nothing of it is shown.
             if ((string)facts["inputDesktop"] != "Default") return Unavailable("paused");
@@ -215,7 +218,7 @@ namespace Goat.ComputerUse
             }
             if (jpeg == null) return Unavailable("captureFailed");
             // Focus can reach a password field while the window draws.
-            if (WindowsFacts.FocusedSecure(target.Pid) != "clear") return Unavailable("private");
+            if (WindowsFacts.FocusedSecure(pid) != "clear") return Unavailable("private");
             var frame = new Dictionary<string, object>();
             frame["width"] = width;
             frame["height"] = height;

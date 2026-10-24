@@ -365,6 +365,12 @@ async function main(
         windowId: fw.window_id,
         maxWidth: 480,
       });
+      // Past a Windows pid's range: no process has it, so it is gone, not a malformed request.
+      await frame("pid-out-of-range", "windowGone", {
+        pid: 2 ** 40,
+        windowId: fw.window_id,
+        maxWidth: 480,
+      });
       const first = await observe("fixture-1", fw.pid, fw.window_id);
       const firstElements = fullElements(first);
       // State the driver gives (Agree's ToggleState) and what only the helper reads (#1286).
