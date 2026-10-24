@@ -8,7 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Redactable from "effect/Redactable";
 
-import { defectSummary, redactCause, redactLogMessage, redactLogText } from "./LogRedaction.ts";
+import { defectSummary, redactCause, redactLogMessage } from "./LogRedaction.ts";
+import { redactLogText } from "./LogTextRedaction.ts";
 
 // Synthetic canaries throughout; none of them is a real credential.
 const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.Y2FuYXJ5LXNpZ25hdHVyZQ";
@@ -56,6 +57,13 @@ describe("redactLogText", () => {
     ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
     ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
     [`requestid.${jwt} done`, "requestid.*** done"],
+    // Pretty JSON escaped inside a JSON string: its whitespace is escaped too.
+    [
+      JSON.stringify('{"token" :\n\t"CANARY",\n"cookie":\n[\n"CANARY"\n],"ok":1}'),
+      JSON.stringify('{"token" :\n\t***,\n"cookie":\n***,"ok":1}')
+        .replaceAll('"***', "***")
+        .replaceAll('***"', "***"),
+    ],
     // Text joined to a token without a dot, however it is joined.
     [`jwt-${jwt} done`, "jwt-*** done"],
     [`jwt_${jwt} done`, "jwt_*** done"],
@@ -249,6 +257,16 @@ describe("redactCause", () => {
     Object.defineProperty(reason, "annotations", { value: new Annotations([["k", "v"]]) });
     expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
     expect(iterated).toBe(false);
+  });
+
+  it("ends on a cyclic chain of unnamed span frames", () => {
+    const frame: Record<string, unknown> = {};
+    frame.parent = frame;
+    const reason = Cause.makeDieReason(new Error("original failure"));
+    Object.defineProperty(reason, "annotations", {
+      value: new Map([[Cause.StackTrace.key, frame]]),
+    });
+    expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
   });
 
   it("keeps an error whose cause cannot be inspected", () => {

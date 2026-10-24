@@ -1,6 +1,6 @@
 import { ORCHESTRATION_V2_PROVIDER_FAILURE_LOG_MAX_CHARS } from "@goat/contracts";
 
-import { redactLogText } from "../observability/LogRedaction.ts";
+import { redactLogText } from "../observability/LogTextRedaction.ts";
 
 /**
  * The bounded log of one workspace preparation: what GOAT did, and the end of the Git and

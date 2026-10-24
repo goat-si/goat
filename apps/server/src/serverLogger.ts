@@ -39,7 +39,7 @@ export const layer = Effect.gen(function* () {
   const layerLogger = Logger.layer(
     otlpLogger === undefined
       ? [consoleLogger, LogRedaction.redacting(Logger.tracerLogger)]
-      : [consoleLogger, LogRedaction.redactingEffect(otlpLogger)],
+      : [consoleLogger, Effect.map(otlpLogger, LogRedaction.redacting)],
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),
