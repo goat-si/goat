@@ -39,8 +39,9 @@ const refuse = (reason: ComputerUseRefusalReason, message: string): ComputerUseR
  * ToggleState as selected (On true, Off false, Indeterminate left out), and SelectionItem's
  * IsSelected otherwise; on an element that toggles it is the checked state (#1286). What the
  * driver leaves out, an Indeterminate toggle and expand/collapse state, comes from the helper's
- * elementStates, joined by screen rectangle, role and name; an entry that matches more than one
- * way is not used.
+ * elementStates, joined by screen rectangle, role and label. A key held by more than one driver
+ * element or more than one helper entry joins nothing, and a truncated answer is not used at all:
+ * uniqueness cannot be shown from part of the tree.
  */
 export function windowsDriverRead(
   read: DriverWindowState,
@@ -49,17 +50,22 @@ export function windowsDriverRead(
   if (read.elements === undefined) return read;
   const key = (role: string, label: string | undefined, frame: Frame) =>
     [role, label ?? "", frame.x, frame.y, frame.w, frame.h].join("|");
+  const driverKeys = new Map<string, number>();
+  for (const element of read.elements)
+    if (element.frame) {
+      const at = key(element.role, element.label, element.frame);
+      driverKeys.set(at, (driverKeys.get(at) ?? 0) + 1);
+    }
   const byKey = new Map<string, WindowsElementStates["elements"][number] | null>();
-  for (const entry of states?.elements ?? []) {
+  for (const entry of states && !states.truncated ? states.elements : []) {
     const at = key(entry.role, entry.label, entry.frame);
     byKey.set(at, byKey.has(at) ? null : entry);
   }
   return {
     ...read,
     elements: read.elements.map(({ selected, ...element }) => {
-      const known = element.frame
-        ? byKey.get(key(element.role, element.label, element.frame))
-        : undefined;
+      const at = element.frame ? key(element.role, element.label, element.frame) : undefined;
+      const known = at !== undefined && driverKeys.get(at) === 1 ? byKey.get(at) : undefined;
       const checked =
         known?.toggle === "indeterminate"
           ? "mixed"

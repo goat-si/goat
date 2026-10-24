@@ -1,6 +1,6 @@
 // A harmless window for the Windows computer use smoke (scripts/computer-use-windows-smoke.ts):
-// a text box, a check box, a mixed check box, a closed drop-down, a counter button, and a
-// password box that two buttons move focus
+// a text box, a check box, a mixed check box (and one with no text, named only by its automation
+// id), a closed drop-down, a counter button, and a password box that two buttons move focus
 // into and out of, so a run can observe, act, see the change, and watch private mode start and
 // end.
 using System;
@@ -17,6 +17,7 @@ internal static class Fixture
         var note = new TextBox { Name = "note", AccessibleName = "Note", Location = new Point(16, 16), Width = 380 };
         var agree = new CheckBox { Name = "agree", Text = "Agree", Location = new Point(16, 52), AutoSize = true };
         var mixed = new CheckBox { Name = "mixed", Text = "Mixed", ThreeState = true, CheckState = CheckState.Indeterminate, Location = new Point(270, 52), AutoSize = true };
+        var unnamed = new CheckBox { Name = "unnamedMixed", ThreeState = true, CheckState = CheckState.Indeterminate, Location = new Point(270, 130), Size = new Size(20, 20) };
         var size = new ComboBox { Name = "size", AccessibleName = "Size", DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(270, 86), Width = 126 };
         size.Items.AddRange(new object[] { "Small", "Large" });
         var count = new Label { Name = "count", Text = "Count: 0", Location = new Point(140, 92), AutoSize = true };
@@ -28,7 +29,7 @@ internal static class Fixture
         focusSecret.Click += delegate { secret.Focus(); };
         var leaveSecret = new Button { Name = "leaveSecret", Text = "Leave secret", Location = new Point(140, 128), Width = 110 };
         leaveSecret.Click += delegate { note.Focus(); };
-        form.Controls.AddRange(new Control[] { note, agree, mixed, size, add, count, focusSecret, leaveSecret, secret });
+        form.Controls.AddRange(new Control[] { note, agree, mixed, unnamed, size, add, count, focusSecret, leaveSecret, secret });
         Application.Run(form);
     }
 }

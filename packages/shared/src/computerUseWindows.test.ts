@@ -210,6 +210,10 @@ describe("Windows computer use observations (conformance)", () => {
           actions: ["toggle"],
           frame: at(250),
         },
+        // Two driver elements in one place under one label: the helper's entry fits either, so
+        // neither takes it, and the list item keeps its own selected.
+        { element_index: 6, role: "ListItem", label: "Pair", selected: true, frame: at(300) },
+        { element_index: 7, role: "ListItem", label: "Pair", selected: false, frame: at(300) },
       ],
     };
     const joined = windowsDriverRead(read, {
@@ -223,6 +227,7 @@ describe("Windows computer use observations (conformance)", () => {
         { frame: at(200), role: "ComboBox", label: "Font", expand: "expanded" },
         { frame: at(250), role: "CheckBox", label: "Twin", toggle: "off" },
         { frame: at(250), role: "CheckBox", label: "Twin", toggle: "on" },
+        { frame: at(300), role: "ListItem", label: "Pair", toggle: "indeterminate" },
       ],
     });
     const tracker = makeObservationTracker(() => "o1");
@@ -246,8 +251,16 @@ describe("Windows computer use observations (conformance)", () => {
         ["README", undefined],
         ["Size", undefined],
         ["Twin", { checked: true }],
+        ["Pair", { selected: true }],
+        ["Pair", { selected: false }],
       ],
     );
+    // Part of the tree cannot show an entry is unique, so a truncated answer adds nothing.
+    const partial = windowsDriverRead(read, {
+      truncated: true,
+      elements: [{ frame: at(0), role: "CheckBox", label: "All", toggle: "indeterminate" }],
+    });
+    assert.equal(partial.elements?.[0]?.checked, undefined);
   });
 });
 

@@ -265,13 +265,14 @@ async function main(
       const first = await observe("fixture-1", fw.pid, fw.window_id);
       const firstElements = fullElements(first);
       // State the driver gives (Agree's ToggleState) and what only the helper reads (#1286).
-      const states = ["Agree", "Mixed", "Size"].map(
+      const states = ["Agree", "Mixed", "unnamedMixed", "Size"].map(
         (name) => labelled(firstElements, new RegExp("^" + name + "$", "u")).state,
       );
       if (
         JSON.stringify(states) !==
         JSON.stringify([
           { enabled: true, checked: false },
+          { enabled: true, checked: "mixed" },
           { enabled: true, checked: "mixed" },
           { enabled: true, expanded: false },
         ])
