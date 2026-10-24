@@ -226,7 +226,6 @@ import {
   shellStreamItemsFromResumeSnapshot,
   shouldPublishShellApplicationEvent,
   subagentShellState,
-  subagentThreadIdsOf,
   skipUnchangedThreadShells,
   toShellApplicationEvent,
   type ShellApplicationEvent,
@@ -1131,7 +1130,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           latestSequence: applicationEvents.latestApplicationSequence,
         }),
       );
-      subagents = subagentShellState(subagentThreadIdsOf(base.threads), base.snapshotSequence);
+      subagents = subagentShellState(base.threads, base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: { ...base, projects: enriched.projects } as OrchestrationV2ShellSnapshot,
@@ -1285,10 +1284,8 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         });
       }
 
-      subagents = subagentShellState(
-        yield* threadManagement.listActiveSubagentThreadIds(),
-        highWater,
-      );
+      const activeSubagents = yield* threadManagement.listActiveSubagentThreadIds();
+      subagents = subagentShellState(activeSubagents, highWater);
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       const replay = toShellStream(

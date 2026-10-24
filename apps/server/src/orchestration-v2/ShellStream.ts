@@ -106,7 +106,7 @@ export type ShellApplicationEvent =
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
     };
 
-export const subagentThreadIdsOf = (
+const subagentThreadIdsOf = (
   threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
 ) =>
   new Set<string>(
@@ -130,9 +130,19 @@ export const subagentLineageOrder = (through: number): SubagentLineageOrder => (
   appliedByThread: new Map(),
 });
 
-/** The subagent set of a shell snapshot taken through a sequence, with its lineage order. */
-export const subagentShellState = (subagentThreadIds: Iterable<string>, through: number) => ({
-  ids: new Set(subagentThreadIds),
+/**
+ * The subagent set of a shell snapshot taken through a sequence, with its lineage order. Takes
+ * the snapshot's thread shells, or subagent ids already read.
+ */
+export const subagentShellState = (
+  source: ReadonlyArray<string | Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
+  through: number,
+) => ({
+  ids: new Set(
+    source.flatMap((entry) =>
+      typeof entry === "string" ? [entry] : [...subagentThreadIdsOf([entry])],
+    ),
+  ),
   ...subagentLineageOrder(through),
 });
 
