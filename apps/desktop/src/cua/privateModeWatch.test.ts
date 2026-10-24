@@ -90,6 +90,15 @@ describe("private mode follower", () => {
     expect(failing).toEqual(["b:watch:w1", "b:unwatch"]);
   });
 
+  it("keeps at most one retry waiting however many changes fail", async () => {
+    const { follower, retries } = follow();
+    await follower.attach(fakeSession([], "a", { failWatches: 3 }));
+    await follower.setWatching(true);
+    await follower.setWatching(true);
+    await follower.setWatching(true);
+    expect(retries).toHaveLength(1);
+  });
+
   it("reports a secret field's focus and clears it when its helper goes away", async () => {
     const reports: Array<DesktopCuaPrivateModeReport> = [];
     const { follower } = follow({ publish: (report) => reports.push(report) });

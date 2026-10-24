@@ -24,6 +24,7 @@ export function makePrivateModeFollower(deps: {
   let active: Target | undefined;
   // A watch or unwatch failed, so the helper may be watching whatever this follower believes.
   let unsure = false;
+  let retryPending = false;
   let chain = Promise.resolve();
 
   const report = (isActive: boolean, target: Target) =>
@@ -50,7 +51,14 @@ export function makePrivateModeFollower(deps: {
       }
     } catch {
       unsure = true;
-      deps.retryLater(() => void settle());
+      // One retry at a time: it reads the state current when it runs.
+      if (!retryPending) {
+        retryPending = true;
+        deps.retryLater(() => {
+          retryPending = false;
+          void settle();
+        });
+      }
     }
   };
   // One change at a time, in order.
