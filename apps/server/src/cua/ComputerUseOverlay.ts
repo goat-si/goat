@@ -17,10 +17,10 @@
  * @module ComputerUseOverlay
  */
 import type {
-  ComputerUseLeaseUpdate,
   ComputerUseOverlayCommand,
   ComputerUseOverlayHideReason,
   ComputerUseOverlayPoint,
+  ComputerUsePauseReason,
 } from "@goat/contracts";
 
 /** Input the driver delivers to a window, with the argument names that carry its point. */
@@ -62,7 +62,7 @@ export interface OverlayState {
   readonly acting: ReadonlySet<string>;
   readonly capturing: ReadonlySet<string>;
   readonly recording: boolean;
-  readonly pause: "human_input" | "takeover" | "private" | undefined;
+  readonly pause: ComputerUsePauseReason | undefined;
   readonly ended: boolean;
   /** Pixel size of the last screenshot per window id. */
   readonly shots: ReadonlyMap<number, { readonly width: number; readonly height: number }>;
@@ -91,7 +91,9 @@ export type OverlayEvent =
       /** The screenshot in the reply, when it has one. */
       readonly image?: { readonly width: number; readonly height: number };
     }
-  | { readonly type: "lease"; readonly update: ComputerUseLeaseUpdate };
+  /** The control paused or ended. The proxy then stops this helper; a resume starts a new one. */
+  | { readonly type: "pause"; readonly reason: ComputerUsePauseReason }
+  | { readonly type: "end" };
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -203,12 +205,10 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         snapshots,
       };
     }
-    case "lease": {
-      const update = event.update;
-      if (update.state === "ended") return { ...state, ended: true };
-      if (update.state === "paused") return { ...state, pause: update.reason };
-      return { ...state, pause: undefined };
-    }
+    case "pause":
+      return { ...state, pause: event.reason };
+    case "end":
+      return { ...state, ended: true };
   }
 }
 

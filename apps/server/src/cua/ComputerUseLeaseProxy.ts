@@ -24,6 +24,7 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
+  type ComputerUseOverlayCommand,
   type ComputerUseControlEnd,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
@@ -43,6 +44,12 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
+import {
+  initialOverlayState,
+  type OverlayEvent,
+  overlayStep,
+  replyImageSize,
+} from "./ComputerUseOverlay.ts";
 
 export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted";
 
@@ -89,6 +96,11 @@ export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
   readonly lines: Stream.Stream<string>;
   readonly kill: Effect.Effect<void>;
+  /**
+   * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
+   * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
+   */
+  readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
 }
 
 export interface LeaseProxyOptions<EU, ED> {
@@ -179,6 +191,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const ownAnswers = new Map<string, Deferred.Deferred<void>>();
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
+  let overlay = initialOverlayState;
+
+  /** Updates what the overlay shows and waits until the helper has drawn it. */
+  const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
+    const [next, commands] = overlayStep(overlay, event);
+    overlay = next;
+    const sink = running?.driver.overlay;
+    if (sink === undefined) return;
+    for (const command of commands) yield* sink(command);
+  });
 
   /** Cancels and answers every outstanding call, then kills the child. */
   const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (
@@ -212,6 +234,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (finished !== undefined) return;
     finished = reason;
     yield* Deferred.succeed(ended, reason);
+    yield* drawOverlay({ type: "end" });
     yield* interrupt(reason, LEASE_END_MESSAGES[reason]);
     // Best effort and deny-only; a slow or stuck revoke cannot hold anything up.
     if (sessions.size > 0)
@@ -239,6 +262,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const session = message.result?.structuredContent?.session;
             if (request?.method === "tools/call" && typeof session === "string")
               sessions.add(session);
+            if (request.method === "tools/call") {
+              const image = replyImageSize(message.result);
+              yield* drawOverlay({
+                type: "reply",
+                id: JSON.stringify(message.id),
+                ...(image ? { image } : {}),
+              });
+            }
           }
           yield* options.output(admitDriverReplyScreenshots(line));
         }),
@@ -256,6 +287,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
     const current: Running = { driver, scope: child };
     running = current;
+    // A new helper draws nothing yet.
+    overlay = initialOverlayState;
     // A fresh child after a pause hears the provider's handshake again; its answers are dropped.
     for (const line of handshake) {
       const message = parse(line);
@@ -275,8 +308,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     reason: ComputerUsePauseReason,
   ) {
     if (finished !== undefined) return;
-    if (paused === undefined) yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
+    const wasPaused = paused !== undefined;
+    // Recorded first: a call that was drawing while this pause stopped its driver refuses
+    // with this reason.
     paused = reason;
+    if (!wasPaused) {
+      yield* drawOverlay({ type: "pause", reason });
+      yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
+    }
     // A proxy told it is paused before it was ever active refuses its waiting calls now.
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
@@ -439,6 +478,28 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           ),
         );
       return;
+    }
+    // Before the call reaches the driver: a capture must not see the overlay (#1321).
+    if (isRequest && message?.method === "tools/call") {
+      const current = running;
+      yield* drawOverlay({
+        type: "call",
+        id: JSON.stringify(id),
+        name: typeof message.params?.name === "string" ? message.params.name : "",
+        args: message.params?.arguments,
+      });
+      // A pause or end while drawing replaced or removed the driver; this call never ran.
+      if (running !== current)
+        return yield* options.output(
+          finished !== undefined
+            ? refusal(id, message.method, finished, LEASE_END_MESSAGES[finished])
+            : refusal(
+                id,
+                message.method,
+                pausedDetail(paused ?? "human_input"),
+                PAUSE_MESSAGES[paused ?? "human_input"],
+              ),
+        );
     }
     if (isRequest) outstanding.set(JSON.stringify(id), { id, method: message!.method! });
     const cancelled = cancelledRequestKey(line);

@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
+import {
+  type ComputerUseLeaseUpdate,
+  type ComputerUseOverlayCommand,
+  computerUseRefusalReason,
+} from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -41,6 +45,13 @@ const harness = Effect.fn(function* (
     readonly expiresAt?: string;
     /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
     readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+    /**
+     * Gives each driver an overlay channel; draws and sends land in `log` in order. With a gate,
+     * every "show" signals `entered` and then waits for `gate`, like a helper slow to draw.
+     */
+    readonly overlay?:
+      | boolean
+      | { readonly gate: Deferred.Deferred<void>; readonly entered: Deferred.Deferred<void> };
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -50,6 +61,7 @@ const harness = Effect.fn(function* (
   const started = yield* Queue.unbounded<FakeDriver>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
+  const log: Array<string> = [];
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
@@ -65,11 +77,30 @@ const harness = Effect.fn(function* (
       drivers.push(driver);
       yield* Queue.offer(started, driver);
       return {
-        send: (line: string) => Queue.offer(driver.toDriver, line).pipe(Effect.asVoid),
+        send: (line: string) =>
+          Effect.sync(() => {
+            const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
+            if (typeof params?.name === "string") log.push("send " + params.name);
+          }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
+        ...(options.overlay
+          ? {
+              overlay: (command: ComputerUseOverlayCommand) =>
+                (typeof options.overlay === "object" && command.op === "show"
+                  ? Deferred.succeed(options.overlay.entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(options.overlay.gate)),
+                    )
+                  : Effect.void
+                ).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
+                  ),
+                ),
+            }
+          : {}),
       };
     }),
     revokeSessions: (sessions) =>
@@ -98,6 +129,7 @@ const harness = Effect.fn(function* (
     restarted: Queue.take(started),
     revokeCalled: Deferred.await(revokeCalled),
     revoked,
+    log,
     proxy,
   };
 });
@@ -113,6 +145,69 @@ const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
 });
 
 describe("ComputerUseLeaseProxy", () => {
+  it.effect(
+    "draws the overlay before each call, and hides it before a capture reaches the driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        const png = Buffer.alloc(24);
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
+        png.write("IHDR", 12, "latin1");
+        png.writeUInt32BE(1000, 16);
+        png.writeUInt32BE(500, 20);
+        const window = { pid: 4, window_id: 9 };
+        yield* h.send(call(1, "get_window_state", window));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              content: [{ type: "image", mimeType: "image/png", data: png.toString("base64") }],
+            },
+          }),
+        );
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "click", { ...window, x: 500, y: 250 }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+        yield* h.nextToProvider;
+        yield* h.send(call(3, "get_window_state", window));
+        yield* h.nextToDriver;
+        const shown = { op: "show", pid: 4, windowId: 9, point: { fx: 0.5, fy: 0.5 } };
+        assert.deepEqual(h.log, [
+          "draw " + JSON.stringify({ op: "hide", reason: "capture" }),
+          "send get_window_state",
+          "draw " + JSON.stringify({ op: "hide", reason: "idle" }),
+          "draw " + JSON.stringify({ ...shown, phase: "acting" }),
+          "send click",
+          "draw " + JSON.stringify({ ...shown, phase: "resting" }),
+          "draw " + JSON.stringify({ op: "hide", reason: "capture" }),
+          "send get_window_state",
+        ]);
+      }),
+  );
+
+  it.effect("refuses a call whose draw a pause interrupted, and never forwards it", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* harness({ overlay: { gate, entered } });
+      yield* h.push(active());
+      yield* h.send(call(5, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* Deferred.await(entered);
+      // The click's draw is still waiting when the person takes over.
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      yield* h.killed;
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.id, 5);
+      assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
+      assert.notInclude(h.log, "send click");
+    }),
+  );
+
   it.effect("holds a call until the server confirms the lease, then forwards it", () =>
     Effect.gen(function* () {
       const h = yield* harness();

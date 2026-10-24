@@ -11,10 +11,12 @@ export function spawnDriverProcess(
   command: string,
   args: ReadonlyArray<string>,
   env: NodeJS.ProcessEnv,
+  /** A fourth descriptor, fd 3, for the macOS helper's cursor overlay channel (#1214). */
+  overlay = false,
 ) {
   const child = NodeChildProcess.spawn(command, [...args], {
     env,
-    stdio: ["pipe", "pipe", "inherit"],
+    stdio: overlay ? ["pipe", "pipe", "inherit", "pipe"] : ["pipe", "pipe", "inherit"],
     windowsHide: true,
     detached: platform !== "win32",
   });

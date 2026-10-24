@@ -1,4 +1,3 @@
-import type { ComputerUseLeaseUpdate } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
@@ -34,7 +33,6 @@ const reply = (id: string, image?: { width: number; height: number }): OverlayEv
   id,
   ...(image ? { image } : {}),
 });
-const lease = (update: ComputerUseLeaseUpdate): OverlayEvent => ({ type: "lease", update });
 const snapshot = [call("s", "get_window_state"), reply("s", { width: 1000, height: 500 })];
 
 describe("ComputerUseOverlay", () => {
@@ -86,24 +84,17 @@ describe("ComputerUseOverlay", () => {
     assert.deepEqual(state.shown, { op: "hide", reason: "idle" });
   });
 
-  it("hides for every pause and the end, and comes back only when control is active again", () => {
-    const active = lease({ state: "active", controlId: "c1", expiresAt: "2026-10-24T15:00:00Z" });
+  it("hides for every pause and for the end, and stays hidden through later replies", () => {
     for (const reason of ["human_input", "takeover", "private"] as const) {
       const { sent } = run([
         ...snapshot,
         call("c", "click", { ...WINDOW, x: 1, y: 1 }),
+        { type: "pause", reason },
         reply("c"),
-        lease({ state: "paused", controlId: "c1", reason }),
-        active,
       ]);
-      assert.deepEqual(sent[4], [{ op: "hide", reason }]);
-      assert.equal((sent[5]?.[0] as { op: string } | undefined)?.op, "show");
+      assert.deepEqual(sent.slice(3), [[{ op: "hide", reason }], []]);
     }
-    const { state } = run([
-      ...snapshot,
-      call("c", "click", WINDOW),
-      lease({ state: "ended", reason: "stopped" }),
-    ]);
+    const { state } = run([...snapshot, call("c", "click", WINDOW), { type: "end" }, reply("c")]);
     assert.deepEqual(state.shown, { op: "hide", reason: "ended" });
   });
 
