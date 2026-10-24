@@ -22,6 +22,14 @@ import { HtmlRenderBrowserError } from "./headlessChrome.ts";
 import * as PreviewBrowser from "../preview/PreviewBrowser.ts";
 import * as HtmlRender from "./HtmlRender.ts";
 
+import { McpSchema, McpServer } from "effect/ai";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { layerPermissionProfilesOff, liveThreadsLayer } from "../mcp/McpToolAccess.testkit.ts";
+import * as HtmlHandlers from "../mcp/toolkits/html/handlers.ts";
+import { HtmlRenderToolkit } from "../mcp/toolkits/html/tools.ts";
+
 const TEST_BROWSER_ENV = "GOAT_TEST_HEADLESS_SHELL";
 
 const layerHtmlRender = (
@@ -57,6 +65,36 @@ const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
  */
 
 describe("HtmlRender", () => {
+  it.effect("lists only this thread's saved pages after provider recovery state is cleared", () =>
+    Effect.gen(function* () {
+      const htmlRender = yield* HtmlRender.HtmlRender;
+      const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+      const threadId = ThreadId.make("html-list-thread");
+      const page = { html: "<p>Saved page</p>", title: "Saved", height: 200 };
+      const first = yield* htmlRender.publish({ threadId, ...page });
+      const second = yield* htmlRender.publish({ threadId, ...page });
+      yield* htmlRender.publish({ threadId: ThreadId.make("other-html-thread"), ...page });
+      yield* mcpSessions.clear(threadId);
+      const expected = [first.attachmentId, second.attachmentId].sort();
+      const listed = yield* htmlRender.list({ threadId, limit: 1 });
+      expect(listed.pages).toEqual([
+        {
+          attachmentId: expected[0],
+          path: expect.stringContaining(`${expected[0]}.html`),
+          sizeBytes: expect.any(Number),
+          modifiedAt: expect.any(String),
+        },
+      ]);
+      expect(listed.nextCursor).toBe(expected[0]);
+      const rest = yield* htmlRender.list({ threadId, cursor: listed.nextCursor ?? undefined });
+      expect(rest.pages.map((page) => page.attachmentId)).toEqual([expected[1]]);
+      expect(rest.nextCursor).toBeNull();
+      expect(
+        (yield* htmlRender.list({ threadId: ThreadId.make("empty-html-thread") })).pages,
+      ).toEqual([]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("inlines local images by absolute path and leaves URLs and relative paths alone", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -398,5 +436,81 @@ describe("HtmlRender", () => {
       expect(requests).toEqual([]);
       expect(datagrams).toEqual([]);
     }).pipe(Effect.scoped),
+  );
+});
+
+const htmlRetryClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  protocolVersion: "2025-06-18",
+  clientCapabilities: {},
+  clientInfo: { name: "html-retry-test", version: "1" },
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "html-retry-test", version: "1" },
+  },
+  getClient: Effect.die("unused"),
+});
+
+it.effect("publishes one HTML attachment on a keyed retry and refuses changed arguments", () => {
+  const published: Array<unknown> = [];
+  const scope: McpInvocationContext.McpInvocationScope = {
+    environmentId: EnvironmentId.make("html-retry-environment"),
+    requestNamespace: "html-retry-session",
+    thread: {
+      threadId: ThreadId.make("html-retry-thread"),
+      providerSessionId: "html-retry-session",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    },
+    client: undefined,
+    capabilities: new Set(),
+    issuedAt: 0,
+  };
+  const render = (clientRequestId: string | undefined, title = "Example", invocation = scope) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({
+          name: "goat_html_render",
+          arguments: { html: "<p>Example</p>", title, height: 200, clientRequestId },
+        }),
+      ),
+      Effect.provideService(McpSchema.McpServerClient, htmlRetryClient),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+    );
+  const dependencies = Layer.mergeAll(
+    layerPermissionProfilesOff,
+    liveThreadsLayer,
+    Layer.mock(HtmlRender.HtmlRender)({
+      publish: (input) =>
+        Effect.sync(() => {
+          published.push(input);
+          return {
+            attachmentId: `html-${published.length}`,
+            title: input.title,
+            height: input.height,
+          };
+        }),
+    }),
+  );
+  return Effect.gen(function* () {
+    const first = yield* render("html-1");
+    expect(first.isError, JSON.stringify(first)).not.toBe(true);
+    expect(yield* render("html-1")).toEqual(first);
+    expect(published).toHaveLength(1);
+    expect(published[0]).not.toHaveProperty("clientRequestId");
+    expect((yield* render("html-1", "Different")).isError).toBe(true);
+    expect((yield* render("html-1", undefined, { ...scope, readOnly: true })).isError).toBe(true);
+    expect(published).toHaveLength(1);
+    yield* render("html-2");
+    yield* render(undefined);
+    expect(published).toHaveLength(3);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender).pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(dependencies),
+        Layer.provideMerge(Sqlite.layerMemory),
+      ),
+    ),
   );
 });
