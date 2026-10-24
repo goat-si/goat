@@ -40,6 +40,19 @@ const encodeHandoff = Schema.encodeSync(Schema.fromJsonString(Schema.toCodecJson
 const thread = ThreadId.make("thread-person");
 const other = ThreadId.make("thread-bot");
 const appsThread = ThreadId.make("thread-apps");
+const turnThread = ThreadId.make("thread-turn");
+const offThread = ThreadId.make("thread-off");
+
+/** A run of `threadId` in the projection, at `status`. */
+const run = (threadId: ThreadId, id: string, ordinal: number, status: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+      VALUES (${id}, ${threadId}, ${ordinal}, 'codex', ${status}, '2026-01-01', '{}')
+    `;
+  });
 
 /** An approved grant for `threadId`, live for an hour. */
 const grant = (threadId: ThreadId, id: string, apps?: ReadonlyArray<string>) =>
@@ -74,6 +87,68 @@ const grant = (threadId: ThreadId, id: string, apps?: ReadonlyArray<string>) =>
   });
 
 layer("ComputerUseLeases controls", (it) => {
+  it.effect(
+    "marks a thread's control idle when its last open run ends, and its next turn reuses it",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const first = yield* leases.control(turnThread, Option.none());
+        // A queued follow-up keeps the control its proxy already holds.
+        yield* run(turnThread, "run-turn-1", 1, "completed");
+        yield* run(turnThread, "run-turn-2", 2, "queued");
+        assert.isFalse(yield* leases.turnEnded(turnThread));
+        assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
+
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run-turn-2'`;
+        assert.isTrue(yield* leases.turnEnded(turnThread));
+        assert.isFalse(yield* leases.turnEnded(turnThread));
+        const listed = () =>
+          leases.sessions.pipe(
+            Effect.map((all) => all.find(({ control }) => control.controlId === first.controlId)),
+          );
+        assert.isTrue((yield* listed())?.control.idle);
+        // Its proxy keeps the control, so the next turn needs no respawn.
+        assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
+        // A person typing between turns pauses nothing.
+        yield* leases.pause("human_input");
+        assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
+
+        const next = yield* leases.control(turnThread, Option.none());
+        assert.equal(next.controlId, first.controlId);
+        assert.isUndefined((yield* listed())?.control.idle);
+      }),
+  );
+
+  it.effect("ends every control when computer use is turned off", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const control = yield* leases.control(offThread, Option.none());
+      yield* leases.disable;
+      assert.deepEqual(yield* leases.controlState(offThread, control.controlId), {
+        _tag: "ended",
+        reason: "disabled",
+      });
+    }),
+  );
+
+  it.effect("keeps the app scope a control had once it is stopped", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const scoped = ThreadId.make("thread-scoped");
+      const control = yield* leases.control(scoped, Option.none());
+      assert.equal((yield* leases.controlState(scoped, control.controlId))._tag, "active");
+      yield* leases.stop(scoped);
+      const listed = (yield* leases.sessions).find(
+        (entry) => entry.control.controlId === control.controlId,
+      );
+      assert.deepEqual(listed?.control.scope, { apps: [] });
+    }),
+  );
+
   it.effect(
     "ends a stopped thread's control; its next turn gets a new one and the old id is replaced",
     () =>
