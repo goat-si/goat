@@ -29,7 +29,6 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
           `GOAT Computer Use build failed (${result.exitCode}). stdout: ${result.stdout.trim()} stderr: ${result.stderr.trim()}`,
         ],
       });
-    yield* requireReleaseCommand(runReleaseCommand, process.execPath, args);
     return path.join(input.output, "GOAT Computer Use.app");
   },
 );
