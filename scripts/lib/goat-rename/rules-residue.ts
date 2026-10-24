@@ -79,6 +79,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
       "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_menu.xml",
       "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_new_thread.xml",
       "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_settings.xml",
+      "apps/mobile/modules/t3-native-controls/android/src/main/res/drawable/t3_usage.xml",
       "apps/mobile/modules/t3-native-controls/expo-module.config.json",
       "apps/mobile/modules/t3-native-controls/ios/T3NativeControls.podspec",
       "apps/mobile/modules/t3-native-controls/ios/T3NativeControlsModule.swift",
@@ -86,13 +87,13 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
       "apps/mobile/modules/t3-native-controls/ios/T3SidebarTabBarView.swift",
       "apps/mobile/src/native/AndroidHingeObserver.android.tsx",
     ],
-    /\b(?:T3ChipIcons|T3FoldPosture(?:Module|View)?|T3NativeControlIcons|T3SegmentedControlView|T3SidebarTabBarView|t3_menu|t3_new_thread|t3_settings)\b/g,
+    /\b(?:T3ChipIcons|T3FoldPosture(?:Module|View)?|T3NativeControlIcons|T3SegmentedControlView|T3SidebarTabBarView|t3_menu|t3_new_thread|t3_settings|t3_usage)\b/g,
     "ADR-0014: native classes, resource bundles and drawable ids share the frozen native fingerprint.",
   ),
   keep(
     "upstream-native-dependency-provenance",
     ["apps/mobile/deps/README.md", "docs/operations/mobile-screens-fork.md"],
-    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.37|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
+    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.43|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
     "D12/D18: dependency repository branches, pack commands and provenance metadata belong to the vendor.",
   ),
   keep(

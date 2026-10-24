@@ -38,6 +38,8 @@ export const hostEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "FleetHostStates.cordon upserts one row by host, setting cordoned and reason while preserving an existing drain; repeating does not launch work.",
     annotations: {
       idempotentHint: true,
       openWorldHint: true,
@@ -59,6 +61,8 @@ export const hostEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "FleetHostStates.uncordon deletes the single state row by host; a repeat removes no additional state and starts no work.",
     annotations: {
       idempotentHint: true,
       openWorldHint: true,
@@ -73,13 +77,15 @@ export const hostEntries = {
     description:
       "Persistently cordon a host and mark it Draining, excluding it from new placements. Existing goal attempts are currently not moved automatically. Use goat_host_uncordon to clear both flags.",
     guide:
-      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. The code contains a policy helper for moving idle attempts between runs, but the current goal controller does not call it or request drain reschedules. Its success message therefore promises evacuation that the controller does not implement.",
+      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. To move a goal attempt off the host, call goat_thread_reschedule for it.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "The handler only calls FleetHostStates.cordon with draining:true, upserting one host row. Repeating sets the same flags and does not launch evacuation work.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,

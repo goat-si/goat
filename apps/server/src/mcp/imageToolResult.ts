@@ -167,7 +167,10 @@ export const imageToolFailure =
     }).pipe(Effect.as(result));
   };
 
-/** An image tool's result as image content, with its metadata beside it as JSON. */
+/**
+ * An image tool's result as image content, with its metadata beside it as JSON text. With an
+ * image, structuredContent stays empty: Codex then sends the model only that JSON, never the image.
+ */
 export const imageToolSuccess = (payload: unknown, encodedResult: unknown) => {
   const { screenshot, ...rest } = encodedResult as ImageToolResult;
   const includeImage =
@@ -182,7 +185,7 @@ export const imageToolSuccess = (payload: unknown, encodedResult: unknown) => {
   };
   return new McpSchema.CallToolResult({
     isError: false,
-    structuredContent: metadata,
+    ...(includeImage ? {} : { structuredContent: metadata }),
     content: [
       { type: "text", text: JSON.stringify(metadata) },
       ...(includeImage

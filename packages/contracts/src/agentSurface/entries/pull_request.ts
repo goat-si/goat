@@ -17,6 +17,8 @@ export const pullRequestEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Linking a pull request that is already linked succeeds with alreadyLinked and changes nothing.",
     annotations: {
       title: "Link pull request to thread",
       idempotentHint: true,
@@ -39,6 +41,8 @@ export const pullRequestEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Unlinking a pull request that is not linked succeeds with wasLinked false and changes nothing.",
     annotations: {
       title: "Unlink pull request from thread",
       idempotentHint: true,
@@ -82,6 +86,7 @@ export const pullRequestEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: "Watching a pull request this thread already watches keeps the one watch.",
     annotations: {
       title: "Watch pull request",
       idempotentHint: true,
@@ -104,6 +109,7 @@ export const pullRequestEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: "Unwatching a pull request with no watch changes nothing.",
     annotations: {
       title: "Stop watching pull request",
       idempotentHint: true,

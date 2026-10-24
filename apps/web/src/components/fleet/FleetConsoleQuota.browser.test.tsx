@@ -123,6 +123,7 @@ function setup(): FleetSnapshot {
     os: null,
     machineKind: null,
     sshHost: null,
+    reportedAliases: [],
     answering: true,
     boat: null,
     running: 0,

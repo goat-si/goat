@@ -34,8 +34,19 @@ export const COMPUTER_USE_TOOL_SOURCE = {
   kind: "computer",
 } as const;
 
+// Codex and ACP name a call `server.tool`; Claude, Cursor and Pi `mcp__server__tool`; OpenCode
+// `server_tool`, with a digest after the server name in OpenCode 2.
+const CUA_DRIVER_TOOL = /^(?:cua-driver\.|mcp__cua-driver__|cua-driver(?:-[0-9a-f]+)?_)([a-z_]+)$/u;
+
+/** The cua-driver tool a provider's call name refers to, such as `click`. */
+export function cuaDriverToolName(toolName: string | null | undefined): string | undefined {
+  return toolName ? CUA_DRIVER_TOOL.exec(toolName)?.[1] : undefined;
+}
+
 export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {
-  if (toolName === "cua_repl.js") return "computer" as const;
+  if (toolName === "cua_repl.js" || cuaDriverToolName(toolName) !== undefined) {
+    return "computer" as const;
+  }
   const code = asRecord(input)?.code;
   return isJavaScriptReplTool(toolName) &&
     typeof code === "string" &&

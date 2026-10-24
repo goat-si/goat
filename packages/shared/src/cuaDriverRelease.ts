@@ -2,6 +2,12 @@
 // Cua Driver notice version and files in third-party-licenses.config.json with both.
 const CUA_DRIVER_VERSION = "0.37.0";
 
+/** The macOS helper app that owns computer use's TCC identity (Contents/Helpers in GOAT.app). */
+export const COMPUTER_USE_HELPER_NAME = "GOAT Computer Use";
+
+/** One helper per desktop channel, so stable, nightly and dev each keep their own grants. */
+export const computerUseHelperBundleId = (desktopAppId: string) => `${desktopAppId}.computer-use`;
+
 const archives = {
   "darwin-universal": {
     archiveName: "cua-driver-rs-0.37.0-darwin-universal-binary.tar.gz",
@@ -113,7 +119,7 @@ export function cuaDriverHostOptions(
     binaryPath,
     hostBundleId,
     // EmbeddedPermissionMode.Standard. Bounded mode ties authority to manifest lifetimes that
-    // would end the shared daemon under interactive threads too (ADR-0020).
+    // would end the shared daemon under interactive threads too (ADR-0022).
     permissionMode: 0,
     capabilityManifestPath,
     approveCapabilityManifest: true,

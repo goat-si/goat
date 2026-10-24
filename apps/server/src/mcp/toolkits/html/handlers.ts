@@ -20,6 +20,15 @@ const toFailure = (error: { readonly _tag: string; readonly message: string }) =
   });
 
 const handlers = {
+  goat_html_list: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const { thread } = yield* McpInvocationContext.requireThreadScope(scope, "html.list");
+      return yield* (yield* HtmlRender.HtmlRender)
+        .list({ threadId: thread.threadId, ...input })
+        .pipe(Effect.mapError(toFailure));
+    }),
+  ),
   // The headless browser runs on the host and can open local files, so only
   // agents GOAT launched, which already work on this machine, get it.
   html_preview: McpToolAccess.readsAsCaller((input) =>
@@ -60,4 +69,5 @@ export const layerPreview = McpToolAccess.toLayer(HtmlPreviewToolkit, {
 
 export const layerRender = McpToolAccess.toLayer(HtmlRenderToolkit, {
   html_render: handlers.html_render,
+  goat_html_list: handlers.goat_html_list,
 });

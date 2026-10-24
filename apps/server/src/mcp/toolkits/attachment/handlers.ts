@@ -95,6 +95,7 @@ export const layer = McpToolAccess.toLayer(
           (input) =>
             Effect.gen(function* () {
               const { caller, projection } = yield* readThread(input.threadId, ["messages"]);
+              yield* McpToolAccess.admit(input);
               if (projection.thread.archivedAt !== null)
                 return yield* new OrchestratorMcpFailure({
                   code: "invalid_request",
@@ -134,6 +135,7 @@ export const layer = McpToolAccess.toLayer(
                 status: result.run.status,
               };
             }),
+          { admission: "handler" },
         ),
       ),
     };

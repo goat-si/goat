@@ -700,10 +700,15 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
               const bounded = boundSnapshotMetadata(metadata);
               return new McpSchema.CallToolResult({
                 isError: false,
-                structuredContent:
-                  bounded.omitted.length === 0
-                    ? bounded.value
-                    : { ...bounded.value, omitted: bounded.omitted },
+                // Codex would send the model this JSON in place of the image (see imageToolSuccess).
+                ...(includeImage
+                  ? {}
+                  : {
+                      structuredContent:
+                        bounded.omitted.length === 0
+                          ? bounded.value
+                          : { ...bounded.value, omitted: bounded.omitted },
+                    }),
                 content: [
                   {
                     type: "text",

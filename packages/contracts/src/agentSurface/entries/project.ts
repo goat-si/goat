@@ -49,9 +49,11 @@ export const projectEntries = {
     toolkit: "project",
     summary: "Register a project directory through the existing project service.",
     description:
-      "Register a project directory, optionally creating it. Omit workspaceRoot to create a Git repository from a title with a README, icon, and attempted first commit. Each call is a new request; commit failure still leaves the project registered.",
+      "Register a project directory, optionally creating it. Omit workspaceRoot to create a Git repository from a title with a README, icon and attempted first commit. Retry with the same clientRequestId to reuse the first project; commit failure still leaves it registered.",
     guide:
-      "Set createWorkspaceRootIfMissing to create a missing directory. With workspaceRoot omitted, supply only the title; GOAT creates the repository in its own projects folder. commitError explains a failed initial commit; the project exists either way.\n\nEach call creates a new request. An already registered workspace is rejected. Clone separately with goat_project_clone, then register the returned cwd with goat_project_create.\n\nRegistration goes through the existing project service, for an explicit workspace and for title-only creation alike.",
+      "Set createWorkspaceRootIfMissing to create a missing directory. With workspaceRoot omitted, supply only the title; GOAT creates the repository in its own projects folder. commitError explains a failed initial commit; the project exists either way.\n\nRetry with the same clientRequestId and arguments to reuse the first creation. Without a key each call is a new request; an already registered workspace is rejected. Clone separately with goat_project_clone, then register the returned cwd with goat_project_create.\n\nRegistration goes through the existing project service, for an explicit workspace and for title-only creation alike.",
+    idempotency: "key",
+    reconcile: "project.list",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -72,6 +74,8 @@ export const projectEntries = {
     description: "Update a registered project's settings. Omitted fields stay unchanged.",
     guide:
       "The handler uses ProjectService.update and supplies only the requested changes.\n\nUpdates go through the same project service as the app.",
+    idempotencyReason:
+      "ProjectService.update assigns only supplied settings to the same project id. Repeating the patch preserves omitted fields and does not create a project, workspace or provider run.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,
@@ -116,6 +120,8 @@ export const projectEntries = {
       "Clone a repository. Register the returned cwd with goat_project_create. This call does not adopt an existing checkout or remove the destination on failure.",
     guide:
       "The tool only clones; it does not register a project. An existing empty destination directory is allowed; a nonempty destination is rejected. The handler does not clean up the destination on failure.\n\nCloning uses the app's source-control service.",
+    idempotencyReason:
+      "SourceControlRepositoryService.prepareDestination refuses a nonempty destination and git clone targets that exact path. Retrying cannot create a second checkout or adopt/overwrite the completed clone.",
     effect: "destructive",
     capability: "settings.write",
     hostRoutable: false,

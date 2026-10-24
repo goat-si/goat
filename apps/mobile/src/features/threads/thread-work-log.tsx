@@ -59,7 +59,9 @@ import { environmentThreadDetails, threadEnvironment } from "../../state/threads
 import { useAtomCommand } from "../../state/use-atom-command";
 import { toolActivityFaviconUrl } from "@goat/shared/favicon";
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
-import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import { computerUseRun, computerUseRunStatus } from "@goat/client-runtime/work-log/computer-use";
+import { ReplCodeText } from "./ReplCodeText";
+import { ThreadComputerUseCard } from "./ThreadComputerUseCard";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { GoatWordmark } from "../../components/GoatWordmark";
@@ -851,38 +853,6 @@ function WorkspacePreparationRetryButton(props: {
   );
 }
 
-function ReplCodeText({
-  code,
-  theme,
-}: {
-  readonly code: string;
-  readonly theme: "light" | "dark";
-}) {
-  const lines = useMarkdownCodeHighlight({ code, language: "typescript", theme, enabled: true });
-  let offset = 0;
-  const highlighted = lines?.flatMap((line, lineIndex) => {
-    const separator = lineIndex > 0 ? "\n" : "";
-    offset += separator.length;
-    return [
-      separator,
-      ...line.map((token) => {
-        const start = offset;
-        offset += token.content.length;
-        return (
-          <Text key={start} style={token.color ? { color: token.color } : undefined}>
-            {token.content}
-          </Text>
-        );
-      }),
-    ];
-  });
-  return (
-    <Text selectable className="font-mono text-2xs leading-normal text-foreground">
-      {highlighted ?? code}
-    </Text>
-  );
-}
-
 const ThreadWorkLogRow = function ThreadWorkLogRow(
   props: Omit<
     ThreadWorkLogProps,
@@ -1050,8 +1020,11 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
       </Text>
     );
   const toolPresentation = resolveWorkEntryToolPresentation(row.workEntry);
+  const computerUse = computerUseRun(row.projectedItem.item);
   const previewText = relativizeWorkLabelPaths(
-    row.groupStandIn?.label ?? workEntryRowLabel(row.workEntry, false, props.workspaceRoot),
+    row.groupStandIn?.label ??
+      computerUse?.summary ??
+      workEntryRowLabel(row.workEntry, false, props.workspaceRoot),
     row.workEntry.changedFiles,
     props.workspaceRoot,
   );
@@ -1218,6 +1191,16 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         </View>
       </WorkLogPressable>
 
+      {computerUse && (expanded || computerUse.observes) ? (
+        <ThreadComputerUseCard
+          run={computerUse}
+          status={computerUseRunStatus(row.workEntry.toolLifecycleStatus)}
+          row={row.projectedItem}
+          environmentId={props.environmentId}
+          showScreenshots={!expanded}
+          onPressPreview={props.onPressPreview}
+        />
+      ) : null}
       {expanded &&
       (reasoning ||
         inlineDiff ||

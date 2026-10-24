@@ -18,6 +18,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "clientRequestId is required and is the inbound message's key in the channel ledger, which ingests each message once.",
     annotations: {
       title: "Message GOAT's front desk",
       idempotentHint: true,
@@ -52,7 +54,7 @@ export const channelEntries = {
     toolkit: "channel",
     summary: "Make this machine GOAT Bot's home",
     description:
-      "Make this machine GOAT Bot's home by writing a new home claim. Other machines adopt it when a connected GOAT app syncs it; the newest claim wins. Check claimed: a newer competing claim returns claimed:false.",
+      "Make this machine GOAT Bot's home with a new claim. The newest claim wins when apps sync. Check claimed for a competing claim. Retry with the same clientRequestId.",
     guide:
       "Use this to replace a home claim naming a machine that is gone or no longer connects. Use a live full-access calling thread in default interaction mode or a full-access client.\n\nIf a newer claim names another machine, the result contains claimed:false and the current home.",
     effect: "write",
@@ -61,6 +63,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "key",
+    reconcile: "channel.bot_home_read",
     annotations: {
       title: "Make this machine GOAT Bot's home",
       idempotentHint: false,
@@ -163,6 +167,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "ChannelRemoteWorkers.move serializes by taskId: a committed move advances generation, making the old worker state stale; once the destination starts, another move there is refused as same_host.",
     annotations: {
       title: "Continue a GOAT task on another machine",
       idempotentHint: false,
@@ -186,6 +192,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "ChannelWorkerReports.report checks the caller and generation, then deduplicates the required eventId in the channel ledger before committing a transition or notification.",
     annotations: {
       title: "Report on a GOAT ledger task",
       idempotentHint: true,
