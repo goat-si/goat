@@ -410,7 +410,7 @@
   "apps/server/src/provider/ProviderHostSync.ts": { "lines": 1139, "nonNull": 1 },
   "apps/server/src/provider/ProviderRegistry.test.ts": { "lines": 2456 },
   "apps/server/src/provider/ProviderRegistry.ts": { "lines": 1058 },
-  "apps/server/src/provider/ProviderSettings.ts": { "lines": 1132 },
+  "apps/server/src/provider/ProviderSettings.ts": { "lines": 1103 },
   "apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts": { "lines": 1197 },
   "apps/server/src/provider/claudeResetCredits.ts": { "nonNull": 5 },
   "apps/server/src/provider/claudeUsageLimits.ts": { "nonNull": 1 },
