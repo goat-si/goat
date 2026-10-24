@@ -148,7 +148,11 @@ const make = Effect.gen(function* () {
   });
   const forwarding = (caller: Inbox.DecisionCaller, effective: Profiles.EffectiveProfile) => ({
     transportEnvironmentId: Authority.scopeOf(caller).environmentId,
-    ...(caller.kind === "agent" ? { permissionProfileCeiling: effective.profile } : {}),
+    // As other profiled host calls do: only an enabled origin policy has a narrowing to forward,
+    // and a destination with goatclaw off refuses any forwarded ceiling.
+    ...(caller.kind === "agent" && effective.enabled
+      ? { permissionProfileCeiling: effective.profile }
+      : {}),
   });
   const stamp = (
     caller: Inbox.DecisionCaller,
