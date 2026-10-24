@@ -214,6 +214,30 @@ describe("fleetHostRows", () => {
     expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
   });
 
+  it("reads a machine through an alias the graph resolved when nothing closer reports it", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", {
+          environmentId: mini,
+          answering: false,
+          reportedAliases: [{ via: headless, alias: "mini-ts" }],
+        }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("mini-ts", { cpu: 0.7 })] },
+      ),
+      primaryEnvironmentId: studio,
+    });
+    expect(rows.map((row) => [row.label, row.sourceKey])).toEqual([
+      ["studio", hostSourceKey(studio, null)],
+      ["mini", hostSourceKey(headless, "mini-ts")],
+    ]);
+  });
+
   it("does not list a connected host again under the alias a same-machine server reports", () => {
     const desktop = EnvironmentId.make("desktop");
     const headless = EnvironmentId.make("headless");
