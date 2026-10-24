@@ -767,6 +767,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }),
   );
 
+  /** The refusal for a call while a pause or end is applied or waiting to be; else undefined. */
+  const stoppedRefusal = (id: JsonRpcId, method: string | undefined) => {
+    const ending =
+      finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+    const pausing =
+      paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+    if (ending !== undefined) return refusal(id, method, ending, LEASE_END_MESSAGES[ending]);
+    if (pausing !== undefined)
+      return refusal(id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
+    return undefined;
+  };
+  /** As stoppedRefusal, for a call whose child was replaced with no stop recorded. */
+  const stoppedRefusalAlways = (id: JsonRpcId, method: string | undefined) =>
+    refusal(id, method, lastInterruption.reason, lastInterruption.message);
+
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);
     const id = message?.id;
@@ -832,9 +847,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         );
       return;
     }
+    // The child a tools/call goes to; a later wait that replaced it means the call is not its.
+    let callChild: Running | undefined;
     // Before the call reaches the driver: a capture must not see the overlay (#1321).
     if (isRequest && message?.method === "tools/call") {
       const current = running;
+      callChild = current;
       yield* drawOverlay({
         type: "call",
         id: JSON.stringify(id),
@@ -843,21 +861,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       });
       // A pause or end that came while drawing, or that is waiting for a refresh to let go of
       // the lock: refuse, whether or not it has stopped the driver yet. This call never ran.
-      const ending =
-        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
-      const pausing =
-        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
-      if (running !== current || pausing !== undefined || ending !== undefined)
-        return yield* options.output(
-          ending !== undefined
-            ? refusal(id, message.method, ending, LEASE_END_MESSAGES[ending])
-            : refusal(
-                id,
-                message.method,
-                pausedDetail(pausing ?? "human_input"),
-                PAUSE_MESSAGES[pausing ?? "human_input"],
-              ),
-        );
+      const late = stoppedRefusal(id, message.method);
+      if (running !== current || late !== undefined)
+        return yield* options.output(late ?? stoppedRefusalAlways(id, message.method));
     }
     if (isRequest)
       outstanding.set(JSON.stringify(id), {
@@ -886,6 +892,20 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       postsInput(typeof message.params?.name === "string" ? message.params.name : "")
     )
       yield* inputStarted(JSON.stringify(id));
+    // The window report and the input record above can wait. A pause or end that came meanwhile
+    // has already answered this call if its child was cut off; one still pending refuses it here,
+    // with nothing between this check and the send.
+    if (isRequest && message?.method === "tools/call") {
+      const key = JSON.stringify(id);
+      if (!outstanding.has(key) || running !== callChild) return yield* inputEnded(key);
+      const late = stoppedRefusal(id, message.method);
+      if (late !== undefined) {
+        outstanding.delete(key);
+        yield* inputEnded(key);
+        return yield* options.output(late);
+      }
+    }
+    if (running === undefined) return;
     yield* running.driver.send(line);
   });
 

@@ -53,6 +53,8 @@ export const harness = Effect.fn(function* (
     readonly placementGate?: Deferred.Deferred<void>;
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
+    /** Holds every window report's answer until done, as a slow server would. */
+    readonly targetGate?: Deferred.Deferred<void>;
     /**
      * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
@@ -89,7 +91,12 @@ export const harness = Effect.fn(function* (
       ? {}
       : {
           onTarget: (target: { pid: number; windowId: number }) =>
-            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
+            Queue.offer(targets, target).pipe(
+              Effect.andThen(
+                options.targetGate === undefined ? Effect.void : Deferred.await(options.targetGate),
+              ),
+              Effect.as(options.onTarget?.(target) ?? true),
+            ),
         }),
     ...(options.humanInput
       ? {

@@ -705,6 +705,33 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect(
+    "a pause and resume while a call's window report waits answer it once and send it nowhere",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ onTarget: () => true, targetGate: gate });
+        yield* h.push(active());
+        const forwarded = yield* h
+          .send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        // The person takes the screen while the report waits: the pause answers the call.
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.killed;
+        const answer = yield* h.nextToProvider;
+        assert.deepInclude((answer.result as Record<string, unknown>).structuredContent as object, {
+          detail: "waiting_for_human",
+        });
+        yield* h.push(active());
+        yield* h.restarted;
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(forwarded);
+        assert.notInclude(h.log, "send click");
+        assert.equal(yield* h.providerQueued, 0);
+      }),
+  );
+
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
     Effect.gen(function* () {
       const h = yield* harness();
