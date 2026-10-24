@@ -88,10 +88,12 @@ const ProjectReadTool = Tool.make(agentSurfaceRegistry["project.read"].name, {
 const ProjectCreateTool = Tool.make(agentSurfaceRegistry["project.create"].name, {
   ...shared,
   description: agentSurfaceRegistry["project.create"].description,
-  parameters: Schema.Struct({
-    ...ProjectCreatePayload.fields,
-    workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      ...ProjectCreatePayload.fields,
+      workspaceRoot: Schema.optional(ProjectCreatePayload.fields.workspaceRoot),
+    }),
+  ),
   success: Schema.Struct({ ...Project.fields, commitError: Schema.optional(Schema.String) }),
   dependencies: [...shared.dependencies, ManagedProjectFolders.ManagedProjectFolders],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.create"]));

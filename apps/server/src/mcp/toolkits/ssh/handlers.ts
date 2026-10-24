@@ -627,69 +627,74 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     ),
   ),
   goat_ssh_thread_handoff: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment((input, check) =>
-      Effect.gen(function* () {
-        const caller = yield* check;
-        const sourceThreadId = input.threadId ?? caller.caller?.id;
-        if (sourceThreadId === undefined)
-          return yield* new OrchestratorMcpFailure({
-            code: "target_required",
-            message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
-          });
-        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        const hosts = yield* dispatch
-          .listHosts({ probe: false })
-          .pipe(Effect.mapError(toMcpFailure));
-        const host = input.host.trim();
-        if (!hosts.some((entry) => entry.alias === host))
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
-          });
-        // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
-        const target = { alias: host, hostname: host, username: null, port: null };
-        const current = yield* check;
-        const callerContext = yield* Effect.context<
-          | McpInvocationContext.McpInvocationContext
-          | ThreadManagementService.ThreadManagementService
-        >();
-        const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
-        const result = yield* sync
-          .handoffThread({
-            sourceThreadId,
-            target,
-            expectedEnvironmentId: null,
-            beforeRemoteChange: check.pipe(
-              Effect.asVoid,
-              Effect.provide(callerContext),
-              Effect.mapError(
-                () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+    McpToolAccess.writesEnvironment(
+      (input, check) =>
+        Effect.gen(function* () {
+          const caller = yield* check;
+          const sourceThreadId = input.threadId ?? caller.caller?.id;
+          if (sourceThreadId === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "target_required",
+              message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
+            });
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const hosts = yield* dispatch
+            .listHosts({ probe: false })
+            .pipe(Effect.mapError(toMcpFailure));
+          const host = input.host.trim();
+          if (!hosts.some((entry) => entry.alias === host))
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
+            });
+          // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
+          const target = { alias: host, hostname: host, username: null, port: null };
+          const current = yield* check;
+          yield* McpToolAccess.admit(input);
+          const callerContext = yield* Effect.context<
+            | McpInvocationContext.McpInvocationContext
+            | ThreadManagementService.ThreadManagementService
+          >();
+          const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
+          const result = yield* sync
+            .handoffThread({
+              sourceThreadId,
+              target,
+              expectedEnvironmentId: null,
+              beforeRemoteChange: check.pipe(
+                Effect.asVoid,
+                Effect.provide(callerContext),
+                Effect.mapError(
+                  () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+                ),
               ),
-            ),
-            ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
-              ? { allowRunId: current.caller.activeRunId }
-              : {}),
-            ...(input.message === undefined ? {} : { message: input.message }),
-            ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-            ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
-            ...(input.interactionMode === undefined
-              ? {}
-              : { interactionMode: input.interactionMode }),
-          })
-          .pipe(Effect.mapError(toHandoffFailure));
-        return {
-          host,
-          operationId: result.operationId,
-          remoteThreadId: result.remoteThreadId,
-          remoteProjectId: result.remoteProjectId,
-          remoteRepoPath: result.remoteRepoPath,
-          branch: result.branch,
-          notes: [
-            `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
-            `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
-          ],
-        };
-      }),
+              ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
+                ? { allowRunId: current.caller.activeRunId }
+                : {}),
+              ...(input.message === undefined ? {} : { message: input.message }),
+              ...(input.modelSelection === undefined
+                ? {}
+                : { modelSelection: input.modelSelection }),
+              ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+              ...(input.interactionMode === undefined
+                ? {}
+                : { interactionMode: input.interactionMode }),
+            })
+            .pipe(Effect.mapError(toHandoffFailure));
+          return {
+            host,
+            operationId: result.operationId,
+            remoteThreadId: result.remoteThreadId,
+            remoteProjectId: result.remoteProjectId,
+            remoteRepoPath: result.remoteRepoPath,
+            branch: result.branch,
+            notes: [
+              `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
+              `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
+            ],
+          };
+        }),
+      { admission: "handler" },
     ),
   ),
   goat_ssh_reports: McpToolAccess.readsAsCaller((input) =>

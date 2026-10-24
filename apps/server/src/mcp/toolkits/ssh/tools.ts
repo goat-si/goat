@@ -312,16 +312,18 @@ const SshThreadHandoffTool = Tool.make(agentSurfaceRegistry["ssh.thread_handoff"
   dependencies: [...shared.dependencies, SshWorkspaceSync.SshWorkspaceSync],
   failure: Schema.Union([OrchestratorMcpFailure, SshThreadHandoffFailure]),
   description: agentSurfaceRegistry["ssh.thread_handoff"].description,
-  parameters: Schema.Struct({
-    host: HostAlias,
-    threadId: Schema.optional(
-      ThreadId.annotate({ description: "Defaults to the calling thread." }),
-    ),
-    message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
-    modelSelection: Schema.optional(ModelSelection),
-    runtimeMode: Schema.optional(RuntimeMode),
-    interactionMode: Schema.optional(ProviderInteractionMode),
-  }),
+  parameters: withClientRequestId(
+    Schema.Struct({
+      host: HostAlias,
+      threadId: Schema.optional(
+        ThreadId.annotate({ description: "Defaults to the calling thread." }),
+      ),
+      message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
+      modelSelection: Schema.optional(ModelSelection),
+      runtimeMode: Schema.optional(RuntimeMode),
+      interactionMode: Schema.optional(ProviderInteractionMode),
+    }),
+  ),
   success: Schema.Struct({
     host: Schema.String,
     operationId: Schema.String,

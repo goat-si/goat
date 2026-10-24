@@ -181,9 +181,11 @@ export const sshEntries = {
     toolkit: "ssh",
     summary: "Continue a thread on another machine",
     description:
-      "Continue this thread (or threadId) on another machine over SSH, in a new thread there that gets its uncommitted changes and conversation; the source thread stays here. Make this the last action of the turn: changes made here after the call are not transferred. Ignored files such as .env are not copied, and untracked files that look like secrets refuse the handoff.",
+      "Continue a thread on another SSH machine in a new thread with its changes and conversation; the source stays here. Retry with the same clientRequestId to reuse the first handoff. Make this the turn's last action. Ignored files are excluded; untracked files resembling secrets refuse the handoff.",
     guide:
       "host must be an SSH alias from goat_ssh_host_list; linked HTTPS hosts are not supported. Omitted modelSelection, runtimeMode and interactionMode keep the source thread's values. Needs a full-access caller in default mode. The source thread must have no active or queued run other than the calling thread's own current run. Outside a GOAT thread, pass threadId. Read the returned remoteThreadId with goat_thread_read using the same host; bring results back with Git actions → Fetch branch using the returned remoteRepoPath and branch.",
+    idempotency: "key",
+    reconcile: "thread.list",
     effect: "destructive",
     capability: "threads.remote",
     hostRoutable: true,

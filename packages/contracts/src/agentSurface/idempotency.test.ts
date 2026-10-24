@@ -41,17 +41,10 @@ const NOT_YET_KEYED: ReadonlySet<string> = new Set([
   "preview.set_appearance",
   "preview.type",
   "preview.upload",
-  "project.create",
   "pull_request_guide.update",
-  "schedule.run",
   "schedule.update",
   "ssh.runtime_update",
-  "ssh.thread_handoff",
-  "thread.configure",
-  "thread.fork",
-  "thread.merge_back",
   "thread.organize",
-  "thread.send_attachments",
 ]);
 
 it("gives every write a retry key with a reconcile read, or a recorded reason it has none", () => {

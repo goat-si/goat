@@ -97,9 +97,11 @@ export const scheduleEntries = {
     toolkit: "thread",
     summary: "Run a scheduled task now through the existing scheduler.",
     description:
-      "Dispatch a manual run of a scheduled task. Each call is a new run, so retries can duplicate work. Completion covers dispatch and bookkeeping; the provider turn can still be running. threadId names the thread this run went to, or is null when dispatch failed.",
+      "Dispatch a manual run of a scheduled task. Retry with the same clientRequestId to reuse the first run. Completion covers dispatch and bookkeeping; the provider turn may still be running. threadId names the dispatched thread, or is null if dispatch failed.",
     guide:
-      "Requires a full-access/default caller. Each call requests a new manual run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
+      "Requires a full-access/default caller. Retry with the same clientRequestId to reuse the first manual run; a new key requests a new run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
+    idempotency: "key",
+    reconcile: "schedule.list",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
