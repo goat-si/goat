@@ -80,9 +80,6 @@ const openGuide = async (permission: CuaPermission) => {
   if (!guide || !(await guide(permission))) throw new Error("Unable to open System Settings.");
 };
 
-const revealGrantTarget = window.desktopBridge?.revealCuaGrantTarget;
-const relaunchForGrants = window.desktopBridge?.relaunchForCuaGrants;
-
 export function ComputerUseSetup({
   host,
   hostLabel,
@@ -101,8 +98,8 @@ export function ComputerUseSetup({
       localMac={host.localMac}
       onCheck={checkGrants}
       onAllow={openGuide}
-      onReveal={revealGrantTarget}
-      onRelaunch={relaunchForGrants}
+      onReveal={window.desktopBridge?.revealCuaGrantTarget}
+      onRelaunch={window.desktopBridge?.relaunchForCuaGrants}
       onEnable={() => host.save(true)}
       onVerify={async () => {
         const verifyDriver = window.desktopBridge?.verifyCuaDriver;
