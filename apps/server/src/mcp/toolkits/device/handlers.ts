@@ -142,79 +142,83 @@ const handlers = {
       };
     }).pipe(Effect.mapError(toolError)),
   ),
-  device_open: McpToolAccess.actsAsCaller((input) =>
-    Effect.gen(function* () {
-      const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
-      const state = yield* devices.list;
-      if (state.hostStatus === "disabled") {
-        return yield* new DeviceToolUnavailableError({
-          reason:
-            "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
-        });
-      }
-      const target = yield* pickDevice(state.devices, input);
-      // Resolve consent and agent connectivity before booting or registering a session.
-      if (!(yield* devices.agentReadinessIfSupported(target.hostId))) {
-        return yield* new DeviceToolUnavailableError({
-          reason:
-            "Agent device access requires enabled device support, agent access, and an available simulator platform on this host.",
-        });
-      }
-      const session = yield* devices.open(
-        {
+  device_open: McpToolAccess.actsAsCaller(
+    (input) =>
+      Effect.gen(function* () {
+        const scope = yield* requireDeviceAccess;
+        const devices = yield* DeviceService.DeviceService;
+        const state = yield* devices.list;
+        if (state.hostStatus === "disabled") {
+          return yield* new DeviceToolUnavailableError({
+            reason:
+              "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
+          });
+        }
+        // Resolve consent and agent connectivity before booting or registering a session.
+        if (!(yield* devices.agentReadinessIfSupported(input.hostId ?? LOCAL_DEVICE_HOST_ID))) {
+          return yield* new DeviceToolUnavailableError({
+            reason:
+              "Agent device access requires enabled device support, agent access, and an available simulator platform on this host.",
+          });
+        }
+        yield* McpToolAccess.admit(input);
+        // Android boot replaces an AVD name with a serial; replay must precede discovery by id.
+        const target = yield* pickDevice(state.devices, input);
+        const session = yield* devices.open(
+          {
+            threadId: scope.thread.threadId,
+            hostId: target.hostId,
+            deviceId: target.id,
+            platform: target.platform,
+          },
+          { workspaceRoot: yield* threadWorkspaceRoot(scope.thread.threadId) },
+        );
+        const after = yield* devices.state;
+        const device =
+          after.devices.find(
+            (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
+          ) ?? target;
+        // Target the opened device: an EAS device and its agent-device daemon
+        // exist only once its session runs, and Android ids change on boot.
+        const agent = yield* devices.agentTarget({
           threadId: scope.thread.threadId,
-          hostId: target.hostId,
-          deviceId: target.id,
-          platform: target.platform,
-        },
-        { workspaceRoot: yield* threadWorkspaceRoot(scope.thread.threadId) },
-      );
-      const after = yield* devices.state;
-      const device =
-        after.devices.find(
-          (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
-        ) ?? target;
-      // Target the opened device: an EAS device and its agent-device daemon
-      // exist only once its session runs, and Android ids change on boot.
-      const agent = yield* devices.agentTarget({
-        threadId: scope.thread.threadId,
-        hostId: device.hostId,
-        deviceId: device.id,
-      });
-      const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
-      const targetArgs = [
-        ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
-        ...agent.args,
-      ];
-      const config = yield* ServerConfig.ServerConfig;
-      const path = yield* Path.Path;
-      const platform = yield* HostProcess.Platform;
-      const shimDir = yield* ensureAgentDeviceShim({
-        entryPath: yield* devices.agentCli,
-        stateDir: config.stateDir,
-      }).pipe(
-        Effect.mapError(
-          (error) =>
-            new DeviceToolUnavailableError({
-              reason:
-                error._tag === "NodeRuntimeUnavailableError"
-                  ? nodeRuntimeUnavailableMessage("Device automation")
-                  : "Could not prepare the agent-device launcher.",
-              cause: error,
-            }),
-        ),
-      );
-      const command = path.join(
-        shimDir,
-        platform === "win32" ? "agent-device.cmd" : "agent-device",
-      );
-      return {
-        device,
-        agentDevice: { command, targetArgs },
-        quickStart: agentDeviceQuickStart(device, targetArgs, command, cloud),
-      };
-    }).pipe(Effect.mapError(toolError)),
+          hostId: device.hostId,
+          deviceId: device.id,
+        });
+        const cloud = after.hosts.some((host) => host.id === device.hostId && host.kind === "eas");
+        const targetArgs = [
+          ...agentDeviceTargetArgs({ ...device, id: agent.agentDeviceId }),
+          ...agent.args,
+        ];
+        const config = yield* ServerConfig.ServerConfig;
+        const path = yield* Path.Path;
+        const platform = yield* HostProcess.Platform;
+        const shimDir = yield* ensureAgentDeviceShim({
+          entryPath: yield* devices.agentCli,
+          stateDir: config.stateDir,
+        }).pipe(
+          Effect.mapError(
+            (error) =>
+              new DeviceToolUnavailableError({
+                reason:
+                  error._tag === "NodeRuntimeUnavailableError"
+                    ? nodeRuntimeUnavailableMessage("Device automation")
+                    : "Could not prepare the agent-device launcher.",
+                cause: error,
+              }),
+          ),
+        );
+        const command = path.join(
+          shimDir,
+          platform === "win32" ? "agent-device.cmd" : "agent-device",
+        );
+        return {
+          device,
+          agentDevice: { command, targetArgs },
+          quickStart: agentDeviceQuickStart(device, targetArgs, command, cloud),
+        };
+      }).pipe(Effect.mapError(toolError)),
+    { admission: "handler" },
   ),
   device_screenshot: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
