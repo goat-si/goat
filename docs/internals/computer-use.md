@@ -333,7 +333,8 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   session for the same thread waits for the cleanup report.
 - **Physical kill switch.** On macOS the helper can arm a listen-only Escape tap while an agent
   session is active. A keyboard event tap needs Input Monitoring, a third grant, so the switch is
-  optional: onboarding offers it, and without it the Stop controls remain.
+  optional: onboarding offers it, and without it the Stop controls remain. Not implemented yet
+  (#1505).
 - **Input collision.** When a person uses the same desktop while an agent acts, the agent pauses
   and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
   every mouse button press to its lease proxy with its own time, from a listen-only event tap
