@@ -507,48 +507,67 @@ async function drawnOver(
   return false;
 }
 
-/** Whether rectangles, in the window's own coordinates, cover all of a width by height window. */
-export function coversWhole(
-  rects: ReadonlyArray<{
-    readonly x: number;
-    readonly y: number;
-    readonly w: number;
-    readonly h: number;
-  }>,
-  width: number,
-  height: number,
-): boolean {
-  for (let y = 0; y < height; y++) {
-    const spans = rects
-      .filter((rect) => rect.y <= y && y < rect.y + rect.h && rect.w > 0)
-      .map((rect) => [rect.x, rect.x + rect.w] as const)
-      .toSorted((a, b) => a[0] - b[0]);
-    let reached = 0;
-    for (const [start, end] of spans) {
-      if (start > reached) break;
-      reached = Math.max(reached, end);
-    }
-    if (reached < width) return false;
-  }
-  return true;
+/**
+ * Which part of a width by height window drawing has covered so far, row by row, so each report
+ * costs only the rows it touches.
+ */
+export function coverage(width: number, height: number) {
+  const rows: Array<Array<[number, number]>> = Array.from({ length: height }, () => []);
+  let full = 0;
+  return {
+    add(rect: { readonly x: number; readonly y: number; readonly w: number; readonly h: number }) {
+      const left = Math.max(0, rect.x);
+      const right = Math.min(width, rect.x + rect.w);
+      if (right <= left) return;
+      for (let y = Math.max(0, rect.y); y < Math.min(height, rect.y + rect.h); y++) {
+        const spans = rows[y] ?? [];
+        if (spans.length === 1 && spans[0]?.[0] === 0 && spans[0][1] === width) continue;
+        const merged: Array<[number, number]> = [];
+        let next: [number, number] = [left, right];
+        for (const span of spans) {
+          if (span[1] < next[0]) merged.push(span);
+          else if (span[0] > next[1]) {
+            merged.push(next);
+            next = span;
+          } else next = [Math.min(span[0], next[0]), Math.max(span[1], next[1])];
+        }
+        merged.push(next);
+        rows[y] = merged;
+        if (merged.length === 1 && merged[0]?.[0] === 0 && merged[0][1] === width) full++;
+      }
+    },
+    whole: () => full === height,
+  };
 }
 
+/** Reports past this many, the window counts as not redrawn: the wait stays bounded. */
+const MAX_DRAW_REPORTS = 4_096;
+
 /**
- * Whether the app redrew the whole window when asked (#1381). A window with no background keeps,
- * where it has not drawn yet, the pixels Composite copied in from behind it, and those can be
- * another app's. The protocol does not say which windows have no background, so every capture
- * asks the app to redraw the window (a synthetic Expose, which paints nothing by itself) and
- * waits, without holding the server, until the app's own drawing (Damage, which includes the
- * window's children) has covered all of it. An app that does not redraw, or not all of it in
- * REDRAW_LIMIT_MS, is refused. Undefined when the display cannot track drawing.
+ * Asks the app to redraw the window and watches it until the pixels are read (#1381).
+ *
+ * A window with no background keeps, where it has not drawn, the pixels Composite copied in
+ * from behind it, and those can be another app's. The protocol does not say which windows have
+ * no background. So every capture sends the app a synthetic Expose for the whole window, which
+ * paints nothing by itself, and waits, without holding the server, until the app's drawing
+ * (Damage, which includes the window's children) covers all of it.
+ *
+ * Damage rectangles bound what was drawn rather than prove each pixel. An app that answers by
+ * drawing only part of a window without a background shows the same leftovers on screen; that
+ * limit is documented in #1381. Damage also cannot tell whose window drew, so from before the
+ * Expose until the read, another app's window that is created, mapped or reparented anywhere in
+ * the target's subtree spoils the capture.
+ *
+ * Resolves with whether the window was redrawn whole, and a check of whether nothing else
+ * arrived since; undefined when the display cannot track drawing.
  */
-async function redrawnWhole(
+async function watchRedraw(
   x: Connection,
   setup: Setup,
   windowId: number,
   width: number,
   height: number,
-): Promise<boolean | undefined> {
+): Promise<{ readonly redrawn: boolean; readonly undisturbed: () => boolean } | undefined> {
   const name = new TextEncoder().encode("DAMAGE");
   const extension = await x.ask(
     request(98, 0, 2 + Math.ceil(name.length / 4), (view) => {
@@ -567,19 +586,45 @@ async function redrawnWhole(
     }),
   );
   if (!version) return undefined;
-  const id = setup.idBase | 2;
-  const drawn: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const own = windowId & ~setup.idMask;
+  // The target's own subtree, where another app's window would draw into the pixels read.
+  const subtree = [windowId];
+  for (let index = 0; index < subtree.length; index++) {
+    if (subtree.length > MAX_CHECKED_WINDOWS) return undefined;
+    const tree = await queryTree(x, subtree[index] ?? 0);
+    if (!tree) return undefined;
+    subtree.push(...childrenOf(tree).filter((child) => (child & ~setup.idMask) === own));
+  }
+  let disturbed = false;
+  const drawn = coverage(width, height);
+  let reports = 0;
   let asked: number | undefined;
+  const id = setup.idBase | 2;
   const done = Promise.withResolvers<boolean>();
   x.listen((event) => {
-    if ((event[0] ?? 0) % 128 !== notify || asked === undefined) return;
-    if (u32(event, 8) !== id) return;
+    const code = (event[0] ?? 0) & 0x7f;
+    // CreateNotify, MapNotify, ReparentNotify of a window that is not the app's own.
+    if (code === 16 || code === 19 || code === 21) {
+      if ((u32(event, 8) & ~setup.idMask) !== own) disturbed = true;
+      return;
+    }
+    if (code !== notify || asked === undefined || u32(event, 8) !== id) return;
     // Drawing reported before the Expose was sent, creating the Damage object's own report
     // included, is not the redraw.
     if (((u16(event, 2) - asked) & 0xffff) >= 0x8000) return;
-    drawn.push({ x: i16(event, 16), y: i16(event, 18), w: u16(event, 20), h: u16(event, 22) });
-    if (coversWhole(drawn, width, height)) done.resolve(true);
+    if (++reports > MAX_DRAW_REPORTS) return done.resolve(false);
+    drawn.add({ x: i16(event, 16), y: i16(event, 18), w: u16(event, 20), h: u16(event, 22) });
+    if (drawn.whole()) done.resolve(true);
   });
+  // ChangeWindowAttributes with SubstructureNotify, for this connection only.
+  for (const window of subtree)
+    x.send(
+      request(2, 0, 4, (view) => {
+        view.setUint32(4, window, true);
+        view.setUint32(8, 1 << 11, true);
+        view.setUint32(12, 1 << 19, true);
+      }),
+    );
   // DamageCreate at the raw-rectangles level: every drawing operation is reported.
   x.send(
     request(damage, 1, 4, (view) => {
@@ -602,11 +647,10 @@ async function redrawnWhole(
   asked = x.sequence();
   const timer = setTimeout(() => done.resolve(false), REDRAW_LIMIT_MS);
   // A lost connection never redraws; the exchange then ends on its own.
-  const covered = await done.promise;
+  const redrawn = await done.promise;
   clearTimeout(timer);
-  x.listen(undefined);
   x.send(request(damage, 2, 2, (view) => view.setUint32(4, id, true)));
-  return covered;
+  return { redrawn, undisturbed: () => !disturbed };
 }
 
 async function exchange(
@@ -656,14 +700,16 @@ async function exchange(
   const attributes = await getAttributes(x, topLevel);
   if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
-  const redrawn = await redrawnWhole(x, setup, windowId, u16(first, 16), u16(first, 18));
-  if (redrawn === undefined) return undefined;
-  if (!redrawn) return { refused: STILL_DRAWING, transient: true };
+  const redraw = await watchRedraw(x, setup, windowId, u16(first, 16), u16(first, 18));
+  if (redraw === undefined) return undefined;
+  if (!redraw.redrawn || !redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true };
   // Held: nothing else may map, move or draw a window between the check and the read. The hold
   // covers only that, and is cut off at GRAB_LIMIT_MS by ending the connection.
   const held = async () => {
     const geometry = await getGeometry(x, windowId);
     if (!geometry) return undefined;
+    // Every event from before the hold has arrived ahead of this reply.
+    if (!redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true as const };
     const width = u16(geometry, 16);
     const height = u16(geometry, 18);
     // The window may have grown since it was first read; the reply is never larger than this.

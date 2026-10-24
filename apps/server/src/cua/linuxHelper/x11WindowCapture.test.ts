@@ -10,7 +10,7 @@ import { pngColors } from "./linuxSession.ts";
 import {
   BUSY_CAPTURE,
   captureX11Window,
-  coversWhole,
+  coverage,
   parseSetup,
   RESIZED_CAPTURE,
   rgbToPng,
@@ -129,6 +129,8 @@ async function scriptedServer(
     readonly managed?: ReadonlyArray<number>;
     /** How the app redraws when asked: all of it (default), half of it, or not at all. */
     readonly redraw?: "whole" | "half" | "none";
+    /** After the redraw, another client's window is mapped inside the target. */
+    readonly afterRedraw?: { readonly mapForeign: number };
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -217,6 +219,14 @@ async function scriptedServer(
               found.width,
               redraw === "half" ? Math.floor(found.height / 2) : found.height,
             );
+          if (damage && options.afterRedraw) {
+            const mapped = Buffer.alloc(32);
+            mapped[0] = 19;
+            mapped.writeUInt16LE(requests.length & 0xffff, 2);
+            mapped.writeUInt32LE(damage.drawable, 4);
+            mapped.writeUInt32LE(options.afterRedraw.mapForeign, 8);
+            socket.write(mapped);
+          }
         } else if (op === COMPOSITE && minor === 0) {
           const extra = payload(24);
           extra.writeUInt32LE(0, 0);
@@ -443,14 +453,32 @@ describe("X11 window capture against a scripted server", () => {
   });
 
   it("counts drawing as tiles: rectangles that together cover the window are a whole redraw", () => {
+    const covered = (rects: ReadonlyArray<{ x: number; y: number; w: number; h: number }>) => {
+      const drawn = coverage(100, 80);
+      for (const rect of rects) drawn.add(rect);
+      return drawn.whole();
+    };
     const tiles = [
-      { x: 0, y: 0, w: 60, h: 80 },
       { x: 50, y: 0, w: 50, h: 40 },
+      { x: 0, y: 0, w: 60, h: 80 },
       { x: 50, y: 40, w: 50, h: 40 },
     ];
-    expect(coversWhole(tiles, 100, 80)).toBe(true);
-    expect(coversWhole(tiles.slice(0, 2), 100, 80)).toBe(false);
-    expect(coversWhole([{ x: 1, y: 0, w: 99, h: 80 }], 100, 80)).toBe(false);
+    expect(covered(tiles)).toBe(true);
+    expect(covered(tiles.slice(0, 2))).toBe(false);
+    expect(covered([{ x: 1, y: 0, w: 99, h: 80 }])).toBe(false);
+    // Drawing that spills past the window counts only where it is inside.
+    expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
+  });
+
+  it("refuses when another app's window is mapped inside the target after it was redrawn", async () => {
+    // Its pixels would stay in the pixmap after it went away (#1390 review).
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      afterRedraw: { mapForeign: 0x600001 },
+    });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: STILL_DRAWING, transient: true });
   });
 
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
