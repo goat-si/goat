@@ -3,7 +3,8 @@
 // changed files, knip, generated GraphQL operations, typecheck of the affected
 // packages and their dependents, and the test files beside the changed files.
 // A change to prompt text also runs the provider replay suites that record it.
-// CI still runs the full test suites and the jobs listed in the summary.
+// A pull request's goat-ci run picks the same test files; the full suites and the jobs listed in
+// the summary run with the ci:full label, a manual goat-ci run, and the full runs on dev.
 //
 //   vp run check:changed          compare against the merge base with origin/dev
 //   vp run check:changed <ref>    compare against the merge base with <ref>
@@ -119,6 +120,6 @@ const ciOnly = Object.entries({
   "mobile native lint": outputs.mobile_native,
   "release smoke": outputs.release_smoke,
 }).flatMap(([job, runs]) => (runs ? [job] : []));
-if (ciOnly.length > 0) console.log(`  CI also runs: ${ciOnly.join(", ")}`);
+if (ciOnly.length > 0) console.log(`  A full CI run (ci:full) also runs: ${ciOnly.join(", ")}`);
 if (!runKnip) console.log("  knip skipped: no code or manifest changed");
 if (results.some((result) => !result.ok)) process.exit(1);
