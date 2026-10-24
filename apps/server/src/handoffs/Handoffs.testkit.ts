@@ -1,14 +1,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type AuthClientSession,
+  AuthSessionId,
   CommandId,
-  type EnvironmentId,
+  EnvironmentId,
   MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -131,4 +134,62 @@ export const durableHandoffs = (
       Effect.map((context) => Context.get(context, Handoffs.Handoffs)),
     );
     return { store, start };
+  });
+
+/**
+ * Two people's clients on one environment for computer use grants: an owner who may change its
+ * settings and an operator who may only operate, with stores the grants need.
+ */
+export const computerUseGrantClients = (orchestrator: Orchestrator.OrchestratorV2["Service"]) =>
+  Effect.gen(function* () {
+    const stored = new Map<string, Uint8Array>();
+    const now = yield* DateTime.now;
+    const session = (id: string, permissions: NonNullable<AuthClientSession["permissions"]>) =>
+      ({
+        sessionId: AuthSessionId.make(id),
+        subject: "test",
+        method: "browser-session-cookie",
+        scopes: ["orchestration:operate"],
+        permissions,
+        client: { label: id, deviceType: "unknown" },
+        issuedAt: now,
+        expiresAt: DateTime.add(now, { days: 1 }),
+        lastConnectedAt: now,
+        connected: true,
+        current: true,
+      }) satisfies AuthClientSession;
+    const owner = session("owner", ["orchestration:operate", "settings:write"]);
+    const operator = session("operator", ["orchestration:operate"]);
+    const environmentId = EnvironmentId.make("test-environment");
+    const dependencies = Layer.mergeAll(
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        dispatch: orchestrator.dispatch,
+        getThreadRecords: orchestrator.getThreadRecords,
+      }),
+      Layer.mock(SessionStore.SessionStore)({
+        cookieName: "test",
+        legacyCookieName: undefined,
+        listActive: () => Effect.succeed([owner, operator]),
+      }),
+      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(Environment.ServerEnvironment)({
+        getEnvironmentId: Effect.succeed(environmentId),
+      }),
+      Layer.succeed(
+        SecretStore.ServerSecretStore,
+        SecretStore.ServerSecretStore.of({
+          get: (name) => Effect.sync(() => Option.fromNullishOr(stored.get(name))),
+          set: (name, value) => Effect.sync(() => void stored.set(name, value)),
+          create: (name, value) => Effect.sync(() => void stored.set(name, value)),
+          remove: (name) => Effect.sync(() => void stored.delete(name)),
+          getOrCreateRandom: (name, size) =>
+            Effect.sync(() => {
+              const bytes = stored.get(name) ?? new Uint8Array(size).fill(7);
+              stored.set(name, bytes);
+              return bytes;
+            }),
+        }),
+      ),
+    );
+    return { owner, operator, environmentId, dependencies };
   });

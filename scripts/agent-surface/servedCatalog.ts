@@ -40,6 +40,11 @@ export interface ServedCatalog {
    * drift from what agents receive.
    */
   readonly listedAsThread: (listing: "full" | "core") => Promise<ReadonlyArray<ListedTool>>;
+  /**
+   * What tools/list sends an MCP client outside GOAT that asks for the core listing with the
+   * listing header, over the same transport and filter.
+   */
+  readonly listedAsCoreClient: () => Promise<ReadonlyArray<ListedTool>>;
   /** tools/call as an agent inside a GOAT thread with every capability granted. */
   readonly callAsThread: (name: string, args: object) => Promise<CallResult>;
   readonly dispose: () => Promise<void>;
@@ -85,8 +90,12 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
     readonly serveCatalogOverHttp: (
       scopes: Readonly<Record<string, unknown>>,
       listing: string,
+      headersOf?: Readonly<Record<string, Readonly<Record<string, string>>>>,
     ) => Program;
   }>("apps/server/src/mcp/agentSurface.testkit.ts");
+  const { AGENT_TOOL_LISTING_HEADER } = await fromRepo<{
+    readonly AGENT_TOOL_LISTING_HEADER: string;
+  }>("packages/contracts/src/agentSurface/listing.ts");
   const { McpInvocationContext } = await fromRepo<{ readonly McpInvocationContext: unknown }>(
     "apps/server/src/mcp/McpInvocationContext.ts",
   );
@@ -120,19 +129,33 @@ export async function loadServedCatalog(): Promise<ServedCatalog> {
     ]),
     issuedAt: 0,
   };
+  // The shape MCP OAuth or an issued client token gives an outside agent with full access.
+  const clientScope = {
+    ...threadScope,
+    requestNamespace: "client:outside",
+    thread: undefined,
+    client: { sessionId: "client:outside", label: "outside", access: "full-access" },
+  };
+  const listAs = (
+    scope: unknown,
+    listing: string,
+    headers: Readonly<Record<string, string>> = {},
+  ) =>
+    Effect.runPromise<ReadonlyArray<ListedTool>>(
+      kit.serveCatalogOverHttp({ caller: scope }, listing, { caller: headers }).pipe(
+        Effect.flatMap((http: { readonly listTools: (caller: string) => Program }) =>
+          http.listTools("caller"),
+        ),
+        Effect.scoped,
+        Effect.provide(NodeHttpServer.layerTest),
+      ),
+    );
   const tools = await withServer((server) => server.tools.map(({ tool }) => tool));
   return {
     tools,
-    listedAsThread: (listing) =>
-      Effect.runPromise<ReadonlyArray<ListedTool>>(
-        kit.serveCatalogOverHttp({ thread: threadScope }, listing).pipe(
-          Effect.flatMap((http: { readonly listTools: (caller: string) => Program }) =>
-            http.listTools("thread"),
-          ),
-          Effect.scoped,
-          Effect.provide(NodeHttpServer.layerTest),
-        ),
-      ),
+    listedAsThread: (listing) => listAs(threadScope, listing),
+    // A client's listing does not follow the setting, so either value measures the same thing.
+    listedAsCoreClient: () => listAs(clientScope, "full", { [AGENT_TOOL_LISTING_HEADER]: "core" }),
     callAsThread: (name, args) =>
       runtime.runPromise<CallResult>(
         McpServer.McpServer.pipe(
