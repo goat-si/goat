@@ -116,6 +116,9 @@ describe("redactGoatCredentialChunk", () => {
       // A complete credential that runs on into what looks like the start of another.
       `${TAG}GOAT_ACP_MCP_AUTHORIZATION: \n`,
       `bearerGOAT_MCP_BEARER_TOKEN :\tGOAT_MCP_BEARER_TOKEN \n`,
+      // A token ending in a label, followed by a word that may start a name.
+      `Authorization: Bearer ${"f".repeat(44)}-Bearer ${"x".repeat(52)}GOA\n`,
+      `Authorization: Bearer ${TOKEN.slice(0, 44)}-Bearer ${"x".repeat(52)}GOA\n`,
     ];
     for (const output of outputs) {
       for (let first = 1; first < output.length; first += 1) {
@@ -158,6 +161,9 @@ describe("redactGoatCredentialChunk", () => {
       "f".repeat(43),
       FOREIGN,
       "Authorization: ",
+      "-Bearer",
+      "x".repeat(52),
+      TAG + "x".repeat(250),
     ];
     let seed = 12_345;
     const random = (bound: number) => {
@@ -167,12 +173,9 @@ describe("redactGoatCredentialChunk", () => {
     for (let index = 0; index < 20_000; index += 1) {
       let output = "";
       for (let count = 2 + random(16); count > 0; count -= 1) output += parts[random(parts.length)];
-      const cuts = [random(output.length + 1), random(output.length + 1)].toSorted((a, b) => a - b);
-      const chunks = [
-        output.slice(0, cuts[0]),
-        output.slice(cuts[0], cuts[1]),
-        output.slice(cuts[1]),
-      ];
+      const cuts = Array.from({ length: 1 + random(6) }, () => random(output.length + 1));
+      const bounds = [0, ...cuts.toSorted((a, b) => a - b), output.length];
+      const chunks = bounds.slice(1).map((end, at) => output.slice(bounds[at], end));
       expect(streamed(chunks).shown, JSON.stringify(chunks)).toBe(redactGoatCredentials(output));
     }
   });
@@ -184,10 +187,13 @@ describe("redactGoatCredentialChunk", () => {
     expect(streamed(["GOAT_MCP_BEARER_TOKEN=" + "x".repeat(60_000)]).maxCarry).toBeLessThan(400);
     // Values past MAX_VALUE stream exactly as whole-text redaction shows them.
     const long = `GOAT_MCP_BEARER_TOKEN=${"x".repeat(300)}\n`;
-    for (let cut = 1; cut < long.length; cut += 1) {
-      expect(streamed([long.slice(0, cut), long.slice(cut)]).shown).toBe(
-        redactGoatCredentials(long),
-      );
+    const tagged = `GOAT_MCP_BEARER_TOKEN=${TAG}${"x".repeat(258)}\n`;
+    for (const output of [long, tagged]) {
+      for (let cut = 1; cut < output.length; cut += 1) {
+        expect(streamed([output.slice(0, cut), output.slice(cut)]).shown).toBe(
+          redactGoatCredentials(output),
+        );
+      }
     }
   });
 });

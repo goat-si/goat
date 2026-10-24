@@ -313,6 +313,29 @@ layer("CommandOutputHub", (it) => {
     ),
   );
 
+  it.effect("a live viewer never sees a token that ends in a label", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        // Synthetic, shaped like a token another server minted.
+        const token = `${"f".repeat(44)}-Bearer`;
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: `Authorization: Bearer ${token} ${"x".repeat(52)}GOA`,
+        });
+        yield* hub.append({ threadId, itemId: ITEM_ID, chunk: "\n" });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.notInclude(client.text, "ffff");
+        assert.include(client.text, "Authorization: Bearer [redacted]");
+      }),
+    ),
+  );
+
   it.effect("a row that is not a known command fails instead of waiting forever", () =>
     Effect.gen(function* () {
       const hub = yield* CommandOutputHub.CommandOutputHub;

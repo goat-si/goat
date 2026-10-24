@@ -37,17 +37,17 @@ const VALUE_CHAR = String.raw`[^\s"'\\,;\0]`;
 // and whole-text redaction equal, since a stream can hold back only so much.
 const MAX_VALUE = 256;
 
-const NAMED_VALUE = new RegExp(
-  `(${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)${VALUE_CHAR}{1,${MAX_VALUE}}`,
-  "g",
-);
-const BEARER_VALUE = new RegExp(`(?<![A-Za-z0-9])(${BEARER})${REGISTRY_TOKEN}`, "gi");
-const MAY_HOLD_LABELED_CREDENTIAL = /bearer|_AUTHORIZATION|_BEARER_TOKEN/i;
+const NAMED_VALUE = `(${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)${VALUE_CHAR}{1,${MAX_VALUE}}`;
+const BEARER_VALUE = `(?<![A-Za-z0-9])(${BEARER})${REGISTRY_TOKEN}`;
 
 /** Run tags of the registries in this process; tests make many, production one. */
 const runTags: Array<string> = [];
 const MAX_RUN_TAGS = 32;
-let taggedValue: RegExp | undefined;
+/**
+ * Every credential in one pass, so a stream's held-back tail and whole-text redaction see the same
+ * matches: a labelled value keeps its label (group 1 or 2), a tagged run goes whole.
+ */
+let credential = buildCredential();
 let partialCredential = buildPartialCredential();
 
 /** Called by McpSessionRegistry with the tag that starts every token it mints. */
@@ -55,19 +55,36 @@ export function registerCredentialRunTag(tag: string): void {
   if (!TOKEN_CHARS.test(tag) || runTags.includes(tag)) return;
   runTags.push(tag);
   if (runTags.length > MAX_RUN_TAGS) runTags.shift();
-  taggedValue = new RegExp(`(?:${runTags.join("|")})${TOKEN_CHAR}{0,${MAX_VALUE}}`, "g");
+  credential = buildCredential();
   partialCredential = buildPartialCredential();
+}
+
+function buildCredential(): RegExp {
+  const tagged =
+    runTags.length === 0 ? [] : [`(?:${runTags.join("|")})${TOKEN_CHAR}{0,${MAX_VALUE}}`];
+  return new RegExp([NAMED_VALUE, BEARER_VALUE, ...tagged].join("|"), "gi");
 }
 
 /** Text with every GOAT MCP credential replaced by {@link REDACTED_CREDENTIAL}. */
 export function redactGoatCredentials(text: string): string {
-  let redacted = taggedValue === undefined ? text : text.replace(taggedValue, REDACTED_CREDENTIAL);
-  if (MAY_HOLD_LABELED_CREDENTIAL.test(redacted)) {
-    redacted = redacted
-      .replace(NAMED_VALUE, `$1${REDACTED_CREDENTIAL}`)
-      .replace(BEARER_VALUE, `$1${REDACTED_CREDENTIAL}`);
+  return redactBefore(text, text.length);
+}
+
+/**
+ * The redacted text before end, with credentials found in the whole text, so a pattern that looks
+ * past end (a token must not run on) sees what really follows.
+ */
+function redactBefore(text: string, end: number): string {
+  let redacted = "";
+  let shown = 0;
+  for (const match of text.matchAll(credential)) {
+    if (match.index >= end) break;
+    const label: string = match[1] ?? match[2] ?? "";
+    redacted += text.slice(shown, match.index) + label + REDACTED_CREDENTIAL;
+    // partialStart never cuts inside a credential; should one reach past end, hide all of it.
+    shown = Math.min(match.index + match[0].length, end);
   }
-  return redacted;
+  return redacted + text.slice(shown, end);
 }
 
 const MAX_DEPTH = 32;
@@ -160,34 +177,28 @@ function partialStart(text: string): number {
   const windowStart = Math.max(0, text.length - PARTIAL_WINDOW);
   const partial = partialCredential.exec(text.slice(windowStart));
   let start = partial === null ? text.length : windowStart + partial.index;
-  // Nor inside a credential that is already complete, such as a tagged run that runs on into a
-  // name, or a value that is itself a name.
+  // The credentials already complete near the cut, exactly as redactGoatCredentials finds them.
   const scanFrom = Math.max(0, windowStart - PARTIAL_WINDOW);
-  const spans = [taggedValue, NAMED_VALUE, BEARER_VALUE].flatMap((pattern) =>
-    pattern === undefined
-      ? []
-      : Array.from(text.slice(scanFrom).matchAll(pattern), (match) => ({
-          from: scanFrom + match.index,
-          to: scanFrom + match.index + match[0].length,
-        })),
-  );
-  for (let moved = true; moved;) {
-    moved = false;
-    for (const { from, to } of spans) {
-      if (from < start && start < to) {
-        start = from;
-        moved = true;
-      }
-    }
-  }
-  // Never cut inside the trailing run of token characters either: the part shown now could be
-  // most of a token whose label the redactor needs to see. Hold the run and the label before it.
+  const spans = Array.from(text.slice(scanFrom).matchAll(credential), (match) => ({
+    from: scanFrom + match.index,
+    to: scanFrom + match.index + match[0].length,
+  }));
   let runStart = text.length;
   while (runStart > windowStart && TOKEN_CHARS.test(text.charAt(runStart - 1))) runStart -= 1;
-  if (start < text.length && start > runStart) start = runStart;
-  if (start === runStart && start < text.length) {
-    const label = LABEL_BEFORE_VALUE.exec(text.slice(windowStart, start));
-    if (label !== null) start -= label[0].length;
+  // Each rule only moves the cut back, so repeating them until none moves it ends on a cut that
+  // satisfies all of them at once.
+  for (let previous = -1; previous !== start;) {
+    previous = start;
+    // Never inside a complete credential, such as a tagged run that runs on into a name, or a
+    // value that is itself a name.
+    for (const { from, to } of spans) if (from < start && start < to) start = from;
+    // Never inside the trailing run of token characters: the part shown now could be most of a
+    // token whose label the redactor needs to see. Hold the run and the label before it.
+    if (start < text.length && start > runStart) start = runStart;
+    if (start === runStart && start < text.length) {
+      const label = LABEL_BEFORE_VALUE.exec(text.slice(windowStart, start));
+      if (label !== null) start -= label[0].length;
+    }
   }
   return start;
 }
@@ -203,5 +214,5 @@ export function redactGoatCredentialChunk(
 ): { readonly emit: string; readonly carry: string } {
   const text = carry + chunk;
   const start = partialStart(text);
-  return { emit: redactGoatCredentials(text.slice(0, start)), carry: text.slice(start) };
+  return { emit: redactBefore(text, start), carry: text.slice(start) };
 }
