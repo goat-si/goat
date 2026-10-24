@@ -852,6 +852,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["built in builtin skill computer use instructions agents observe verify"],
   },
   {
+    id: "computer-use-full-access",
+    title: "Full access without approval",
+    to: "/settings/integrations",
+    targetId: "computer",
+    searchTerms: ["computer use approval grant admission allow every app full access unattended"],
+  },
+  {
     id: "goat-bot-home",
     title: "Runs on",
     to: "/settings/goat-bot",
