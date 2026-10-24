@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import type { ComputerUseLeaseUpdate } from "@goat/contracts";
+import type { ComputerUseLeaseUpdate, ComputerUseOverlayCommand } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -18,7 +18,10 @@ const active: ComputerUseLeaseUpdate = {
 };
 const window = { pid: 4, window_id: 9 };
 
-/** A proxy on every app over in-memory queues; `push` returns once it acted on the update. */
+/**
+ * A proxy on every app over in-memory queues; `push` returns once it acted on the update, and
+ * `overlay` holds what the helper was told to draw.
+ */
 const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
   const output = yield* Queue.unbounded<string>();
@@ -27,6 +30,7 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate>();
   // The proxy asks for the next update only once it has acted on the one before.
   const pulls = yield* Queue.unbounded<void>();
+  const overlay: Array<ComputerUseOverlayCommand> = [];
   yield* runLeaseProxy({
     controlId: "control:one",
     expiresAt: DateTime.makeUnsafe("1970-01-01T00:30:00.000Z"),
@@ -39,6 +43,8 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
       send: (line: string) => Queue.offer(toDriver, line).pipe(Effect.asVoid),
       lines: Stream.fromQueue(fromDriver),
       kill: Queue.end(fromDriver),
+      overlay: (command: ComputerUseOverlayCommand) =>
+        Effect.sync(() => void overlay.push(command)),
     }),
     revokeSessions: () => Effect.void,
     ...(onTarget === undefined ? {} : { onTarget }),
@@ -61,6 +67,7 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
       Effect.map((line) => (JSON.parse(line) as { readonly id: number }).id),
     ),
     driverQueued: Queue.size(toDriver),
+    overlay,
   };
 });
 
@@ -113,5 +120,8 @@ it.effect(
       assert.equal(answer.id, 1);
       assert.deepInclude(answer.result.structuredContent, { detail: "screen_shared" });
       assert.equal(yield* h.driverQueued, 0);
+      // The cursor drew it as acting; the refusal settles that, as a reply would.
+      assert.deepInclude(h.overlay.at(0), { op: "show", phase: "acting" });
+      assert.deepInclude(h.overlay.at(-1), { op: "show", phase: "resting" });
     }),
 );

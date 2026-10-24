@@ -114,29 +114,33 @@ export function scopeVerdict(input: {
 }
 
 /**
- * Records every app a driver answer names with its pid, such as list_apps, list_windows and
- * launch_app results. Ids prefer the bundle id, which is what grants name.
+ * Keeps the pid-to-app map in step with a driver answer. Only a list_apps answer (`listing`)
+ * says which app a pid is, by the bundle id grants name or the app name where there is none.
+ * Other answers, such as list_windows and get_window_state, often name the app without its
+ * bundle id; a display name taken as an id would let a grant naming it reach an app another
+ * grant names by bundle id. They can only drop a pid whose app they name differently, which
+ * also catches a pid reused by another app, so it is listed again before it is judged.
  */
-export function learnApps(value: unknown, into: Map<number, ListedApp>, depth = 0): void {
+export function learnApps(
+  value: unknown,
+  into: Map<number, ListedApp>,
+  listing: boolean,
+  depth = 0,
+): void {
   if (depth > 5) return;
   if (Array.isArray(value)) {
-    for (const item of value) learnApps(item, into, depth + 1);
+    for (const item of value) learnApps(item, into, listing, depth + 1);
     return;
   }
   const object = record(value);
   if (object === undefined) return;
   const pid = object.pid;
-  const bundle = text(object.bundle_id);
   const name = text(object.app_name) ?? text(object.name);
-  const id = bundle ?? name;
+  const id = text(object.bundle_id) ?? name;
   if (typeof pid === "number" && Number.isInteger(pid) && id !== undefined) {
-    const known = into.get(pid);
-    // Replies such as get_window_state name the app without its bundle id. A name cannot tell
-    // the listed app from another that reused its pid, and keeping the name as its id would
-    // refuse every grant naming the bundle id, so the pid is listed again before it is judged.
-    if (bundle === undefined && known !== undefined && known.id !== known.name) into.delete(pid);
-    else into.set(pid, { id, name });
+    if (listing) into.set(pid, { id, name });
+    else if (into.get(pid)?.id !== id) into.delete(pid);
   }
   for (const nested of Object.values(object))
-    if (typeof nested === "object" && nested !== null) learnApps(nested, into, depth + 1);
+    if (typeof nested === "object" && nested !== null) learnApps(nested, into, listing, depth + 1);
 }

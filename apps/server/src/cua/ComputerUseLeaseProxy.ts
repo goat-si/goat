@@ -384,8 +384,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           if (finished !== undefined || running !== current) return;
           const message = parse(line);
           if (message?.id !== undefined && message.id !== null && message.method === undefined) {
-            learnApps(message.result, listed);
-            if (typeof message.id === "string" && message.id.startsWith(OWN_ID)) {
+            const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
+            const asked = own
+              ? String(message.id).startsWith(`${OWN_ID}apps:`)
+              : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
+            learnApps(message.result, listed, asked);
+            if (own) {
               const waiter = ownAnswers.get(message.id);
               ownAnswers.delete(message.id);
               if (waiter !== undefined) yield* Deferred.succeed(waiter, message);
@@ -762,6 +766,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       takesScreen(message.params?.name, message.params?.arguments)
     ) {
       outstanding.delete(JSON.stringify(id));
+      // Drawn as acting above; it never reaches the driver, so no reply will settle it.
+      yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
       return yield* options.output(refusal(id, message.method, "screen_shared", SCREEN_SHARED));
     }
     yield* running.driver.send(line);
