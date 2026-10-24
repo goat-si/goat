@@ -52,6 +52,11 @@ const DESKTOP_PREFIX = "desktop:";
 const RECONCILE_MS = 5_000;
 /** How soon a capture request that failed to send is sent again. */
 const RETRY_MS = 1_000;
+/**
+ * How soon a control read as open past its own deadline is read again. The read raced its expiry;
+ * until a read after it says otherwise, nothing is captured for it.
+ */
+const OVERDUE_RECHECK_MS = 250;
 /** The seq of a request that may or may not have reached the desktop; it matches no frame. */
 const UNSENT = -1;
 
@@ -216,9 +221,15 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const gates = new Map<string, FrameGate>();
         const asks = new Map<string, ReadonlyArray<ViewerAsk>>();
+        let overdue = false;
         for (const [key, set] of viewers) {
           if (set.size === 0) continue;
-          gates.set(key, yield* gateOf(key));
+          const gate = yield* gateOf(key);
+          if (gate._tag === "open" && gate.wakeAt <= (yield* Clock.currentTimeMillis)) {
+            overdue = true;
+            continue;
+          }
+          gates.set(key, gate);
           asks.set(key, [...set]);
         }
         const targets = planFrames(gates, asks);
@@ -226,6 +237,9 @@ const make = Effect.gen(function* () {
           Option.isSome(desktop) &&
           (current.seq === UNSENT || !sameTargets(targets, current.targets))
         ) {
+          // Unknown until the write returns: an interrupted write still left the receiver holding
+          // these targets to replay, so the next reconcile must withdraw or confirm them.
+          current = { seq: UNSENT, targets };
           const seq = yield* desktop.value.setCuaFrames(targets).pipe(
             Effect.tapError((cause) =>
               Effect.logWarning("Could not send window capture targets to the desktop", {
@@ -236,7 +250,7 @@ const make = Effect.gen(function* () {
           );
           current = { seq: Option.getOrElse(seq, () => UNSENT), targets };
         }
-        yield* schedule(gates);
+        yield* schedule(gates, overdue);
         for (const [key, set] of viewers) {
           const gate = gates.get(key);
           for (const viewer of set) {
@@ -250,12 +264,19 @@ const make = Effect.gen(function* () {
     )
     .pipe(Effect.withSpan("DesktopFrames.reconcile"));
 
-  /** Reconcile again when a watched control can next lapse, or soon after a failed send. */
-  const schedule = Effect.fnUntraced(function* (gates: ReadonlyMap<string, FrameGate>) {
+  /**
+   * Reconcile again when a watched control can next lapse, soon after a failed send, and soon
+   * after a read that raced a deadline.
+   */
+  const schedule = Effect.fnUntraced(function* (
+    gates: ReadonlyMap<string, FrameGate>,
+    overdue: boolean,
+  ) {
     const now = yield* Clock.currentTimeMillis;
     const due = [...gates.values()]
       .flatMap((gate) => (gate._tag === "open" && gate.wakeAt > now ? [gate.wakeAt] : []))
-      .concat(current.seq === UNSENT ? [now + RETRY_MS] : []);
+      .concat(current.seq === UNSENT ? [now + RETRY_MS] : [])
+      .concat(overdue ? [now + OVERDUE_RECHECK_MS] : []);
     const next = due.length === 0 ? undefined : Math.min(...due);
     if (next === scheduled) return;
     scheduled = next;
@@ -279,11 +300,13 @@ const make = Effect.gen(function* () {
         if (fence !== undefined) yield* PubSub.takeUpTo(fence, Number.MAX_SAFE_INTEGER);
         const gate = yield* gateOf(message.key);
         if (fence !== undefined && (yield* PubSub.remaining(fence)) > 0) return;
+        const now = yield* Clock.currentTimeMillis;
+        // Expiry sends no signal; a read that began before it can still say open.
+        if (gate._tag === "open" && gate.wakeAt <= now) return yield* kick;
         const event = admitFrame(message, current, gate);
         if (event === undefined) return;
         if (event.type === "frame") {
           const target = current.targets.find((candidate) => candidate.key === message.key);
-          const now = yield* Clock.currentTimeMillis;
           const nextAt = pace(now, nextFrameAt.get(message.key), target?.intervalMs ?? 0);
           if (nextAt === undefined) return;
           nextFrameAt.set(message.key, nextAt);

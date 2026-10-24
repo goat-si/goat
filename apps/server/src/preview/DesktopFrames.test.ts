@@ -69,6 +69,7 @@ const fixture = Effect.fnUntraced(function* () {
   const fromDesktop = yield* PubSub.unbounded<DesktopCuaFrame>();
   const seq = yield* Ref.make(0);
   const failNext = yield* Ref.make(false);
+  const blockNext = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none());
   const hold = yield* Ref.make<
     Option.Option<{ reading: Deferred.Deferred<void>; release: Deferred.Deferred<void> }>
   >(Option.none());
@@ -110,6 +111,16 @@ const fixture = Effect.fnUntraced(function* () {
       Queue.offer(requests, targets).pipe(
         // The receiver keeps what it was asked for and sends it again when the desktop reconnects.
         Effect.andThen(Ref.updateAndGet(seq, (n) => n + 1)),
+        Effect.tap(() =>
+          Ref.getAndSet(blockNext, Option.none()).pipe(
+            // A write the desktop never takes up; only an interruption ends it.
+            Effect.flatMap((writing) =>
+              Option.isSome(writing)
+                ? Deferred.succeed(writing.value, undefined).pipe(Effect.andThen(Effect.never))
+                : Effect.void,
+            ),
+          ),
+        ),
         Effect.andThen((next) =>
           Ref.getAndSet(failNext, false).pipe(
             Effect.flatMap((fail) =>
@@ -138,6 +149,7 @@ const fixture = Effect.fnUntraced(function* () {
   return {
     service,
     requested: Queue.take(requests),
+    unrequested: Queue.size(requests),
     seq: Ref.get(seq),
     send: (message: DesktopCuaFrame) => PubSub.publish(fromDesktop, message),
     set: (next: ComputerUseLeases.ComputerUseControlState) =>
@@ -145,6 +157,11 @@ const fixture = Effect.fnUntraced(function* () {
     /** A change nothing signals, such as a control reaching its expiry. */
     quietly: (next: ComputerUseLeases.ComputerUseControlState) => Ref.set(state, next),
     failNextWrite: Ref.set(failNext, true),
+    blockNextWrite: Effect.gen(function* () {
+      const writing = yield* Deferred.make<void>();
+      yield* Ref.set(blockNext, Option.some(writing));
+      return writing;
+    }),
     holdNextRead: Effect.gen(function* () {
       const held = {
         reading: yield* Deferred.make<void>(),
@@ -237,6 +254,51 @@ describe("DesktopFrames", () => {
       assert.deepEqual(yield* f.requested, [target]);
       yield* TestClock.adjust("1 second");
       assert.deepEqual(yield* f.requested, [target]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("withdraws a capture whose request was cut off mid-write by its viewer leaving", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const writing = yield* f.blockNextWrite;
+      const viewer = yield* Scope.make();
+      yield* watch(f.service).pipe(Effect.provideService(Scope.Scope, viewer), Effect.asVoid);
+      yield* Deferred.await(writing);
+      assert.deepEqual(yield* f.requested, [target]);
+      yield* Scope.close(viewer, Exit.void);
+      assert.deepEqual(yield* f.requested, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("drops a frame whose check began before the control lapsed", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.quietly({ ...active, wakeAt: 1_000 });
+      const next = yield* watch(f.service);
+      assert.deepEqual(yield* f.requested, [target]);
+      const held = yield* f.holdNextRead;
+      yield* f.send(frame(yield* f.seq));
+      yield* Deferred.await(held.reading);
+      yield* f.quietly({ _tag: "ended", reason: "expired" });
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.succeed(held.release, undefined);
+      assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("never asks to capture for a control read as active after it lapsed", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.quietly({ ...active, wakeAt: 1_000 });
+      const held = yield* f.holdNextRead;
+      const next = yield* watch(f.service);
+      yield* Deferred.await(held.reading);
+      yield* f.quietly({ _tag: "ended", reason: "expired" });
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.succeed(held.release, undefined);
+      yield* TestClock.adjust("1 second");
+      assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
+      assert.equal(yield* f.unrequested, 0);
     }).pipe(Effect.scoped),
   );
 
