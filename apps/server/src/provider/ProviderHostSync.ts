@@ -31,6 +31,7 @@ import {
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -57,6 +58,7 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import { judgeRemoteHost, LOCAL_HOST_COMPATIBILITY } from "../mcp/hostStatusModel.ts";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -367,6 +369,7 @@ const make = Effect.gen(function* () {
         platform: runtimePlatform,
         arch: runtimeArch,
         goatVersion: packageJson.version,
+        protocol: servedRuntimeProtocolRanges(),
         ...(Option.isSome(cua) ? { computerUse: yield* cua.value.computerUse } : {}),
       };
       if (!includeCloud) {
@@ -426,17 +429,10 @@ const make = Effect.gen(function* () {
       Effect.map((result): ProviderHostRow => {
         const row = result.rows[0];
         if (row === undefined) return { host, status: "unreachable", providers: [] };
-        const mismatch = row.goatVersion !== packageJson.version;
-        return {
-          ...row,
-          host,
-          ...(mismatch
-            ? {
-                versionMismatch: true,
-                message: `${host} runs ${row.goatVersion ? `GOAT ${row.goatVersion}` : "an older GOAT"}; this machine runs GOAT ${packageJson.version}. Update GOAT on the older machine.`,
-              }
-            : {}),
-        };
+        // Host status and this matrix share one verdict, from served protocols (ADR-0019).
+        const { versionMismatch: _v, compatibility: _c, message: _m, ...reported } = row;
+        const remote = { host, serverVersion: row.goatVersion, protocol: row.protocol };
+        return { ...reported, host, ...judgeRemoteHost(remote, LOCAL_HOST_COMPATIBILITY) };
       }),
       Effect.catch((failure: RemoteFailure) =>
         Effect.succeed<ProviderHostRow>({

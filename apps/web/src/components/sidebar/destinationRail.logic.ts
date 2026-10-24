@@ -66,8 +66,6 @@ export interface RailPreferences {
 export const DEFAULT_RAIL_PREFERENCES: RailPreferences = { order: [], shown: [], hidden: [] };
 
 export interface RailContext {
-  /** Saved environments, connected or not, so a dropped connection does not reshuffle the rail. */
-  readonly environmentCount: number;
   readonly pullRequestsSupported: boolean;
   readonly memoryAvailable: boolean;
   readonly hubEnabled: boolean;
@@ -103,8 +101,6 @@ function isAvailable(id: RailItemId, context: RailContext): boolean {
 /** Context decides only what a person has not chosen; an explicit choice always wins. */
 function isShownByDefault(id: RailItemId, context: RailContext): boolean {
   switch (id) {
-    case "fleet":
-      return context.environmentCount > 1;
     case "hub":
       return context.hubEnabled;
     case "addProvider":

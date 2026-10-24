@@ -47,9 +47,9 @@ drains it and hands over to the ADR-0013 supervisor; the supervisor's `last-repl
 requests that clients mark `automatic`, so shared runtimes only move forward on their channel.
 
 Compatibility between two GOAT builds comes from the protocol ranges each serves, never from their
-release strings. `goat_host_status` reports the ranges every machine serves (`protocol`), and the
-machine that fans out judges each reachable remote with `hostCompatibilityOf` in
-`packages/shared/src/sshRuntimeProtocol.ts` (`markHostCompatibility` in
+release strings. `goat_host_status` and `goat_provider_host_matrix` report the ranges every
+machine serves (`protocol`), and the machine that fans out judges each reachable remote with
+`hostCompatibilityOf` in `packages/shared/src/sshRuntimeProtocol.ts` (`judgeRemoteHost` in
 `apps/server/src/mcp/hostStatusModel.ts`): `compatible` when its ranges include every protocol
 this machine speaks, `incompatible` when they miss one (the message names the side to update), and
 `degraded` when it does not report valid ranges. `versionMismatch` only marks a different build;

@@ -458,7 +458,7 @@ export class ChannelLedger extends Context.Service<
     ) => Effect.Effect<string | undefined, ChannelLedgerError>;
     /**
      * The answers recorded in a task's current generation, newest first, which the dispatcher
-     * reads when it asked. A retry starts over: earlier generations' answers are not returned.
+     * reads when it asked. A retry or a move starts over: earlier generations' are not returned.
      */
     readonly recentAnswers: (
       taskId: ChannelTaskId,
@@ -1870,7 +1870,7 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
           AND sequence > COALESCE((
             SELECT MAX(sequence) FROM channel_task_events
-            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+            WHERE task_id = ${taskId} AND type IN ('task.retry.requested', 'task.moved')
           ), 0)
         ORDER BY sequence DESC LIMIT ${limit}
       `.pipe(
@@ -1889,7 +1889,7 @@ const make = Effect.gen(function* () {
         WHERE task_id = ${taskId} AND type = 'task.question.answered'
           AND sequence > COALESCE((
             SELECT MAX(sequence) FROM channel_task_events
-            WHERE task_id = ${taskId} AND type = 'task.retry.requested'
+            WHERE task_id = ${taskId} AND type IN ('task.retry.requested', 'task.moved')
           ), 0)
           AND COALESCE(json_extract(event_json, '$.payload.projectChoice.type'), '') != 'none'
         ORDER BY sequence DESC LIMIT 1
