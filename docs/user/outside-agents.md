@@ -96,6 +96,26 @@ Agents without OAuth support can use a client token instead.
 The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
 `goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
 
+## Set up a client with the goat-mcp skill
+
+The `goat-mcp` skill is a step-by-step guide an agent can follow to connect its
+own client: finding the MCP URL, signing in or using a client token, the
+settings for Claude Code, Claude Desktop, Codex, Cursor, VS Code, OpenCode,
+Gemini CLI, ChatGPT and Grok, checking the connection, and fixing common
+errors. Clients that only start local stdio servers connect through the
+`mcp-remote` bridge it describes.
+
+`goat mcp skill` prints the skill. To install it for Claude Code or Codex:
+
+```sh
+mkdir -p ~/.claude/skills/goat-mcp && goat mcp skill > ~/.claude/skills/goat-mcp/SKILL.md
+mkdir -p ~/.codex/skills/goat-mcp && goat mcp skill > ~/.codex/skills/goat-mcp/SKILL.md
+```
+
+On a machine without GOAT, copy
+[skills/goat-mcp/SKILL.md](https://github.com/goat-si/goat/blob/dev/skills/goat-mcp/SKILL.md)
+from the GOAT repository into the client's skills folder.
+
 ## Long-running orchestrators
 
 A bot or script that drives GOAT for weeks, such as an orchestrator on another
@@ -109,6 +129,30 @@ goat auth client create --name "Grok Bot" --runtime-mode-ceiling approval-requir
 Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
 days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
 you choose on the sign-in page. Without it, the client gets **Supervised**.
+
+### Give a client its token
+
+Keep the token in an environment variable, such as
+`export GOAT_MCP_TOKEN="$(goat auth client create --name "Cursor" --token-only)"`,
+and let the client read it when it starts, so the token stays out of its
+config file. Replace `<url>` with the MCP URL:
+
+| Client               | Setting                                                                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code          | `claude mcp add-json --scope user goat '{"type":"http","url":"<url>","headers":{"Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'`               |
+| Codex                | `codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN`                                                                       |
+| Cursor               | `"url": "<url>"` and `"headers": { "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }` in `mcp.json`                                          |
+| VS Code              | `"type": "http"`, `"url": "<url>"` and the same `headers` under `servers` in `mcp.json`                                                      |
+| OpenCode             | `"type": "remote"`, `"oauth": false` and `"headers": { "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }`                                     |
+| Gemini CLI           | `gemini mcp add --scope user --transport http --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat <url>`                                 |
+| Clients without HTTP | `npx -y mcp-remote <url> --header "Authorization:${GOAT_MCP_AUTH}"`, with `GOAT_MCP_AUTH` set to `Bearer <token>` (Node.js 20.18.1 or newer) |
+| xAI API              | `"authorization": "Bearer <token>"` in an `mcp` tool; the URL must be public `https`                                                         |
+
+Restart the client after changing the variable. The
+[goat-mcp skill](#set-up-a-client-with-the-goat-mcp-skill) has full config files
+and fixes for common errors.
+
+### Sessions and revoking
 
 Initialize MCP once and reuse the `mcp-session-id` header from that response
 for later calls, including long `thread.wait` polls. End the session with

@@ -345,7 +345,7 @@ const make = Effect.gen(function* () {
     return handoff;
   });
   const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
-    input: HandoffReadInput,
+    input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
@@ -364,8 +364,10 @@ const make = Effect.gen(function* () {
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
             : // Admitting an unattended thread to the screen, or changing the hub's members, is as
-              // strong as changing this environment's settings.
-              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+              // strong as changing this environment's settings. Ending a screen grant only narrows
+              // what agents may do, so whoever may stop agents can end it (Stop all).
+              (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                  input.action !== "cancelled") ||
                 isHubDeviceHandoffPath(record.target.path)
               ? ("settings:write" as const)
               : ("orchestration:operate" as const);

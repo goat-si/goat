@@ -182,9 +182,9 @@ const caller = ThreadId.make("thread:caller");
 // Writes each built-in profile may run: the declared mapping's effect, pinned for review.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   observer: 50,
-  worker: 85,
-  manager: 99,
-  "merge-manager": 99,
+  worker: 87,
+  manager: 101,
+  "merge-manager": 101,
   owner: 131,
 };
 
@@ -417,6 +417,35 @@ it.effect("refuses a nested call the same way as a direct one", () =>
     });
     expect("ran" in nested && JSON.parse(nested.ran)).toMatchObject(direct);
   }).pipe(Effect.provide(served({ enabled: true, defaultProfile: "observer" }))),
+);
+
+// #858: worker and manager agents may set up the projects they work in, and nothing more.
+it.effect.each([
+  { profile: "worker", allowed: true },
+  { profile: "manager", allowed: true },
+  { profile: "observer", allowed: false },
+])(
+  "lets a $profile thread create and clone projects ($allowed), directly and through goat_call",
+  ({ profile, allowed }) =>
+    Effect.gen(function* () {
+      yield* seed(caller);
+      for (const path of ["project.create", "project.clone"]) {
+        const entry = entryAt(path);
+        const expected = allowed ? { ran: entry.name } : refusedFor("worktree.create");
+        expect(yield* call(listedToolName(entry), threadCaller(caller)), path).toMatchObject(
+          expected,
+        );
+        const nested = yield* call("nested_call", threadCaller(caller), {
+          tool: listedToolName(entry),
+        });
+        expect("ran" in nested && JSON.parse(nested.ran), path).toMatchObject(expected);
+      }
+      for (const path of ["project.update", "project.delete"])
+        expect(
+          yield* call(listedToolName(entryAt(path)), threadCaller(caller)),
+          path,
+        ).toMatchObject(refusedFor("settings.write"));
+    }).pipe(Effect.provide(served({ enabled: true, defaultProfile: profile }))),
 );
 
 it.effect("gates a legacy tool name over /mcp exactly as its listed name", () =>

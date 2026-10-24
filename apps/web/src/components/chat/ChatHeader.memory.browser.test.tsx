@@ -51,6 +51,9 @@ vi.mock("../../hooks/useSettings", () => ({ useClientSettings: () => undefined }
 vi.mock("../ProjectFavicon", () => ({ ProjectFavicon: () => null }));
 vi.mock("../goatBot/GoatBotModeButton", () => ({ GoatBotModeButton: () => null }));
 vi.mock("../../notes/ThreadNotesButton", () => ({ ThreadNotesButton: () => null }));
+vi.mock("../preview/sessions/AgentScreenCardsToggle", () => ({
+  AgentScreenCardsToggle: () => null,
+}));
 import { ChatHeader } from "./ChatHeader";
 let dispose: (() => Promise<void>) | undefined;
 afterEach(async () => {

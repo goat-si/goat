@@ -22,6 +22,7 @@ import { Fallback } from "../resources/Fallback.ts";
 import { Placement } from "../resources/Placement.ts";
 import { GoalController, layer as controllerLayer } from "./GoalController.ts";
 import { LAUNCH_GRACE_MS, type PullRequestObservation } from "./goalPlan.ts";
+import { GoalRecovery } from "./GoalRecovery.ts";
 import { GoalStore, layer as goalStoreLayer, NOT_SENT } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 import {
@@ -197,6 +198,13 @@ const healthy = Layer.succeed(Health, {
   threadHealth: () => Effect.sync(() => healthOf()),
 });
 
+/** Later attempts start like first ones; GoalRecovery.test.ts covers resuming earlier work. */
+const freshStarts = Layer.succeed(GoalRecovery, {
+  capture: () => Effect.void,
+  resume: () => Effect.succeed({ _tag: "Start" as const, workspace: null, note: null }),
+  forget: () => Effect.void,
+});
+
 const persistence = (path: string | undefined) =>
   path === undefined
     ? SqlitePersistence.layerMemory
@@ -224,6 +232,7 @@ const layerFor = (
         FleetDefaults.layerRescheduler,
         noFallback,
         healthy,
+        freshStarts,
       ),
     ),
     Layer.provide(
