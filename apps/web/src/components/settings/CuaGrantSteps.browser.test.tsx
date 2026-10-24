@@ -59,7 +59,7 @@ it("shows the re-drag hint while the pane is open, and no ask for a grant this M
   );
   await expect.element(screen.getByRole("button", { name: "Open again" })).toBeVisible();
   await expect
-    .element(screen.getByText(/Already on\? Remove it with the − button and drag it in again\./))
+    .element(screen.getByText(/remove every GOAT Computer Use row with the − button/))
     .toBeVisible();
   // Screen recording is not reported granted yet, but this Mac already reads it as on.
   await expect.element(screen.getByText("Allowed on this Mac")).toBeVisible();

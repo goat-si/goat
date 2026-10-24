@@ -263,12 +263,17 @@ node scripts/build-computer-use-helper.ts --channel dev
 GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
 ```
 
-The script signs with the keychain's Developer ID Application identity when one is usable, and
-`--identity -` signs ad-hoc. An ad-hoc helper gets a new code hash on every build, so macOS asks
-for Accessibility and Screen Recording again after each rebuild. Only `--channel dev` may be
-ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team, launched them.
-Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
-session that cannot unlock it (`errSecInternalComponent`).
+The script signs with the keychain's Developer ID Application identity and pins the helper's
+designated requirement to its bundle id and team, so a rebuild keeps its Accessibility and
+Screen Recording grants. Signing needs the login keychain of the signed-in user: over SSH or
+from an agent session that cannot use it (`errSecInternalComponent`), the build stops and says
+so. Run it from Terminal on the Mac and allow codesign to use the key.
+
+`--ad-hoc` signs a throwaway dev build without a certificate. Each ad-hoc build gets a new code
+hash, so its grants stop applying after a rebuild and System Settings adds another
+"GOAT Computer Use" row to both lists; remove the old rows before allowing the new build. Only
+`--channel dev` may be ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the
+same team, launched them.
 
 ### Windows computer use helper
 
