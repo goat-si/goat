@@ -52,9 +52,11 @@ export const scheduleEntries = {
     toolkit: "orchestrator",
     summary: "Update a scheduled task",
     description:
-      "Update a scheduled task, pause it with enabled=false, or switch between this thread and a fresh top-level thread per run. Omitted top-level fields stay unchanged. Supplying a webhook schedule without signature clears signature checks.",
+      "Update a scheduled task, pause it with enabled=false, or switch between this thread and a fresh top-level thread per run. Omitted top-level fields stay unchanged. Supplying a webhook schedule without signature clears signature checks. Retry with the same clientRequestId.",
     guide:
-      "Pass scheduledTaskId from goat_schedule_list.\n\nOmit a top-level field to keep its stored value. Set enabled=false to pause future automatic runs without deleting the task. Set bindToCurrentThread=true to post runs into this thread, or false to launch a fresh thread per run.\n\nWebhook dedupe accepts replayKey, coalesceKey and coalesceWindowSeconds (10–3600, default 120). Replay keys suppress replays for 7 days. Coalescing retains the latest payload in each fixed window.\n\nWhen supplying a webhook schedule, omitted filters keep the stored filters; pass filters to replace them or filters:[] to clear them. Supplying schedule replaces other trigger settings except the explicitly preserved filters and dedupe settings; include signature to keep signature checks.",
+      "Pass scheduledTaskId from goat_schedule_list.\n\nOmit a top-level field to keep its stored value. Set enabled=false to pause future automatic runs without deleting the task. Set bindToCurrentThread=true to post runs into this thread, or false to launch a fresh thread per run.\n\nWebhook dedupe accepts replayKey, coalesceKey and coalesceWindowSeconds (10–3600, default 120). Replay keys suppress replays for 7 days. Coalescing retains the latest payload in each fixed window.\n\nWhen supplying a webhook schedule, omitted filters keep the stored filters; pass filters to replace them or filters:[] to clear them. Supplying schedule replaces other trigger settings except the explicitly preserved filters and dedupe settings; include signature to keep signature checks.\n\nA retry with the same clientRequestId passes the task checks again, then returns the first result without saving again, so a signature secretRef is used once. If the outcome was lost, compare goat_schedule_list with what you sent: a secretRef saved by the update shows as webhookSignatureSecretRef. If it did not save, update again with a new key; a secretRef it already used needs a new secret request.",
+    idempotency: "key",
+    reconcile: "schedule.list",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

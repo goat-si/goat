@@ -11,6 +11,7 @@ import { useEnvironmentQuery } from "../../../state/query";
 import { serverEnvironment } from "../../../state/server";
 import { SettingsActionRow } from "../components/SettingsActionRow";
 import { SettingsSection } from "../components/SettingsSection";
+import { ComputerUseAdvancedRow, useComputerUseAdvanced } from "./ComputerUseAdvancedRow";
 
 const stateLabels = {
   ok: "Ready",
@@ -28,7 +29,13 @@ const setupLabels = {
   unavailable: "Unavailable",
 } as const satisfies Record<ComputerUseSetupStatus, string>;
 
-export function ComputerUseReadiness(input: Parameters<typeof computerUseReadinessSteps>[0]) {
+export function ComputerUseReadiness({
+  details = true,
+  ...input
+}: Parameters<typeof computerUseReadinessSteps>[0] & {
+  /** False shows only the one-line summary; the steps live under Advanced. */
+  readonly details?: boolean;
+}) {
   const result = computerUseReadinessSteps(input);
   return (
     <View accessibilityLabel="Computer use readiness" className="gap-4 p-4">
@@ -37,6 +44,18 @@ export function ComputerUseReadiness(input: Parameters<typeof computerUseReadine
           ? "Computer use is ready on this host."
           : "Computer use setup needs attention."}
       </Text>
+      {details ? <ComputerUseReadinessDetails result={result} /> : null}
+    </View>
+  );
+}
+
+function ComputerUseReadinessDetails({
+  result,
+}: {
+  readonly result: ReturnType<typeof computerUseReadinessSteps>;
+}) {
+  return (
+    <>
       {result.steps.map((step, index) => (
         <View key={step.id} className="gap-1">
           <Text textRole="body">
@@ -87,7 +106,7 @@ export function ComputerUseReadiness(input: Parameters<typeof computerUseReadine
         </View>
       ) : null}
       <Text textRole="footnote">Permissions must be granted on this host's desktop.</Text>
-    </View>
+    </>
   );
 }
 
@@ -99,6 +118,7 @@ export function ComputerUseHostReadiness({
   readonly machine?: string | undefined;
 }) {
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
+  const advanced = useComputerUseAdvanced();
   return (
     <SettingsSection title="Computer use">
       {query.error ? (
@@ -112,7 +132,9 @@ export function ComputerUseHostReadiness({
         readiness={query.data?.readiness}
         tools={query.data?.tools}
         signals={query.data?.signals}
+        details={advanced.expanded}
       />
+      <ComputerUseAdvancedRow advanced={advanced} />
       <SettingsActionRow
         icon="arrow.clockwise"
         label="Refresh computer use readiness"

@@ -3,8 +3,9 @@ name: goat-nightly
 # GOAT release channels (docs/internals/release-channels.md).
 # Nightly builds dev: on its schedule, or by hand, prepare picks the newest dev commit
 # whose full manual goat-ci run ("goat-ci all on dev") succeeded, skips it when that commit
-# is already a published nightly, and versions it as a prerelease of the next stable
-# (<base>-nightly.<date>.<run>). A manual run may name any dev commit, green or not.
+# is already a published nightly or is not newer than the newest published nightly's commit,
+# and versions it as a prerelease of the next stable (<base>-nightly.<date>.<run>). A manual
+# run may name any dev commit, green or not, older or not.
 # Stable promotes a published nightly: its own schedule, or a manual run with
 # channel=stable, rebuilds the commit of the newest nightly that has been out for 24 hours
 # and is newer than the current stable, with the plain version, unless an open issue is
@@ -87,9 +88,10 @@ jobs:
       manifest: ${{ steps.release.outputs.manifest }}
     steps:
       # Nightly: the newest dev commit whose full manual goat-ci run succeeded, or a
-      # given dev commit; already published means skip. Stable: the nightly that
-      # release-train.cjs (from this workflow's commit) promotes, or skip. Every
-      # checkout trusts this sha.
+      # given dev commit; release-train.cjs skips one already published and, unless a
+      # commit was given, one not newer than the newest published nightly's. Stable: the
+      # nightly that release-train.cjs (from this workflow's commit) promotes, or skip.
+      # Every checkout trusts this sha.
       - name: Resolve commit
         id: resolve
         shell: bash
@@ -150,9 +152,12 @@ jobs:
             *) echo "::error::$sha is not on $branch ($status)"; exit 1 ;;
           esac
           if [ "$CHANNEL" = nightly ]; then
-            published="$(gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[] | select(.prerelease) | .name')"
-            if grep -Fq "(${sha:0:12})" <<<"$published"; then
-              echo "$sha is already a published nightly; skipping"
+            releases="$RUNNER_TEMP/goat-releases.jsonl"
+            gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' \
+              --jq '.[] | {tag_name, name, draft, prerelease, published_at}' > "$releases"
+            decision="$(RELEASES_FILE="$releases" SHA="$sha" node "$train" nightly)"
+            if [ "$decision" != build=true ]; then
+              echo "skipping $sha"
               skip=true
             fi
           fi

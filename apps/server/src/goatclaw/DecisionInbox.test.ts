@@ -1,11 +1,11 @@
 import { expect, it } from "@effect/vitest";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import {
   OrchestratorMcpFailure,
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
   type DecisionRequestInput,
+  type PermissionProfile,
   type OrchestratorMcpPendingRequestRespondInput,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -20,13 +20,21 @@ import {
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-import * as Sqlite from "../persistence/Sqlite.ts";
 import * as Settings from "../serverSettings.ts";
-import * as Profiles from "./PermissionProfiles.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as Inbox from "./DecisionInbox.ts";
+import {
+  narrowCeiling,
+  origin,
+  fixture,
+  pendingUsingSql,
+  seedDestination,
+  seedPending,
+  seedThread,
+  transport,
+} from "./DecisionDestination.testkit.ts";
 
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const owner: Inbox.DecisionCaller = {
@@ -60,70 +68,108 @@ const request: DecisionRequestInput = {
   recommended: "wait",
   requiredProfile: "manager",
 };
-const fixture = (
-  options: {
-    readonly profile?: string;
-    readonly threads?: Layer.Layer<ThreadManagement.ThreadManagementService>;
-    readonly pending?: Layer.Layer<
-      PendingQuestions.PendingQuestionsMcpService,
-      never,
-      SqlClient.SqlClient
-    >;
-  } = {},
-) =>
-  Inbox.layer.pipe(
-    Layer.provide(Profiles.layer),
-    Layer.provide(options.threads ?? Layer.mock(ThreadManagement.ThreadManagementService)({})),
-    Layer.provide(options.pending ?? Layer.mock(PendingQuestions.PendingQuestionsMcpService)({})),
-    Layer.provideMerge(
-      Settings.layerTest({
-        goatclaw: { enabled: true, defaultProfile: options.profile ?? "worker" },
-      }),
-    ),
-    Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provide(NodeCrypto.layer),
-  );
-const pendingUsingSql = (
-  respond: (
-    sql: SqlClient.SqlClient,
-  ) => PendingQuestions.PendingQuestionsMcpService["Service"]["respond"],
-) =>
-  Layer.unwrap(
-    Effect.map(SqlClient.SqlClient, (sql) =>
-      Layer.mock(PendingQuestions.PendingQuestionsMcpService)({ respond: respond(sql) }),
-    ),
-  );
-const seedThread = (id = "asking", mode = "full-access") =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
-    VALUES (${id}, 'project', 'Asking thread', 'codex', ${mode}, 'default', '1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z', '{}')`;
-  });
-const seedPending = (kind = "user_input", mode = "full-access") =>
-  Effect.gen(function* () {
-    yield* seedThread("pending-thread", mode);
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO orchestration_v2_projection_runtime_requests
-    (runtime_request_id, thread_id, node_id, kind, status, created_at, payload_json)
-    VALUES ('question', 'pending-thread', 'node', ${kind}, 'pending', '1970-01-01T00:00:00.000Z', '{}')`;
-    yield* sql`INSERT INTO orchestration_v2_projection_turn_items
-    (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json)
-    VALUES ('item', 'pending-thread', 0, ${kind === "user_input" ? "user_input_request" : "approval_request"}, 'pending', '1970-01-01T00:00:00.000Z', ${JSON.stringify(
-      kind === "user_input"
-        ? {
-            requestId: "question",
-            questions: [
-              {
-                id: "q",
-                header: "Placement",
-                question: "Where should work run?",
-                options: [{ label: "Wait", description: "Keep paused" }],
-              },
-            ],
-          }
-        : { requestId: "question", prompt: "Allow the command?" },
-    )})`;
-  });
+
+it.effect.each(["full-access", "auto"] as const)(
+  "#1405 preservation: disabled policy respects the actual %s calling thread",
+  (runtimeMode) =>
+    Effect.gen(function* () {
+      yield* seedThread("asking", runtimeMode);
+      yield* (yield* Settings.ServerSettingsService).updateSettings({
+        goatclaw: { enabled: false },
+      });
+      const inbox = yield* Inbox.DecisionInbox;
+      const item = yield* inbox.create(owner, request);
+      const result = yield* inbox
+        .answer(agent, { id: item.id, optionId: "wait", reason: "Use actual thread authority" })
+        .pipe(Effect.result);
+      expect(result._tag).toBe(runtimeMode === "full-access" ? "Success" : "Failure");
+      expect((yield* inbox.get(owner, item.id)).status).toBe(
+        runtimeMode === "full-access" ? "answered" : "open",
+      );
+    }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect(
+  "#1405 preservation: destination commits and delivers once without mutating the origin",
+  () =>
+    Effect.gen(function* () {
+      const originInbox = yield* Inbox.DecisionInbox;
+      const originSql = yield* SqlClient.SqlClient;
+      const original = yield* originInbox.create(owner, request);
+      const originRows = yield* originSql`SELECT * FROM decision_items`;
+      const originAudits = yield* originSql`SELECT * FROM audit_events`;
+      const delivered = yield* Ref.make<ReadonlyArray<ThreadManagement.ThreadManagementSendInput>>(
+        [],
+      );
+      yield* Effect.gen(function* () {
+        yield* seedThread();
+        const inbox = yield* Inbox.DecisionInbox;
+        const sql = yield* SqlClient.SqlClient;
+        const item = yield* inbox.create(agent, request);
+        yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, client_label, issued_at, expires_at)
+        VALUES ('remote-session', 'mcp-client', '[]', 'bearer-access-token', 'Destination manager', '1970-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')`;
+        const controls = { transportEnvironmentId: origin };
+        const answered = yield* inbox.answer(transport, {
+          ...controls,
+          id: item.id,
+          optionId: "wait",
+          reason: "Confirmed remotely",
+        });
+        expect(answered).toMatchObject({
+          status: "answered",
+          answeredBy: "mcp:remote-session",
+          answeredByLabel: "Destination manager",
+          from: { environmentId: "test" },
+        });
+        expect(yield* inbox.get(transport, item.id, controls)).toEqual(answered);
+        expect(
+          (yield* inbox.list(transport, { ...controls, localOnly: true, status: "answered" }))
+            .items,
+        ).toEqual([answered]);
+        expect(
+          yield* inbox
+            .answer(transport, {
+              ...controls,
+              id: item.id,
+              optionId: "fallback",
+              reason: "Repeated",
+            })
+            .pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure", failure: { code: "invalid_request" } });
+        yield* inbox.runDueWork;
+        yield* inbox.runDueWork;
+        expect(
+          yield* sql`SELECT actor FROM audit_events WHERE action = 'decision.answer' AND outcome = 'answered'`,
+        ).toEqual([{ actor: "mcp:remote-session" }]);
+        expect(
+          yield* sql`SELECT decision_id FROM decision_answer_deliveries WHERE delivered_at IS NOT NULL`,
+        ).toEqual([{ decision_id: item.id }]);
+        const messages = yield* Ref.get(delivered);
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toMatchObject({
+          commandId: `decision-answer:${item.id}`,
+          messageId: `decision-answer:${item.id}`,
+        });
+        expect(messages[0]!.text).toContain("Answered by: Destination manager");
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            fixture({
+              profile: "manager",
+              threads: Layer.mock(ThreadManagement.ThreadManagementService)({
+                sendToThread: (input) =>
+                  Ref.update(delivered, (all) => [...all, input]).pipe(Effect.as({} as never)),
+              }),
+            }),
+          ),
+        ),
+      );
+      expect(yield* originSql`SELECT * FROM decision_items`).toEqual(originRows);
+      expect(yield* originSql`SELECT * FROM audit_events`).toEqual(originAudits);
+      expect(yield* originSql`SELECT * FROM decision_answer_deliveries`).toEqual([]);
+      expect(yield* originInbox.get(owner, original.id)).toEqual(original);
+    }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
 
 it.effect(
   "creates, gets, answers once and stores append-only audit metadata without context or answers",
@@ -662,4 +708,287 @@ it.effect("uses an answering agent's thread title instead of its id in client hi
     yield* sql`UPDATE orchestration_v2_projection_threads SET title = '' WHERE thread_id = 'asking'`;
     expect((yield* inbox.get(owner, item.id)).answeredBy).toBe("an agent");
   }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect(
+  "#1405 baseline-failing: foreign discovery filters durable and pending rows before limiting",
+  () =>
+    Effect.gen(function* () {
+      for (const input of [
+        { id: "owned-a", launcherEnvironmentId: origin, launcherThreadId: "manager-a" },
+        { id: "owned-b", launcherEnvironmentId: origin, launcherThreadId: "manager-b" },
+        { id: "aaa-unrelated", launcherEnvironmentId: "another-origin" },
+        { id: "aaa-local" },
+        { id: "aaa-deleted", launcherEnvironmentId: origin, deleted: true },
+        { id: "archived", launcherEnvironmentId: origin, archived: true },
+        { id: "native", launcherEnvironmentId: origin, providerNative: true },
+        { id: "grandchild", launcherEnvironmentId: "test", launcherThreadId: "owned-a" },
+      ])
+        yield* seedDestination(input);
+      const inbox = yield* Inbox.DecisionInbox;
+      const threadless = yield* inbox.create(owner, request);
+      const input = { launcherEnvironmentId: origin, status: "open" as const };
+      const items = (yield* inbox.list(transport, input)).items;
+      expect(items.map((item) => item.id).sort()).toEqual([
+        "decision:archived",
+        "decision:native",
+        "decision:owned-a",
+        "decision:owned-b",
+        "pending:owned-a:question-owned-a",
+        "pending:owned-b:question-owned-b",
+      ]);
+      expect(items.every((item) => item.from.host === undefined)).toBe(true);
+      expect(items.some((item) => item.id === threadless.id)).toBe(false);
+      const narrowed = yield* inbox.list(transport, {
+        ...input,
+        launcherThreadId: ThreadId.make("manager-b"),
+      });
+      expect(narrowed.items.map((item) => item.id).sort()).toEqual([
+        "decision:owned-b",
+        "pending:owned-b:question-owned-b",
+      ]);
+      expect(
+        (yield* inbox.list(transport, { ...input, limit: 1 })).items.map((item) => item.id),
+      ).toEqual(["decision:archived"]);
+    }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect.each([
+  ["thread caller", agent, { launcherEnvironmentId: origin }],
+  ["person caller", owner, { launcherEnvironmentId: origin }],
+  [
+    "unauthenticated outside caller",
+    { ...transport, scope: { ...transport.scope, client: undefined } },
+    { launcherEnvironmentId: origin },
+  ],
+  ["same environment", transport, { launcherEnvironmentId: EnvironmentId.make("test") }],
+  ["thread without environment", transport, { launcherThreadId: ThreadId.make("manager-a") }],
+  ["routed foreign filter", transport, { launcherEnvironmentId: origin, host: "other-host" }],
+  ["fanout foreign filter", transport, { launcherEnvironmentId: origin, hosts: ["other-host"] }],
+  [
+    "mismatched identities",
+    transport,
+    { launcherEnvironmentId: origin, transportEnvironmentId: EnvironmentId.make("different") },
+  ],
+  ["localOnly without foreign identity", transport, { localOnly: true }],
+  ["ceiling without foreign identity", transport, { permissionProfileCeiling: narrowCeiling }],
+  [
+    "same transport identity",
+    transport,
+    { localOnly: true, transportEnvironmentId: EnvironmentId.make("test") },
+  ],
+] as const)(
+  "#1405 baseline-failing: rejects unsafe discovery controls from %s",
+  ([_name, caller, input]) =>
+    Effect.gen(function* () {
+      yield* seedThread();
+      const result = yield* (yield* Inbox.DecisionInbox).list(caller, input).pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "invalid_request" } });
+    }).pipe(Effect.provide(fixture())),
+);
+
+it.effect.each(
+  (
+    [
+      ["person", owner, origin],
+      ["thread", agent, origin],
+      ["missing identity", transport, undefined],
+      ["same environment", transport, EnvironmentId.make("test")],
+    ] as const
+  ).flatMap(([name, caller, transportEnvironmentId]) =>
+    (["get", "answer"] as const).map(
+      (operation) =>
+        [
+          `${operation} rejects forwarded controls from ${name}`,
+          caller,
+          transportEnvironmentId,
+          operation,
+        ] as const,
+    ),
+  ),
+)("#1405 baseline-failing: %s", ([_name, caller, transportEnvironmentId, operation]) =>
+  Effect.gen(function* () {
+    yield* seedThread();
+    const inbox = yield* Inbox.DecisionInbox;
+    const item = yield* inbox.create(owner, request);
+    const profile = (yield* (yield* Settings.ServerSettingsService).getSettings).goatclaw.profiles
+      .manager!;
+    const options = {
+      permissionProfileCeiling: profile,
+      ...(transportEnvironmentId === undefined ? {} : { transportEnvironmentId }),
+    };
+    const result = yield* (
+      operation === "get"
+        ? inbox.get(caller, item.id, options)
+        : inbox.answer(caller, {
+            ...options,
+            id: item.id,
+            optionId: "wait",
+            reason: "Invalid transport",
+          })
+    ).pipe(Effect.result);
+    expect(result).toMatchObject({ _tag: "Failure", failure: { code: "invalid_request" } });
+    expect((yield* inbox.get(owner, item.id)).status).toBe("open");
+  }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect.each(["list", "get"] as const)(
+  "#1405 baseline-failing: forwarded %s classifies pending questions at the origin ceiling",
+  (read) =>
+    Effect.gen(function* () {
+      yield* seedPending("user_input", "full-access");
+      const inbox = yield* Inbox.DecisionInbox;
+      const options = { transportEnvironmentId: origin, permissionProfileCeiling: narrowCeiling };
+      const id = "pending:pending-thread:question";
+      expect((yield* inbox.get(transport, id)).humanRequired).toBe(false);
+      const item =
+        read === "get"
+          ? yield* inbox.get(transport, id, options)
+          : (yield* inbox.list(transport, { ...options, localOnly: true })).items[0];
+      expect(item).toMatchObject({ humanRequired: true, requiredProfile: "owner" });
+      const result = yield* inbox
+        .answer(transport, {
+          ...options,
+          id,
+          answers: { q: "Wait" },
+          reason: "Origin cannot resolve this",
+        })
+        .pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
+      expect((yield* inbox.get(owner, id)).status).toBe("open");
+    }).pipe(Effect.provide(fixture({ profile: "owner" }))),
+);
+
+it.effect.each([
+  ["capabilities", { capabilities: [] }],
+  ["runtime", { runtimeModeCeiling: "auto" }],
+  ["lanes", { maxLanes: 1 }],
+  ["hosts", { hosts: ["allowed-host"] }],
+  ["turns", { maxTurns: 1 }],
+  ["wall-clock budget", { maxWallClockMs: 1000 }],
+] satisfies ReadonlyArray<readonly [string, Partial<PermissionProfile>]>)(
+  "#1405 baseline-failing: a same-named forwarded profile cannot grant broader %s",
+  ([_name, change]) =>
+    Effect.gen(function* () {
+      const inbox = yield* Inbox.DecisionInbox;
+      const item = yield* inbox.create(owner, request);
+      const manager = (yield* (yield* Settings.ServerSettingsService).getSettings).goatclaw.profiles
+        .manager!;
+      const input = {
+        id: item.id,
+        optionId: "wait",
+        reason: "Narrow origin",
+        transportEnvironmentId: origin,
+        permissionProfileCeiling: { ...manager, ...change },
+      };
+      const result = yield* inbox.answer(transport, input).pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
+      expect((yield* inbox.get(owner, item.id)).status).toBe("open");
+      const sql = yield* SqlClient.SqlClient;
+      expect(yield* sql`SELECT id FROM audit_events WHERE action = 'decision.answer'`).toEqual([]);
+    }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect(
+  "#1405 baseline-failing: disabled policy still enforces the transport runtime ceiling",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* Settings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: false, defaultProfile: "manager" } });
+      const inbox = yield* Inbox.DecisionInbox;
+      const item = yield* inbox.create(owner, request);
+      const caller = {
+        ...transport,
+        scope: {
+          ...transport.scope,
+          client: { ...transport.scope.client, access: "auto" as const },
+        },
+      };
+      const result = yield* inbox
+        .answer(caller, { id: item.id, optionId: "wait", reason: "Session too narrow" })
+        .pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
+      expect((yield* inbox.get(owner, item.id)).status).toBe("open");
+    }).pipe(Effect.provide(fixture({ profile: "manager" }))),
+);
+
+it.effect("#1405 preservation: a transport session cannot resolve person-only questions", () =>
+  Effect.gen(function* () {
+    yield* seedPending("user_input", "full-access");
+    const inbox = yield* Inbox.DecisionInbox;
+    const caller = {
+      ...transport,
+      scope: {
+        ...transport.scope,
+        client: { ...transport.scope.client, access: "auto" as const, approvals: true },
+      },
+    };
+    const input = {
+      id: "pending:pending-thread:question",
+      answers: { q: "Wait" },
+      reason: "Origin person is not transported",
+      transportEnvironmentId: origin,
+    };
+    expect(yield* inbox.answer(caller, input).pipe(Effect.result)).toMatchObject({
+      _tag: "Failure",
+      failure: { code: "capability_denied" },
+    });
+    expect((yield* inbox.get(owner, input.id)).status).toBe("open");
+  }).pipe(Effect.provide(fixture({ profile: "owner" }))),
+);
+
+it.effect(
+  "#1405 baseline-failing: forwarded pending answers retain the execution ceiling if the target changes",
+  () =>
+    Effect.gen(function* () {
+      yield* seedPending("user_input", "auto");
+      const inbox = yield* Inbox.DecisionInbox;
+      const worker = (yield* (yield* Settings.ServerSettingsService).getSettings).goatclaw.profiles
+        .worker!;
+      const input = {
+        id: "pending:pending-thread:question",
+        answers: { q: "Wait" },
+        reason: "Within origin ceiling",
+        transportEnvironmentId: origin,
+        permissionProfileCeiling: worker,
+      };
+      const result = yield* inbox.answer(transport, input).pipe(Effect.result);
+      expect(result).toMatchObject({ _tag: "Failure", failure: { code: "capability_denied" } });
+      expect((yield* inbox.get(owner, input.id)).status).toBe("open");
+    }).pipe(
+      Effect.provide(
+        fixture({
+          profile: "owner",
+          pending: pendingUsingSql(
+            (sql) => () =>
+              Effect.gen(function* () {
+                yield* sql`UPDATE orchestration_v2_projection_threads SET runtime_mode = 'full-access' WHERE thread_id = 'pending-thread'`;
+                const limit = yield* DispatchModeLimit;
+                if (
+                  limit !== undefined &&
+                  exceededDispatchModeLimit(limit, {
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                  }) !== undefined
+                )
+                  return yield* new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: "Target exceeds dispatch ceiling.",
+                  });
+                yield* sql`UPDATE orchestration_v2_projection_runtime_requests SET status = 'resolved' WHERE thread_id = 'pending-thread'`;
+                return { sequence: 1 };
+              }).pipe(
+                Effect.mapError((error) =>
+                  isMcpFailure(error)
+                    ? error
+                    : new OrchestratorMcpFailure({
+                        code: "orchestration_error",
+                        message: "Fixture storage failed.",
+                      }),
+                ),
+              ),
+          ),
+        }),
+      ),
+    ),
 );

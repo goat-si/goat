@@ -1,12 +1,11 @@
-import type { ComputerUseGrant, DesktopCuaGrants } from "@goat/contracts";
-import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import type { DesktopCuaGrants } from "@goat/contracts";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 
 import { ChevronRightIcon, CircleCheckIcon } from "~/components/solar";
 import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
-  cuaGranted,
   cuaGrantSteps,
   cuaGrantTroubleshooting,
   type CuaGrantHolder,
@@ -17,6 +16,8 @@ import {
 /**
  * The grants of the app computer use runs as, read again while setup is open. Each read asks a
  * fresh helper process, so a switch turned on in System Settings shows up on the next check.
+ * record and invalidate start a new epoch, so a read that began before them is dropped when it
+ * lands; reads counts the successful reads, so a caller can wait for one newer than its own.
  */
 export function useCuaGrants(
   check: () => Promise<DesktopCuaGrants>,
@@ -25,6 +26,9 @@ export function useCuaGrants(
 ) {
   const [grants, setGrants] = useState<DesktopCuaGrants | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reads, setReads] = useState(0);
+  const epoch = useRef(0);
+  const readCount = useRef(0);
   const checkLatest = useEffectEvent(check);
   useEffect(() => {
     if (!enabled) return;
@@ -35,15 +39,19 @@ export function useCuaGrants(
     const refresh = async () => {
       if (disposed || checking || document.visibilityState === "hidden") return;
       checking = true;
+      const started = epoch.current;
       await checkLatest().then(
         (next) => {
           unusable = next.principal === "unusable";
-          if (disposed) return;
+          if (disposed || started !== epoch.current) return;
           setGrants(next);
           setError(null);
+          readCount.current += 1;
+          setReads(readCount.current);
         },
         () => {
-          if (!disposed) setError("Could not check permissions. We'll try again automatically.");
+          if (!disposed && started === epoch.current)
+            setError("Could not check permissions. We'll try again automatically.");
         },
       );
       checking = false;
@@ -61,7 +69,19 @@ export function useCuaGrants(
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [enabled, intervalMs]);
-  return { grants, error };
+  const invalidate = () => {
+    epoch.current += 1;
+  };
+  /** Takes a read made elsewhere as the newest one; returns its read number. */
+  const record = (next: DesktopCuaGrants) => {
+    invalidate();
+    setGrants(next);
+    setError(null);
+    readCount.current += 1;
+    setReads(readCount.current);
+    return readCount.current;
+  };
+  return { grants, error, reads, record, invalidate };
 }
 
 const STEP_ICONS: Record<CuaPermission, ReactNode> = {
@@ -164,35 +184,48 @@ export function CuaGrantSteps({
           </li>
         ))}
       </ol>
-      <Collapsible>
-        <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-          <ChevronRightIcon
-            className="size-3.5 transition-transform group-data-panel-open:rotate-90 motion-reduce:transition-none"
-            aria-hidden="true"
-          />
-          Still not allowed?
-        </CollapsibleTrigger>
-        <CollapsiblePanel>
-          <ul className="mt-2 list-disc space-y-1.5 pl-5 text-xs text-muted-foreground">
-            {cuaGrantTroubleshooting(grants).map((tip) => (
-              <li key={tip}>{tip}</li>
-            ))}
-          </ul>
-          {grants.bundlePath ? (
-            <p className="mt-2 text-xs text-muted-foreground">
-              This copy is at <span className="break-all font-mono">{grants.bundlePath}</span>.
-            </p>
-          ) : null}
-          {onReveal ? (
-            <div className="mt-2">
-              <Button size="xs" variant="outline" onClick={onReveal}>
-                Show {grants.name} in Finder
-              </Button>
-            </div>
-          ) : null}
-        </CollapsiblePanel>
-      </Collapsible>
+      <CuaGrantTroubleshooting grants={grants} onReveal={onReveal} />
     </div>
+  );
+}
+
+/** Remedies for a grant that stays off, folded away until the person asks. */
+export function CuaGrantTroubleshooting({
+  grants,
+  onReveal,
+}: {
+  grants: CuaGrantHolder;
+  onReveal?: (() => void) | undefined;
+}) {
+  return (
+    <Collapsible>
+      <CollapsibleTrigger className="group flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+        <ChevronRightIcon
+          className="size-3.5 transition-transform group-data-panel-open:rotate-90 motion-reduce:transition-none"
+          aria-hidden="true"
+        />
+        Still not allowed?
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <ul className="mt-2 list-disc space-y-1.5 pl-5 text-xs text-muted-foreground">
+          {cuaGrantTroubleshooting(grants).map((tip) => (
+            <li key={tip}>{tip}</li>
+          ))}
+        </ul>
+        {grants.bundlePath ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            This copy is at <span className="break-all font-mono">{grants.bundlePath}</span>.
+          </p>
+        ) : null}
+        {onReveal ? (
+          <div className="mt-2">
+            <Button size="xs" variant="outline" onClick={onReveal}>
+              Show {grants.name} in Finder
+            </Button>
+          </div>
+        ) : null}
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
@@ -205,55 +238,4 @@ function CuaGrantWaitingHint({ name }: { name: string }) {
       Recording, remove every {name} row with the − button, then drag this copy in again.
     </p>
   );
-}
-
-/**
- * What a grant row of the shared readiness list offers on the Mac that runs the host: the System
- * Settings guide for the next grant, and the waiting hint once its pane is open. The host's report
- * trails this Mac's own read, so a grant this Mac already reads as on says so instead of asking,
- * and the next grant is the first one this Mac reads as off. The report's own "current" grant can
- * still be one this Mac has allowed, which would leave no row to act on.
- */
-export function cuaReadinessGrantSlot(input: {
-  readonly live: CuaGrantHolder;
-  readonly opened: CuaPermission | null;
-  readonly busy: boolean;
-  readonly onOpen: (permission: CuaPermission) => void;
-}) {
-  return (
-    grant: "accessibility" | "screenCapture",
-    state: ComputerUseGrant,
-    _context: { isCurrent: boolean },
-  ): { action: ReactNode; detail?: ReactNode } => {
-    const permission: CuaPermission =
-      grant === "accessibility" ? "accessibility" : "screen-recording";
-    if (state === "granted") return { action: null };
-    if (cuaGranted(input.live, permission))
-      return {
-        action: (
-          <span className="flex items-center gap-1 text-xs text-success">
-            <CircleCheckIcon className="size-4" aria-hidden="true" />
-            Allowed on this Mac
-          </span>
-        ),
-      };
-    // withLiveGrants already demotes a reported grant this Mac reads as off, so this Mac's read
-    // alone picks the next step.
-    const next = cuaGranted(input.live, "accessibility") ? "screen-recording" : "accessibility";
-    if (permission !== next) return { action: null };
-    const waiting = input.opened === permission;
-    return {
-      action: (
-        <Button
-          size="xs"
-          variant={waiting ? "outline" : "default"}
-          disabled={input.busy}
-          onClick={() => input.onOpen(permission)}
-        >
-          {waiting ? "Open again" : "Open Settings"}
-        </Button>
-      ),
-      ...(waiting ? { detail: <CuaGrantWaitingHint name={input.live.name} /> } : {}),
-    };
-  };
 }

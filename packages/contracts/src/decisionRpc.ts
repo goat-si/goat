@@ -37,7 +37,7 @@ export const DecisionRpcs = RpcGroup.make(
     error: decisionRpcErrors,
   }),
   Rpc.make(DECISION_WS_METHODS.decisionWithdraw, {
-    payload: Decisions.DecisionGetInput,
+    payload: Decisions.DecisionWithdrawInput,
     success: Decisions.DecisionItem,
     error: decisionRpcErrors,
   }),

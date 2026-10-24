@@ -5,24 +5,25 @@
  *
  * @module ComputerUseLeaseProxyCli
  */
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs/promises";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 
-import { CuaDriverMcpConfiguration } from "@goat/contracts";
+import { type ComputerUseLeaseReport, CuaDriverMcpConfiguration } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
-import { overlayChannel } from "./overlayChannel.ts";
+import { type HelperHumanInput, overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
@@ -52,11 +53,14 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
   }
 }
 
-/** Tells the lease route which window the control acts on; true when the server took it. */
-async function reportTarget(
+/**
+ * Tells the lease route which window the control acts on, or that a person used the keyboard or
+ * pointer; true when the server took it.
+ */
+async function report(
   url: string,
   authorization: string,
-  body: { readonly controlId: string; readonly pid: number; readonly windowId: number },
+  body: ComputerUseLeaseReport,
 ): Promise<boolean> {
   try {
     const response = await fetch(url, {
@@ -124,12 +128,16 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       output: (line) => Effect.sync(() => void process.stdout.write(line + "\n")),
       onTarget: (target) =>
         Effect.promise(() =>
-          reportTarget(url, authorization, {
+          report(url, authorization, {
             controlId,
             pid: target.pid,
             windowId: target.windowId,
           }),
         ),
+      onHumanInput: (humanInput) =>
+        Effect.promise(() => report(url, authorization, { controlId, humanInput })),
+      onAgentInput: (agentInput) =>
+        Effect.promise(() => report(url, authorization, { controlId, agentInput })),
       leaseUpdates: leaseUpdateLines(
         Stream.fromAsyncIterable(
           (async function* () {
@@ -157,23 +165,42 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         }),
         (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
       ).pipe(
-        Effect.map((child) => ({
-          ...(drawsOverlay && child.stdio[3] instanceof NodeStream.Duplex
-            ? { overlay: overlayChannel(child.stdio[3]) }
-            : {}),
-          send: (line: string) =>
-            Effect.sync(() => {
-              if (child.stdin.writable) child.stdin.write(line + "\n");
-            }),
-          lines: Stream.fromAsyncIterable(
-            NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
-            () => undefined,
-          ).pipe(Stream.catchCause(() => Stream.empty)),
-          kill: Effect.sync(() => {
-            child.stdin.end();
-            killDriverGroup(platform, child, "SIGKILL");
+        Effect.flatMap((child) =>
+          Effect.gen(function* () {
+            // The helper's input reports; only the latest few matter once one is a person's.
+            const seen = yield* Queue.sliding<{
+              readonly source: HelperHumanInput["source"];
+              readonly at: number;
+            }>(16);
+            const channel = child.stdio[3];
+            return {
+              ...(drawsOverlay && channel instanceof NodeStream.Duplex
+                ? {
+                    // Dated the moment the line is read, on the clock the server compares with.
+                    overlay: overlayChannel(channel, (input) =>
+                      Queue.offerUnsafe(seen, {
+                        source: input.source,
+                        at: Date.now() - input.ageMs,
+                      }),
+                    ),
+                    humanInput: Stream.fromQueue(seen),
+                  }
+                : {}),
+              send: (line: string) =>
+                Effect.sync(() => {
+                  if (child.stdin.writable) child.stdin.write(line + "\n");
+                }),
+              lines: Stream.fromAsyncIterable(
+                NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+                () => undefined,
+              ).pipe(Stream.catchCause(() => Stream.empty)),
+              kill: Effect.sync(() => {
+                child.stdin.end();
+                killDriverGroup(platform, child, "SIGKILL");
+              }),
+            };
           }),
-        })),
+        ),
       ),
       ...(placement === undefined
         ? {}

@@ -812,6 +812,9 @@ func runService() -> Never {
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
     // Methods beyond the protocol's first set, so the host never relies on one this build lacks.
+    // Agent connections already report a person's input (InputActivity), but "humanInput" is
+    // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
+    // advertising it lets unattended turns run.
     "features": frameCaptureAvailable ? ["watch", "frames"] : ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",

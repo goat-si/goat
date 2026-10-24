@@ -123,8 +123,8 @@ pass its `--json` output to the report with `--budget`.
 
 Run campaigns only against a dev server with seeded data, started with `vp run dev` in a
 worktree, and never against the live install. Fixtures and runs launch real threads, and the
-runner does not delete them. The dev server restarts when files under `packages/` change, and
-typecheck and test runs write there, so run no checks in that worktree while a batch runs.
+runner does not delete them. The dev server restarts when server or package source changes, so
+leave that worktree's source alone while a batch runs.
 
 1. Copy [campaign.example.json](../../scripts/agent-surface/eval/campaign.example.json) and fill
    in the project, the arms, a cheap fixture model, and three review models. Mint the client

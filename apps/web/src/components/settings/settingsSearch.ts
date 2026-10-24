@@ -841,21 +841,21 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/integrations",
     targetId: "computer",
     searchTerms: [
-      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions",
+      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions setup set up retry",
     ],
   },
   {
     id: "computer-use-skill",
     title: "Computer Use skill",
     to: "/settings/integrations",
-    targetId: "computer",
-    searchTerms: ["built in builtin skill computer use instructions agents observe verify"],
+    searchTerms: [
+      "built in builtin skill computer use instructions agents observe verify advanced readiness",
+    ],
   },
   {
     id: "computer-use-full-access",
     title: "Full access without approval",
     to: "/settings/integrations",
-    targetId: "computer",
     searchTerms: ["computer use approval grant admission allow every app full access unattended"],
   },
   {
