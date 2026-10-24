@@ -28,18 +28,15 @@ namespace Goat.ComputerUse
         const int MaxLineBytes = 1 << 20;
         /// <summary>Names this helper process; replies and events are trusted only with it.</summary>
         public static readonly string Generation = Guid.NewGuid().ToString("N");
-        static readonly object OutputLock = new object();
-        static readonly Stream Output = Console.OpenStandardOutput();
+        static HelperOutput output;
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
 
+        /// <summary>Queues a line for the host (HelperOutput); never waits on stdout.</summary>
         static void Emit(Dictionary<string, object> message)
         {
             byte[] line = new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
-            lock (OutputLock)
-            {
-                Output.Write(line, 0, line.Length);
-                Output.Flush();
-            }
+            object type;
+            output.Add(line, message.TryGetValue("type", out type) && (type as string) == "frame");
         }
 
         static Dictionary<string, object> Message(string type)
@@ -68,12 +65,14 @@ namespace Goat.ComputerUse
                     return 78;
                 }
             }
+            output = new HelperOutput(Console.OpenStandardOutput());
             if (refusal != null)
             {
                 var refused = Message("refused");
                 refused["reason"] = "untrusted_parent";
                 refused["message"] = refusal;
                 Emit(refused);
+                output.Drain(2000);
                 return 77;
             }
             var service = new DriverService(executable, Emit);
@@ -129,6 +128,8 @@ namespace Goat.ComputerUse
                 try { frames.Shutdown(); signals.Shutdown(); }
                 finally { service.Stop(); }
             }
+            // A last error line, if any, still reaches a host that reads.
+            output.Drain(1000);
             return 0;
         }
 
