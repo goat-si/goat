@@ -125,6 +125,9 @@ import {
 } from "./channelIds.ts";
 import { botAddress, chipDelivery, makeTaskEvent, prepareTransition } from "./channelTaskWrites.ts";
 
+const movedNarration = (payload: { fromHost: string; host: string; replicaCapturedAt: string }) =>
+  `${payload.fromHost} stopped answering, so this continues on ${payload.host} from the copy of its work taken at ${payload.replicaCapturedAt}. Whatever it does on ${payload.fromHost} after that stays there.`;
+
 /** How long a reception pass may take before the sender gets a failure note instead. */
 const CHANNEL_RECEPTION_TIMEOUT_MS = 45_000;
 
@@ -1768,19 +1771,12 @@ const make = Effect.gen(function* () {
             ": " +
             (event.payload.summary ?? event.payload.reason),
         };
+      case "task.progress":
+        return event.payload.milestone === true
+          ? { kind: "receipt" as const, text: event.payload.summary }
+          : undefined;
       case "task.moved":
-        return {
-          kind: "receipt" as const,
-          text:
-            event.payload.fromHost +
-            " stopped answering, so this continues on " +
-            event.payload.host +
-            " from the copy of its work taken at " +
-            event.payload.replicaCapturedAt +
-            ". Whatever it does on " +
-            event.payload.fromHost +
-            " after that stays there.",
-        };
+        return { kind: "receipt" as const, text: movedNarration(event.payload) };
       case "task.cancelled":
         return { kind: "failure" as const, text: "Stopped: " + task.title };
       case "task.question.opened":
@@ -1860,10 +1856,11 @@ const make = Effect.gen(function* () {
         request === undefined
           ? []
           : [{ role: "user" as const, text: request.message.text, at: request.message.receivedAt }];
-      // Questions and a turn's answer keep their exact words; other results and failures may be
-      // phrased by the model.
+      // Milestones, questions and a turn's answer keep the words written for the person.
       const worded =
-        base.kind === "question" || (task.kind === "turn" && base.kind === "result")
+        pending.event.type === "task.progress" ||
+        base.kind === "question" ||
+        (task.kind === "turn" && base.kind === "result")
           ? baseText
           : Option.match(
               yield* generate({

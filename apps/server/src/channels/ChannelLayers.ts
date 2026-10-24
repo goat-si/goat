@@ -81,7 +81,8 @@ export const makeLayerServices = <E, R>(
   const layerWorkers = Layer.mergeAll(
     ChannelReceptionService.layer,
     ChannelChildWork.layer,
-    ChannelDispatcher.layer,
+    // The stop traversal reads and settles child-work records; one shared instance.
+    ChannelDispatcher.layer.pipe(Layer.provide(ChannelChildWork.layer)),
     ChannelWorkerReports.layer,
     ChannelDeliveryWorker.layer,
   ).pipe(

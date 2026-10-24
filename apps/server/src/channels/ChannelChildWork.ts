@@ -17,10 +17,12 @@
 import {
   type ChannelChildWork as ChannelChildWorkRecord,
   type ChannelChildWorkDestination,
-  type ChannelChildWorkId,
   type ChannelChildWorkState,
   type ChannelChildWorkSurface,
   type ChannelTask,
+  type ChannelTaskEventId,
+  type ChannelTaskId,
+  isChannelChildWorkActive,
   isChannelTaskTerminal,
   type ThreadId,
 } from "@goat/contracts";
@@ -34,10 +36,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { isThreadMissing } from "./channelWorkerObservation.ts";
+import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import {
   childWorkIdFor,
   childWorkKeylessRequestKeyFor,
   childWorkPromptDigestFor,
+  childWorkStopCommandIdFor,
 } from "./channelIds.ts";
 
 /** At most this many active descendants per channel task, delegates and threads together. */
@@ -46,7 +51,7 @@ export const CHANNEL_CHILD_WORK_MAX_ACTIVE = 2;
 export class ChannelChildWorkError extends Schema.TaggedError<ChannelChildWorkError>()(
   "ChannelChildWorkError",
   {
-    reason: Schema.Literals(["at_capacity", "depth_exceeded", "storage"]),
+    reason: Schema.Literals(["at_capacity", "depth_exceeded", "owner_terminal", "storage"]),
     detail: Schema.String,
     cause: Schema.optional(Schema.Unknown),
   },
@@ -126,6 +131,22 @@ export class ChannelChildWork extends Context.Service<
     readonly markUnknown: (record: ChannelChildWorkRecord) => Effect.Effect<void, never>;
     /** One reconcile pass over active records; returns how many changed state. */
     readonly reconcile: Effect.Effect<number, ChannelChildWorkError>;
+    /**
+     * Stop what a task stop can reach through the ownership records: reservations release,
+     * launched thread children get a thread.stop (their own delegated subtrees cascade with
+     * it), and a record settles cancelled once the stop lands or the thread proves gone.
+     * Delegates are covered by the worker's own cascade and remote-binding children by
+     * reconcile, so both are only watched here. "retry" asks the caller to run the stop pass
+     * again; a refused stop while the child is still live advances the owning stop's attempt,
+     * since a refused command id is refused for good.
+     */
+    readonly cancelForTask: (input: {
+      readonly taskId: ChannelTaskId;
+      readonly generation: number;
+      readonly stopEventId: ChannelTaskEventId;
+      readonly attempt: number;
+      readonly reason: string;
+    }) => Effect.Effect<"settled" | "retry", ChannelChildWorkError>;
   }
 >()("goat/channels/ChannelChildWork") {}
 
@@ -184,6 +205,18 @@ const make = Effect.gen(function* () {
         detail:
           "This thread is itself recorded child work of a channel task and cannot launch its own" +
           " subagents or threads. Return findings to the coordinating worker instead.",
+      });
+    }
+    // A terminal task's worker still answering a late turn launches nothing new. A cancel
+    // racing this check is resolved by the stop traversal (reserved records release) and by
+    // reconcile, so the admission never outlives its owner.
+    if (isChannelTaskTerminal(ownership.task.status)) {
+      return yield* new ChannelChildWorkError({
+        reason: "owner_terminal",
+        detail:
+          "This work is " +
+          ownership.task.status +
+          ", so it no longer launches subagents or threads.",
       });
     }
     const promptDigest = childWorkPromptDigestFor(input.prompt);
@@ -277,6 +310,96 @@ const make = Effect.gen(function* () {
 
   const markUnknown = (record: ChannelChildWorkRecord) =>
     transition(record, ["launched", "bound"], "unknown");
+
+  // Same liveness the dispatcher's stop applies: a run that has not ended, a finished run
+  // whose provider still works in the background, or a cloud task in flight. Settling a
+  // refused stop against any of those would abandon live provider work.
+  const childThreadLive = (threadId: ThreadId) =>
+    threads
+      .getThreadRecords(threadId, ["runs", "providerThreads", "turnItems"], {
+        turnItemStatuses: ["pending", "running", "waiting"],
+      })
+      .pipe(
+        Effect.map((records) => {
+          const runs = records.runs;
+          const latestRun = runs.findLast((run) => run.status !== "queued");
+          const background =
+            latestRun !== undefined &&
+            derivePendingBackgroundWork({
+              latestRun,
+              providerThreads: records.providerThreads,
+              turnItems: records.turnItems,
+              activeProviderThreadId: records.thread.activeProviderThreadId,
+              runs,
+            }).length > 0;
+          const cloud = records.providerThreads.some(
+            (thread) =>
+              thread.cloudTask?.status === "running" || thread.cloudTask?.status === "submitting",
+          );
+          return runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) || background || cloud;
+        }),
+        // An unreadable thread may still be alive; keep the stop retrying instead of settling.
+        Effect.orElseSucceed(() => true),
+      );
+
+  const cancelForTask = Effect.fn("ChannelChildWork.cancelForTask")(function* (input: {
+    readonly taskId: ChannelTaskId;
+    readonly generation: number;
+    readonly stopEventId: ChannelTaskEventId;
+    readonly attempt: number;
+    readonly reason: string;
+  }) {
+    const records = yield* store
+      .listForTask(input.taskId)
+      .pipe(Effect.mapError((error) => toError("Unable to list the task's child work.", error)));
+    const attemptKey = input.attempt === 0 ? undefined : "attempt-" + input.attempt;
+    for (const record of records) {
+      if (record.generation !== input.generation || !isChannelChildWorkActive(record.state))
+        continue;
+      // Never launched: capacity returns. A reservation inserted after this pass (a launch
+      // racing the stop) is released by reconcile once the owner is terminal.
+      if (record.state === "reserved") {
+        yield* releaseReserved(record);
+        continue;
+      }
+      // Delegates stop with the worker's own cascade; reconcile settles their records.
+      if (record.surface === "delegate_local" || record.surface === "delegate_remote") continue;
+      const threadId = record.destination?.threadId;
+      // A remote-binding child has no local thread to stop; reconcile (and the destination's
+      // resolve-or-fence hook) settles it.
+      if (threadId === undefined) continue;
+      const stop = yield* threads
+        .dispatch({
+          type: "thread.stop",
+          commandId: childWorkStopCommandIdFor(record.childWorkId, attemptKey),
+          threadId,
+          stopDelegatedTasks: true,
+          reason: input.reason,
+        })
+        .pipe(Effect.result);
+      if (stop._tag === "Success" || isThreadMissing(stop.failure)) {
+        yield* markTerminal(record, "cancelled");
+        continue;
+      }
+      const tag = (stop.failure as { readonly _tag?: string })._tag;
+      const refused =
+        tag === "OrchestratorCommandRejectedError" ||
+        tag === "OrchestratorCommandPreviouslyRejectedError";
+      if (!refused) return "retry" as const;
+      if (yield* childThreadLive(threadId)) {
+        yield* ledger
+          .advanceStopAttempt({
+            eventId: input.stopEventId,
+            from: input.attempt,
+            now: yield* nowIso,
+          })
+          .pipe(Effect.mapError((error) => toError("Unable to advance the stop attempt.", error)));
+        return "retry" as const;
+      }
+      yield* markTerminal(record, "cancelled");
+    }
+    return "settled" as const;
+  });
 
   /** The owning task is gone, terminal, or a newer generation: its reservations may release. */
   const owningTaskSettled = Effect.fnUntraced(function* (record: ChannelChildWorkRecord) {
@@ -406,6 +529,7 @@ const make = Effect.gen(function* () {
     releaseReserved,
     markUnknown,
     reconcile,
+    cancelForTask,
   });
 });
 
