@@ -50,6 +50,25 @@ it.each(ComputerUseGrant.literals)(
   },
 );
 
+it("gives a Linux host its setup guide, with the commands a person runs at that machine", () => {
+  const result = computerUseReadinessSteps({
+    readiness: { ...ready, tree: "unavailable", platform: { linux: { displayServer: "x11" } } },
+    platform: "linux",
+    tools: "available",
+    machine: "lab-box",
+  });
+  expect(result.linuxSetup?.steps[0]?.detail).toContain("lab-box");
+  expect(
+    result.linuxSetup?.steps.find((step) => step.id === "accessibility")?.guidance,
+  ).toContainEqual({
+    kind: "command",
+    text: "gsettings set org.gnome.desktop.interface toolkit-accessibility true",
+  });
+  // Other platforms, and a Linux host whose helper has not reported, have no guide to show.
+  expect(view(ready, "darwin").linuxSetup).toBeUndefined();
+  expect(view(undefined, "linux").linuxSetup).toBeUndefined();
+});
+
 it("uses typed readiness and server tools only, independently of reasons and optional detection signals", () => {
   expect(view(ready).ready).toBe(true);
   expect(view({ ...ready, reasons: ["An informational warning."] }).ready).toBe(true);

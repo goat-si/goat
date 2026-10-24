@@ -8,6 +8,8 @@ import {
   type CuaToolsAvailability,
 } from "@goat/contracts";
 
+import { linuxComputerUseSetup } from "../computerUseLinuxSetup.ts";
+
 export type ReadinessStepState = "ok" | "pending" | "blocked" | "unsupported" | "unknown";
 type GrantId = keyof ComputerUseReadiness["grants"];
 type StepId = "grants" | "helper" | "capture" | "tools";
@@ -150,11 +152,14 @@ export function computerUseReadinessSteps({
   platform,
   tools,
   signals,
+  machine,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
   readonly tools?: CuaToolsAvailability | undefined;
   readonly signals?: ComputerUseCapabilities["signals"] | undefined;
+  /** The host's name in the Linux guide, which tells a person where to act. */
+  readonly machine?: string | undefined;
 }) {
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
@@ -272,6 +277,11 @@ export function computerUseReadinessSteps({
     report,
     steps,
     blockers,
+    // What each step means on a Linux desktop and what to do there, with copyable commands.
+    linuxSetup:
+      platform === "linux" && readiness !== undefined
+        ? linuxComputerUseSetup(readiness, machine ?? "this computer")
+        : undefined,
   } as const;
 }
 

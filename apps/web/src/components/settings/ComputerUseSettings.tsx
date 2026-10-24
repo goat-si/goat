@@ -220,6 +220,7 @@ function ComputerUseControls({
       />
       <ComputerUseReadiness
         platform={host.status?.platform}
+        machine={hostLabel}
         readiness={withLiveGrants(
           host.status?.readiness,
           current && current.principal !== "unusable" ? current : null,
