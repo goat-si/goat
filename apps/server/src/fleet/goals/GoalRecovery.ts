@@ -361,14 +361,27 @@ const make = Effect.gen(function* () {
     attempt: number,
   ) {
     if (attempt <= 1) return START;
-    // Local attempts get their thread id from their launch id (GoalWorkerRuntime.workerThreadId).
-    const previous = workerThreadId(launchActionId(goal, slot, attempt - 1));
-    const before = yield* readAttempt(previous);
-    if (before._tag === "Wait") return before satisfies Resume;
-    if (before._tag === "Stopped" && before.runId !== null) {
-      const capture = yield* captureRun(goal, slot, attempt - 1, previous, before.runId).pipe(
-        Effect.result,
-      );
+    // Every earlier attempt of the slot, newest first: one that never started does not hide an
+    // older one that runs again. Local attempts get their thread id from their launch id.
+    const earlier = Array.from({ length: attempt - 1 }, (_, index) => ({
+      attempt: attempt - 1 - index,
+      threadId: workerThreadId(launchActionId(goal, slot, attempt - 1 - index)),
+    }));
+    const readAll = Effect.forEach(earlier, (entry) => readAttempt(entry.threadId));
+    const before = yield* readAll;
+    for (const entry of before) if (entry._tag === "Wait") return entry satisfies Resume;
+    // The newest attempt that ran is the one whose work continues.
+    const newest = before.findIndex((entry) => entry._tag === "Stopped");
+    const last = before[newest];
+    const lastEntry = earlier[newest];
+    if (last?._tag === "Stopped" && last.runId !== null && lastEntry !== undefined) {
+      const capture = yield* captureRun(
+        goal,
+        slot,
+        lastEntry.attempt,
+        lastEntry.threadId,
+        last.runId,
+      ).pipe(Effect.result);
       if (capture._tag === "Failure") {
         yield* logCaptureFailure(goal, slot)(capture.failure);
         return {
@@ -385,10 +398,16 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    // Its work was read and imported as it was then; it must not have run again since.
-    if (start._tag !== "Start" || before._tag !== "Stopped") return start;
-    const after = yield* readAttempt(previous);
-    if (after._tag !== "Stopped" || after.runId !== before.runId)
+    // Their work was read and imported as it was then; none may have run or started since.
+    if (start._tag !== "Start") return start;
+    const after = yield* readAll;
+    const unchanged = after.every((entry, index) => {
+      const was = before[index];
+      return entry._tag === "Stopped"
+        ? was?._tag === "Stopped" && entry.runId === was.runId
+        : entry._tag === was?._tag;
+    });
+    if (!unchanged)
       return {
         _tag: "Wait",
         message: "The previous attempt ran again while it was being recovered; it is asked again.",

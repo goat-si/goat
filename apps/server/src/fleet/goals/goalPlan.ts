@@ -54,8 +54,21 @@ const resumeActionId = (
   attempt: number,
   runId: string,
 ) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":resume";
-const interruptActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
-  "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":interrupt";
+/** Names the run it stops: the id is the interrupt's command id, so a later run gets a new one. */
+const interruptActionId = (
+  goal: Pick<FleetGoal, "id">,
+  slot: number,
+  attempt: number,
+  runId: string | null,
+) =>
+  "goal:" +
+  goal.id +
+  ":s" +
+  slot +
+  ":a" +
+  attempt +
+  (runId === null ? "" : ":" + runId) +
+  ":interrupt";
 
 export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>
   goal.spec.workers.workspace.branchPrefix.replace(/\/+$/, "") + "/s" + slot + "-a" + attempt;
@@ -555,6 +568,20 @@ export function planGoal(
     const seen = observation.workers.get(worker.slot);
     return worker.threadId !== null && seen?.kind === "seen" && !seen.terminal;
   };
+  const interrupt = (worker: WorkerRecord): GoalAction => {
+    const seen = observation.workers.get(worker.slot);
+    return {
+      type: "interrupt",
+      slot: worker.slot,
+      attempt: worker.attempt,
+      actionId: interruptActionId(
+        goal,
+        worker.slot,
+        worker.attempt,
+        seen?.kind === "seen" ? seen.runId : null,
+      ),
+    };
+  };
   /** Known to have stopped: no thread was ever started, the run ended, or the thread is gone. */
   const confirmedDone = (worker: WorkerRecord) => {
     if (worker.state === "launch_unknown") return false;
@@ -583,13 +610,7 @@ export function planGoal(
       workers.push({ ...worker, state: "launch_unknown" });
       continue;
     }
-    if (isLive(worker))
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    if (isLive(worker)) actions.push(interrupt(worker));
     workers.push(confirmedDone(worker) ? { ...worker, state: "superseded" } : worker);
   }
   if (deleting) {
@@ -598,13 +619,7 @@ export function planGoal(
     actions.length = 0;
     actions.push(...resolving);
     const live = workers.filter(isLive);
-    for (const worker of live)
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    for (const worker of live) actions.push(interrupt(worker));
     // Like a finalizer: the row goes only once every attempt is known to have stopped. A worker
     // that cannot be read keeps the goal as a tombstone; goat_goal_delete with force drops it.
     if (workers.every(confirmedDone)) actions.push({ type: "delete_row" });

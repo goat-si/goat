@@ -387,12 +387,15 @@ describe("GoalRecovery", () => {
   );
 
   /** GoalRecovery alone, over one stopped attempt-1 worktree whose shell the test controls. */
-  const recoveryAlone = (world: World, shellOf: () => OrchestrationV2ThreadShell) =>
+  const recoveryAlone = (
+    world: World,
+    shellOf: (threadId: ThreadId) => OrchestrationV2ThreadShell | null,
+  ) =>
     recoveryLayer.pipe(
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: () => Effect.sync(shellOf),
+            getThreadShell: (threadId) => Effect.sync(() => shellOf(threadId)),
           }),
           project(world),
           ProcessRunner.layer,
@@ -453,6 +456,43 @@ describe("GoalRecovery", () => {
           workspace: { baseRef: expect.stringMatching(/^goat\/replica\//), startFromOrigin: false },
         });
       }).pipe(Effect.provide(recoveryAlone(world, () => stoppedShell(worktreePath, "run:1"))));
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("does not let an attempt that never started hide an older one that runs again", () =>
+    Effect.gen(function* () {
+      const world = yield* acquireWorld;
+      const worktree = NodePath.join(world.root, "a1");
+      world.git(world.repo, "worktree", "add", "--quiet", "-b", "goal/test/s0-a1", worktree);
+      NodeFS.writeFileSync(NodePath.join(worktree, "notes.txt"), "not committed\n");
+      // Attempt 2 failed before its thread existed; attempt 1 was messaged and runs again.
+      let firstRuns = true;
+      const shellOf = (threadId: ThreadId) =>
+        threadId !== firstThread
+          ? null
+          : firstRuns
+            ? {
+                ...stoppedShell(worktree, "run:2"),
+                activeRunId: RunId.make("run:2"),
+                status: "running" as const,
+              }
+            : stoppedShell(worktree, "run:2");
+      yield* Effect.gen(function* () {
+        const recovery = yield* GoalRecovery;
+        expect(yield* recovery.resume(GOAL, 0, 3)).toMatchObject({
+          _tag: "Wait",
+          message: expect.stringContaining("still active"),
+        });
+        firstRuns = false;
+        const start = yield* recovery.resume(GOAL, 0, 3);
+        expect(start).toMatchObject({
+          _tag: "Start",
+          workspace: {
+            baseRef: expect.stringMatching(/^goat\/replica\/goal-goal_rec-s0-/),
+            startFromOrigin: false,
+          },
+        });
+      }).pipe(Effect.provide(recoveryAlone(world, shellOf)));
     }).pipe(Effect.scoped),
   );
 });
