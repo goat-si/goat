@@ -7,6 +7,11 @@ import type {
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
 } from "@goat/contracts";
+import {
+  admittedCuaApplications,
+  cuaDriverCapabilityManifest,
+  type CuaDriverListedApp,
+} from "@goat/shared/cuaDriverManifest";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -106,6 +111,14 @@ export const fixture = Effect.fn(function* (
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
   const readiness: DesktopCuaReadinessReport[] = [];
   const watching = yield* Queue.unbounded<boolean>();
+  const approvals = yield* Queue.unbounded<{
+    apps: ReadonlyArray<string>;
+    done: Deferred.Deferred<void>;
+  }>();
+  const manifests = new Map<string, string>();
+  let listedApps: ReadonlyArray<CuaDriverListedApp> = [
+    { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+  ];
   const safety: DesktopCuaPrivateModeReport[] = [];
   const safetyHeard = yield* Queue.unbounded<void>();
   /** The helper's watch calls, in order, and a way to raise its private-mode event. */
@@ -143,6 +156,7 @@ export const fixture = Effect.fn(function* (
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
+  let appListingFails = options.helperAppsFail === true;
   const helperLaunches: Array<{
     bundleId: string;
     driverPath: string;
@@ -285,22 +299,31 @@ export const fixture = Effect.fn(function* (
     prepareManifest: async (input) => {
       const path = `${input.directory}/${input.scope}.yaml`;
       prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
+      const apps =
+        input.scope === "agents" ? await (input.listApplications?.() ?? Promise.resolve([])) : [];
       if (input.scope === "agents")
-        manifestListings.push(
-          input.listApplications
-            ? {
-                scope: input.scope,
-                through: "helper",
-                apps: (await input.listApplications()).length,
-              }
-            : { scope: input.scope, through: "driver", apps: 0 },
-        );
+        manifestListings.push({
+          scope: input.scope,
+          through: input.listApplications ? "helper" : "driver",
+          apps: apps.length,
+        });
+      manifests.set(
+        path,
+        cuaDriverCapabilityManifest({
+          applications: admittedCuaApplications(apps, input.hostBundleIds),
+        }),
+      );
       return path;
+    },
+    readManifest: async (path) => {
+      const text = manifests.get(path);
+      if (text === undefined) throw new Error("missing manifest");
+      return text;
     },
     helperApps: async (bundle) => {
       helperAppListings.push(bundle.bundleId);
-      if (options.helperAppsFail) throw new Error("driver_untrusted");
-      return [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }];
+      if (appListingFails) throw new Error("driver_untrusted");
+      return listedApps;
     },
     processId: HOST_PID,
     executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
@@ -390,6 +413,14 @@ export const fixture = Effect.fn(function* (
     publishUpdateReport: () => Effect.void,
     cuaRequests: Stream.fromQueue(requests),
     cuaWatch: Stream.fromQueue(watching),
+    cuaWatchApps: Stream.fromQueue(approvals).pipe(
+      Stream.flatMap(({ apps, done }) =>
+        Stream.concat(
+          Stream.make(apps),
+          Stream.drain(Stream.fromEffect(Deferred.succeed(done, undefined))),
+        ),
+      ),
+    ),
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
     publishCuaReadiness: (report) =>
       Effect.sync(() => {
@@ -426,6 +457,20 @@ export const fixture = Effect.fn(function* (
   );
   yield* driver.listen;
   return {
+    manifest: () => manifests.get(launches.at(-1)?.manifestPath ?? "") ?? "",
+    failAppListing: Effect.sync(() => {
+      appListingFails = true;
+    }),
+    listApps: (apps: ReadonlyArray<CuaDriverListedApp>) =>
+      Effect.sync(() => {
+        listedApps = apps;
+      }),
+    approveApps: (apps: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<void>();
+        yield* Queue.offer(approvals, { apps, done });
+        yield* Deferred.await(done);
+      }),
     restart: driver.restart,
     verify: driver.verify,
     grants: driver.grants,

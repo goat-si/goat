@@ -7,19 +7,12 @@ import {
   type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
-import {
-  CUA_DRIVER_VERIFY_TOOLS,
-  cuaDriverCapabilityManifest,
-  isCuaDriverStartupRefusal,
-  prepareCuaDriverCapabilityManifest,
-  writeCuaDriverCapabilityManifest,
-} from "@goat/shared/cuaDriverManifest";
+import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
   cuaDriverHostOptions,
-  cuaDriverListingEnvironment,
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import type { CuaDriverLike, ToolResult } from "@trycua/cua-driver";
@@ -60,7 +53,7 @@ import {
   type HelperSession,
 } from "./ComputerUseHelper.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
-import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
+import { prepareDesktopManifest, refreshDesktopManifest } from "./DesktopCuaManifest.ts";
 import {
   describeDegraded,
   failedCall,
@@ -167,6 +160,7 @@ export interface DesktopCuaDriverDependencies {
     /** Lists apps through the helper, so the driver never runs outside its seal check. */
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
+  readonly readManifest: (path: string) => Promise<string>;
   /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
   readonly helperApps: (
     bundle: HelperBundle,
@@ -190,34 +184,6 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
     if (Math.max(bitmap[offset]!, bitmap[offset + 1]!, bitmap[offset + 2]!) > 16) lit++;
   }
   return lit / sampled >= 0.01;
-}
-
-/**
- * The manifest for one daemon start. The grant check's admits only GOAT and needs no listing;
- * the agents' lists apps through listApplications when the engine gives it one, so a helper
- * that verifies its driver is the only thing that runs it.
- */
-export async function prepareDesktopManifest(
-  input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
-): Promise<string> {
-  const { join } = await import("node:path");
-  const hostBundleIds = await withResolvedWindowsPaths(input.hostBundleIds, input.platform);
-  return input.scope === "verify"
-    ? writeCuaDriverCapabilityManifest(
-        join(input.directory, "verify-manifest.yaml"),
-        cuaDriverCapabilityManifest({
-          applications: hostBundleIds,
-          tools: CUA_DRIVER_VERIFY_TOOLS,
-        }),
-      )
-    : prepareCuaDriverCapabilityManifest({
-        binaryPath: input.binaryPath,
-        platform: input.platform,
-        environment: cuaDriverListingEnvironment(process.env),
-        hostBundleIds,
-        path: join(input.directory, "capability-manifest.yaml"),
-        ...(input.listApplications ? { listApplications: input.listApplications } : {}),
-      });
 }
 
 const dependencies: DesktopCuaDriverDependencies = {
@@ -267,6 +233,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
   prepareManifest: prepareDesktopManifest,
+  readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),
   helperApps: (bundle, platform) =>
     listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
   processId: process.pid,
@@ -279,6 +246,10 @@ interface OwnedHost {
   readonly started: Promise<EmbeddedDriverConnection>;
   /** Run by GOAT Computer Use; only such a host makes the helper's readiness "running". */
   readonly helper: boolean;
+  readonly direct: boolean;
+  readonly refreshManifest: (
+    apps: ReadonlyArray<string>,
+  ) => ReturnType<typeof refreshDesktopManifest>;
   /** It exited before GOAT stopped it; retire aborts before stopping, so its own stop never is. */
   crashed?: boolean;
   monitor?: Promise<void>;
@@ -424,15 +395,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       "Computer use is unavailable. Try again after the driver has stopped.",
     );
 
-  const restart = mutex.withPermits(1)(
-    Effect.gen(function* () {
-      const request = owned ? currentRequest : undefined;
-      currentRequest = undefined;
-      const stopped = yield* stop;
-      if (request)
-        yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
-    }),
-  );
+  const restartHost = Effect.gen(function* () {
+    const request = owned ? currentRequest : undefined;
+    currentRequest = undefined;
+    const stopped = yield* stop;
+    if (request)
+      yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
+  });
+  const restart = mutex.withPermits(1)(restartHost);
 
   const driverPath = () =>
     environment.isPackaged
@@ -519,21 +489,20 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       scope,
       principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
     });
-    const manifestPath = yield* Effect.tryPromise(() =>
-      native.prepareManifest({
-        binaryPath: enginePath(engine),
-        scope,
-        hostBundleIds: hostBundleIds(engine),
-        directory: environment.path.join(environment.stateDir, "cua-driver"),
-        platform: environment.platform,
-        // The helper verifies its driver before running it, so it lists the apps too; running
-        // the driver here would execute it unchecked, under GOAT's identity (#1241).
-        ...(engine.kind === "helper" &&
-        (environment.platform === "darwin" || environment.platform === "win32")
-          ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
-          : {}),
-      }),
-    );
+    const manifestInput = {
+      binaryPath: enginePath(engine),
+      scope,
+      hostBundleIds: hostBundleIds(engine),
+      directory: environment.path.join(environment.stateDir, "cua-driver"),
+      platform: environment.platform,
+      // The helper verifies its driver before running it, so it lists the apps too; running
+      // the driver here would execute it unchecked, under GOAT's identity (#1241).
+      ...(engine.kind === "helper" &&
+      (environment.platform === "darwin" || environment.platform === "win32")
+        ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
+        : {}),
+    };
+    const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;
     let host: NativeHost;
     if (engine.kind === "helper") {
@@ -568,6 +537,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       abort: new AbortController(),
       started: Promise.resolve().then(() => host.start()),
       helper: engine.kind === "helper",
+      direct: engine.kind === "helper" && scope === "agents" && environment.platform === "darwin",
+      refreshManifest: (apps) =>
+        scope === "agents"
+          ? refreshDesktopManifest({
+              apps,
+              path: manifestPath,
+              read: native.readManifest,
+              prepare: () => native.prepareManifest(manifestInput),
+            })
+          : Effect.succeed(false),
     };
     owned = entry;
     void entry.started.then(
@@ -963,6 +942,22 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     grants,
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
+      yield* publisher.cuaWatchApps.pipe(
+        Stream.runForEach((apps) =>
+          mutex.withPermits(1)(
+            Effect.gen(function* () {
+              const entry = owned;
+              if (closed || !entry || entry.cleanup) return;
+              if ((yield* entry.refreshManifest(apps)) && !entry.direct) yield* restartHost;
+            }).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Could not refresh Cua Driver manifest", { cause }),
+              ),
+            ),
+          ),
+        ),
+        Effect.forkScoped,
+      );
       yield* followers.listen;
       yield* Effect.forever(
         Queue.take(crashes).pipe(
