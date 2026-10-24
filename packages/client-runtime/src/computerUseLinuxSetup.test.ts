@@ -108,4 +108,24 @@ describe("linuxComputerUseSetup", () => {
     expect(steps.some((step) => step.status === "done")).toBe(false);
     expect(JSON.stringify(steps)).not.toContain("can still read and use app controls");
   });
+
+  it("with no window open yet, it asks for a window instead of turning AT-SPI on", () => {
+    // AT-SPI is proven only by reading a window, so with none open the tree is unavailable
+    // whether or not AT-SPI answers; capture reports the missing window.
+    const noWindow: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "unknown", screenCapture: "granted" },
+      capture: "noWindow",
+      tree: "unavailable",
+    };
+    const step = linuxComputerUseSetup(noWindow, "lidge-ai").steps.find(
+      (entry) => entry.id === "accessibility",
+    );
+    expect(step).toMatchObject({ status: "waiting", title: "App controls" });
+    expect(step?.detail).toContain("Open any app window");
+    expect(JSON.stringify(step)).not.toContain("gsettings");
+    // A window that was read and still got no answer is AT-SPI being off.
+    const silent = { ...noWindow, capture: "ready" } as const;
+    expect(status(silent)).toMatchObject({ accessibility: "action" });
+  });
 });
