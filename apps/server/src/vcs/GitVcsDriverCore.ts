@@ -38,7 +38,7 @@ import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@go
 import { parseGoatProjectFile } from "@goat/shared/goatProjectFile";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { compactTraceAttributes } from "@goat/shared/observability";
-import { isWindowsReservedFileName, normalizeProjectPathForComparison } from "@goat/shared/path";
+import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand } from "@goat/shared/shell";
@@ -57,7 +57,9 @@ import { removeEmptyDirectory } from "./removeEmptyDirectory.ts";
 import {
   defaultCheckoutWorkers,
   missingWindowsCheckoutSettings,
+  pinWorktreeRoot,
   WINDOWS_CHECKOUT_SETTINGS,
+  worktreeFolderName,
   worktreeSparseCheckoutPatterns,
 } from "./worktreeCheckout.ts";
 import { explicitBareRepositoryEnv, gitConfigEnv } from "./VcsProcess.ts";
@@ -278,17 +280,6 @@ function paginateBranches(input: {
     nextCursor,
     totalCount,
   };
-}
-
-/**
- * The folder a new worktree gets for its branch. Git allows branch names Windows refuses as file
- * names (`"`, `<`, `|`, a trailing dot, `con`), so a Windows server replaces those as well.
- */
-export function worktreeFolderName(branch: string, platform: NodeJS.Platform): string {
-  const name = branch.replace(/\//g, "-");
-  if (platform !== "win32") return name;
-  const safe = name.replace(/[\\:*?"<>|]/gu, "-").replace(/[. ]+$/u, "") || "worktree";
-  return isWindowsReservedFileName(safe) ? `${safe}-branch` : safe;
 }
 
 /** Git prints `C:/Users/...` where Node joins `C:\Users\...`, and NTFS folds case. */
@@ -4290,6 +4281,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* Effect.gen(function* () {
         if (sparse === null) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
+          yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
           return;
         }
         // --no-checkout writes no files and runs no hook, so the patterns apply before
@@ -4307,6 +4299,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ["sparse-checkout", "set", "--no-cone", "--stdin"],
           { stdin: sparse.patterns },
         );
+        yield* pinWorktreeRoot(executeGit, fileSystem, targetPath);
         // checkout prints progress to a pipe only when asked, and would run post-checkout as a
         // same-commit switch. Hooks are off for it, then post-checkout runs with the
         // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.

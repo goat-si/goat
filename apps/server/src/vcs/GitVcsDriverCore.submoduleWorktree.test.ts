@@ -20,7 +20,16 @@ const git = Effect.fn(function* (cwd: string, args: ReadonlyArray<string>) {
   const result = yield* driver.execute({
     operation: "GitVcsDriver.test.git",
     cwd,
-    args: ["-c", "user.email=test@test.com", "-c", "user.name=Test", ...args],
+    // Git refuses file: submodule transports unless the command line allows them.
+    args: [
+      "-c",
+      "user.email=test@test.com",
+      "-c",
+      "user.name=Test",
+      "-c",
+      "protocol.file.allow=always",
+      ...args,
+    ],
     timeoutMs: 10_000,
   });
   return result.stdout.trim();
@@ -39,76 +48,109 @@ const commitFiles = Effect.fn(function* (cwd: string, files: Record<string, stri
   yield* git(cwd, ["commit", "-q", "-m", "files"]);
 });
 
+/**
+ * A checkout that is itself a submodule, as GOAT is inside a superproject: its git dir is
+ * `<superproject>/.git/modules/sub`, whose shared config sets `core.worktree = ../../../sub`.
+ */
+const makeSubmoduleCheckout = Effect.fn(function* (sparse: boolean) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const root = yield* fileSystem.realPath(
+    yield* fileSystem.makeTempDirectoryScoped({ prefix: "git-submodule-worktree-" }),
+  );
+  const inner = path.join(root, "inner");
+  const superproject = path.join(root, "super");
+  yield* commitFiles(inner, {
+    "src/app.ts": "export {};\n",
+    ".repos/vendor/big.ts": "export {};\n",
+    ...(sparse
+      ? { [GOAT_PROJECT_FILE_NAME]: JSON.stringify({ worktreeSparseExclude: [".repos/"] }) }
+      : {}),
+  });
+  yield* commitFiles(superproject, { "README.md": "# super\n" });
+  yield* git(superproject, ["submodule", "add", "-q", inner, "sub"]);
+  yield* git(superproject, ["commit", "-q", "-m", "add submodule"]);
+  const checkout = path.join(superproject, "sub");
+  const gitDir = path.join(superproject, ".git", "modules", "sub");
+  const head = yield* git(checkout, ["rev-parse", "HEAD"]);
+  const createWorktree = Effect.fn(function* (name: string) {
+    const worktreePath = path.join(root, name);
+    yield* driver.createWorktree({
+      cwd: checkout,
+      path: worktreePath,
+      refName: head,
+      newRefName: `feature/${name}`,
+    });
+    return worktreePath;
+  });
+  /** What `git submodule update` in the superproject rewrites, among other things. */
+  const updateSubmodule = () => git(superproject, ["submodule", "update", "--init"]);
+  const readConfig = () =>
+    Effect.all([
+      fileSystem.readFileString(path.join(gitDir, "config")),
+      fileSystem.readFileString(path.join(gitDir, "config.worktree")).pipe(Effect.option),
+    ]);
+  const sharedRoot = () =>
+    git(checkout, ["config", "--file", path.join(gitDir, "config"), "core.worktree"]);
+  return { checkout, gitDir, createWorktree, updateSubmodule, readConfig, sharedRoot };
+});
+
+const assertCheckedOutInPlace = Effect.fn(function* (
+  worktreePath: string,
+  input: { readonly gitDir: string; readonly sparse: boolean },
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  assert.equal(yield* git(worktreePath, ["rev-parse", "--show-toplevel"]), worktreePath);
+  assert.isTrue(yield* fileSystem.exists(path.join(worktreePath, "src/app.ts")));
+  assert.equal(yield* fileSystem.exists(path.join(worktreePath, ".repos")), !input.sparse);
+  assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
+  // Nothing was checked out into the git dir.
+  assert.isFalse(yield* fileSystem.exists(path.join(input.gitDir, "src")));
+});
+
 it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
   it.effect.each(["sparse", "full"] as const)(
     "a %s worktree checks out into its own directory and leaves the submodule's config alone (#799)",
     (mode) =>
       Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const root = yield* fileSystem.realPath(
-          yield* fileSystem.makeTempDirectoryScoped({ prefix: "git-submodule-worktree-" }),
-        );
-        const inner = path.join(root, "inner");
-        const superproject = path.join(root, "super");
-        yield* commitFiles(inner, {
-          "src/app.ts": "export {};\n",
-          ".repos/vendor/big.ts": "export {};\n",
-          ...(mode === "sparse"
-            ? { [GOAT_PROJECT_FILE_NAME]: JSON.stringify({ worktreeSparseExclude: [".repos/"] }) }
-            : {}),
-        });
-        yield* commitFiles(superproject, { "README.md": "# super\n" });
-        // Git refuses file: submodule transports unless the command line allows them.
-        yield* git(superproject, [
-          "-c",
-          "protocol.file.allow=always",
-          "submodule",
-          "add",
-          "-q",
-          inner,
-          "sub",
-        ]);
-        yield* git(superproject, ["commit", "-q", "-m", "add submodule"]);
-        // The checkout's git dir is .git/modules/sub, whose shared config sets
-        // core.worktree = ../../../sub. An earlier sparse worktree turns on
-        // extensions.worktreeConfig, and a later `git submodule update` in the superproject
-        // writes core.worktree back into the shared config, so every linked worktree without
-        // its own value inherits the original checkout's root.
-        const checkout = path.join(superproject, "sub");
-        const gitDir = path.join(superproject, ".git", "modules", "sub");
-        yield* git(checkout, ["config", "extensions.worktreeConfig", "true"]);
-        const readConfig = () =>
-          Effect.all([
-            fileSystem.readFileString(path.join(gitDir, "config")),
-            fileSystem.readFileString(path.join(gitDir, "config.worktree")).pipe(Effect.option),
-          ]);
-        const configBefore = yield* readConfig();
-        assert.equal(
-          yield* git(checkout, ["config", "--file", path.join(gitDir, "config"), "core.worktree"]),
-          "../../../sub",
-        );
-        const worktreePath = path.join(root, "worktree");
-
-        yield* driver.createWorktree({
-          cwd: checkout,
-          path: worktreePath,
-          refName: yield* git(checkout, ["rev-parse", "HEAD"]),
-          newRefName: `feature/${mode}`,
-        });
-
-        assert.equal(yield* git(worktreePath, ["rev-parse", "--show-toplevel"]), worktreePath);
-        assert.isTrue(yield* fileSystem.exists(path.join(worktreePath, "src/app.ts")));
-        assert.equal(yield* fileSystem.exists(path.join(worktreePath, ".repos")), mode === "full");
-        assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
-        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), `feature/${mode}`);
-        // Nothing was checked out into the git dir, and the original checkout is as it was.
-        assert.isFalse(yield* fileSystem.exists(path.join(gitDir, "src")));
-        assert.deepStrictEqual(yield* readConfig(), configBefore);
+        const repo = yield* makeSubmoduleCheckout(mode === "sparse");
+        // An earlier sparse worktree turned extensions.worktreeConfig on, and a later
+        // `git submodule update` wrote core.worktree back into the shared config.
+        yield* git(repo.checkout, ["config", "extensions.worktreeConfig", "true"]);
+        assert.equal(yield* repo.sharedRoot(), "../../../sub");
+        const configBefore = yield* repo.readConfig();
         assert.isTrue(Option.isNone(configBefore[1]));
-        assert.equal(yield* git(checkout, ["rev-parse", "--show-toplevel"]), checkout);
-        assert.equal(yield* git(checkout, ["status", "--porcelain"]), "");
+
+        const worktreePath = yield* repo.createWorktree(mode);
+
+        yield* assertCheckedOutInPlace(worktreePath, {
+          gitDir: repo.gitDir,
+          sparse: mode === "sparse",
+        });
+        assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), `feature/${mode}`);
+        assert.deepStrictEqual(yield* repo.readConfig(), configBefore);
+        assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
+        assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
+      }),
+  );
+
+  it.effect(
+    "a sparse worktree keeps its own root after git submodule update rewrites the shared one (#799)",
+    () =>
+      Effect.gen(function* () {
+        const repo = yield* makeSubmoduleCheckout(true);
+        const first = yield* repo.createWorktree("first");
+        yield* repo.updateSubmodule();
+        assert.equal(yield* repo.sharedRoot(), "../../../sub");
+
+        const second = yield* repo.createWorktree("second");
+
+        yield* assertCheckedOutInPlace(first, { gitDir: repo.gitDir, sparse: true });
+        yield* assertCheckedOutInPlace(second, { gitDir: repo.gitDir, sparse: true });
+        assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
+        assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
       }),
   );
 });
