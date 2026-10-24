@@ -67,6 +67,7 @@ const snapshot = {
       machineKind: null,
       environmentId,
       sshHost: null,
+      reportedAliases: [],
       boat: null,
       answering: true,
       running: 9,

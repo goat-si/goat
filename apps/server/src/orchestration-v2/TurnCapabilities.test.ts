@@ -10,7 +10,7 @@ import {
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as DateTime from "effect/DateTime";
 
-import { runTurnCapabilities } from "./TurnCapabilities.ts";
+import { preparedTurnCapabilities, runTurnCapabilities } from "./TurnCapabilities.ts";
 
 const now = DateTime.makeUnsafe("2026-10-24T00:00:00.000Z");
 const run = (index: number, fields: Partial<OrchestrationV2Run> = {}): OrchestrationV2Run => ({
@@ -80,5 +80,35 @@ it("a message whose chip was deleted asks for nothing", () => {
       projection: { runs: [owner], messages: [edited] },
     }),
     [],
+  );
+});
+
+it("an internal re-prepare keeps the current turn's chips, whichever way its stale copy differs", () => {
+  // Turn A asked for the browser; turn B, admitted under the lock since, did not.
+  assert.deepEqual(
+    preparedTurnCapabilities(true, { turnCapabilities: [] }, { turnCapabilities: ["browser"] }),
+    { turnCapabilities: [] },
+  );
+  // Turn B asked for the browser; a rotation that read turn A's input must not remove it.
+  assert.deepEqual(
+    preparedTurnCapabilities(true, { turnCapabilities: ["browser"] }, { turnCapabilities: [] }),
+    {
+      turnCapabilities: ["browser"],
+    },
+  );
+  // Opening a turn always carries that turn's own chips.
+  assert.deepEqual(
+    preparedTurnCapabilities(false, { turnCapabilities: ["browser"] }, { turnCapabilities: [] }),
+    { turnCapabilities: [] },
+  );
+  assert.deepEqual(
+    preparedTurnCapabilities(
+      false,
+      { turnCapabilities: undefined },
+      { turnCapabilities: ["browser"] },
+    ),
+    {
+      turnCapabilities: ["browser"],
+    },
   );
 });

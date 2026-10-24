@@ -5,7 +5,12 @@ import {
   Handoff,
   HandoffError,
 } from "./handoff.ts";
-import { CuaHostStatus } from "./cua.ts";
+import {
+  ComputerUseStopAllResult,
+  ComputerUseStopInput,
+  ComputerUseStopResult,
+  CuaHostStatus,
+} from "./cua.ts";
 import {
   SshHostAddInput,
   SshPreflightInput,
@@ -590,6 +595,9 @@ export const WS_METHODS = {
 
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
+  computerUseStop: "computerUse.stop",
+  computerUseStopAll: "computerUse.stopAll",
+  computerUseResume: "computerUse.resume",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -764,6 +772,27 @@ const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
 const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, {
   payload: Schema.Struct({}),
   success: CuaHostStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Ends one thread's control of this host's screen, killing its driver transport. */
+const WsComputerUseStopRpc = Rpc.make(WS_METHODS.computerUseStop, {
+  payload: ComputerUseStopInput,
+  success: ComputerUseStopResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The kill switch: every thread's control on this host ends, unattended admissions included. */
+const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
+  payload: Schema.Struct({}),
+  success: ComputerUseStopAllResult,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Hands the screen back to agents after a person's input or takeover paused them. */
+const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({}),
   error: EnvironmentAuthorizationError,
 });
 
@@ -2319,6 +2348,9 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
+  WsComputerUseStopRpc,
+  WsComputerUseStopAllRpc,
+  WsComputerUseResumeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
