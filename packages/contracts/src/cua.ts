@@ -440,6 +440,16 @@ export const ComputerUseCallAdmission = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("admitted"),
     reservationId: Schema.NullOr(Schema.String),
+    /** Scope at atomic admission; streamed updates may still be in transit. */
+    permissions: Schema.optionalKey(
+      Schema.Struct({
+        apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+        validUntilMillis: Schema.Int.check(
+          Schema.isGreaterThanOrEqualTo(0),
+          Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+        ),
+      }),
+    ),
   }),
   Schema.Struct({ status: Schema.Literal("released") }),
   Schema.Struct({

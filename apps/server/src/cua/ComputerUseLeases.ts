@@ -824,8 +824,9 @@ const make = Effect.gen(function* () {
             return { status: "refused", detail: "replaced" } as const;
           if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
             return { status: "refused", detail: "expired" } as const;
+          // A desktop grant can authorize scope even when delivery stays in the background.
           if (
-            requiresForeground(call) &&
+            (requiresForeground(call) || call.foregroundGrantId !== undefined) &&
             (call.foregroundGrantId === undefined ||
               !foreground.bound(call.foregroundGrantId, threadId, call.controlId) ||
               !state.foreground?.some(
@@ -834,7 +835,16 @@ const make = Effect.gen(function* () {
               ))
           )
             return { status: "refused", detail: "foreground_not_approved" } as const;
-          return reservations.reserve(threadId, call);
+          const decision = reservations.reserve(threadId, call);
+          return decision.status === "admitted"
+            ? {
+                ...decision,
+                permissions: {
+                  ...(state.apps === undefined ? {} : { apps: state.apps }),
+                  validUntilMillis: state.wakeAt,
+                },
+              }
+            : decision;
         }),
       );
     }),

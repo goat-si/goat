@@ -848,6 +848,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
     }
     let reservationId: string | undefined;
+    let permissionDeadline = Infinity;
     if (isRequest && message?.method === "tools/call") {
       const focusNow = yield* Clock.currentTimeMillis;
       const focusGrant = requiresForeground({
@@ -879,10 +880,40 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         );
       }
       reservationId = decision.reservationId ?? undefined;
+      permissionDeadline = Math.min(
+        decision.permissions?.validUntilMillis ?? Infinity,
+        focusGrant?.expiresAtMillis ?? Infinity,
+      );
       if (!stillCurrent()) {
         if (reservationId !== undefined)
           yield* release({ reservationId, connectionId: current.connectionId });
         return yield* options.output(notSent(id));
+      }
+      if (decision.permissions !== undefined) {
+        // Judge this call only: an older admission reply must not overwrite a newer lease update.
+        const verdict = scopeVerdict({
+          name: message.params?.name,
+          args: message.params?.arguments,
+          apps: approvedApps(decision.permissions.apps),
+          appOf: (pid) => listed.get(pid),
+        });
+        if (verdict._tag !== "allow") {
+          if (reservationId !== undefined)
+            yield* release({ reservationId, connectionId: current.connectionId });
+          const reason = verdict._tag === "refuse" ? verdict.reason : "app_not_approved";
+          const app = verdict._tag === "refuse" ? verdict.app : undefined;
+          return yield* options.output(
+            refusal(
+              id,
+              message.method,
+              reason,
+              verdict._tag === "resolve"
+                ? "The approved apps changed. Call list_apps to identify the target, then observe again before retrying. This call did not run."
+                : scopeMessage(verdict.reason, verdict.app, verdict.opaque),
+              app,
+            ),
+          );
+        }
       }
     }
     const kinds =
@@ -902,6 +933,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           yield* release({ reservationId, connectionId: current.connectionId });
         return yield* options.output(notSent(id));
       }
+    }
+    if (isRequest && (yield* Clock.currentTimeMillis) >= permissionDeadline) {
+      if (kinds.length > 0) yield* agentInput.ended(JSON.stringify(id));
+      if (reservationId !== undefined)
+        yield* release({ reservationId, connectionId: current.connectionId });
+      return yield* options.output(
+        refusal(
+          id,
+          message?.method,
+          "expired",
+          "This call's permission expired before dispatch, so it did not run. Observe the current approval before trying again.",
+        ),
+      );
     }
     // Nothing waits from here to the send, so the checks above still hold when it goes out.
     if (isRequest)

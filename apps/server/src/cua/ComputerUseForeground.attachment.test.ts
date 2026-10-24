@@ -54,7 +54,10 @@ const layer = (fullAccess: boolean) =>
     ),
   );
 
-const attach = Effect.fn("foreground.attachFixture")(function* (fullAccess: boolean) {
+const attach = Effect.fn("foreground.attachFixture")(function* (
+  fullAccess: boolean,
+  liveUpdates = true,
+) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
   yield* sql`INSERT OR IGNORE INTO orchestration_v2_projection_threads
@@ -84,19 +87,83 @@ const attach = Effect.fn("foreground.attachFixture")(function* (fullAccess: bool
   });
   if (attachment._tag !== "proxied") return yield* Effect.die("expected real admitted attachment");
   const settings = yield* ServerSettings.ServerSettingsService;
+  const updates = leaseUpdates({ threadId, controlId: attachment.control.controlId }).pipe(
+    Stream.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+    Stream.provideService(ServerSettings.ServerSettingsService, settings),
+  );
   const h = yield* harness({
     controlId: attachment.control.controlId,
     expiresAt: DateTime.formatIso(attachment.control.expiresAt),
-    leaseUpdates: leaseUpdates({ threadId, controlId: attachment.control.controlId }).pipe(
-      Stream.provideService(ComputerUseLeases.ComputerUseLeases, leases),
-      Stream.provideService(ServerSettings.ServerSettingsService, settings),
-    ),
+    leaseUpdates: liveUpdates ? updates : updates.pipe(Stream.take(1), Stream.concat(Stream.never)),
     reservation: (request) => leases.callReservation(threadId, request).pipe(Effect.orDie),
   });
   return { attachment, leases, h };
 });
 
 describe("foreground through real computer-use attachment", () => {
+  it.effect.each(["expiry", "cancel"] as const)(
+    "keeps background app scope after foreground %s while lease updates stall",
+    (ending) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* foregroundGrant(threadId, "handoff:background-stalled", {
+          foreground: false,
+          minutes: 10,
+          apps: ["com.example.AppA"],
+        });
+        const grant = yield* foregroundGrant(threadId, "handoff:foreground-stalled", {
+          minutes: 5,
+        });
+        const { attachment, leases, h } = yield* attach(false, false);
+        const apps = {
+          apps: [
+            { pid: 42, bundle_id: "com.example.AppA" },
+            { pid: 43, bundle_id: "com.example.AppB" },
+          ],
+        };
+        yield* h.send(call(1, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.nextReservation;
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: { structuredContent: apps } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, 1);
+        if (ending === "expiry") {
+          yield* TestClock.adjust("5 minutes");
+          yield* h.killed;
+          assert.equal((yield* h.nextReservation).action, "close");
+          yield* h.restarted;
+        } else yield* revokeForegroundGrant(grant.handoffId);
+        const remaining = yield* leases.controlState(threadId, attachment.control.controlId);
+        assert.deepEqual(remaining._tag === "active" ? remaining.apps : remaining, [
+          "com.example.AppA",
+        ]);
+        if (ending === "expiry") {
+          yield* h.send(call(2, "list_apps"));
+          assert.equal((yield* h.nextToDriver).id, 2);
+          yield* h.nextReservation;
+          yield* h.reply(
+            JSON.stringify({ jsonrpc: "2.0", id: 2, result: { structuredContent: apps } }),
+          );
+          assert.equal((yield* h.nextToProvider).id, 2);
+        }
+        yield* h.send(
+          call(3, "type_text", { pid: 43, window_id: 8, text: "outside background scope" }),
+        );
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched" as const, message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer" as const, message }))),
+        );
+        assert.equal(observed.kind, "answer", "Ended foreground authority cannot admit app B");
+        const result = observed.message.result as { structuredContent: { detail: string } };
+        assert.equal(result.structuredContent.detail, "app_not_approved");
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal((yield* h.nextReservation).action, "release");
+        yield* h.send(call(4, "type_text", { pid: 42, window_id: 7, text: "approved background" }));
+        assert.equal((yield* h.nextToDriver).id, 4);
+      }).pipe(Effect.provide(layer(false))),
+  );
+
   it.effect.each(["none", "pause", "stop"] as const)(
     "binds a new foreground admission after an existing background control unless interrupted by %s",
     (interruption) =>

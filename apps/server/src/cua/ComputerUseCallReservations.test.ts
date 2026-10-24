@@ -60,6 +60,25 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect("does not borrow another thread's foreground scope for background input", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const focus = yield* foregroundGrant(f.a, "handoff:background-scope-proof");
+      assert.deepEqual(
+        yield* f.reserve(
+          f.b,
+          { pid: 43, window_id: 8 },
+          "type_text",
+          "driver:1",
+          0,
+          focus.handoffId,
+        ),
+        { status: "refused", detail: "foreground_not_approved" },
+      );
+      assert.equal((yield* f.reserve(f.b, { pid: 43, window_id: 8 })).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect("rejects invalid window identities before foreground broadens the reservation", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -229,7 +248,7 @@ describe("server computer-use call reservations", () => {
             "type_text",
             "driver:1",
             0,
-            focus.handoffId,
+            foregroundFirst ? focus.handoffId : undefined,
           )).status,
           "admitted",
         );
@@ -240,7 +259,7 @@ describe("server computer-use call reservations", () => {
             "type_text",
             "driver:1",
             0,
-            focus.handoffId,
+            foregroundFirst ? undefined : focus.handoffId,
           ),
           {
             status: "refused",

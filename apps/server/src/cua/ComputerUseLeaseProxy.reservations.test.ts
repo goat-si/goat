@@ -13,6 +13,45 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect(
+    "refuses an unsent mutation when its admitted permission expires during the input report",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({
+          humanInput: true,
+          agentInputGate: gate,
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve"
+                ? {
+                    status: "admitted" as const,
+                    reservationId: "expiry-ticket",
+                    permissions: { validUntilMillis: 60_000 },
+                  }
+                : { status: "released" as const },
+            ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+        yield* h.nextReservation;
+        assert.equal(yield* h.agentCall, "start 1");
+        yield* TestClock.adjust("1 minute");
+        yield* Deferred.succeed(gate, undefined);
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(observed.kind, "answer");
+        assert.equal(
+          (observed.message.result as { structuredContent: { detail: string } }).structuredContent
+            .detail,
+          "expired",
+        );
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.equal(yield* h.agentCall, "end 1");
+      }),
+  );
   it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
