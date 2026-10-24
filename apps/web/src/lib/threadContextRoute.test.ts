@@ -8,6 +8,10 @@ import {
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  formatComposerContextReference,
+  threadContextsOutsideEnvironment,
+} from "@goat/shared/composerContextReferences";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -197,6 +201,46 @@ describe("routeThreadContextRecords", () => {
 });
 
 describe("settleThreadContextsForAgent", () => {
+  it("allows a settled SSH reference, then blocks it after moving to an unrelated environment", () => {
+    const record = threadContextRecord(
+      { environmentId: laptopId, threadId: ThreadId.make("remote") },
+      "Remote",
+    );
+    const text = formatComposerContextReference(record);
+    const settle = (environmentId: EnvironmentId) =>
+      settleThreadContextsForAgent({
+        records: [record],
+        agentEnvironmentId: environmentId,
+        entries,
+        isDesktopRenderer: true,
+      });
+    const onPrimary = settle(primaryId);
+    expect(onPrimary[0]?.host).toBe("juns-macbook-pro");
+    expect(
+      threadContextsOutsideEnvironment({
+        text,
+        records: onPrimary,
+        environmentId: primaryId,
+        hostRoutingEnvironmentId: primaryId,
+      }),
+    ).toEqual([]);
+    const onCloud = settle(cloudId);
+    expect(onCloud[0]?.host).toBeUndefined();
+    expect(
+      threadContextsOutsideEnvironment({
+        text,
+        records: onCloud,
+        environmentId: cloudId,
+        hostRoutingEnvironmentId: cloudId,
+      }),
+    ).toEqual(onCloud);
+    const onLaptop = settle(laptopId);
+    expect(onLaptop[0]?.host).toBeUndefined();
+    expect(
+      threadContextsOutsideEnvironment({ text, records: onLaptop, environmentId: laptopId }),
+    ).toEqual([]);
+  });
+
   it("re-settles hosts when a draft is sent from another environment", () => {
     const attachedOnPrimary = routeThreadContextRecord(
       threadContextRecord({ environmentId: laptopId, threadId: ThreadId.make("t-laptop") }, "A"),
