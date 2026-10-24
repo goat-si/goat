@@ -1,11 +1,31 @@
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { vi } from "vite-plus/test";
 
+const { keychainEntries } = vi.hoisted(() => ({ keychainEntries: [] as string[] }));
+vi.mock("@napi-rs/keyring", () => ({
+  Entry: class {
+    constructor(service: string) {
+      keychainEntries.push(service);
+    }
+    getPassword() {
+      return null;
+    }
+    setPassword() {}
+  },
+}));
+
+import * as DesktopConfig from "./DesktopConfig.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import {
   copySafeStorageKey,
+  DesktopSafeStorageKeyMigration,
+  layer,
   macKeychainItem,
   makeWith,
   MARKER_FILE_NAME,
@@ -138,3 +158,74 @@ it("addresses the Keychain item Electron itself reads and writes", () => {
     account: "GOAT Alpha Key",
   });
 });
+const desktopEnvironmentLayer = (input: {
+  readonly homeDirectory: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+}) =>
+  DesktopEnvironment.layer({
+    dirname: "/repo/apps/desktop/dist-electron",
+    homeDirectory: input.homeDirectory,
+    platform: "darwin",
+    processArch: "arm64",
+    appVersion: "0.0.22",
+    appPath: "/repo/apps/desktop",
+    isPackaged: false,
+    resourcesPath: "/repo/apps/desktop/resources",
+    runningUnderArm64Translation: false,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, DesktopConfig.layerTest(input.env)),
+    ),
+  );
+
+it.effect("never reads the Keychain at startup for an opted-in dev run in an isolated home", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const tempRoot = yield* fs.makeTempDirectoryScoped();
+    const homeDirectory = path.join(tempRoot, "home");
+    const run = (env: Readonly<Record<string, string | undefined>>) =>
+      Effect.gen(function* () {
+        const userDataPath = yield* fs.makeTempDirectoryScoped();
+        keychainEntries.length = 0;
+        yield* Effect.gen(function* () {
+          const migration = yield* DesktopSafeStorageKeyMigration;
+          yield* migration.run({
+            userDataPath,
+            legacyRuntimeName: "T3 Code Dev",
+            runtimeName: "GOAT Dev",
+          });
+        }).pipe(
+          Effect.provide(
+            layer({ initialRuntimeName: "Electron" }).pipe(
+              Layer.provide(desktopEnvironmentLayer({ homeDirectory, env })),
+            ),
+          ),
+        );
+        return {
+          keychainEntries: [...keychainEntries],
+          marked: yield* fs.exists(path.join(userDataPath, MARKER_FILE_NAME)),
+        };
+      });
+    const isolated = {
+      GOAT_HOME: path.join(tempRoot, "isolated-goat"),
+      VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+    };
+
+    // #1298: each read of another bundle's Keychain item prompts an unsigned dev build.
+    const bypassed = yield* run({ ...isolated, GOAT_DEV_INSECURE_SECRET_STORAGE: "1" });
+    assert.deepEqual(bypassed.keychainEntries, []);
+    // Unmarked, so the migration still runs once the opt-in is removed.
+    assert.isFalse(bypassed.marked);
+
+    const withoutOptIn = yield* run(isolated);
+    assert.include(withoutOptIn.keychainEntries, "GOAT Dev Safe Storage");
+
+    const defaultHome = yield* run({
+      GOAT_HOME: path.join(homeDirectory, ".goat"),
+      VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+      GOAT_DEV_INSECURE_SECRET_STORAGE: "1",
+    });
+    assert.include(defaultHome.keychainEntries, "GOAT Dev Safe Storage");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
