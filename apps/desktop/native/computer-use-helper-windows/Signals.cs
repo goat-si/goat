@@ -22,6 +22,10 @@ namespace Goat.ComputerUse
     /// puts every humanInput either before the answer under the old id or after it under the new
     /// one. Focus events carry no sample; the owner reads focus and window liveness itself, after
     /// any switch, so an old sample can never speak for a new watch.
+    ///
+    /// A watch with no targets is the desktop host's: it watches for a password field focused
+    /// anywhere on this desktop, as the macOS helper does, and names the foreground window that
+    /// holds it. Unknown focus counts as private there too.
     /// </summary>
     internal sealed class Signals
     {
@@ -60,6 +64,11 @@ namespace Goat.ComputerUse
         static extern IntPtr GetModuleHandle(string name);
         [DllImport("user32.dll")]
         static extern bool PeekMessage(out MSG message, IntPtr window, uint min, uint max, uint remove);
+        [DllImport("user32.dll")]
+        static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")]
+        static extern IntPtr GetAncestor(IntPtr window, uint flags);
+        const uint GA_ROOT = 2;
 
         /// <summary>One watched window; a target is the pair, not the process.</summary>
         internal struct Target
@@ -90,6 +99,8 @@ namespace Goat.ComputerUse
         string watchId;
         List<Target> targets = new List<Target>();
         readonly Dictionary<string, bool> active = new Dictionary<string, bool>();
+        /// <summary>The window an anywhere watch last reported private, if any.</summary>
+        Target? anywhereActive;
         AutomationFocusChangedEventHandler focusHandler;
         HookWorker hooks;
         /// <summary>While watching, checks that each private target's window still exists.</summary>
@@ -162,6 +173,7 @@ namespace Goat.ComputerUse
             {
                 foreach (Target target in targets)
                     if (!next.Contains(target.Key)) Clear(target);
+                ClearAnywhere();
                 watchId = nextWatchId;
                 targets = nextTargets;
                 active.Clear();
@@ -178,6 +190,7 @@ namespace Goat.ComputerUse
             lock (attribution)
             {
                 foreach (Target target in targets) Clear(target);
+                ClearAnywhere();
                 watchId = null;
                 inputWatch = null;
                 targets = new List<Target>();
@@ -196,6 +209,14 @@ namespace Goat.ComputerUse
             active[target.Key] = false;
         }
 
+        /// <summary>An anywhere watch's private window gets active:false under the watch it leaves.</summary>
+        void ClearAnywhere()
+        {
+            if (watchId != null && anywhereActive.HasValue)
+                outbox.Add(Frame(watchId, PrivateMode(anywhereActive.Value, false)), PrivateKey(watchId, anywhereActive.Value));
+            anywhereActive = null;
+        }
+
         /// <summary>
         /// Reads focus now and reports each target whose state changed; every target when the
         /// watch has just started. Focus UI Automation cannot read counts as private. A target
@@ -207,6 +228,11 @@ namespace Goat.ComputerUse
             int pid;
             bool password;
             bool known = WindowsFacts.Focus(out pid, out password);
+            if (targets.Count == 0)
+            {
+                ReconcileAnywhere(all, known ? (password ? Holder(pid) : (Target?)null) : Holder(pid));
+                return;
+            }
             foreach (Target target in targets)
             {
                 bool now = WindowAlive(target) && (!known || (password && pid == target.Pid));
@@ -215,6 +241,34 @@ namespace Goat.ComputerUse
                 active[target.Key] = now;
                 outbox.Add(Frame(watchId, PrivateMode(target, now)), PrivateKey(watchId, target));
             }
+        }
+
+        /// <summary>
+        /// The foreground top-level window when it belongs to the focused process, else that
+        /// process alone (window 0): the server pauses the whole host, so the window only names it.
+        /// </summary>
+        static Target Holder(int pid)
+        {
+            IntPtr window = GetForegroundWindow();
+            if (window != IntPtr.Zero) window = GetAncestor(window, GA_ROOT);
+            int owner;
+            bool matches = window != IntPtr.Zero && NativeMethods.GetWindowThreadProcessId(window, out owner) != 0 && owner == pid;
+            return new Target { Pid = pid, WindowId = matches ? window.ToInt64() : 0 };
+        }
+
+        /// <summary>
+        /// Reports a change of the private window: the old one cleared first, then the new one.
+        /// Every watch starts with its current state, a cleared nothing (pid 0) when none.
+        /// </summary>
+        void ReconcileAnywhere(bool all, Target? now)
+        {
+            bool same = now.HasValue == anywhereActive.HasValue && (!now.HasValue || now.Value.Key == anywhereActive.Value.Key);
+            if (same && !all) return;
+            if (!same) ClearAnywhere();
+            anywhereActive = now;
+            Target reported = now ?? new Target { Pid = 0, WindowId = 0 };
+            if (now.HasValue || all)
+                outbox.Add(Frame(watchId, PrivateMode(reported, now.HasValue)), PrivateKey(watchId, reported));
         }
 
         /// <summary>
@@ -239,6 +293,9 @@ namespace Goat.ComputerUse
         void ClearGoneTargets()
         {
             if (watchId == null) return;
+            // A closed private window loses focus too; a focus event does not always say so.
+            if (anywhereActive.HasValue && anywhereActive.Value.WindowId != 0 && !WindowAlive(anywhereActive.Value))
+                ReconcileAnywhere(false, null);
             foreach (Target target in targets)
             {
                 bool was;
@@ -428,6 +485,8 @@ namespace Goat.ComputerUse
         static Dictionary<string, object> Frame(string forWatch, Dictionary<string, object> signal)
         {
             var frame = new Dictionary<string, object>();
+            // The host reads unrequested lines by type, as the macOS helper writes them.
+            frame["type"] = "event";
             frame["generation"] = Program.Generation;
             frame["watchId"] = forWatch;
             frame["event"] = signal;
