@@ -342,3 +342,70 @@ it.each([
       : { cuaFullAccessAutoAdmit: true },
   );
 });
+it("On again while an earlier check still runs waits for it, then checks for the new run", async () => {
+  const f = setup();
+  const first = deferred<DesktopCuaVerification>();
+  f.verify.mockImplementationOnce(() => first.promise);
+  await using _screen = await render(panel(f));
+  await clickSwitch("Computer use");
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  await clickSwitch("Computer use");
+  await clickSwitch("Computer use");
+  await vi.waitFor(() => expect(f.checkGrants).toHaveBeenCalledTimes(2));
+  expect(f.verify).toHaveBeenCalledOnce();
+  await act(() => first.resolve(PASSED));
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
+});
+
+it.each([
+  [
+    "a blocked capture",
+    {
+      ...idleMac,
+      running: true,
+      tools: "available",
+      readiness: {
+        grants: { accessibility: "granted", screenCapture: "granted" },
+        helper: "authenticated",
+        capture: "blank",
+        tree: "ready",
+        input: "background",
+        blockers: [],
+        reasons: [],
+      },
+    },
+  ],
+  ["a host failure", { ...idleMac, failure: "Helper could not start." }],
+] satisfies ReadonlyArray<[string, CuaHostStatus]>)(
+  "%s reported after a passing check ends Ready until a new check passes",
+  async (_, rejecting) => {
+    const f = setup();
+    await using screen = await render(panel(f));
+    await clickSwitch("Computer use");
+    await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
+    f.enabled = true;
+    f.status = rejecting;
+    await screen.rerender(panel(f));
+    await vi.waitFor(() => expect(statusText() ?? "").not.toMatch(/^Ready/));
+    // The report clears, but nothing has proved the helper again.
+    f.status = idleMac;
+    await screen.rerender(panel(f));
+    await vi.waitFor(() => expect(statusText()).toBe("Starts with the next agent turn"));
+  },
+);
+
+it("a System Settings pane that cannot open says so and keeps the Open button", async () => {
+  const f = setup({ granted: false });
+  f.openGuide.mockRejectedValueOnce(new Error("no pane"));
+  await using screen = await render(panel(f));
+  await clickSwitch("Computer use");
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Needs your OK/));
+  const open = screen.getByRole("button", { name: "Open: Accessibility in System Settings" });
+  await open.click();
+  await expect
+    .element(screen.getByText("Could not open System Settings. Try again."))
+    .toBeVisible();
+  await open.click();
+  expect(f.openGuide).toHaveBeenCalledTimes(2);
+});

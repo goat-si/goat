@@ -63,10 +63,16 @@ function verificationFailure(result: DesktopCuaVerification): string {
 export function useComputerUseAutoSetup({
   enabled,
   localMac,
+  hostRejects,
   actions,
 }: {
   readonly enabled: boolean;
   readonly localMac: boolean;
+  /**
+   * The host reports a failure or a blocked grant, helper or capture step. A failure carries no
+   * generation that would prove it older than this session's check, so it ends that proof.
+   */
+  readonly hostRejects: boolean;
   readonly actions: ComputerUseSetupActions;
 }) {
   const [phase, setPhase] = useState<ComputerUseSetupPhase>({ step: "idle" });
@@ -79,7 +85,9 @@ export function useComputerUseAutoSetup({
   const run = useRef(0);
   // Off has its own number: turning off invalidates setup runs, but not the Off save itself.
   const offRun = useRef(0);
-  const verifying = useRef(false);
+  // The check in flight. A run that Off replaced can still be restarting the helper, so a later
+  // run waits for it and then proves the helper again for itself.
+  const inflight = useRef<Promise<DesktopCuaVerification> | null>(null);
   const on = desired ?? enabled;
   const busy = phase.step === "saving" || phase.step === "checking" || phase.step === "verifying";
   // Each read starts a helper process, so it pauses while setup runs its own, rechecks quickly
@@ -101,6 +109,8 @@ export function useComputerUseAutoSetup({
   // A grant revoked in System Settings, or one still missing when the page opens, asks again.
   if (on && missing !== null && (phase.step === "idle" || phase.step === "ready"))
     setPhase({ step: "granting", afterRead: polled.reads });
+  // Only a new check restores Ready once the host has reported against it.
+  if (phase.step === "ready" && hostRejects) setPhase({ step: "idle" });
   useEffect(() => {
     if (!on) run.current += 1;
   }, [on]);
@@ -112,11 +122,15 @@ export function useComputerUseAutoSetup({
   );
 
   const verifyNow = async (id: number) => {
-    if (verifying.current) return;
-    verifying.current = true;
     setPhase({ step: "verifying" });
-    const result = await actions.verify().catch(() => UNREACHABLE);
-    verifying.current = false;
+    while (inflight.current !== null) {
+      await inflight.current;
+      if (id !== run.current) return;
+    }
+    const attempt = actions.verify().catch(() => UNREACHABLE);
+    inflight.current = attempt;
+    const result = await attempt;
+    if (inflight.current === attempt) inflight.current = null;
     if (id !== run.current) return;
     setPhase(
       result.verified
@@ -199,16 +213,18 @@ export function useComputerUseAutoSetup({
   };
 
   const openGrant = (permission: CuaPermission) => {
+    // A pane opened for a run that Off or a later run replaced reports nothing.
+    const id = run.current;
     setOpening(true);
     setNotice(null);
     void actions.openGuide(permission).then(
       () => {
         setOpening(false);
-        setOpened(permission);
+        if (id === run.current) setOpened(permission);
       },
       () => {
         setOpening(false);
-        setNotice("Could not open System Settings. Try again.");
+        if (id === run.current) setNotice("Could not open System Settings. Try again.");
       },
     );
   };

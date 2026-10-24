@@ -44,16 +44,46 @@ interface StatusLine {
   readonly retry?: boolean;
   readonly relaunch?: boolean;
   readonly hint?: string | null;
+  readonly hintError?: boolean;
 }
 
 type Readiness = ReturnType<typeof computerUseReadinessSteps>;
+
+/**
+ * Whether the host's own report speaks against computer use working: a failure, or a grant,
+ * helper or capture step it reports as blocked. Tools that are not running yet do not count,
+ * since a passing check stops its own helper until the next agent turn.
+ */
+function hostRejects(status: CuaHostStatus | null): boolean {
+  if (status === null) return false;
+  if (status.failure) return true;
+  if (!status.readiness) return false;
+  const { steps } = computerUseReadinessSteps({
+    readiness: status.readiness,
+    platform: status.platform,
+    tools: status.tools,
+    signals: status.signals,
+  });
+  return steps.some(
+    (step) => step.id !== "tools" && (step.state === "blocked" || step.state === "unsupported"),
+  );
+}
 
 /**
  * The one line under the switch. A live grant read outranks the host's report, which trails it;
  * any failure the host reports outranks this session's passing check, since a failure carries no
  * generation that would prove it older.
  */
-function statusLine(input: {
+function statusLine(input: Parameters<typeof setupLine>[0]): StatusLine | null {
+  const line = setupLine(input);
+  const notice = input.setup.notice;
+  if (!notice) return line;
+  // A failed action keeps the line's own way forward, such as the grant's Open button.
+  if (line?.grant) return { ...line, hint: notice, hintError: true };
+  return { text: notice, error: true, retry: line?.retry ?? false };
+}
+
+function setupLine(input: {
   readonly setup: ComputerUseAutoSetup;
   readonly status: CuaHostStatus | null;
   readonly error: string | null;
@@ -63,7 +93,6 @@ function statusLine(input: {
 }): StatusLine | null {
   const { setup, status, error, localMac } = input;
   const { phase } = setup;
-  if (setup.notice) return { text: setup.notice, error: true };
   if (setup.busy) return { text: "Setting up…" };
   if (phase.step === "failed")
     return { text: phase.message, error: true, retry: true, relaunch: phase.relaunch };
@@ -160,6 +189,7 @@ export function ComputerUsePanel({
   const setup = useComputerUseAutoSetup({
     enabled,
     localMac,
+    hostRejects: hostRejects(status),
     actions: { ...bridge, save: (patch) => save(patch) },
   });
   const advanced = useAdvancedOpen();
@@ -317,7 +347,14 @@ function ComputerUseStatus({
           </Button>
         ) : null}
       </div>
-      {line?.hint ? <p className="text-xs text-muted-foreground">{line.hint}</p> : null}
+      {line?.hint ? (
+        <p
+          role={line.hintError ? "alert" : undefined}
+          className={line.hintError ? "text-xs text-destructive" : "text-xs text-muted-foreground"}
+        >
+          {line.hint}
+        </p>
+      ) : null}
     </div>
   );
 }
