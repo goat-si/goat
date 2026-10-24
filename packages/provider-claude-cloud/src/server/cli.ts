@@ -550,7 +550,11 @@ const make = Effect.gen(function* () {
       if (!failure && trustPrompt(pending) && (!trust || receipt))
         failure = trustFailure(cwd, receipt ? "uncertain" : "rejected");
       const diagnostic = failure ? undefined : readDiagnostic(bounded, login.environment);
-      if (diagnostic) failure = new ClaudeCloudError({ detail: diagnostic, outcome: "uncertain" });
+      if (diagnostic !== undefined)
+        failure = new ClaudeCloudError({
+          detail: diagnostic || "Claude could not confirm cloud submission.",
+          outcome: "uncertain",
+        });
       notify();
     };
     // The exit listener belongs to the process resource. Keep it until release sees real exit,

@@ -99,6 +99,8 @@ it.effect.each([
   ],
   ["ab  cd", "Error: invalid ab \u001b[1C cd\n", "invalid [redacted]"],
   ["/fixture/tool/bin:".repeat(1024), "Error: a simple error\n", "a simple error"],
+  ["abc\uE000def", "Error: invalid abc\uE000def\n", "invalid [redacted]"],
+  ["public secret", "Error: visit https://public secret-tail\n", "visit [link redacted]"],
 ] as const)(
   "masks what plain redaction masks however the screen spaced it (%#)",
   ([value, output, shown]) =>
@@ -116,4 +118,22 @@ it.effect.each([
         expect(error.detail).toBe(shown);
       }),
     ),
+);
+
+it.effect("an Error: line with nothing readable still makes the submission uncertain", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(RECEIPT + "Error: \n");
+      const handle = yield* Fiber.join(fiber);
+      h.fake.finish(0, 0);
+      const error = yield* handle.exited.pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toBe("Claude could not confirm cloud submission.");
+    }),
+  ),
 );

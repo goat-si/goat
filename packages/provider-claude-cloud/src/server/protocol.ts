@@ -67,78 +67,86 @@ export function cleanOutput(raw: string) {
   return NodeUtil.stripVTControlCharacters(raw).replace(/\r\n?/g, "\n");
 }
 
-/** Where the native PTY jumped the cursor; it reads as a space but redaction never sees it. */
-const GAP = "\uE000";
+/** One character of screen text; gap marks a cursor jump drawn just before it. */
+type Cell = { readonly character: string; readonly gap: boolean };
 
 /**
  * Claude's "Error:" text as it appears on screen, redacted. The native PTY spaces words with
- * cursor-column jumps and wraps long text with CR CR LF. Redaction runs on the text without the
- * jumps, exactly what redact() sees, and only the unmasked jumps then become spaces; the wrapped
- * lines that already arrived rejoin into one sentence.
+ * cursor-column jumps and wraps long text with CR CR LF. The jumps travel beside the characters,
+ * so redact()'s exact steps run, in order, on the same text it would see; only the jumps left
+ * outside a mask then show as spaces, and the wrapped lines that already arrived rejoin into one
+ * sentence. Returns "" for an Error: line with nothing readable on it.
  */
 export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
-  const screen = NodeUtil.stripVTControlCharacters(
-    // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
-    raw.replace(/\u001b\[\d*[GC]/g, GAP),
-  ).replace(/\r+\n|\r/g, "\n");
-  const block =
-    /^[\s\uE000]*Error:[\s\uE000]*([^\s\uE000].*(?:\n[ \t\uE000]*[^\s\uE000].*)*)\n/m.exec(
-      screen,
-    )?.[1];
-  if (block === undefined) return undefined;
-  return maskScreen(block, environment)
-    .replaceAll(GAP, " ")
+  const cells = screenCells(raw);
+  const text = cellText(cells);
+  const match = /^\s*Error:([^\n]*(?:\n[ \t]*\S[^\n]*)*)\n/m.exec(text);
+  const lines = match?.[1];
+  if (match === undefined || match === null || lines === undefined) return undefined;
+  const start = match.index + match[0].indexOf("Error:") + "Error:".length;
+  return redactCells(cells.slice(start, start + lines.length), environment)
+    .map((cell) => (cell.gap ? " " : "") + cell.character)
+    .join("")
     .replace(/\s+/g, " ")
     .slice(0, 1024)
     .trim();
 }
 
-function maskScreen(block: string, environment: NodeJS.ProcessEnv) {
-  const positions: number[] = [];
-  let text = "";
-  for (let index = 0; index < block.length; index++) {
-    if (block[index] === GAP) continue;
-    positions.push(index);
-    text += block[index];
+function screenCells(raw: string): Cell[] {
+  const cells: Cell[] = [];
+  let gap = false;
+  // eslint-disable-next-line no-control-regex -- Split on the native PTY's cursor-column and cursor-forward sequences.
+  const segments = raw.replace(/\r+\n|\r/g, "\n").split(/\u001b\[\d*[GC]/);
+  segments.forEach((segment, index) => {
+    if (index > 0) gap = true;
+    const visible = NodeUtil.stripVTControlCharacters(segment);
+    for (let offset = 0; offset < visible.length; offset++) {
+      cells.push({ character: visible.charAt(offset), gap });
+      gap = false;
+    }
+  });
+  return cells;
+}
+
+const cellText = (cells: ReadonlyArray<Cell>) => cells.map((cell) => cell.character).join("");
+
+function replaceCells(
+  cells: ReadonlyArray<Cell>,
+  matches: ReadonlyArray<{ readonly index: number; readonly length: number }>,
+  label: string,
+): Cell[] {
+  const next: Cell[] = [];
+  let cursor = 0;
+  for (const { index, length } of matches) {
+    next.push(...cells.slice(cursor, index));
+    const gap = cells[index]?.gap ?? false;
+    for (let offset = 0; offset < label.length; offset++)
+      next.push({ character: label.charAt(offset), gap: offset === 0 && gap });
+    cursor = index + length;
   }
-  const ranges: Array<{ start: number; end: number; label: string }> = [];
+  next.push(...cells.slice(cursor));
+  return next;
+}
+
+/** redact()'s steps on screen cells: exact values, links (with wrapped continuations), tokens. */
+function redactCells(cells: Cell[], environment: NodeJS.ProcessEnv) {
+  let text = cellText(cells);
   for (const value of Object.values(environment)) {
     if (!value || value.length < 6) continue;
+    const matches: Array<{ index: number; length: number }> = [];
     for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + value.length))
-      ranges.push({ start: at, end: at + value.length, label: "[redacted]" });
+      matches.push({ index: at, length: value.length });
+    if (matches.length === 0) continue;
+    cells = replaceCells(cells, matches, "[redacted]");
+    text = cellText(cells);
   }
-  // A URL wrapped onto following lines keeps its continuation inside the mask.
-  for (const match of text.matchAll(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g))
-    ranges.push({
-      start: match.index,
-      end: match.index + match[0].length,
-      label: "[link redacted]",
-    });
-  for (const match of text.matchAll(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi))
-    ranges.push({ start: match.index, end: match.index + match[0].length, label: "[redacted]" });
-  ranges.sort((left, right) => left.start - right.start);
-  let masked = "";
-  let cursor = 0;
-  let open: (typeof ranges)[number] | undefined;
-  const close = (range: (typeof ranges)[number]) => {
-    const start = positions[range.start] ?? block.length;
-    masked += block.slice(cursor, start) + range.label;
-    cursor = (positions[range.end - 1] ?? block.length - 1) + 1;
-  };
-  for (const range of ranges) {
-    if (open && range.start < open.end) {
-      open = {
-        start: open.start,
-        end: Math.max(open.end, range.end),
-        label: range.label === "[link redacted]" ? range.label : open.label,
-      };
-      continue;
-    }
-    if (open) close(open);
-    open = range;
-  }
-  if (open) close(open);
-  return masked + block.slice(cursor);
+  const found = (pattern: RegExp) =>
+    Array.from(cellText(cells).matchAll(pattern), (match) => ({
+      index: match.index,
+      length: match[0].length,
+    }));
+  cells = replaceCells(cells, found(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g), "[link redacted]");
+  return replaceCells(cells, found(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi), "[redacted]");
 }
 
 export function readStartReceipt(raw: string) {
