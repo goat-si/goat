@@ -11,12 +11,13 @@ import * as Schema from "effect/Schema";
 import { gdbusRunner, makeSecureFocusProbe } from "./linuxHelper/atspiFocus.ts";
 import {
   detectLinuxSession,
-  linuxCapabilities,
   linuxSessionFacts,
   readGnomeShellVersion,
 } from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
+
+const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const requireDriver = NodeModule.createRequire(import.meta.url);
@@ -99,8 +100,9 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
           }
         }).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(ComputerUseReadiness)),
-          // The helper's own capability answer names the signals it raises.
-          Effect.map((readiness) => ({ readiness, signals: linuxCapabilities(session).signals })),
+          // This reads the driver directly, and nothing here watches for a person or a password
+          // field, so neither signal is raised until the server runs the helper itself (#1223).
+          Effect.map((readiness) => ({ readiness, signals: UNWATCHED })),
         );
       }
       return undefined;
