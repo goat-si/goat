@@ -638,9 +638,13 @@ const make = Effect.gen(function* () {
                   Effect.tap(() =>
                     admitted.enabled ? permissions.complete(commandId) : Effect.void,
                   ),
+                  // A thread the failed launch created keeps its lane, bound so that it counts only
+                  // while that thread runs: one whose first message was refused never does.
                   Effect.onError(() =>
                     admitted.enabled
-                      ? permissions.release(commandId, true).pipe(Effect.ignore)
+                      ? permissions
+                          .release(commandId, true)
+                          .pipe(Effect.andThen(permissions.complete(commandId)), Effect.ignore)
                       : Effect.void,
                   ),
                   // Only a launch that never created its thread returns the capacity. The
