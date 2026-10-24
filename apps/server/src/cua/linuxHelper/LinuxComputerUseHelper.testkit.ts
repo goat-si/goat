@@ -25,6 +25,7 @@ import { serveHelperChannel } from "./helperChannel.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { detectLinuxSession, linuxCapabilities, type LinuxSessionFacts } from "./linuxSession.ts";
+import type { CaptureRoute } from "./windowCapture.ts";
 
 const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
 const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
@@ -105,8 +106,8 @@ export function fixtureDriver() {
     /** Answers the next input call instead of the fixture's own behavior. */
     nextAnswer: undefined as DriverToolResult | undefined,
     readinessImage: png(8, 4, true).toString("base64"),
-    /** The driver took the screen region under the window, as when a popup covers it. */
-    composited: false,
+    /** Every get_window_state the driver was asked for, as asked. */
+    reads: [] as Array<Readonly<Record<string, unknown>>>,
   };
   const exit = Promise.withResolvers<void>();
   const ok = (structured: unknown, text = "", images: DriverToolResult["images"] = []) =>
@@ -142,6 +143,7 @@ export function fixtureDriver() {
             ],
       });
     if (tool === "get_window_state") {
+      state.reads.push(args);
       if (args.include_accessibility_tree === false)
         return ok({}, "", [
           {
@@ -168,6 +170,8 @@ export function fixtureDriver() {
           label: "Increment",
           actions: ["click"],
           screenshot_frame: { x: 12, y: 54, w: 396, h: 34 },
+          // On the screen the fixture window's corner is at (100, 50).
+          frame: { x: 112, y: 104, w: 396, h: 34 },
         },
         {
           element_index: 2,
@@ -191,7 +195,6 @@ export function fixtureDriver() {
           pid: 10,
           window_id: 20,
           window_bounds: { width: 420, height: 320 },
-          ...(state.composited ? { screenshot_composited: true } : {}),
           ...(shot
             ? { screenshot_width: 420, screenshot_height: 320, screenshot_mime_type: "image/png" }
             : {}),
@@ -263,8 +266,8 @@ export async function connect(
     readonly helloPadding?: number;
     /** False: the helper cannot see a person's input devices on this desktop. */
     readonly personInput?: boolean;
-    /** Why a window capture would be cropped from the whole output; undefined when it is not. */
-    readonly cropped?: string;
+    /** Where screenshots come from; the fixture driver's own capture unless a test says. */
+    readonly capture?: CaptureRoute;
   } = {},
 ) {
   const session = detectLinuxSession(options.session ?? X11);
@@ -320,15 +323,10 @@ export async function connect(
     delay: () => new Promise<void>(() => undefined),
   });
   const capabilities = linuxCapabilities(session, hasPersonInput);
-  // Answers queued in next go first, one per check; then cropped answers every check.
-  const capture = { cropped: options.cropped, next: [] as Array<string | undefined>, checks: 0 };
   const helper = makeLinuxHelper({
     session,
     screen: ":91",
-    windowCapture: async () => {
-      capture.checks++;
-      return capture.next.length > 0 ? capture.next.shift() : capture.cropped;
-    },
+    capture: options.capture ?? { route: "driver" },
     startDriver: async () => {
       starts++;
       return driver.client;
@@ -432,7 +430,6 @@ export async function connect(
     ref,
     driver,
     focus,
-    capture,
     clock,
     gate,
     starts: () => starts,

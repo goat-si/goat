@@ -28,6 +28,10 @@ const DriverElement = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   selected: Schema.optionalKey(Schema.Boolean),
   parent_index: Schema.optionalKey(Schema.Number),
+  /** The element's rectangle on the screen; a helper that captures the window itself places it. */
+  frame: Schema.optionalKey(
+    Schema.Struct({ x: Schema.Number, y: Schema.Number, w: Schema.Number, h: Schema.Number }),
+  ),
   screenshot_frame: Schema.optionalKey(
     Schema.Struct({ x: Schema.Number, y: Schema.Number, w: Schema.Number, h: Schema.Number }),
   ),

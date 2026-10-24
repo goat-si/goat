@@ -25,7 +25,8 @@ import {
   pngColors,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
-import { CROPPED_CAPTURE, UNREDIRECTED_CAPTURE } from "./windowCapture.ts";
+import { CROPPED_CAPTURE } from "./windowCapture.ts";
+import { UNREDIRECTED_CAPTURE } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -48,7 +49,7 @@ describe("Linux session facts", () => {
         session: detectLinuxSession(facts),
         uinputWritable: async () => true,
         secureFocus: async () => NOT_SECURE,
-        windowCapture: async () => undefined,
+        capture: { route: "driver" },
         call: async (tool) => {
           calls.push(tool);
           return "unexpected";
@@ -513,10 +514,30 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
-  it("where a window capture would be cropped from the whole screen, screenshots are refused and app controls still read", async () => {
+  it("on X11 the screenshot is the window's own capture, and element frames are placed in it", async () => {
+    const own = png(42, 32, true);
     const helper = await connect({
-      session: { ...X11, display: undefined, waylandDisplay: "wayland-0", gnomeShellMajor: 46 },
-      cropped: CROPPED_CAPTURE,
+      capture: {
+        route: "own",
+        capture: async () => ({ png: own, width: 42, height: 32, origin: { x: 100, y: 50 } }),
+      },
+    });
+    const first = await helper.observe();
+    expect(first.observation.screenshot).toEqual({ mimeType: "image/png", width: 42, height: 32 });
+    expect(first.image?.data).toBe(own.toString("base64"));
+    // The driver captured nothing; the frame is its screen rectangle moved to the window's corner.
+    expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(false);
+    const increment =
+      first.observation.kind === "full"
+        ? first.observation.elements.find((element) => element.label === "Increment")
+        : undefined;
+    expect(increment?.frame).toEqual({ x: 12, y: 54, width: 396, height: 34 });
+    await helper.close();
+  });
+
+  it("a window whose own pixels cannot be proven gets no screenshot: observe and readiness say why", async () => {
+    const helper = await connect({
+      capture: { route: "own", capture: async () => ({ refused: UNREDIRECTED_CAPTURE }) },
     });
     const shot = await helper.request("observe", {
       target: { pid: 10, windowId: 20 },
@@ -525,57 +546,32 @@ describe("Linux computer use helper conformance", () => {
     expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
     expect(shot.image).toBeUndefined();
     const controls = await helper.observe({ screenshot: false });
-    expect(controls.observation).toMatchObject({ kind: "full" });
-    expect(controls.observation.screenshot).toBeUndefined();
+    expect(controls.observation.kind).toBe("full");
     expect(controls.image).toBeUndefined();
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({ capture: "unavailable", tree: "ready" });
+    expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
+    expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("where the driver would crop the whole screen, nothing is captured and readiness says why", async () => {
+    const helper = await connect({
+      session: { ...X11, display: undefined, waylandDisplay: "wayland-0", gnomeShellMajor: 46 },
+      capture: { route: "refused", reason: CROPPED_CAPTURE },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
+    expect(helper.driver.state.reads).toEqual([]);
     const readiness = decodeReadiness((await helper.request("permissions", {})).result);
     expect(readiness).toMatchObject({
       grants: { screenCapture: "unknown" },
       capture: "unavailable",
-      tree: "ready",
     });
     expect(readiness.reasons).toContain(CROPPED_CAPTURE);
-    expect(computerUseReady(readiness)).toBe(false);
-    await helper.close();
-  });
-
-  it("a capture route that turns cropped while the window is read sends no image", async () => {
-    const helper = await connect({
-      session: { ...X11, display: undefined, waylandDisplay: "wayland-0", gnomeShellMajor: 46 },
-    });
-    // The check before the read passes; the one after it finds the window capture gone.
-    helper.capture.next.push(undefined, CROPPED_CAPTURE);
-    const reply = await helper.request("observe", {
-      target: { pid: 10, windowId: 20 },
-      screenshot: true,
-    });
-    expect(reply.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
-    expect(reply.image).toBeUndefined();
-    await helper.close();
-  });
-
-  it("an X11 capture the driver took from the screen under a popup is refused, never sent", async () => {
-    const helper = await connect();
-    helper.driver.state.composited = true;
-    const reply = await helper.request("observe", {
-      target: { pid: 10, windowId: 20 },
-      screenshot: true,
-    });
-    expect(reply.result).toMatchObject({ outcome: "refused", reason: "targetRefused" });
-    expect(reply.image).toBeUndefined();
-    // Without a screenshot nothing is captured, so the controls still read.
-    expect((await helper.observe({ screenshot: false })).observation.kind).toBe("full");
-    await helper.close();
-  });
-
-  it("readiness does not count a capture the desktop stopped vouching for while it was taken", async () => {
-    const helper = await connect();
-    // Before the readiness capture the window's own pixels were promised; after it, not.
-    helper.capture.next.push(undefined, UNREDIRECTED_CAPTURE);
-    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
-    expect(readiness.capture).toBe("unavailable");
-    expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
-    expect(computerUseReady(readiness)).toBe(false);
     await helper.close();
   });
 
@@ -619,7 +615,7 @@ describe("makeLinuxHelper shutdown", () => {
       screen: ":91",
       startDriver: async () => ({ ...client, close: () => closing.promise }),
       secureFocus: async () => NOT_SECURE,
-      windowCapture: async () => undefined,
+      capture: { route: "driver" },
       uinputWritable: async () => false,
       settle: async () => undefined,
       newId: () => "o",

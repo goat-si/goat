@@ -28,7 +28,7 @@ import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
 import type { LinuxSession } from "./linuxSession.ts";
-import { COMPOSITED_CAPTURE, type WindowCaptureCheck } from "./windowCapture.ts";
+import type { CaptureRoute } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -43,7 +43,7 @@ export interface LinuxHelperDependencies {
   readonly screen: string;
   readonly startDriver: () => Promise<DriverClient>;
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
-  readonly windowCapture: WindowCaptureCheck;
+  readonly capture: CaptureRoute;
   readonly uinputWritable: () => Promise<boolean>;
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
@@ -230,24 +230,22 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     readonly maxElements: number | undefined;
     readonly deadlineMs: number;
   }): Promise<HelperAnswer & { readonly result: ComputerUseObservation | ComputerUseRefusal }> => {
-    // A screenshot that could hold other apps' windows is refused (#1328). The desktop is checked
-    // before and after the read, since a compositing manager can stop while the driver captures.
-    const cropped = async () => (input.screenshot ? await deps.windowCapture() : undefined);
-    const refuseCropped = (reason: string) => ({
+    // A screenshot holds only the window's own pixels, or is refused (#1328; windowCapture.ts).
+    const route = input.screenshot ? deps.capture : undefined;
+    const refuseShot = (reason: string) => ({
       result: {
         ...unsupportedComputerUseMethod("observe", "linux"),
         message: reason + " Observe again without a screenshot to read the window's controls.",
       },
     });
-    const before = await cropped();
-    if (before !== undefined) return refuseCropped(before);
+    if (route?.route === "refused") return refuseShot(route.reason);
     const answer = await call(
       "get_window_state",
       {
         pid: input.pid,
         window_id: input.windowId,
         tree_format: "elements",
-        include_screenshot: input.screenshot,
+        include_screenshot: route?.route === "driver",
         ...(input.query === undefined ? {} : { query: input.query }),
         ...(input.maxElements === undefined ? {} : { max_elements: input.maxElements }),
       },
@@ -257,16 +255,6 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       return { result: refusal("busy", "Reading the window took too long.") };
     if (answer === "lost") return { result: refusal("helperUnavailable", "Cua Driver exited.") };
     if (isRefusal(answer)) return { result: answer };
-    const after = await cropped();
-    if (after !== undefined) return refuseCropped(after);
-    // The driver took the screen region under the window because a popup covers it.
-    if (input.screenshot && field(answer.structured, "screenshot_composited") === true)
-      return {
-        result: refusal(
-          "targetRefused",
-          COMPOSITED_CAPTURE + " Observe again without a screenshot to read the window's controls.",
-        ),
-      };
     const decoded = decodeRead(answer.structured);
     if (answer.isError || decoded._tag === "None") {
       const code = driverRefusalCode(answer.structured);
@@ -279,9 +267,18 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     }
+    // The window's own capture is taken after its tree, as the driver's is; its element frames
+    // are their screen rectangles moved to the window's corner, one pixel to one pixel.
+    let offered: DriverImage | undefined;
+    let origin: { readonly x: number; readonly y: number } | undefined;
+    if (route?.route === "own") {
+      const own = await route.capture(input.windowId);
+      if ("refused" in own) return refuseShot(own.refused);
+      offered = { mimeType: "image/png", data: Buffer.from(own.png).toString("base64") };
+      origin = own.origin;
+    } else if (route?.route === "driver") offered = answer.images[0];
     // The screenshot is declared from its own bytes, so the size the agent points in is the
     // size of the image it sees; an image those bytes do not describe is not declared at all.
-    const offered = input.screenshot ? answer.images[0] : undefined;
     const info = offered ? computerUseImageInfo(offered.data) : undefined;
     const {
       screenshot_width: _width,
@@ -301,8 +298,25 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     const privateMode = await privateFor(input.pid);
     // A password field's value never leaves, even when it does not have focus.
     const elements = (state.elements ?? []).map((element) => {
-      if (element.role !== SECURE_ROLE || element.value === undefined) return element;
-      const { value: _value, ...rest } = element;
+      const { frame, screenshot_frame: driverFrame, ...placed } = element;
+      const located =
+        origin === undefined
+          ? { ...placed, ...(driverFrame === undefined ? {} : { screenshot_frame: driverFrame }) }
+          : {
+              ...placed,
+              ...(frame === undefined
+                ? {}
+                : {
+                    screenshot_frame: {
+                      x: frame.x - origin.x,
+                      y: frame.y - origin.y,
+                      w: frame.w,
+                      h: frame.h,
+                    },
+                  }),
+            };
+      if (located.role !== SECURE_ROLE || located.value === undefined) return located;
+      const { value: _value, ...rest } = located;
       return rest;
     });
     const observation = observations.observe({

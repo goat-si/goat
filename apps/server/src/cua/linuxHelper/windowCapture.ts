@@ -1,44 +1,37 @@
 import type { LinuxSession } from "./linuxSession.ts";
+import type { X11WindowCapture } from "./x11WindowCapture.ts";
 
 /**
- * Whether the image Cua Driver returns for a window holds only that window's pixels (#1328).
- * Pinned 0.37.0 takes it four ways:
+ * Where an agent's window screenshot comes from, so it holds only that window's pixels (#1328).
  *
- * - X11: XShm/XGetImage on the window itself (capture.rs). That is the window's own pixmap only
- *   while a compositing manager redirects windows; without one, the obscured parts show
- *   whatever covers the window. When the app's own popup or dialog overlaps it, the driver
- *   captures that screen region instead and marks the answer `screenshot_composited`.
- * - XWayland: the same X11 path; Xwayland redirects every top-level window itself.
- * - Wayland on Hyprland: the toplevel's own export, and an error, never a crop, when that fails
- *   (wayland/hyprland.rs). The driver decides Hyprland from the environment it runs with, so the
- *   check reads that same environment.
- * - Any other Wayland compositor: a capture of the whole output cropped to the window's
- *   bounds, or a GNOME Shell helper whose per-window route falls back to that crop inside the
- *   driver whenever its version lookup fails (wayland/mod.rs:1047, :1103), so a passing check
- *   outside the driver cannot prove which route a capture took.
- *
- * Answers undefined when a capture is the window's own, or why it is not.
+ * - X11 and XWayland: the helper captures the window itself from its composite pixmap
+ *   (x11WindowCapture.ts), which proves the pixels are the window's own or refuses. Pinned Cua
+ *   Driver 0.37.0's own X11 capture reads the window's drawable, which shows whatever covers it
+ *   when nothing redirects the window, and takes the screen region under a popup.
+ * - Wayland on Hyprland: the driver exports the toplevel itself, and errs rather than crop
+ *   (wayland/hyprland.rs). It decides Hyprland from the environment it runs with, so this reads
+ *   that same environment with the driver's own test.
+ * - Any other Wayland compositor: the driver crops a capture of the whole output, or its GNOME
+ *   Shell helper falls back to that crop inside the driver when its version lookup fails
+ *   (wayland/mod.rs:1047, :1103). Nothing outside the driver can tell which route a capture took.
  */
-export type WindowCaptureCheck = () => Promise<string | undefined>;
+export type CaptureRoute =
+  | { readonly route: "own"; readonly capture: (windowId: number) => Promise<X11WindowCapture> }
+  | { readonly route: "driver" }
+  | { readonly route: "refused"; readonly reason: string };
 
 export const CROPPED_CAPTURE =
   "This Wayland desktop cannot capture one window by itself: Cua Driver would crop a capture of the whole screen, which can show other apps' windows. Screenshots are off here; app controls still work. Hyprland or an X11 session can show GOAT a single window.";
-export const UNREDIRECTED_CAPTURE =
-  "No compositing manager runs on this X display, so a window capture would show whatever covers the window, other apps included. Screenshots are off here; app controls still work. A desktop with a compositor (GNOME, KDE, or picom on other window managers) can show GOAT a single window.";
-export const COMPOSITED_CAPTURE =
-  "A popup or dialog is open over this window, so its screenshot would be taken from the screen and could show other apps. Observe it without a screenshot, or close the popup first.";
 
-export function makeWindowCaptureCheck(deps: {
+export function captureRoute(deps: {
   readonly session: LinuxSession;
   /** Exactly the environment the driver runs with. */
   readonly driverEnvironment: Readonly<Record<string, string | undefined>>;
-  /** Whether a compositing manager owns the X screen. */
-  readonly compositing: () => Promise<boolean>;
-}): WindowCaptureCheck {
+  readonly captureX11: (windowId: number) => Promise<X11WindowCapture>;
+}): CaptureRoute {
   const { displayServer } = deps.session;
-  if (displayServer === "xwayland") return async () => undefined;
-  if (displayServer === "x11")
-    return async () => ((await deps.compositing()) ? undefined : UNREDIRECTED_CAPTURE);
+  if (displayServer === "x11" || displayServer === "xwayland")
+    return { route: "own", capture: deps.captureX11 };
   const present = (name: string) => (deps.driverEnvironment[name] ?? "").trim() !== "";
   // The driver's own test: the Wayland backend on, a Hyprland instance, and not injecting.
   const hyprland =
@@ -47,5 +40,5 @@ export function makeWindowCaptureCheck(deps: {
     present("WAYLAND_DISPLAY") &&
     present("HYPRLAND_INSTANCE_SIGNATURE") &&
     !present("CUA_INJECT_SOCKET");
-  return async () => (hyprland ? undefined : CROPPED_CAPTURE);
+  return hyprland ? { route: "driver" } : { route: "refused", reason: CROPPED_CAPTURE };
 }

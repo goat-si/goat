@@ -16,8 +16,8 @@ import {
 } from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
-import { makeWindowCaptureCheck } from "./linuxHelper/windowCapture.ts";
-import { x11Compositing } from "./linuxHelper/x11Compositing.ts";
+import { captureRoute } from "./linuxHelper/windowCapture.ts";
+import { captureX11Window } from "./linuxHelper/x11WindowCapture.ts";
 
 const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
@@ -60,11 +60,12 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
         ),
       );
       const secureFocus = makeSecureFocusProbe(gdbus);
-      // This driver runs with the server's session environment, so that is what it decides by.
-      const windowCapture = makeWindowCaptureCheck({
+      // The server's driver runs embedded, and its embedding passes no Hyprland instance on
+      // (cua-driver-sdk embedded.rs), so here only an X window's own capture counts.
+      const capture = captureRoute({
         session,
-        driverEnvironment: sessionEnvironment,
-        compositing: () => x11Compositing(sessionEnvironment),
+        driverEnvironment: {},
+        captureX11: (windowId) => captureX11Window(sessionEnvironment, windowId),
       });
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");
@@ -83,7 +84,7 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
               {
                 session,
                 secureFocus,
-                windowCapture,
+                capture,
                 uinputWritable: async () => writable,
                 call: async (name, args) => {
                   const result = await client.callTool(name, JSON.stringify(args), { signal });

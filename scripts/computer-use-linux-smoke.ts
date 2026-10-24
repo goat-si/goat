@@ -16,6 +16,7 @@ import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 import * as NodeUtil from "node:util";
+import * as NodeZlib from "node:zlib";
 
 import {
   admitComputerUseReply,
@@ -102,6 +103,27 @@ const children = async (pid: number) => {
     pids.push(...text.split(/\s+/u).filter(Boolean).map(Number));
   }
   return pids;
+};
+
+/** Pure red pixels in a PNG the helper wrote: 8-bit RGB, every row unfiltered. */
+const redPixels = (png: Buffer) => {
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const chunks: Buffer[] = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    if (png.toString("ascii", offset + 4, offset + 8) === "IDAT")
+      chunks.push(png.subarray(offset + 8, offset + 8 + length));
+    offset += 12 + length;
+  }
+  const raw = NodeZlib.inflateSync(Buffer.concat(chunks));
+  let count = 0;
+  for (let row = 0; row < height; row++)
+    for (let x = 0; x < width; x++) {
+      const at = row * (width * 3 + 1) + 1 + x * 3;
+      if (raw[at] === 255 && raw[at + 1] === 0 && raw[at + 2] === 0) count++;
+    }
+  return count;
 };
 
 let failed = false;
@@ -362,6 +384,56 @@ try {
     keys.result.outcome === "refused" && keys.result.reason === "backgroundUnavailable",
     keys.result,
   );
+
+  // Another app's window over the fixture: what the screen shows there must not reach the
+  // fixture's screenshot (#1328). Pure red marks the other app.
+  const cover = start(
+    "python3",
+    [
+      "-c",
+      [
+        "import gi",
+        "gi.require_version('Gtk', '3.0')",
+        "from gi.repository import Gtk, Gdk",
+        "w = Gtk.Window(title='Other app')",
+        "w.set_default_size(260, 160)",
+        "w.move(40, 40)",
+        "w.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(1, 0, 0, 1))",
+        "w.show_all()",
+        "Gtk.main()",
+      ].join("\n"),
+    ],
+    env,
+  );
+  await sleep(1500);
+  const screen = NodeChildProcess.spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import gi, sys",
+        "gi.require_version('Gdk', '3.0')",
+        "from gi.repository import Gdk",
+        "root = Gdk.get_default_root_window()",
+        "Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360).savev(sys.argv[1], 'png', [], [])",
+      ].join("\n"),
+      NodePath.join(evidence, "4-screen-with-other-app.png"),
+    ],
+    { env, timeout: 5000 },
+  );
+  const covered = await request("observe", { target, screenshot: true });
+  const red = covered.image ? redPixels(Buffer.from(covered.image.data, "base64")) : -1;
+  check(
+    "another app's window over the fixture never reaches its screenshot",
+    covered.result.kind === "full" && red === 0,
+    {
+      redPixels: red,
+      screenCapture: screen.status,
+      file: await saveImage("5-fixture-under-other-app.png", covered.image),
+    },
+  );
+  cover.kill("SIGTERM");
+  await sleep(300);
 
   // Give the fixture window X input focus (no window manager runs here), then focus the password.
   const xdotool = NodeChildProcess.spawnSync(

@@ -1,69 +1,50 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { detectLinuxSession, type LinuxSessionFacts } from "./linuxSession.ts";
-import { CROPPED_CAPTURE, makeWindowCaptureCheck, UNREDIRECTED_CAPTURE } from "./windowCapture.ts";
+import { captureRoute, CROPPED_CAPTURE } from "./windowCapture.ts";
 
-const BUS = "unix:path=/run/user/1000/bus";
 const WAYLAND: LinuxSessionFacts = {
   display: undefined,
   waylandDisplay: "wayland-1",
-  sessionBus: BUS,
+  sessionBus: "unix:path=/run/user/1000/bus",
   currentDesktop: "Hyprland",
   gnomeShellMajor: null,
 };
 
-/** The check for a session, with the environment the helper would hand the driver. */
-function check(facts: LinuxSessionFacts, extra: Record<string, string> = {}, compositing = true) {
+/** The route for a session, with the environment the helper would hand the driver. */
+const route = (facts: LinuxSessionFacts, extra: Record<string, string> = {}) => {
   const session = detectLinuxSession(facts);
-  let asked = 0;
-  const windowCapture = makeWindowCaptureCheck({
+  return captureRoute({
     session,
     driverEnvironment: {
       WAYLAND_DISPLAY: facts.waylandDisplay,
       ...session.driverEnvironment,
       ...extra,
     },
-    compositing: async () => {
-      asked++;
-      return compositing;
-    },
+    captureX11: async () => ({ refused: "not in this test" }),
   });
-  return { windowCapture, asked: () => asked };
-}
+};
 
-describe("window capture on Linux (#1328)", () => {
-  it("X11 captures a window's own pixels only while a compositing manager redirects windows", async () => {
-    const x11 = { ...WAYLAND, display: ":0", waylandDisplay: undefined, currentDesktop: "i3" };
-    expect(await check(x11, {}, true).windowCapture()).toBeUndefined();
-    expect(await check(x11, {}, false).windowCapture()).toBe(UNREDIRECTED_CAPTURE);
+describe("where a Linux window screenshot comes from (#1328)", () => {
+  it("X11 and XWayland windows are captured by the helper itself, never by the driver", () => {
+    expect(route({ ...WAYLAND, display: ":0", waylandDisplay: undefined }).route).toBe("own");
+    expect(route({ ...WAYLAND, display: ":0" }).route).toBe("own");
   });
 
-  it("XWayland is the window's own, since Xwayland redirects every window itself", async () => {
-    const xwayland = check({ ...WAYLAND, display: ":0" }, {}, false);
-    expect(await xwayland.windowCapture()).toBeUndefined();
-    expect(xwayland.asked()).toBe(0);
-  });
-
-  it("pure Wayland is the window's own only where the driver itself sees Hyprland", async () => {
+  it("pure Wayland uses the driver's capture only where the driver itself sees Hyprland", () => {
+    expect(route(WAYLAND, { HYPRLAND_INSTANCE_SIGNATURE: "abc_123" }).route).toBe("driver");
+    // A signature the driver is not given counts for nothing; inject mode routes it elsewhere.
+    expect(route(WAYLAND)).toEqual({ route: "refused", reason: CROPPED_CAPTURE });
     expect(
-      await check(WAYLAND, { HYPRLAND_INSTANCE_SIGNATURE: "abc_123" }).windowCapture(),
-    ).toBeUndefined();
-    // The signature in the helper's own environment counts for nothing if the driver lacks it.
-    expect(await check(WAYLAND).windowCapture()).toBe(CROPPED_CAPTURE);
-    // Inject mode routes the driver elsewhere.
-    expect(
-      await check(WAYLAND, {
-        HYPRLAND_INSTANCE_SIGNATURE: "abc_123",
-        CUA_INJECT_SOCKET: "/run/cua.sock",
-      }).windowCapture(),
-    ).toBe(CROPPED_CAPTURE);
+      route(WAYLAND, { HYPRLAND_INSTANCE_SIGNATURE: "abc_123", CUA_INJECT_SOCKET: "/run/cua.sock" })
+        .route,
+    ).toBe("refused");
   });
 
-  it("GNOME and every other Wayland compositor would crop, whatever helper is installed", async () => {
-    const gnome = { ...WAYLAND, currentDesktop: "GNOME", gnomeShellMajor: 46 };
-    expect(await check(gnome).windowCapture()).toBe(CROPPED_CAPTURE);
-    expect(await check({ ...WAYLAND, currentDesktop: "sway" }).windowCapture()).toBe(
-      CROPPED_CAPTURE,
+  it("GNOME and every other Wayland compositor are refused, whatever helper is installed", () => {
+    expect(route({ ...WAYLAND, currentDesktop: "GNOME", gnomeShellMajor: 46 }).route).toBe(
+      "refused",
     );
+    expect(route({ ...WAYLAND, currentDesktop: "sway" }).route).toBe("refused");
   });
 });
