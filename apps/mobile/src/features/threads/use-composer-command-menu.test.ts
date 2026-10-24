@@ -3,6 +3,7 @@ import { ProviderDriverKind } from "@goat/contracts";
 
 const refreshProviders = vi.hoisted(() => vi.fn());
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+vi.mock("@react-navigation/native", () => ({ useNavigation: vi.fn() }));
 
 vi.mock("../../state/queries", () => ({
   useComposerPathSearch: () => ({ entries: [], isPending: false }),

@@ -1,6 +1,6 @@
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
-import { AuthSettingsWriteScope } from "@goat/contracts";
+import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -15,7 +15,7 @@ import {
   type ProjectScopedServerSettingKey,
 } from "@goat/contracts";
 import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -150,18 +150,32 @@ export function SettingsEnvironmentSourceControlRouteScreen() {
   return <ServerSettingsDetail page="source-control" />;
 }
 
-export function SettingsEnvironmentAgentBehaviorRouteScreen() {
-  return <ServerSettingsDetail page="agent-behavior" />;
+export function SettingsEnvironmentAgentBehaviorRouteScreen({
+  route,
+}: Partial<StaticScreenProps<{ readonly environmentId?: EnvironmentId } | undefined>>) {
+  return (
+    <ServerSettingsDetail page="agent-behavior" focusEnvironmentId={route?.params?.environmentId} />
+  );
 }
 
 export function SettingsEnvironmentMaintenanceRouteScreen() {
   return <ServerSettingsDetail page="maintenance" />;
 }
 
-function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
+function ServerSettingsDetail(props: {
+  readonly page: SettingsPage;
+  /** Set when the composer's computer use setup link opens this page for its environment. */
+  readonly focusEnvironmentId?: EnvironmentId | undefined;
+}) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { selectedTargets, projectGroups, selectedProjectKey } = useSettingsEnvironmentFilter();
+  const { selectedTargets, projectGroups, selectedProjectKey, focusEnvironment } =
+    useSettingsEnvironmentFilter();
+  const { focusEnvironmentId } = props;
+  useEffect(() => {
+    if (focusEnvironmentId !== undefined) focusEnvironment(focusEnvironmentId);
+    // Focus once per link; later filter changes by the user must stick.
+  }, [focusEnvironmentId]);
   const selectedProject = projectGroups.find((group) => group.key === selectedProjectKey);
   const writableEnvironments = useEnvironmentsWithScope(selectedTargets, AuthSettingsWriteScope);
   const projectSelected = selectedProjectKey !== null;
