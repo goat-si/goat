@@ -967,6 +967,9 @@ export const make = Effect.gen(function* () {
       );
     });
 
+    // Desktop IPC answers only the main window, and the preload calls it as soon
+    // as the page starts loading.
+    yield* electronWindow.setMain(window);
     loadApplication();
     if (environment.isDevelopment) {
       window.webContents.openDevTools({ mode: "detach" });
@@ -984,7 +987,6 @@ export const make = Effect.gen(function* () {
   const createMain = Effect.gen(function* () {
     const window = yield* createWindow();
     if (Option.isSome(window)) {
-      yield* electronWindow.setMain(window.value);
       yield* logWindowInfo("main window created");
     }
     return window;

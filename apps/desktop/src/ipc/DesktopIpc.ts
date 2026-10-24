@@ -1,8 +1,11 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
 
 export interface DesktopIpcInvokeEvent {
   readonly sender: {
@@ -11,12 +14,21 @@ export interface DesktopIpcInvokeEvent {
   };
 }
 
-export interface DesktopIpcSyncEvent {
+/** The renderer behind a raw IPC message, as Electron reports it. */
+export interface DesktopIpcIncomingEvent extends DesktopIpcInvokeEvent {
+  readonly sender: DesktopIpcInvokeEvent["sender"] & {
+    readonly mainFrame: unknown;
+    isDestroyed(): boolean;
+  };
+  readonly senderFrame: unknown;
+}
+
+export interface DesktopIpcSyncEvent extends DesktopIpcIncomingEvent {
   returnValue: unknown;
 }
 
 export type DesktopIpcHandleListener = (
-  event: DesktopIpcInvokeEvent,
+  event: DesktopIpcIncomingEvent,
   raw: unknown,
 ) => unknown | Promise<unknown>;
 
@@ -61,6 +73,63 @@ export const DesktopIpcError = Schema.Union([
 ]);
 export type DesktopIpcError = typeof DesktopIpcError.Type;
 
+const DesktopIpcSenderRefusal = Schema.Literals([
+  "no-main-window",
+  "sender-destroyed",
+  "untrusted-window",
+  "frame-detached",
+  "subframe",
+]);
+type DesktopIpcSenderRefusal = typeof DesktopIpcSenderRefusal.Type;
+
+export class DesktopIpcSenderRefusedError extends Schema.TaggedError<DesktopIpcSenderRefusedError>()(
+  "DesktopIpcSenderRefusedError",
+  {
+    channel: Schema.String,
+    reason: DesktopIpcSenderRefusal,
+  },
+) {
+  override get message(): string {
+    return `Desktop IPC refused ${this.channel} from an untrusted sender (${this.reason}).`;
+  }
+}
+
+export interface DesktopIpcTrustedWindow {
+  readonly webContents: DesktopIpcIncomingEvent["sender"];
+}
+
+// Only the main window loads the desktop preload, and only in its top frame, so
+// that frame is the one sender every DesktopIpc channel answers. Anything else
+// (a subframe, a webview or other window, a document that has navigated away,
+// a closed or replaced main window) is refused before its payload is decoded.
+const findSenderRefusal = (
+  event: DesktopIpcIncomingEvent,
+  trusted: Option.Option<DesktopIpcTrustedWindow>,
+): DesktopIpcSenderRefusal | undefined => {
+  if (Option.isNone(trusted)) return "no-main-window";
+  try {
+    const sender = event.sender;
+    if (sender.isDestroyed()) return "sender-destroyed";
+    if (sender !== trusted.value.webContents) return "untrusted-window";
+    // Electron reports null once the sending frame has navigated or been destroyed.
+    const frame = event.senderFrame;
+    if (frame === null || frame === undefined) return "frame-detached";
+    if (frame !== sender.mainFrame) return "subframe";
+    return undefined;
+  } catch {
+    // Electron throws when a sender or window is torn down while being inspected.
+    return "sender-destroyed";
+  }
+};
+
+const readSenderId = (event: DesktopIpcIncomingEvent): number | null => {
+  try {
+    return event.sender.id;
+  } catch {
+    return null;
+  }
+};
+
 export interface DesktopIpcMethod<E, R> {
   readonly channel: string;
   readonly handler: (raw: unknown, event?: DesktopIpcInvokeEvent) => Effect.Effect<unknown, E, R>;
@@ -83,8 +152,27 @@ export class DesktopIpc extends Context.Service<
   }
 >()("@goat/desktop/ipc/DesktopIpc") {}
 
-export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
-  DesktopIpc.of({
+export const make = (
+  ipcMain: DesktopIpcMain,
+  trustedWindow: Effect.Effect<Option.Option<DesktopIpcTrustedWindow>>,
+): DesktopIpc["Service"] => {
+  // Runs inside each invoke span, so it adds no span of its own.
+  const senderRefusal = Effect.fnUntraced(function* (
+    channel: string,
+    event: DesktopIpcIncomingEvent,
+  ) {
+    const reason = findSenderRefusal(event, yield* trustedWindow);
+    if (reason !== undefined) {
+      yield* Effect.logWarning("desktop IPC refused an untrusted sender", {
+        channel,
+        reason,
+        senderId: readSenderId(event),
+      });
+    }
+    return reason;
+  });
+
+  return DesktopIpc.of({
     handle: Effect.fn("desktop.ipc.registerInvoke")(function* <E, R>({
       channel,
       handler,
@@ -101,6 +189,10 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
               runPromise(
                 Effect.gen(function* () {
                   yield* Effect.annotateCurrentSpan({ channel });
+                  const reason = yield* senderRefusal(channel, event);
+                  if (reason !== undefined) {
+                    return yield* new DesktopIpcSenderRefusedError({ channel, reason });
+                  }
                   return yield* handler(raw, event);
                 }).pipe(Effect.annotateLogs({ channel }), Effect.withSpan("desktop.ipc.invoke")),
               ),
@@ -134,6 +226,9 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
               event.returnValue = runSync(
                 Effect.gen(function* () {
                   yield* Effect.annotateCurrentSpan({ channel });
+                  // sendSync blocks the renderer until it gets a reply, so a refusal
+                  // still answers, with null.
+                  if ((yield* senderRefusal(channel, event)) !== undefined) return null;
                   return yield* handler();
                 }).pipe(
                   Effect.annotateLogs({ channel }),
@@ -154,8 +249,16 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
       );
     }),
   });
+};
 
-export const layer = (ipcMain: DesktopIpcMain) => Layer.succeed(DesktopIpc, make(ipcMain));
+export const layer = (ipcMain: DesktopIpcMain) =>
+  Layer.effect(
+    DesktopIpc,
+    Effect.gen(function* () {
+      const windows = yield* ElectronWindow.ElectronWindow;
+      return make(ipcMain, windows.main);
+    }),
+  );
 
 export interface DesktopIpcMethodRegistration<
   Payload,
