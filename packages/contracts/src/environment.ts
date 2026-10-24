@@ -243,6 +243,17 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
   protocol: Schema.optionalKey(RuntimeProtocolRanges),
   /** New for every server start. A replacement request names it so it never hits a successor. */
   instanceId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * The same for every GOAT server on one machine, whatever its base directory, so clients
+   * draw them as one machine. A hash of the OS machine identifier, absent when the OS hides it
+   * and on servers that predate it.
+   */
+  machineId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Like `machineId`, but the same only for servers one OS account runs there. They read the
+   * same SSH config, so an SSH alias names the same host on each of them.
+   */
+  machineUserId: Schema.optionalKey(TrimmedNonEmptyString),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

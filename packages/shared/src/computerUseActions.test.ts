@@ -264,3 +264,35 @@ describe("computer use action review regressions", () => {
       ).toMatchObject({ reason: "unsupported" });
   });
 });
+
+describe("computer use foreground failures", () => {
+  it("keeps a foreground click that failed after mouse-down unverifiable, not refused", () => {
+    const { save, request } = setup();
+    const click = {
+      ...request({ action: "click", at: { element: save } }),
+      delivery: "foreground",
+    } as ComputerUseActionRequest;
+    // pixel_route returns this code with no effect after mouse.rs may have posted mouse-down.
+    expect(
+      actionResultFromDriver(click, {
+        isError: true,
+        text: "",
+        structured: { code: "foreground_unavailable" },
+      }),
+    ).toMatchObject({
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
+    });
+    // Said explicitly, the same code is a refusal with its reason.
+    expect(
+      actionResultFromDriver(click, {
+        isError: true,
+        text: "",
+        structured: { code: "foreground_unavailable", effect: "refused" },
+      }),
+    ).toMatchObject({
+      outcome: "refused",
+      reason: "backgroundUnavailable",
+    });
+  });
+});

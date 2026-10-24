@@ -216,10 +216,12 @@ export function fleetMachineHeatEqual(left: FleetMachineHeat, right: FleetMachin
  *    exactly one entry and one such machine match and no environment claims that alias.
  * 4. An SSH or cloud host a dispatcher reported is that dispatcher's entry for
  *    the same alias.
+ * 5. Otherwise a reporting server's entry for an alias the graph resolved to the machine.
  */
 export function matchFleetHostEntries(input: {
   readonly machines: ReadonlyArray<
-    Pick<FleetMachine, "id" | "label" | "environmentId" | "sshHost">
+    Pick<FleetMachine, "id" | "label" | "environmentId" | "sshHost"> &
+      Partial<Pick<FleetMachine, "reportedAliases">>
   >;
   readonly sshAliases: ReadonlyMap<EnvironmentId, ReadonlyArray<string>>;
   /** Each environment's own host-status answer, where it has one. */
@@ -263,7 +265,18 @@ export function matchFleetHostEntries(input: {
     const byLabel = relayed.filter(
       (entry) => entry.host!.toLowerCase() === label && !claimed.has(entry.host!),
     );
-    if (byLabel.length === 1 && labelCount.get(label) === 1) matched.set(machine.id, byLabel[0]!);
+    if (byLabel.length === 1 && labelCount.get(label) === 1) {
+      matched.set(machine.id, byLabel[0]!);
+      continue;
+    }
+    for (const route of machine.reportedAliases ?? []) {
+      const entry = input.reports
+        .get(route.via)
+        ?.find((candidate) => candidate.host === route.alias);
+      if (entry === undefined) continue;
+      matched.set(machine.id, entry);
+      break;
+    }
   }
   return matched;
 }
