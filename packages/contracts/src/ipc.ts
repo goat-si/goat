@@ -12,6 +12,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
+import type { DesktopWindowMaterialBridge } from "./desktopWindowMaterial.ts";
 import {
   type SshHostResult,
   SshHostStatus,
@@ -1192,7 +1193,7 @@ export interface DesktopSystemWakeEvent {
   readonly asleepMs: number | null;
 }
 
-export interface DesktopBridge {
+export interface DesktopBridge extends DesktopWindowMaterialBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;

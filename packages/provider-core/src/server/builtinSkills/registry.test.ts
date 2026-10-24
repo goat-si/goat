@@ -32,28 +32,28 @@ const PLATFORMS = ["darwin", "win32", "linux", "freebsd"] as const;
 
 describe("built-in skill activation", () => {
   it("loads the computer use skill only on turns with computer use attached", () => {
-    expect(resolveBuiltInSkills({ attached: ["computer"] }).active).toEqual(["computer-use"]);
+    expect(resolveBuiltInSkills({ attached: ["computer-use"] }).active).toEqual(["computer-use"]);
     expect(resolveBuiltInSkills({ attached: [] }).active).toEqual([]);
     expect(resolveBuiltInSkills({ attached: ["browser"] }).active).toEqual([]);
   });
 
   it("keeps a skill switched off in Settings off unless this turn requests its capability", () => {
     expect(
-      resolveBuiltInSkills({ attached: ["computer"], disabled: ["computer-use"] }).active,
+      resolveBuiltInSkills({ attached: ["computer-use"], disabled: ["computer-use"] }).active,
     ).toEqual([]);
     expect(
       resolveBuiltInSkills({
-        attached: ["computer"],
-        requested: ["computer"],
+        attached: ["computer-use"],
+        requested: ["computer-use"],
         disabled: ["computer-use"],
       }).active,
     ).toEqual(["computer-use"]);
   });
 
   it("reports a requested capability that is not attached instead of dropping it", () => {
-    expect(resolveBuiltInSkills({ attached: [], requested: ["computer", "browser"] })).toEqual({
+    expect(resolveBuiltInSkills({ attached: [], requested: ["computer-use", "browser"] })).toEqual({
       active: [],
-      unattached: ["computer", "browser"],
+      unattached: ["computer-use", "browser"],
     });
   });
 });
