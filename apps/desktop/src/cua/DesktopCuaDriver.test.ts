@@ -24,6 +24,7 @@ import {
   toolResult,
   healthyTools,
   fixture,
+  helperTools,
   VERIFICATION_IDS,
 } from "./DesktopCuaDriver.testkit.ts";
 
@@ -462,23 +463,6 @@ describe("DesktopCuaDriver verification", () => {
 });
 
 describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
-  const helperTools = (identity: { bundle: string; parent: number }) => ({
-    ...healthyTools(),
-    health_report: toolResult({
-      checks: [
-        {
-          name: "bundle_identity",
-          status: "pass",
-          data: {
-            bundle_identifier: identity.bundle,
-            identity_source: "parent_application",
-            parent_process_id: identity.parent,
-          },
-        },
-      ],
-    }),
-  });
-
   it.effect("asks the helper for grants and lets it own the driver agents cannot target", () =>
     Effect.scoped(
       Effect.gen(function* () {

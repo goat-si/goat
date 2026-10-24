@@ -456,3 +456,21 @@ export const VERIFICATION_IDS = [
   "capture",
   "accessibility",
 ] as const;
+
+/** A healthy driver whose health report names the helper bundle and its parent process. */
+export const helperTools = (identity: { bundle: string; parent: number }) => ({
+  ...healthyTools(),
+  health_report: toolResult({
+    checks: [
+      {
+        name: "bundle_identity",
+        status: "pass",
+        data: {
+          bundle_identifier: identity.bundle,
+          identity_source: "parent_application",
+          parent_process_id: identity.parent,
+        },
+      },
+    ],
+  }),
+});

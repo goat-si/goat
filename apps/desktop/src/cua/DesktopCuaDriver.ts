@@ -877,6 +877,18 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }).pipe(
       Effect.catch((error) =>
         stop.pipe(
+          // A helper that could not start, such as one whose identity no longer matches, is
+          // not the one an earlier check confirmed.
+          Effect.andThen(
+            selected.kind === "helper"
+              ? noteHelper((state) =>
+                  withoutProof(
+                    state,
+                    `${COMPUTER_USE_HELPER_NAME} could not start. Run the readiness check again.`,
+                  ),
+                )
+              : Effect.void,
+          ),
           Effect.andThen(
             isCuaDriverStartupRefusal(error)
               ? report(
