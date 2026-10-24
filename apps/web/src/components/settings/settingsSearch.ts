@@ -9,6 +9,7 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
+import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
 import {
   validateSettingsScopeSearch,
   type ResolvedSettingsScope,
@@ -296,13 +297,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["colors borders interface"],
   },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: "Glass opacity",
-    to: "/settings/appearance",
-    searchTerms: ["transparent transparency solid menus dialogs composer"],
-  },
+  ...GLASS_SETTINGS_SEARCH_ITEMS,
   {
     id: "diff-color-scheme",
     title: "Diff colors",
