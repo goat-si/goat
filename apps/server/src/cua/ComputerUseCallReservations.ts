@@ -48,7 +48,7 @@ const positive = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 
 /** Foreground input shares the desktop even when its named window differs. */
-const foreground = (value: unknown, depth = 0): boolean => {
+export const foreground = (value: unknown, depth = 0): boolean => {
   if (depth > 16) return true;
   if (Array.isArray(value)) return value.some((item) => foreground(item, depth + 1));
   const object = record(value);

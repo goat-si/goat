@@ -237,6 +237,30 @@ describe("proxy execution ownership", () => {
     }),
   );
 
+  it.effect("a call the server refuses to reserve leaves the agent cursor at rest", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        overlay: true,
+        reservation: (request) =>
+          Effect.succeed(
+            request.action === "reserve"
+              ? { status: "refused", detail: "screen_shared" }
+              : { status: "released" },
+          ),
+      });
+      yield* h.push(active());
+      yield* h.send(
+        call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1, dispatch: "foreground" }),
+      );
+      const result = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepInclude(result.structuredContent, { detail: "screen_shared" });
+      const draws = h.log.filter((entry) => entry.startsWith("draw "));
+      assert.include(draws.at(0), '"phase":"acting"');
+      assert.include(draws.at(-1), '"phase":"resting"');
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
   it.effect(
     "keeps cancelled execution ownership and input attribution until the terminal reply",
     () =>

@@ -103,6 +103,7 @@ export const leaseUpdates = (input: {
                 ...(state.apps === undefined ? {} : { apps: state.apps }),
                 ...(state.idleEpoch === undefined ? {} : { idleEpoch: state.idleEpoch }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
+                ...(state.shared === true ? { shared: true } : {}),
               },
         );
         const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);

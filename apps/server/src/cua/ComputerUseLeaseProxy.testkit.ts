@@ -17,12 +17,8 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { NamedWindow } from "./x11WindowPlacement.ts";
-import {
-  LEASE_END_MESSAGES,
-  MAY_HAVE_ACTED,
-  READ_CUT_OFF,
-  runLeaseProxy,
-} from "./ComputerUseLeaseProxy.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -80,6 +76,8 @@ export const harness = Effect.fn(function* (
     readonly humanGate?: Deferred.Deferred<void>;
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
+    /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
+    readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -115,6 +113,7 @@ export const harness = Effect.fn(function* (
       ),
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
+    bundleIds: true,
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
     ...(options.onTarget === undefined
@@ -151,7 +150,10 @@ export const harness = Effect.fn(function* (
     leaseUpdates: Stream.fromQueue(updates).pipe(
       Stream.tap((update) => Queue.offer(taken, update.state)),
     ),
-    onLeaseUpdateApplied: (update) => Queue.offer(applied, update.state).pipe(Effect.asVoid),
+    onLeaseUpdateApplied: (update) =>
+      Queue.offer(applied, update.state).pipe(
+        Effect.andThen(options.afterApplied?.(update) ?? Effect.void),
+      ),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
         toDriver: yield* Queue.unbounded<string>(),

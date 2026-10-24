@@ -7,7 +7,7 @@
  */
 import type { ComputerUseLeaseUpdate, ComputerUsePauseReason } from "@goat/contracts";
 
-import type { LeaseEnd } from "./ComputerUseLeaseProxy.ts";
+import type { LeaseEnd } from "./ComputerUseLeaseMessages.ts";
 import { approvedApps } from "./ComputerUseScope.ts";
 
 export type Stopping =

@@ -154,4 +154,87 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         assert.notInclude(h.log, "send click");
       }),
   );
+
+  it.effect(
+    "another thread's grant that waits behind a refresh still refuses a call that takes the screen",
+    () =>
+      Effect.gen(function* () {
+        let manifest = "v1";
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ manifestStamp: () => manifest, firstKillGate: gate });
+        yield* h.push(active());
+        manifest = "v2";
+        const forwarded = yield* h
+          .send(call(1, "move_cursor", { x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        assert.equal(yield* h.taken, "active");
+        assert.equal(yield* h.applied, "active");
+        // The refresh is stopping the old child when another thread's grant arrives.
+        yield* h.killed;
+        yield* h.push({
+          state: "active",
+          controlId: CONTROL,
+          expiresAt: "1970-01-01T00:30:00.000Z",
+          shared: true,
+        });
+        assert.equal(yield* h.taken, "active");
+        yield* Deferred.succeed(gate, undefined);
+        // Either the provider hears a refusal or the new child gets the call.
+        const outcome = yield* h.nextToProvider.pipe(
+          Effect.map((answer) => ({ sent: false, answer })),
+          Effect.raceFirst(h.nextToDriver.pipe(Effect.as({ sent: true, answer: undefined }))),
+        );
+        assert.isFalse(outcome.sent, "the call reached the driver");
+        assert.deepInclude(
+          (outcome.answer?.result as Record<string, unknown> | undefined)
+            ?.structuredContent as object,
+          { detail: "screen_shared" },
+        );
+        yield* Fiber.join(forwarded);
+      }),
+  );
+
+  it.effect(
+    "an older update applied after another thread's grant was taken does not lift the shared screen",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const held = yield* Deferred.make<void>();
+        let hold = false;
+        const h = yield* harness({
+          humanInput: true,
+          agentInputGate: started,
+          afterApplied: () => (hold ? Deferred.await(held) : Effect.void),
+        });
+        yield* h.push(active());
+        assert.equal(yield* h.applied, "active");
+        // A foreground click waits for its input report while two updates arrive: an older one
+        // without the grant, then the one with it. The older one applies and the queue holds.
+        yield* h.send(
+          call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1, dispatch: "foreground" }),
+        );
+        assert.equal(yield* h.agentCall, "start 1");
+        hold = true;
+        yield* h.push(active());
+        yield* h.push({
+          state: "active",
+          controlId: CONTROL,
+          expiresAt: "1970-01-01T00:30:00.000Z",
+          shared: true,
+        });
+        assert.equal(yield* h.applied, "active");
+        yield* Deferred.succeed(started, undefined);
+        const outcome = yield* h.nextToProvider.pipe(
+          Effect.map((answer) => ({ sent: false, answer })),
+          Effect.raceFirst(h.nextToDriver.pipe(Effect.as({ sent: true, answer: undefined }))),
+        );
+        assert.isFalse(outcome.sent, "the click reached the driver");
+        assert.deepInclude(
+          (outcome.answer?.result as Record<string, unknown> | undefined)
+            ?.structuredContent as object,
+          { detail: "screen_shared" },
+        );
+        yield* Deferred.succeed(held, undefined);
+      }),
+  );
 });

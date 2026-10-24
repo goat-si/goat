@@ -152,6 +152,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       reservation: (call) => Effect.promise(() => reserveCall(url, authorization, call)),
       controlId,
       expiresAt: expiresAt.value,
+      bundleIds: platform === "darwin",
       input: Stream.fromAsyncIterable(
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
         () => undefined,
