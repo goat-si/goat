@@ -104,16 +104,53 @@ const KEEP_MS = 10_000;
  */
 const OPEN_MS = 10_000;
 
-/** Cover of one kind that never lapsed: from its first call until the last tail to close. */
-interface Run {
+/** One call's cover of one kind: from just before it began until its tail, open while it runs. */
+interface Span {
+  readonly key: string | undefined;
   readonly from: number;
-  /** The latest tail of a call of this run that has closed. */
-  tail: number;
-  /** Calls of this run still open; while any is, the run has not ended. */
-  readonly open: Set<string>;
+  to: number;
 }
 
-const runEnd = (run: Run) => (run.open.size > 0 ? Infinity : run.tail);
+/**
+ * Groups spans into unbroken runs, earliest first. Calls reach the log in the order their reports
+ * arrive, which across controls is not the order they began, so runs are found from the spans
+ * each time rather than kept as they grow.
+ */
+function runsOf(spans: ReadonlyArray<Span>): Array<Array<Span>> {
+  const sorted = [...spans].sort((left, right) => left.from - right.from);
+  const runs: Array<Array<Span>> = [];
+  let reach = -Infinity;
+  for (const span of sorted) {
+    const current = runs.at(-1);
+    if (current !== undefined && span.from <= reach) current.push(span);
+    else runs.push([span]);
+    reach = current !== undefined && span.from <= reach ? Math.max(reach, span.to) : span.to;
+  }
+  return runs;
+}
+
+/**
+ * Keeps a run's history short: closed spans that end before every open span of their run cannot
+ * have a gap an open span bridges, so together they are one span. A run with nothing open is one
+ * span. The earliest start of every run is kept.
+ */
+function compact(spans: ReadonlyArray<Span>): Array<Span> {
+  return runsOf(spans).flatMap((run) => {
+    const firstOpen = Math.min(
+      ...run.filter((span) => span.to === Infinity).map((span) => span.from),
+    );
+    const settled = run.filter((span) => span.to < firstOpen);
+    if (settled.length < 2) return run;
+    return [
+      {
+        key: undefined,
+        from: Math.min(...settled.map((span) => span.from)),
+        to: Math.max(...settled.map((span) => span.to)),
+      },
+      ...run.filter((span) => span.to >= firstOpen),
+    ];
+  });
+}
 
 export function makeAgentInputLog() {
   const open = new Map<
@@ -126,23 +163,18 @@ export function makeAgentInputLog() {
     readonly kinds: ReadonlyArray<InputKind>;
   }> = [];
   /**
-   * Each kind's unbroken runs, kept apart from the calls themselves: forgetting an old call must
-   * not make a long run look as if it began later.
+   * Each kind's spans, kept apart from the calls themselves: forgetting an old call must not make
+   * a long run look as if it began later.
    */
-  const runs: Record<InputKind, Array<Run>> = { keyboard: [], pointer: [] };
+  const spans: Record<InputKind, Array<Span>> = { keyboard: [], pointer: [] };
   const opened = (key: string, kinds: ReadonlyArray<InputKind>, at: number) => {
-    for (const kind of kinds) {
-      const last = runs[kind].at(-1);
-      if (last !== undefined && at - BEFORE_MS <= runEnd(last)) last.open.add(key);
-      else runs[kind].push({ from: at - BEFORE_MS, tail: at - BEFORE_MS, open: new Set([key]) });
-    }
+    for (const kind of kinds) spans[kind].push({ key, from: at - BEFORE_MS, to: Infinity });
   };
   const closed = (key: string, kinds: ReadonlyArray<InputKind>, until: number) => {
     for (const kind of kinds) {
-      const run = runs[kind].findLast((entry) => entry.open.has(key));
-      if (run === undefined) continue;
-      run.open.delete(key);
-      run.tail = Math.max(run.tail, until);
+      const span = spans[kind].find((entry) => entry.key === key && entry.to === Infinity);
+      if (span !== undefined) span.to = until;
+      spans[kind] = compact(spans[kind]);
     }
   };
   const finish = (
@@ -167,7 +199,9 @@ export function makeAgentInputLog() {
         closed(key, call.kinds, call.start + OPEN_MS);
       }
     for (const kind of ["keyboard", "pointer"] as const)
-      runs[kind] = runs[kind].filter((run) => now - runEnd(run) < KEEP_MS);
+      spans[kind] = runsOf(spans[kind])
+        .filter((run) => now - Math.max(...run.map((span) => span.to)) < KEEP_MS)
+        .flat();
   };
   return {
     prune,
@@ -217,9 +251,13 @@ export function makeAgentInputLog() {
             call.kinds.includes(kind) && at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS,
         );
       if (!covered) return false;
-      const run = runs[kind].find((entry) => entry.from <= at && at <= runEnd(entry));
+      const run = runsOf(spans[kind]).find(
+        (entry) =>
+          Math.min(...entry.map((span) => span.from)) <= at &&
+          at <= Math.max(...entry.map((span) => span.to)),
+      );
       // No run on record for covered input: err toward the person.
-      return run !== undefined && at - run.from <= OPEN_MS;
+      return run !== undefined && at - Math.min(...run.map((span) => span.from)) <= OPEN_MS;
     },
     /** How many calls the log still holds, open or finished. */
     size: () => open.size + done.length,
