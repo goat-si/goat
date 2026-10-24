@@ -543,4 +543,40 @@ describe("LinuxHelperHost (#1223)", () => {
         assert.strictEqual(yield* Queue.size(t.safety), 0);
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "a later listing with the same windows releases a hold on a window that left (#1494 r9)",
+    () =>
+      Effect.gen(function* () {
+        const a = { pid: 7, windowId: 70 };
+        const b = { pid: 8, windowId: 80 };
+        let windows = [a];
+        let watchId = "";
+        let listWindows = 0;
+        const t = yield* hostWith([], {
+          windows: () => windows,
+          onRequest: (request) => {
+            if (request.method === "watch" && watchId === "")
+              watchId = (request.params as { watchId: string }).watchId;
+            // A reports its secret after this listing was asked for, so this listing cannot release it.
+            if (request.method === "listWindows" && ++listWindows === 2)
+              t2.helper()?.event(watchId, { type: "privateMode", active: true, target: a });
+          },
+        });
+        const t2 = { helper: () => t.spawned[0]?.helper };
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        windows = [b];
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("watch");
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        // The next listing still shows only B: A is gone, and its hold is older than this view.
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("listWindows");
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
+      }).pipe(Effect.scoped),
+  );
 });

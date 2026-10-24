@@ -369,7 +369,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       .map((target) => target.pid + ":" + target.windowId)
       .sort()
       .join(",");
-    if (key === entry.watched && entry.client.watching()) return;
+    // Unchanged windows need no new watch, but this listing is still a view of the screen.
+    if (key === entry.watched && entry.client.watching()) return observed(snapshot, targets);
     if (targets.length === 0) {
       if (entry.client.watching()) yield* unwatch(entry);
       entry.watched = "";
