@@ -25,17 +25,36 @@ const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
 const VALUE = String.raw`(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|\S+)`;
 
 /**
- * A credential-named field in JSON, a dict repr or JSON escaped inside another JSON string. Its
- * whole value is masked, however it is quoted or nested; see {@link valueEnd}.
+ * A quoted field name followed by a colon, in JSON escaped inside another JSON string, in JSON,
+ * and in a single-quoted repr. Names are decoded before they are compared, so an escaped spelling
+ * such as "to\u006ben" is still a token. Name length is bounded so scanning stays linear.
  */
-const CREDENTIAL_FIELDS = [
-  { key: String.raw`\\"`, escaped: true },
-  { key: '"', escaped: false },
-  { key: "'", escaped: false },
-].map(({ key, escaped }) => ({
-  field: new RegExp(String.raw`${key}(?:${CREDENTIAL_KEY})${key}\s*:\s*`, "gi"),
-  escaped,
-}));
+const FIELD_NAMES = [
+  {
+    name: new RegExp(String.raw`\\"((?:\\\\(?:\\\\|\\"|[^\\"])|[^\\"]){1,128})\\"\s*:\s*`, "g"),
+    escaped: true,
+    decode: (raw: string) => jsonString(raw.replace(/\\(\\|")/g, "$1")),
+  },
+  {
+    name: new RegExp(String.raw`"((?:\\.|[^"\\]){1,128})"\s*:\s*`, "g"),
+    escaped: false,
+    decode: jsonString,
+  },
+  {
+    name: new RegExp(String.raw`'((?:\\.|[^'\\]){1,128})'\s*:\s*`, "g"),
+    escaped: false,
+    decode: (raw: string) => jsonString(raw.replace(/\\'/g, "'").replace(/"/g, '\\"')),
+  },
+];
+
+function jsonString(body: string): string {
+  try {
+    const value: unknown = JSON.parse(`"${body}"`);
+    return typeof value === "string" ? value : body;
+  } catch {
+    return body;
+  }
+}
 
 const ESCAPED_QUOTE = '\\"';
 const ESCAPED_BACKSLASH = "\\\\";
@@ -93,19 +112,20 @@ function valueEnd(text: string, start: number, escaped: boolean): number {
   return text.length;
 }
 
+/** Every credential-named field's whole value replaced; see {@link valueEnd}. */
 function maskCredentialFields(text: string): string {
   let masked = text;
-  for (const { field, escaped } of CREDENTIAL_FIELDS) {
+  for (const { name, escaped, decode } of FIELD_NAMES) {
     let out = "";
     let shown = 0;
-    field.lastIndex = 0;
-    for (let match = field.exec(masked); match !== null; match = field.exec(masked)) {
-      if (match.index < shown) continue;
+    name.lastIndex = 0;
+    for (let match = name.exec(masked); match !== null; match = name.exec(masked)) {
+      if (match.index < shown || !isCredentialKey.test(decode(match[1] ?? ""))) continue;
       const start = match.index + match[0].length;
       const end = valueEnd(masked, start, escaped);
       out += masked.slice(shown, start) + MASK;
       shown = end;
-      field.lastIndex = Math.max(end, start);
+      name.lastIndex = Math.max(end, start);
     }
     masked = out + masked.slice(shown);
   }
@@ -124,17 +144,25 @@ function isJoseHeader(part: string): boolean {
   }
 }
 
+/** A dotted run from its first part that is a JOSE header on, masked; otherwise the run itself. */
+function maskJoseToken(run: string): string {
+  const parts = run.split(".");
+  for (let index = 0; index + 2 < parts.length; index++) {
+    const part = parts[index] ?? "";
+    if (part.length >= 8 && isJoseHeader(part)) return [...parts.slice(0, index), MASK].join(".");
+  }
+  return run;
+}
+
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
   // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
-  // A JWT or JWE: dotted base64url parts whose first decodes to a JSON header, whatever
-  // whitespace the header holds. Dotted names such as serverLogger.test.ts are left alone.
-  [
-    /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]*){2,4}/g,
-    (match) => (isJoseHeader(match.slice(0, match.indexOf("."))) ? MASK : match),
-  ],
-  // https://user:token@host/repo.git
-  [/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, `$1${MASK}@`],
+  // A JWT or JWE: dotted base64url parts led by one that decodes to a JSON header, whatever
+  // whitespace the header holds. Each part of a dotted run is tried, so a dotted prefix cannot
+  // hide a token, and dotted names such as serverLogger.test.ts are left alone.
+  [/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g, maskJoseToken],
+  // https://user:token@host/repo.git; bounded so a long run without one stays linear.
+  [/\b([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s@]{1,512}@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
@@ -350,6 +378,9 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
   budget.path.add(value);
   try {
     return sanitizeObject(value, depth, budget);
+  } catch {
+    // A revoked Proxy or a forged built-in can throw on any inspection; logging must not fail.
+    return "[Uninspectable]";
   } finally {
     budget.path.delete(value);
   }
@@ -476,14 +507,23 @@ function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknow
   });
 }
 
+/** What a log call shows when redaction itself fails: never the unredacted value. */
+function guarded<A>(redact: () => A, fallback: A): A {
+  try {
+    return redact();
+  } catch {
+    return fallback;
+  }
+}
+
 /** A sink that sees each log call only after redaction. */
 export const redacting = <Output>(logger: Logger.Logger<unknown, Output>) =>
   Logger.make<unknown, Output>((options) =>
     logger.log({
       ...options,
-      message: redactLogMessage(options.message),
-      cause: redactCause(options.cause),
-      fiber: redactedFiber(options.fiber),
+      message: guarded(() => redactLogMessage(options.message), "[unloggable message]"),
+      cause: guarded(() => redactCause(options.cause), Cause.die(new Error("unloggable cause"))),
+      fiber: guarded(() => redactedFiber(options.fiber), options.fiber),
     }),
   );
 

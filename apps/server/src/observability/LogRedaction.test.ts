@@ -51,6 +51,10 @@ describe("redactLogText", () => {
     ],
     ['{"cookie":{"sid":"CANARY"},"status":200}', '{"cookie":***,"status":200}'],
     ['{"password":123456,"ok":true}', '{"password":***,"ok":true}'],
+    // An escaped spelling of a credential name, in JSON and in JSON inside a JSON string.
+    ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
+    ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
+    [`requestid.${jwt} done`, "requestid.*** done"],
     ['{"cookie":[["first"],"CANARY"],"status":200}', '{"cookie":***,"status":200}'],
     ['{"token":{"value":{"inner":"CANARY"},"next":"CANARY"},"ok":1}', '{"token":***,"ok":1}'],
     ['{"token":"never closed CANARY', '{"token":***'],
@@ -285,6 +289,15 @@ describe("redactLogMessage", () => {
     expect(typeof huge).toBe("string");
     expect(String(huge).length).toBeLessThanOrEqual(64_001);
     expect(redactLogMessage(42n)).toBe(42n);
+  });
+
+  it("logs a value that throws on inspection as a placeholder", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    expect(redactLogMessage({ revoked: proxy, forged: Object.create(Map.prototype) })).toEqual({
+      revoked: "[Uninspectable]",
+      forged: "[Uninspectable]",
+    });
   });
 
   it("names a function without running a name getter", () => {

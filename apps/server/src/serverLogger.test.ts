@@ -195,6 +195,7 @@ const leadingSpaceJwt = `${Buffer.from(' {"alg":"HS256"}').toString("base64url")
 const canaries = [
   leadingSpaceJwt,
   "canary-nested-cookie",
+  "canary-escaped-key",
   "canaryGoatEnvToken0123456789",
   canaryJwt,
   spacedJwt,
@@ -211,9 +212,9 @@ const canaries = [
 /** An error whose message, own field and nested cause each carry a credential. */
 const leakyError = (label: string) =>
   Object.assign(
-    new Error(`${label} failed with ${canaryJwt}, ${spacedJwt} and ${leadingSpaceJwt}`, {
+    new Error(`${label} failed with requestid.${canaryJwt}, ${spacedJwt} and ${leadingSpaceJwt}`, {
       cause: new Error(
-        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"],"cookie":[["a"],"canary-nested-cookie"]}',
+        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"],"cookie":[["a"],"canary-nested-cookie"],"to\\u006ben":"canary-escaped-key"}',
       ),
     }),
     {
