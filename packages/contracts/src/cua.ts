@@ -221,6 +221,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
+  "helper_restarted",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -235,6 +237,8 @@ export const computerUseRefusalReason = (
       return "userIntervened";
     case "app_not_approved":
       return "appNotAllowed";
+    case "helper_restarted":
+      return "helperUnavailable";
     default:
       return "targetRefused";
   }
