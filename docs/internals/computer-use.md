@@ -103,10 +103,14 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   driver it reports is the helper's own child (#1213), then exchanges the #1207 hello:
   `clientApiVersion` against `serverApiVersion`, with `incompatibleClientVersion` instead of a
   degraded session.
-- The parent check is only as strong as the parent. GOAT's executable can run as plain Node
-  (`ELECTRON_RUN_AS_NODE`), so until GOAT's backend runs from a separately identified runtime and
-  the main app's run-as-Node fuses are off, any same-user process can pass the check by running
-  code under GOAT's signature (#1210). Signed helper builds stay blocked on that (#1202).
+- The parent check is only as strong as the parent. A signed GOAT whose Electron fuses let it run
+  a launcher's own JavaScript (`RunAsNode`, `NODE_OPTIONS`, Node inspect arguments) passes a
+  signature check for any same-user code, so a release helper also reads the parent app's fuse
+  wire, from the Electron framework it first verifies against the team, and refuses with
+  `parent_runs_node` unless all three are off (#1352). GOAT's backend and CLI still run as Node
+  (`ELECTRON_RUN_AS_NODE`), so today every release parent is refused, until they run from a
+  separately identified runtime and the fuses are turned off (#1210). Signed helper builds stay
+  blocked on that (#1202).
 - Replies are bound to the helper's executable, pid and generation from the hello.
   `admitComputerUseReply` quarantines replies from another generation, to a request a Stop or a
   deadline already ended, or over the frame limit; they never reach the agent.
@@ -261,7 +265,9 @@ browser.
   screen before taking it. A helper that can do neither runs without the floating stack and
   overlay on that host, and a capture that would still include them, or a crop without known
   window bounds, is refused with a typed reason (`unsafeCapture`, `targetBoundsUnavailable`).
-  Tiles never capture other tiles.
+  Tiles never capture other tiles: the macOS helper refuses (`appNotApproved`) a live picture of
+  any window owned by the app that launched it, by itself, or by an app with GOAT's bundle ids,
+  before it reads any grant or window, whatever the control approved (#1321).
 - Web and mobile show the same tiles in the existing right panel or a sheet, without a floating
   mode.
 - A tile captures only the operated window where the platform helper can capture windows, and a
