@@ -464,4 +464,50 @@ describe("LinuxHelperHost (#1223)", () => {
         assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "an earlier watch's late acceptance does not lift the guard of a later unconfirmed unwatch (#1494 r7)",
+    () =>
+      Effect.gen(function* () {
+        let windows = [{ pid: 7, windowId: 70 }];
+        let watches = 0;
+        const target = { pid: 7, windowId: 70 };
+        const t = yield* hostWith([], {
+          windows: () => windows,
+          onRequest: (request) => {
+            if (request.method === "watch") watches++;
+          },
+          // The replacement watch and the unwatch go unanswered for now.
+          answers: (request) =>
+            request.method === "unwatch" ? false : request.method !== "watch" || watches !== 2,
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        const first = yield* t.nextRequest("watch");
+        const helper = t.spawned[0]?.helper;
+        helper?.event((first.params as { watchId: string }).watchId, {
+          type: "privateMode",
+          active: true,
+          target,
+        });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        windows = [target, { pid: 8, windowId: 80 }];
+        yield* TestClock.adjust(TICK_MS);
+        const replacement = yield* t.nextRequest("watch");
+        t.expire();
+        yield* t.host.setWatch(false);
+        yield* t.nextRequest("unwatch");
+        // The helper now answers in order: the replacement watch late, then the unwatch's clear.
+        const replaced = (replacement.params as { watchId: string }).watchId;
+        helper?.send({
+          id: replacement.id,
+          generation: "gen-1",
+          result: { watchId: replaced, watching: windows },
+        });
+        helper?.event(replaced, { type: "privateMode", active: false, target });
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+      }).pipe(Effect.scoped),
+  );
 });

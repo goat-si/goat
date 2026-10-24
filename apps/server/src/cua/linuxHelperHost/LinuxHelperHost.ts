@@ -156,6 +156,8 @@ interface Running {
    * may still be carried out later, so only a confirmed answer, read as it arrives, lifts this.
    */
   guard: ReadonlySet<string> | undefined;
+  /** Numbers the guarded requests; only the latest one's confirmation lifts the guard. */
+  requests: number;
   /** The process exited on its own. */
   ended: boolean;
   /** The host let it go: stopped, its reports withdrawn. */
@@ -259,6 +261,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       ended: false,
       retired: false,
       guard: undefined,
+      requests: 0,
     };
     current = entry;
     process.onLine(client.line);
@@ -318,19 +321,25 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (readiness._tag === "Some") failures = 0;
   });
 
-  /** Narrows the guard to the windows this request keeps as well. */
+  /**
+   * Narrows the guard to the windows this request keeps as well, and returns what lifts it: this
+   * request's confirmation, only while no later request is unconfirmed. The helper carries out
+   * requests in order, so an earlier request's late answer says nothing about a later one.
+   */
   const guardFor = (entry: Running, keeps: ReadonlySet<string>) => {
     const before = entry.guard;
     entry.guard = before ? new Set([...keeps].filter((window) => before.has(window))) : keeps;
-  };
-  const confirmed = (entry: Running) => () => {
-    entry.guard = undefined;
+    const request = ++entry.requests;
+    return () => {
+      if (entry.requests === request) entry.guard = undefined;
+    };
   };
 
   const unwatch = (entry: Running) =>
-    Effect.sync(() => guardFor(entry, new Set())).pipe(
-      Effect.andThen(Effect.promise(() => entry.client.unwatch(WATCH_MS, confirmed(entry)))),
-    );
+    Effect.suspend(() => {
+      const confirmed = guardFor(entry, new Set());
+      return Effect.promise(() => entry.client.unwatch(WATCH_MS, confirmed));
+    });
 
   /** Watches every window on screen while agents control the host; nothing otherwise. */
   const reconcileWatch = Effect.fnUntraced(function* (entry: Running) {
@@ -359,10 +368,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     }
     // A watch that was refused or not answered in time leaves the helper's watch unknown, so
     // the next tick asks again rather than trusting the windows it last watched.
-    guardFor(entry, new Set(targets.map(windowKey)));
-    const accepted = yield* Effect.promise(() =>
-      entry.client.watch(targets, WATCH_MS, confirmed(entry)),
-    );
+    const confirmed = guardFor(entry, new Set(targets.map(windowKey)));
+    const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS, confirmed));
     entry.watched = accepted ? key : "";
     if (accepted) observed(entry.launch, targets);
   });
