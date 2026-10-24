@@ -130,7 +130,7 @@ export function computerUseObservedTarget(output: unknown): string | null {
   const structured = record(record(output)?.structuredContent) ?? record(output);
   const app = label(structured?.app_name);
   const title = label(structured?.window_title);
-  return app !== undefined && title !== undefined ? `${app} — ${title}` : (app ?? title ?? null);
+  return app !== undefined && title !== undefined ? `${title} in ${app}` : (app ?? title ?? null);
 }
 
 export function computerUseRunStatus(

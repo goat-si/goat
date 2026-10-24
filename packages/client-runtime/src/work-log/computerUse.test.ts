@@ -64,7 +64,7 @@ describe("computerUseObservedTarget", () => {
         content: [],
         structuredContent: { app_name: "Finder", window_title: "Downloads" },
       }),
-    ).toBe("Finder — Downloads");
+    ).toBe("Downloads in Finder");
     expect(computerUseObservedTarget({ app_name: "Finder" })).toBe("Finder");
     expect(computerUseObservedTarget([{ type: "text", text: "x" }])).toBeNull();
   });
