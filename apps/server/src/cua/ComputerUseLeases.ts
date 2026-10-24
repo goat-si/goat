@@ -150,6 +150,8 @@ export class ComputerUseLeases extends Context.Service<
      * A turn that starts meanwhile keeps the control it reused active.
      */
     readonly turnEnded: (threadId: ThreadId) => Effect.Effect<boolean, ComputerUseLeaseError>;
+    /** Checks every acting control for a thread with nothing left open; see turnEnded. */
+    readonly settle: Effect.Effect<void>;
     /** Ends every control because computer use was turned off. */
     readonly disable: Effect.Effect<void>;
     /** Every live grant on this host, for the kill switch to end. */
@@ -464,6 +466,47 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
+  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
+    const before = controls.get(threadId);
+    if (before === undefined || before.ended !== undefined) return false;
+    // Native subagents work through the parent's provider session, and so its control, on
+    // their own child threads; one can outlive a failed parent run. Delegated tasks hold
+    // controls of their own.
+    const open = yield* sql<{ readonly one: number }>`
+      WITH RECURSIVE native(child_thread_id, status) AS (
+        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
+        WHERE s.thread_id = ${threadId} AND s.origin = 'provider_native'
+        UNION
+        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
+        JOIN native n ON s.thread_id = n.child_thread_id
+        WHERE s.origin = 'provider_native'
+      )
+      SELECT 1 AS one FROM orchestration_v2_projection_runs
+      WHERE thread_id = ${threadId}
+        AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+      UNION ALL
+      SELECT 1 AS one FROM native WHERE status IN ('pending', 'running', 'waiting')
+      UNION ALL
+      SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
+      WHERE status IN ('pending', 'running')
+        AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
+      LIMIT 1
+    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
+    if (open.length > 0) return false;
+    // The read yields: a turn that minted or reused the control since then keeps it.
+    const after = controls.get(threadId);
+    if (
+      after?.controlId !== before.controlId ||
+      after.uses !== before.uses ||
+      after.ended !== undefined ||
+      after.idle === true
+    )
+      return false;
+    controls.set(threadId, { ...after, idle: true });
+    yield* changed;
+    return true;
+  });
+
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
@@ -489,33 +532,20 @@ const make = Effect.gen(function* () {
     stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
       Effect.tap(() => changed),
     ),
-    turnEnded: Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId) {
-      const before = controls.get(threadId);
-      if (before === undefined || before.ended !== undefined) return false;
-      // A native subagent keeps working after a failed parent run, through the same control.
-      const open = yield* sql<{ readonly one: number }>`
-        SELECT 1 AS one FROM orchestration_v2_projection_runs
-        WHERE thread_id = ${threadId}
-          AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
-        UNION ALL
-        SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
-        WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
-        LIMIT 1
-      `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-      if (open.length > 0) return false;
-      // The read yields: a turn that minted or reused the control since then keeps it.
-      const after = controls.get(threadId);
-      if (
-        after?.controlId !== before.controlId ||
-        after.uses !== before.uses ||
-        after.ended !== undefined ||
-        after.idle === true
-      )
-        return false;
-      controls.set(threadId, { ...after, idle: true });
-      yield* changed;
-      return true;
-    }),
+    turnEnded,
+    // Fails only on a read; a control left as it was is read again on the next end.
+    settle: Effect.suspend(() =>
+      Effect.forEach(
+        [...controls.values()].filter(acting).map((record) => record.threadId),
+        (threadId) =>
+          turnEnded(threadId).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("computer use control left to expire", { threadId, cause }),
+            ),
+          ),
+        { discard: true },
+      ),
+    ),
     disable: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "disabled"))).pipe(
       Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void)),
     ),

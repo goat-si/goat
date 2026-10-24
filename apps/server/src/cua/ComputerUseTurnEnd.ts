@@ -25,17 +25,13 @@ export const layer = Layer.effectDiscard(
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* forkParked(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-        // A run's end, or a native subagent's turn that outlived it.
-        (event.type === "run.updated" || event.type === "provider-turn.updated") &&
+        // A run's end, or the end of a native subagent or its turn, which may outlive the run.
+        // A subagent's events carry its child thread, so every acting control is checked.
+        (event.type === "run.updated" ||
+          event.type === "provider-turn.updated" ||
+          event.type === "subagent.updated") &&
         !OPEN.has(event.payload.status)
-          ? leases.value.turnEnded(event.threadId).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("computer use control left to expire", {
-                  threadId: event.threadId,
-                  cause,
-                }),
-              ),
-            )
+          ? leases.value.settle
           : Effect.void,
       ),
     );

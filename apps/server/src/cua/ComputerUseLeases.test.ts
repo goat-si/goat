@@ -122,7 +122,7 @@ layer("ComputerUseLeases controls", (it) => {
   );
 
   it.effect(
-    "keeps a control live while a native subagent still runs after its parent run failed",
+    "keeps a control live while a native subagent, on its own child thread, outlives the failed parent run",
     () =>
       Effect.gen(function* () {
         yield* runMigrations();
@@ -131,19 +131,38 @@ layer("ComputerUseLeases controls", (it) => {
         const control = yield* leases.control(parent, Option.none());
         yield* run(parent, "run-parent-1", 1, "failed");
         const sql = yield* SqlClient.SqlClient;
+        // Native subagents report under their child thread, nested ones under their own parent.
+        const native = (id: string, owner: string, child: string, status: string) =>
+          sql`
+            INSERT INTO orchestration_v2_projection_subagents
+              (subagent_id, thread_id, parent_node_id, provider, child_thread_id, origin, status, updated_at, payload_json)
+            VALUES (${id}, ${owner}, 'node', 'codex', ${child}, 'provider_native', ${status}, '2026-10-24', '{}')
+          `;
+        yield* native("sub-child", parent, "thread-native-child", "completed");
+        yield* native("sub-nested", "thread-native-child", "thread-native-nested", "completed");
         yield* sql`
-        INSERT INTO orchestration_v2_projection_provider_turns
-          (provider_turn_id, thread_id, provider_thread_id, node_id, ordinal, status, payload_json)
-        VALUES ('turn-child', ${parent}, 'native-child', 'node-child', 1, 'running', '{}')
-      `;
-        assert.isFalse(yield* leases.turnEnded(parent));
-        const listed = (yield* leases.sessions).find(
-          (entry) => entry.control.controlId === control.controlId,
-        );
-        assert.isUndefined(listed?.control.idle);
+          INSERT INTO orchestration_v2_projection_provider_turns
+            (provider_turn_id, thread_id, provider_thread_id, node_id, ordinal, status, payload_json)
+          VALUES ('turn-nested', 'thread-native-nested', 'native-nested', 'node-nested', 1, 'running', '{}')
+        `;
+        // A delegated task runs on its own control, so it does not hold this one.
+        yield* sql`
+          INSERT INTO orchestration_v2_projection_subagents
+            (subagent_id, thread_id, parent_node_id, provider, child_thread_id, origin, status, updated_at, payload_json)
+          VALUES ('sub-task', ${parent}, 'node', 'codex', 'thread-task', 'app_owned', 'running', '2026-10-24', '{}')
+        `;
 
-        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET status = 'completed' WHERE provider_turn_id = 'turn-child'`;
-        assert.isTrue(yield* leases.turnEnded(parent));
+        yield* leases.settle;
+        const listed = () =>
+          leases.sessions.pipe(
+            Effect.map((all) => all.find((entry) => entry.control.controlId === control.controlId)),
+          );
+        assert.isUndefined((yield* listed())?.control.idle);
+
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET status = 'completed' WHERE provider_turn_id = 'turn-nested'`;
+        // A child's end is what wakes the check, so it re-reads every control.
+        yield* leases.settle;
+        assert.isTrue((yield* listed())?.control.idle);
       }),
   );
 
