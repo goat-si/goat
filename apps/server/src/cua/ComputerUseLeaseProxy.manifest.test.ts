@@ -68,4 +68,53 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         assert.notInclude(h.log, "send click");
       }),
   );
+
+  it.effect(
+    "an approval narrowed while a refresh stops the old child refuses a call for the revoked app",
+    () =>
+      Effect.gen(function* () {
+        let manifest = "v1";
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ manifestStamp: () => manifest, firstKillGate: gate });
+        yield* h.push(active(undefined, ["com.example.a", "com.example.b"]));
+        assert.equal(yield* h.taken, "active");
+        assert.equal(yield* h.applied, "active");
+        // The proxy learns that pid 4 is app A.
+        yield* h.send(call(1, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: {
+              content: [],
+              structuredContent: { apps: [{ pid: 4, bundle_id: "com.example.a", name: "A" }] },
+            },
+          }),
+        );
+        yield* h.nextToProvider;
+        // A newly approved app rewrote the manifest: the next call waits for a fresh child.
+        manifest = "v2";
+        const forwarded = yield* h
+          .send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        yield* h.killed;
+        // While the old child stops, the person narrows the approval to app B only.
+        yield* h.push(active(undefined, ["com.example.b"]));
+        assert.equal(yield* h.taken, "active");
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(forwarded);
+        const answer = yield* h.nextToProvider;
+        assert.equal(answer.id, 2);
+        assert.deepInclude((answer.result as Record<string, unknown>).structuredContent as object, {
+          detail: "app_not_approved",
+        });
+        assert.notProperty(
+          (answer.result as Record<string, unknown>).structuredContent as object,
+          "effect",
+        );
+        // App A's click never reached any driver.
+        assert.notInclude(h.log, "send click");
+      }),
+  );
 });
