@@ -20,8 +20,14 @@ import * as Stream from "effect/Stream";
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
+import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
+const decodeX11Display = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
+  ),
+);
 
 const argument = (args: ReadonlyArray<string>, name: string) => {
   const index = args.indexOf(name);
@@ -62,6 +68,11 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     return;
   }
   const descriptor = driver.value;
+  // The X display GOAT started the driver on; every window the driver names must be there (#1358).
+  const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
+  const placement = Option.isSome(x11Display)
+    ? makeX11WindowPlacement(x11Display.value)
+    : undefined;
   // The driver child never sees the thread's GOAT credential.
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
@@ -121,6 +132,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           }),
         })),
       ),
+      ...(placement === undefined
+        ? {}
+        : { placement: (windows) => Effect.promise(() => placement(windows)) }),
       revokeSessions: (sessions) =>
         // A driver without a socket is a direct child of this connection; killing it ends its
         // sessions, and there is no daemon left to ask.

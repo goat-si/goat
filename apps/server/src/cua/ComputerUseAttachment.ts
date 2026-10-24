@@ -51,6 +51,8 @@ export type ComputerUseAttachment =
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
       readonly skills: ReadonlyArray<BuiltInSkillName>;
+      /** The X display the driver was started on; the proxy checks its windows against it. */
+      readonly x11Display?: CuaDriver.CuaX11Display;
     };
 
 export interface ComputerUseAttachmentInput {
@@ -100,6 +102,8 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
   if (Option.isNone(mcp)) return none("unavailable", unattended);
+  const x11Display =
+    cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
   // Names this build does not know are ignored; unreadable settings keep the default on.
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const disabled = Option.isNone(settings)
@@ -111,6 +115,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   return {
     _tag: "proxied",
     mcp: mcp.value,
+    ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
     control: yield* leases.value.control(input.threadId, lease),
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
@@ -129,6 +134,7 @@ export const LEASE_PROXY_ENV = {
   url: "GOAT_CUA_LEASE_URL",
   authorization: "GOAT_CUA_LEASE_AUTHORIZATION",
   driver: "GOAT_CUA_DRIVER_MCP",
+  x11Display: "GOAT_CUA_X11_DISPLAY",
 } as const;
 
 /**
@@ -158,6 +164,9 @@ function leaseProxyDescriptor(
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
       { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
+      ...(attachment.x11Display === undefined
+        ? []
+        : [{ name: LEASE_PROXY_ENV.x11Display, value: JSON.stringify(attachment.x11Display) }]),
     ],
     ...(attachment.mcp.socketPath === undefined ? {} : { socketPath: attachment.mcp.socketPath }),
   };
