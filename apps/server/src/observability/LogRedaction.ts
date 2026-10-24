@@ -163,7 +163,8 @@ function maskUnfinishedJose(text: string): string {
 }
 
 function startsJsonObject(part: string): boolean {
-  return /^\s*\{/.test(Buffer.from(part.slice(0, 64), "base64url").toString("utf8"));
+  // The whole part is decoded: a header may open with any amount of whitespace.
+  return /^\s*\{/.test(Buffer.from(part, "base64url").toString("utf8"));
 }
 
 /** A dotted run from its first part that is a JOSE header on, masked; otherwise the run itself. */
@@ -264,9 +265,11 @@ export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> =
   // The reasons are read once, through descriptors: neither the cause nor its list can run code
   // that shows a sink something other than what was redacted here.
   const listed = guarded(() => Reflect.get(cause, "reasons"), []);
-  const length = Array.isArray(listed)
-    ? Number(guarded(() => Object.getOwnPropertyDescriptor(listed, "length")?.value, 0))
-    : 0;
+  const length = guarded(
+    () =>
+      Array.isArray(listed) ? Number(Object.getOwnPropertyDescriptor(listed, "length")?.value) : 0,
+    0,
+  );
   const reasons: Array<Cause.Reason<unknown>> = [];
   for (let index = 0; index < Math.min(length, MAX_REASONS); index++)
     reasons.push(redactReason(dataProperty(listed, index)));
@@ -286,7 +289,7 @@ function dataProperty(target: unknown, key: PropertyKey): unknown {
 
 function redactReason(reason: unknown): Cause.Reason<unknown> {
   const annotations = dataProperty(reason, "annotations");
-  const frames = annotations instanceof Map ? annotations : undefined;
+  const frames = guarded(() => (annotations instanceof Map ? annotations : undefined), undefined);
   switch (dataProperty(reason, "_tag")) {
     case "Fail":
       return Cause.makeFailReason(sanitizedError(dataProperty(reason, "error"), frames));
@@ -377,8 +380,8 @@ function inspectError(
 
 /** The span frames Effect would print for these annotations, rendered once and redacted. */
 function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
-  if (annotations.size === 0) return "";
   try {
+    if (annotations.size === 0) return "";
     const placeholder = new Error("frames");
     placeholder.stack = "Error: frames";
     const reason = Cause.makeDieReason(placeholder).annotate(

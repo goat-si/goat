@@ -68,6 +68,22 @@ describe("DefectReporter", () => {
     ),
   );
 
+  it.effect("logs a defect whose reason metadata cannot be inspected", () =>
+    withErrorLogs((logs) =>
+      Effect.gen(function* () {
+        const { proxy, revoke } = Proxy.revocable(new Map(), {});
+        revoke();
+        const reason = Cause.makeDieReason(new Error("original failure"));
+        Object.defineProperty(reason, "annotations", { value: proxy });
+        yield* ErrorReporter.report(Cause.fromReasons([reason])).pipe(
+          Effect.provide(DefectReporter.layer),
+        );
+
+        assert.include(Cause.pretty(yield* Queue.take(logs)), "original failure");
+      }),
+    ),
+  );
+
   it.effect("a dying RPC handler fails alone, and its defect is logged", () =>
     withErrorLogs((logs) =>
       Effect.gen(function* () {

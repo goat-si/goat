@@ -96,13 +96,17 @@ describe("redactLogText", () => {
     expect(text).not.toContain(payload.slice(0, 40));
   });
 
-  it("hides a header that the scanned part of a huge text cuts open", () => {
-    const header = Buffer.from(
-      JSON.stringify({ alg: "HS256", marker: "canary-header", pad: "x".repeat(220_000) }),
-    ).toString("base64url");
-    const text = redactLogText(`start ${header}.e30.c2ln`);
-    expect(text).not.toContain(header.slice(0, 40));
-  });
+  it.each([0, 60])(
+    "hides a header that the scanned part of a huge text cuts open (%i leading spaces)",
+    (spaces) => {
+      const header = Buffer.from(
+        " ".repeat(spaces) +
+          JSON.stringify({ alg: "HS256", marker: "canary-header", pad: "x".repeat(220_000) }),
+      ).toString("base64url");
+      const text = redactLogText(`start ${header}.e30.c2ln`);
+      expect(text).not.toContain(header.slice(0, 40));
+    },
+  );
 
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {
     const text = redactLogText(`${"x".repeat(31_990)} ${jwt} ${"y".repeat(100)}`);
@@ -161,6 +165,20 @@ describe("redactCause", () => {
     for (const cause of [Cause.fromReasons(forgedList), lyingCause]) {
       expect(Cause.pretty(redactCause(cause))).not.toContain("canary-forged-reason");
     }
+  });
+
+  it("keeps an error whose reason metadata or reason list cannot be inspected", () => {
+    const { proxy, revoke } = Proxy.revocable(new Map(), {});
+    revoke();
+    const reason = Cause.makeDieReason(new Error("original failure"));
+    Object.defineProperty(reason, "annotations", { value: proxy });
+    expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
+
+    const revokedList = Proxy.revocable([], {});
+    revokedList.revoke();
+    const cause = Cause.fromReasons([Cause.makeDieReason(new Error("listed"))]);
+    Object.defineProperty(cause, "reasons", { value: revokedList.proxy });
+    expect(() => redactCause(cause)).not.toThrow();
   });
 
   it("keeps an error whose cause cannot be inspected", () => {
