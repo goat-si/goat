@@ -1,9 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
-  COMPUTER_USE_HELPER_IN_APP,
   computerUseHelperRefusal,
   embeddedHelperProblems,
+  signedComputerUseHelper,
   withComputerUseHelper,
 } from "./desktop-artifact-computer-use.ts";
 
@@ -14,12 +14,12 @@ const signed = {
 };
 
 describe("desktop computer use payload", () => {
-  it("refuses signed, universal and non-mac builds until each can carry the helper intact", () => {
+  it("keeps the flag to unsigned arm64 and x64 mac builds; signed ones always carry the helper", () => {
     assert.isUndefined(computerUseHelperRefusal({ platform: "mac", arch: "arm64", signed: false }));
     assert.isUndefined(computerUseHelperRefusal({ platform: "mac", arch: "x64", signed: false }));
     assert.match(
       computerUseHelperRefusal({ platform: "mac", arch: "arm64", signed: true }) ?? "",
-      /#1210/,
+      /always carries the Developer ID helper/,
     );
     assert.isDefined(
       computerUseHelperRefusal({ platform: "mac", arch: "universal", signed: false }),
@@ -80,30 +80,32 @@ describe("desktop computer use payload", () => {
     );
   });
 
-  it("puts the helper where the desktop host looks and keeps GOAT.app's signer off it", () => {
-    const config = withComputerUseHelper(
-      { appId: "si.goat.desktop", mac: { icon: "icon.icns" } },
-      signed,
+  it("keeps GOAT.app's signer off the helper createBuildConfig places in Contents/Helpers", () => {
+    const helper = signedComputerUseHelper(
+      "/stage/computer-use-helper/GOAT Computer Use.app",
+      "si.goat.desktop.nightly",
     );
-    const mac = config.mac as {
-      extraFiles: Array<{ from: string; to: string }>;
-      signIgnore: string[];
-      icon: string;
-    };
-    assert.equal(mac.icon, "icon.icns");
-    // DesktopCuaDriver resolves <Contents/Resources>/../Helpers/GOAT Computer Use.app.
-    assert.deepEqual(mac.extraFiles, [{ from: signed.bundle, to: COMPUTER_USE_HELPER_IN_APP }]);
-    assert.equal(COMPUTER_USE_HELPER_IN_APP, "Helpers/GOAT Computer Use.app");
+    assert.deepEqual(helper, {
+      bundle: "/stage/computer-use-helper/GOAT Computer Use.app",
+      bundleId: "si.goat.desktop.nightly.computer-use",
+      signed: true,
+    });
+    assert.isUndefined(signedComputerUseHelper(undefined, "si.goat.desktop"));
+    const sign = "/repo/scripts/sign-macos.ts";
+    const config = withComputerUseHelper({ appId: "si.goat.desktop", mac: { sign } }, helper);
+    const mac = config.mac as { signIgnore: string[]; sign: string };
+    // A signed build keeps its own signer and identity; only the helper is left alone.
+    assert.equal(mac.sign, sign);
     assert.notProperty(mac, "identity");
     const ignored = (file: string) =>
       mac.signIgnore.some((pattern) => new RegExp(pattern).test(file));
-    const app = "/dist/mac-arm64/GOAT.app/Contents";
-    assert.isTrue(ignored(app + "/Helpers/GOAT Computer Use.app"));
-    assert.isTrue(
-      ignored(app + "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver"),
-    );
-    assert.isFalse(ignored(app + "/Frameworks/GOAT Helper (Renderer).app"));
-    assert.isFalse(ignored(app + "/Helpers/GOAT Computer Use Extra.app"));
+    const contents = "/dist/mac-arm64/GOAT.app/Contents";
+    // createBuildConfig's extraResources entry "../Helpers/GOAT Computer Use.app", from Contents/Resources.
+    const placed = contents + "/Helpers/GOAT Computer Use.app";
+    assert.isTrue(ignored(placed));
+    assert.isTrue(ignored(placed + "/Contents/Resources/cua-driver/cua-driver"));
+    assert.isFalse(ignored(contents + "/Frameworks/GOAT Helper (Renderer).app"));
+    assert.isFalse(ignored(contents + "/Helpers/GOAT Computer Use Extra.app"));
     assert.isFalse(ignored("/dist/mac-arm64/GOAT.app"));
 
     const adHoc = withComputerUseHelper({ mac: {} }, { ...signed, signed: false });

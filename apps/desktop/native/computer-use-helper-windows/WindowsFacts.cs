@@ -261,7 +261,7 @@ namespace Goat.ComputerUse
         }
 
         /// <summary>UI Automation calls into the target process and can hang with it.</summary>
-        static bool RunBounded(Func<bool> work, int milliseconds, bool fallback)
+        internal static bool RunBounded(Func<bool> work, int milliseconds, bool fallback)
         {
             bool result = fallback;
             Exception failure = null;

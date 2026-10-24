@@ -35,20 +35,22 @@ import {
   updateReleasePackageVersions,
 } from "./update-release-package-versions.ts";
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
+import { stageDesktopComputerUseHelper } from "./lib/desktop-computer-use-helper.ts";
+
 import { resolveBuildCommitTime } from "./lib/build-commit-time.ts";
+import { resolveDesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
+export { resolveDesktopBuildIconAssets };
+export type { DesktopBuildIconAssets } from "./lib/desktop-icon-assets.ts";
 import {
   isPlainReleaseVersion,
   RELEASE_VERSION_STAMP_COMMAND,
   resolveDevBuildVersion,
 } from "./lib/release-version.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
+import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import {
   computerUseHelperRefusal,
+  signedComputerUseHelper,
   CuaDriverArtifactError,
   stageComputerUseHelper,
   stageCuaDriverExecutable,
@@ -3079,9 +3081,8 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   };
 });
 
-export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
-}
+import { resolveDesktopUpdateChannel } from "./lib/desktop-release-channel.ts";
+export { resolveDesktopUpdateChannel };
 
 export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
@@ -3089,22 +3090,6 @@ export function isDesktopPreviewVersion(version: string): boolean {
 
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
   return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
-}
-
-export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
-  return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
-  };
 }
 
 export function resolveMockUpdateServerUrl(mockUpdateServerPort: number | undefined): string {
@@ -3150,6 +3135,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
   sshRuntimeBundled = false,
+  computerUseHelperPath?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: resolveDesktopAppId(version),
@@ -3182,6 +3168,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         }),
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(computerUseHelperPath
+        ? [{ from: computerUseHelperPath, to: "../Helpers/GOAT Computer Use.app" }]
+        : []),
       ...(sshRuntimeBundled ? SSH_RUNTIME_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
@@ -4388,6 +4377,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     platform: options.platform,
     arch: options.arch,
   });
+  // Signed mac builds always carry the Developer ID helper (#1351); --computer-use-helper adds
+  // an ad-hoc one to an unsigned build.
   const computerUseHelper = options.computerUseHelper
     ? yield* stageComputerUseHelper({
         repoRoot,
@@ -4397,7 +4388,15 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         appId: resolveDesktopAppId(appVersion),
         signed: options.signed,
       })
-    : undefined;
+    : signedComputerUseHelper(
+        yield* stageDesktopComputerUseHelper({
+          repoRoot,
+          output: path.join(stageRoot, "computer-use-helper"),
+          channel: resolveDesktopUpdateChannel(appVersion),
+          signed: options.platform === "mac" && options.signed,
+        }),
+        resolveDesktopAppId(appVersion),
+      );
 
   yield* assertPlatformBuildResources(
     options.platform,
@@ -4509,6 +4508,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
         options.arch,
         options.sshRuntimeArchiveDir !== undefined,
+        computerUseHelper?.bundle,
       ),
       computerUseHelper,
     ),

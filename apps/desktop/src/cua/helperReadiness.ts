@@ -21,11 +21,15 @@ export interface HelperReadinessState {
   readonly desktop?: { readonly detail: string; readonly blocker?: Blocker };
 }
 
-/** Neither the macOS nor the Windows helper raises the safety signals yet (#1235). */
-export const HELPER_SIGNALS: ComputerUseCapabilities["signals"] = {
-  privateMode: "unsupported",
+/**
+ * The safety signals a desktop host's helper raises (#1235): a focused secure field when the
+ * running helper said it can watch for one. None reports a person's input yet, so unattended
+ * turns stay refused.
+ */
+export const helperSignals = (canWatch: boolean): ComputerUseCapabilities["signals"] => ({
+  privateMode: canWatch ? "supported" : "unsupported",
   humanInput: "unsupported",
-};
+});
 
 export const initialHelperReadiness: HelperReadinessState = {
   grants: { accessibility: "unknown", screenCapture: "unknown" },

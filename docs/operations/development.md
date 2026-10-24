@@ -275,18 +275,18 @@ hash, so its grants stop applying after a rebuild and System Settings adds anoth
 `--channel dev` may be ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the
 same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
 
-A packaged build carries the helper in `GOAT.app/Contents/Helpers` when asked to:
+A signed macOS package always carries the Developer ID helper in `GOAT.app/Contents/Helpers`.
+An unsigned one carries an ad-hoc helper when asked to:
 
 ```sh
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
 ```
 
-Until signed builds may carry the helper (#1210), this is an unsigned build: an ad-hoc helper
-that serves any parent, inside an ad-hoc GOAT.app, for arm64 or x64, never notarized. It has the
-same row problem as `--ad-hoc` and prints the same warning. The build fails when the embedded
-helper's code hash differs from the one it built, or when GOAT.app or the helper carries a
-Developer ID team. `--signed` with the flag is refused until the helper brokers the driver over
-stdio and GOAT's run-as-Node fuses are off.
+That helper serves any parent, sits inside an ad-hoc GOAT.app, builds for arm64 or x64, and is
+never notarized. It has the same row problem as `--ad-hoc` and prints the same warning. Either
+way, electron-builder leaves the helper's signature alone, and the build fails when the embedded
+helper's code hash differs from the one built, when a signed GOAT.app and its helper carry
+different teams, or when an unsigned one carries any team.
 
 ### Windows computer use helper
 

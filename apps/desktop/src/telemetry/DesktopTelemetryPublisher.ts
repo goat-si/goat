@@ -4,6 +4,8 @@ import {
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
   type DesktopCuaReadinessReport,
+  type DesktopCuaHumanInputReport,
+  type DesktopCuaPrivateModeReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -81,6 +83,14 @@ export class DesktopTelemetryPublisher extends Context.Service<
      * server connection that starts later, so a restarted server learns it without asking.
      */
     readonly publishCuaReadiness: (report: DesktopCuaReadinessReport) => Effect.Effect<void>;
+    /**
+     * The helper's safety reports, for this host's own server only and never dropped. A secret
+     * field still focused is told again to a server that connects later, so its agents stay
+     * paused.
+     */
+    readonly publishCuaSafety: (
+      report: DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport,
+    ) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
       message: DesktopTelemetryControlMessage,
@@ -196,6 +206,10 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   // Readiness is state: a connection that falls behind needs only the newest report.
   const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
+  const activePrivateMode = yield* Ref.make(Option.none<DesktopCuaPrivateModeReport>());
+  const cuaSafetyReports = yield* PubSub.unbounded<
+    DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport
+  >();
   interface CuaSource {
     readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
     requestId?: string;
@@ -506,7 +520,17 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           }),
           Stream.fromSubscription(readinessSubscription),
         ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
-        return Stream.mergeAll([encoded, privateReports, readiness], { concurrency: "unbounded" });
+        const safetySubscription = yield* PubSub.subscribe(cuaSafetyReports);
+        const safety = Stream.concat(
+          Option.match(yield* Ref.get(activePrivateMode), {
+            onNone: () => Stream.empty,
+            onSome: Stream.make,
+          }),
+          Stream.fromSubscription(safetySubscription),
+        ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
+        return Stream.mergeAll([encoded, privateReports, readiness, safety], {
+          concurrency: "unbounded",
+        });
       }),
     );
   };
@@ -537,6 +561,11 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         Effect.andThen(PubSub.publish(cuaReadinessChanges, report)),
         Effect.asVoid,
       ),
+    publishCuaSafety: (report) =>
+      (report.type === "cuaPrivateMode"
+        ? Ref.set(activePrivateMode, report.active ? Option.some(report) : Option.none())
+        : Effect.void
+      ).pipe(Effect.andThen(PubSub.publish(cuaSafetyReports, report)), Effect.asVoid),
     handleControlForSource,
     removeControlSource,
     publishUpdateReport,

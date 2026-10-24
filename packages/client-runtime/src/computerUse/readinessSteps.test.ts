@@ -150,6 +150,35 @@ it("keeps Linux probe explanations with capture and tree even while portal conse
   );
 });
 
+it("tells Windows users about the security prompt, administrator apps and a blocked helper", () => {
+  const locked = view({ ...ready, blockers: ["screenLocked"] }, "win32");
+  expect(locked.steps[2]?.state).toBe("blocked");
+  expect(locked.steps[2]?.detail.join(" ")).toContain(
+    "Windows security prompt (User Account Control)",
+  );
+  expect(view({ ...ready, blockers: ["screenLocked"] }).steps[2]?.detail.join(" ")).not.toContain(
+    "User Account Control",
+  );
+  const healthy = view(ready, "win32");
+  expect(healthy.ready).toBe(true);
+  expect(healthy.steps[2]?.detail.join(" ")).toContain(
+    "Apps running as administrator stay out of reach",
+  );
+  expect(healthy.steps[1]?.detail.join(" ")).not.toContain("Smart App Control");
+  const blocked = {
+    ...ready,
+    helper: "unauthenticated",
+    capture: "unavailable",
+    tree: "unavailable",
+  } as const;
+  expect(view(blocked, "win32").steps[1]?.detail.join(" ")).toContain("Smart App Control");
+  // Stopped after reading a real window: it ran, so nothing blocked it.
+  expect(
+    view({ ...ready, helper: "unauthenticated" }, "win32").steps[1]?.detail.join(" "),
+  ).not.toContain("Smart App Control");
+  expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
+});
+
 it("uses host-specific names and reports the Linux display server", () => {
   expect(view(ready).steps[0]?.grants[1]?.title).toBe("Screen & System Audio Recording");
   expect(view(ready, "win32").steps[0]?.grants[0]?.title).toBe("UI Automation");

@@ -8,15 +8,16 @@ import { useSyncExternalStore } from "react";
 import { LockIcon, MonitorIcon } from "~/components/solar";
 import { ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 
-const subscribeVisibility = (onChange: () => void) => {
-  document.addEventListener("visibilitychange", onChange);
-  return () => document.removeEventListener("visibilitychange", onChange);
-};
-const documentVisible = () => document.visibilityState === "visible";
-
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
-export function useDocumentVisible() {
-  return useSyncExternalStore(subscribeVisibility, documentVisible, () => true);
+export function useDocumentVisible(doc: Document = document) {
+  return useSyncExternalStore(
+    (onChange) => {
+      doc.addEventListener("visibilitychange", onChange);
+      return () => doc.removeEventListener("visibilitychange", onChange);
+    },
+    () => doc.visibilityState === "visible",
+    () => true,
+  );
 }
 
 function Placeholder(props: { readonly icon: "lock" | "monitor"; readonly text: string }) {

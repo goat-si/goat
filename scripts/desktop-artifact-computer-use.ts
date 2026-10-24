@@ -10,10 +10,8 @@ import {
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -162,7 +160,7 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
 });
 
 /** Where GOAT.app carries the helper, relative to Contents; DesktopCuaDriver looks there. */
-export const COMPUTER_USE_HELPER_IN_APP = `Helpers/${COMPUTER_USE_HELPER_NAME}.app`;
+const COMPUTER_USE_HELPER_IN_APP = `Helpers/${COMPUTER_USE_HELPER_NAME}.app`;
 
 export interface StagedComputerUseHelper {
   readonly bundle: string;
@@ -172,16 +170,10 @@ export interface StagedComputerUseHelper {
 }
 
 /**
- * Builds the helper for GOAT.app's channel. A signed build signs it with the Developer ID that
- * signs GOAT.app (GOAT_CLI_MAC_SIGN_IDENTITY, else the keychain's), and the helper then serves
- * only that app. An unsigned build gets an ad-hoc helper that serves any parent, because an
- * ad-hoc GOAT.app has no team for it to check.
- */
-/**
- * Why this build cannot embed the helper, or undefined when it can. A signed build would ship a
- * Developer ID helper that trusts any code GOAT's executable runs as Node, and whose driver still
- * listens on a socket, so it waits for #1210 (ADR-0023). @electron/universal rewrites every
- * nested Info.plist when it merges slices, which breaks the helper's seal.
+ * Why --computer-use-helper cannot apply to this build, or undefined when it can. A signed mac
+ * build always carries the Developer ID helper (#1351), so the flag is only for an unsigned one.
+ * @electron/universal rewrites every nested Info.plist when it merges slices, which breaks the
+ * helper's seal (#1340).
  */
 export function computerUseHelperRefusal(input: {
   readonly platform: DesktopPlatform;
@@ -191,12 +183,17 @@ export function computerUseHelperRefusal(input: {
   if (input.platform !== "mac")
     return "--computer-use-helper embeds the macOS helper and applies to mac builds only.";
   if (input.signed)
-    return "Signed builds cannot embed GOAT Computer Use until it brokers the driver over stdio and GOAT's run-as-Node fuses are off (#1210, ADR-0023).";
+    return "--computer-use-helper is for unsigned builds; a signed mac build always carries the Developer ID helper.";
   if (input.arch === "universal")
     return "--computer-use-helper builds arm64 or x64: merging a universal app rewrites the helper's signed Info.plist.";
   return undefined;
 }
 
+/**
+ * An ad-hoc helper for an unsigned GOAT.app: it serves any parent, because an ad-hoc GOAT.app has
+ * no team for it to check, and logs #1337's warning, because every ad-hoc build is a new app to
+ * macOS's privacy lists.
+ */
 export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(function* (input: {
   readonly repoRoot: string;
   readonly stageRoot: string;
@@ -208,30 +205,37 @@ export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(functi
   const refusal = computerUseHelperRefusal(input);
   if (refusal !== undefined) return yield* new CuaDriverArtifactError({ message: refusal });
   const path = yield* Path.Path;
-  const identity = yield* Config.String("GOAT_CLI_MAC_SIGN_IDENTITY").pipe(Config.option);
   const built = yield* buildComputerUseHelper({
     repoRoot: input.repoRoot,
     output: path.join(input.stageRoot, "computer-use-helper"),
     channel: input.appId.endsWith(".nightly") ? "nightly" : "stable",
-    identity: input.signed ? Option.getOrUndefined(identity) : undefined,
-    // Logs #1337's warning: every ad-hoc build is a new app to macOS's privacy lists.
-    adHoc: !input.signed,
-    unsignedPackage: !input.signed,
+    identity: undefined,
+    adHoc: true,
+    unsignedPackage: true,
     notaryProfile: undefined,
   });
   if (built.bundleId !== computerUseHelperBundleId(input.appId))
     return yield* new CuaDriverArtifactError({
       message: `The helper is ${built.bundleId}, but GOAT.app is ${input.appId}.`,
     });
-  return { bundle: built.bundle, bundleId: built.bundleId, signed: input.signed };
+  return { bundle: built.bundle, bundleId: built.bundleId, signed: false };
 });
 
+/** The Developer ID helper a signed build staged (stageDesktopComputerUseHelper), if any. */
+export const signedComputerUseHelper = (
+  bundle: string | undefined,
+  appId: string,
+): StagedComputerUseHelper | undefined =>
+  bundle === undefined
+    ? undefined
+    : { bundle, bundleId: computerUseHelperBundleId(appId), signed: true };
+
 /**
- * Adds the helper to GOAT.app's Contents and keeps electron-builder's signer off it, so GOAT.app
- * is sealed over the helper's own signature (inner binaries, then the helper, then GOAT.app).
- * Unsigned builds are signed ad-hoc so the nested seal still verifies. electron-builder matches
- * an identity of "-" against certificate names before it falls back to ad-hoc, so the sign hook
- * forces ad-hoc whatever certificate it found.
+ * Keeps electron-builder's signer off the helper createBuildConfig placed in Contents/Helpers,
+ * so GOAT.app is sealed over the helper's own signature and entitlements (inner binaries, then
+ * the helper, then GOAT.app). Unsigned builds are signed ad-hoc so the nested seal still
+ * verifies. electron-builder matches an identity of "-" against certificate names before it
+ * falls back to ad-hoc, so the sign hook forces ad-hoc whatever certificate it found.
  */
 export function withComputerUseHelper(
   config: Record<string, unknown>,
@@ -243,7 +247,6 @@ export function withComputerUseHelper(
     ...config,
     mac: {
       ...mac,
-      extraFiles: [{ from: helper.bundle, to: COMPUTER_USE_HELPER_IN_APP }],
       signIgnore: [`/Contents/${COMPUTER_USE_HELPER_IN_APP.replaceAll(".", "\\.")}(/|$)`],
       ...(helper.signed
         ? {}
