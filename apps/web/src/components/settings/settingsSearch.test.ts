@@ -61,6 +61,7 @@ describe("searchSettings", () => {
     ["opencodex home", "providers", "/settings/providers"],
     ["bot home", "goat-bot-home", "/settings/goat-bot"],
     ["archive", "archive", "/settings/archived"],
+    ["device hub", "device-hub", "/settings/integrations"],
   ] as const)("still finds %s after the rename, on %s", (query, id, to) => {
     expect(searchSettings(query).find((item) => item.id === id)?.to).toBe(to);
   });
