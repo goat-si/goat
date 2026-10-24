@@ -172,10 +172,7 @@ function ComputerUseControls({
   const current = host.localMac && host.enabled ? grants.grants : null;
   const live = current && current.principal !== "unusable" ? current : null;
   // Waiting ends once this Mac reads the opened grant as on, which also ends the quick rechecks.
-  const openedGranted = opened !== null && live !== null && cuaGranted(live, opened);
-  useEffect(() => {
-    if (openedGranted) setOpened(null);
-  }, [openedGranted]);
+  if (opened !== null && live !== null && cuaGranted(live, opened)) setOpened(null);
   const missingGrants =
     current && current.principal !== "unusable"
       ? CUA_PERMISSIONS.filter((id) => !cuaGranted(current, id))
