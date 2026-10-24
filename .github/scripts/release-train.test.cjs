@@ -2,7 +2,12 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
-const { SOAK_MS, decideStablePromotion, nextStableBase } = require("./release-train.cjs");
+const {
+  SOAK_MS,
+  decideStablePromotion,
+  nextStableBase,
+  recheckStablePromotion,
+} = require("./release-train.cjs");
 
 const HOUR = 60 * 60 * 1000;
 const NOW = Date.parse("2026-10-25T06:00:00Z");
@@ -131,5 +136,39 @@ describe("nextStableBase", () => {
 
   it("starts from the manifests before any stable exists", () => {
     assert.equal(nextStableBase({ tags: [], packageVersion: "0.1.0" }), "0.1.0");
+  });
+});
+
+describe("recheckStablePromotion", () => {
+  const recheck = (input = {}) =>
+    recheckStablePromotion({
+      releases,
+      openBlockers: 0,
+      hold: "",
+      shortSha: "bbbbbbbbbbbb",
+      manual: false,
+      ...input,
+    });
+
+  it("lets a promotion publish while its gates stay clear", () => {
+    assert.deepEqual(recheck(), { ok: true, reason: "bbbbbbbbbbbb is still promotable" });
+  });
+
+  it("stops a scheduled promotion when a blocker opens or the hold is set during the build", () => {
+    assert.match(recheck({ openBlockers: 1 }).reason, /release-blocker/);
+    assert.equal(recheck({ openBlockers: 1 }).ok, false);
+    assert.equal(recheck({ hold: "true" }).ok, false);
+  });
+
+  it("lets a manual run that named its commit publish despite a blocker or the hold", () => {
+    assert.equal(recheck({ manual: true, openBlockers: 3, hold: "true" }).ok, true);
+  });
+
+  it("stops any promotion whose commit shipped or was overtaken by a stable during the build", () => {
+    const shipped = [stable("0.1.2", "bbbbbbbbbbbb", ago(HOUR)), ...releases];
+    assert.equal(recheck({ releases: shipped }).ok, false);
+    assert.equal(recheck({ releases: shipped, manual: true }).ok, false);
+    const overtaken = [stable("0.1.2", "cccccccccccc", ago(HOUR)), ...releases];
+    assert.match(recheck({ releases: overtaken }).reason, /not newer than stable v0\.1\.2/);
   });
 });

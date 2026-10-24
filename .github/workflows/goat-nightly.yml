@@ -70,10 +70,12 @@ jobs:
     # Hosted: the resolve step needs gh, which the EPYC runners do not carry.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # Reading goat-ci runs needs actions: read; nothing here writes.
+    # Reading goat-ci runs needs actions: read and counting release-blocker issues
+    # issues: read; nothing here writes.
     permissions:
       actions: read
       contents: read
+      issues: read
     outputs:
       skip: ${{ steps.resolve.outputs.skip }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -117,7 +119,9 @@ jobs:
               releases="$RUNNER_TEMP/goat-releases.jsonl"
               gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' \
                 --jq '.[] | {tag_name, name, draft, prerelease, published_at}' > "$releases"
-              blockers="$(gh api 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' --jq length)"
+              # The issues API lists pull requests too; only issues block.
+              blockers="$(gh api --paginate 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' \
+                --jq '.[] | select(.pull_request | not) | .number' | wc -l | tr -d ' ')"
               decision="$(RELEASES_FILE="$releases" OPEN_BLOCKERS="$blockers" node "$train" stable)"
               printf '%s\n' "$decision"
               if [ "$(printf '%s\n' "$decision" | sed -n 's/^promote=//p')" != true ]; then
@@ -859,14 +863,51 @@ jobs:
           node scripts/.staging/nightly-staging.ts put --repo goat-si/goat --tag "$STAGING_TAG" --target "$SHA" \
             --name release-assets --dir release
 
+  # A stable promotion decided in prepare publishes hours later. This checks again,
+  # after the build and right before publish, that no release-blocker issue opened,
+  # GOAT_STABLE_HOLD was not set (both skipped when a manual run named its commit),
+  # and no stable shipped the commit or a newer base meanwhile. A nightly passes.
+  stable_gate:
+    name: Recheck stable promotion
+    needs: [prepare, assemble]
+    if: >-
+      needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
+      (!cancelled() && needs.assemble.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Recheck promotion rules
+        if: needs.prepare.outputs.channel == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.sha }}
+          GOAT_STABLE_HOLD: ${{ vars.GOAT_STABLE_HOLD }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          train="$RUNNER_TEMP/release-train.cjs"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/goat-si/goat/contents/.github/scripts/release-train.cjs?ref=$GITHUB_WORKFLOW_SHA" > "$train"
+          releases="$RUNNER_TEMP/goat-releases.jsonl"
+          gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' \
+            --jq '.[] | {tag_name, name, draft, prerelease, published_at}' > "$releases"
+          blockers="$(gh api --paginate 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' \
+            --jq '.[] | select(.pull_request | not) | .number' | wc -l | tr -d ' ')"
+          RELEASES_FILE="$releases" OPEN_BLOCKERS="$blockers" SHORT_SHA="${SHA:0:12}" node "$train" recheck
+
   # Publishing is opt-in twice: the repository variable turns the channel on,
   # and a manual run must also ask for it; a scheduled nightly publishes.
   publish:
     name: Publish to goat-releases
-    needs: [prepare, assemble]
+    needs: [prepare, assemble, stable_gate]
     if: >-
       needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
       (!cancelled() && needs.assemble.result == 'success' &&
+      needs.stable_gate.result == 'success' &&
       vars.GOAT_RELEASES_PUBLISH == 'true' &&
       (github.event_name == 'schedule' || inputs.publish))
     runs-on: ubuntu-24.04
@@ -920,6 +961,24 @@ jobs:
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
         run: node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names release-assets --dir release
+
+      # Prepare checked the version hours ago; a run of the other channel may have
+      # published since (a stable of this nightly's base, or a newer nightly). Inside
+      # the publish lock, check again against what goat-releases holds now. A tag that
+      # already exists is left to the publisher, which accepts identical bytes on a re-run.
+      - name: Recheck release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags="$RUNNER_TEMP/goat-releases-tags.txt"
+          gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[].tag_name' > "$tags"
+          if grep -Fxq "v$VERSION" "$tags"; then
+            echo "v$VERSION already exists; the publisher compares its files."
+            exit 0
+          fi
+          node scripts/check-release-version.ts --candidate "$VERSION" --published-tags "$tags"
 
       # The only step in this workflow that reads a secret. The token is scoped to
       # goat-si/goat-releases by the App installation.

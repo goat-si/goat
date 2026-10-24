@@ -447,7 +447,7 @@ function mentionsSecrets(value, key = "") {
 // commit decides which); every checkout trusts its sha output. Changing that step means
 // updating this pin on purpose.
 // The whole step is pinned (any added key such as if or continue-on-error changes it).
-const pinnedResolveSha256 = "2e5cb0604ad68ea4538c07d8b594408c2830ab4b91c721be7f18f1f8ab17df61";
+const pinnedResolveSha256 = "e02d48d68328cdacbcce9c79f3f23a73d0e29fdfe03ec7dba36da9ac163889fa";
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {

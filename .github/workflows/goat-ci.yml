@@ -347,6 +347,7 @@ jobs:
         run: >-
           node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
           .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
+          .github/scripts/release-train.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.

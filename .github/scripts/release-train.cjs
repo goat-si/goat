@@ -5,6 +5,7 @@
 // nightly commit is promoted under today's rules.
 //
 //   node release-train.cjs stable   decide whether to promote a nightly to stable
+//   node release-train.cjs recheck  before publishing, check that promotion still holds
 //   node release-train.cjs base     print the base version the next nightly or stable carries
 //
 // Stable promotes the newest published nightly that has been out for 24 hours and is newer than
@@ -65,7 +66,8 @@ function nextStableBase({ tags, packageVersion }) {
  * {promote: true, nightlyTag, shortSha, version, reason} or {promote: false, reason}, and throws
  * when a named commit is not a promotable nightly.
  */
-function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
+/** The current stable and the published nightlies a promotion may still pick, newest first. */
+function promotable(releases) {
   const published = releases.filter((release) => !release.draft && release.published_at);
   const stables = published.filter(
     (release) => !release.prerelease && STABLE_TAG.test(release.tag_name),
@@ -85,6 +87,18 @@ function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
     .filter((nightly) => current === undefined || compare(nightly.base, current) > 0)
     .filter((nightly) => !shipped.has(nightly.shortSha))
     .sort((a, b) => compare(b.order, a.order));
+  return { currentLabel, candidates };
+}
+
+/** The gates that stop an automatic promotion, or undefined when none holds. */
+function heldBy({ openBlockers, hold }) {
+  if (hold === "true") return "repository variable GOAT_STABLE_HOLD is 'true'";
+  if (openBlockers > 0) return openBlockers + " open " + BLOCKER_LABEL + " issue(s)";
+  return undefined;
+}
+
+function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
+  const { currentLabel, candidates } = promotable(releases);
   const promote = (nightly, reason) => ({
     promote: true,
     nightlyTag: nightly.release.tag_name,
@@ -106,15 +120,8 @@ function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
     }
     return promote(named, "manual run named " + named.release.tag_name);
   }
-  if (hold === "true") {
-    return { promote: false, reason: "repository variable GOAT_STABLE_HOLD is 'true'" };
-  }
-  if (openBlockers > 0) {
-    return {
-      promote: false,
-      reason: openBlockers + " open " + BLOCKER_LABEL + " issue(s)",
-    };
-  }
+  const held = heldBy({ openBlockers, hold });
+  if (held) return { promote: false, reason: held };
   const soaked = candidates.find(
     (nightly) => now - Date.parse(nightly.release.published_at) >= SOAK_MS,
   );
@@ -135,6 +142,27 @@ function decideStablePromotion({ releases, openBlockers, hold, now, sha }) {
   );
 }
 
+/**
+ * Checked again right before a promotion publishes, hours after prepare decided: a blocker
+ * opened or the hold set during the build stops a scheduled promotion, and a stable that
+ * shipped meanwhile stops any. A manual run that named its commit skips the two gates.
+ */
+function recheckStablePromotion({ releases, openBlockers, hold, shortSha, manual }) {
+  if (!manual) {
+    const held = heldBy({ openBlockers, hold });
+    if (held) return { ok: false, reason: held };
+  }
+  const { currentLabel, candidates } = promotable(releases);
+  if (!candidates.some((nightly) => nightly.shortSha === shortSha)) {
+    return {
+      ok: false,
+      reason:
+        shortSha + " is not newer than stable " + currentLabel + " or already shipped as stable",
+    };
+  }
+  return { ok: true, reason: shortSha + " is still promotable" };
+}
+
 /** One JSON object per line, as gh api --paginate --jq '.[] | {...}' prints them. */
 const readJsonLines = (file) =>
   fs
@@ -150,11 +178,27 @@ function main(argv = process.argv.slice(2), env = process.env) {
     console.log(nextStableBase({ tags, packageVersion: env.PACKAGE_VERSION }));
     return;
   }
-  if (command === "stable") {
+  const blockerCount = () => {
     const blockers = Number(env.OPEN_BLOCKERS);
-    if (!Number.isInteger(blockers) || blockers < 0) {
+    if (env.OPEN_BLOCKERS === undefined || !Number.isInteger(blockers) || blockers < 0) {
       throw new Error("OPEN_BLOCKERS must be a count, got '" + env.OPEN_BLOCKERS + "'");
     }
+    return blockers;
+  };
+  if (command === "recheck") {
+    const result = recheckStablePromotion({
+      releases: readJsonLines(env.RELEASES_FILE),
+      openBlockers: blockerCount(),
+      hold: env.GOAT_STABLE_HOLD ?? "",
+      shortSha: env.SHORT_SHA,
+      manual: Boolean(env.INPUT_SHA),
+    });
+    if (!result.ok) throw new Error("stable promotion stopped before publishing: " + result.reason);
+    console.log("stable promotion: " + result.reason);
+    return;
+  }
+  if (command === "stable") {
+    const blockers = blockerCount();
     const decision = decideStablePromotion({
       releases: readJsonLines(env.RELEASES_FILE),
       openBlockers: blockers,
@@ -174,10 +218,16 @@ function main(argv = process.argv.slice(2), env = process.env) {
     console.log(lines.join("\n"));
     return;
   }
-  throw new Error("usage: release-train.cjs stable|base");
+  throw new Error("usage: release-train.cjs stable|recheck|base");
 }
 
-module.exports = { SOAK_MS, BLOCKER_LABEL, decideStablePromotion, nextStableBase };
+module.exports = {
+  SOAK_MS,
+  BLOCKER_LABEL,
+  decideStablePromotion,
+  nextStableBase,
+  recheckStablePromotion,
+};
 
 if (require.main === module) {
   try {
