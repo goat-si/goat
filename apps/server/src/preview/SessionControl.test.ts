@@ -240,4 +240,15 @@ describe("SessionControl", () => {
     read.resolve("snapshot with the password field");
     await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
   });
+
+  it("withholds a read that a brief secret overlapped, even after the secret is gone", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    control.setPrivate(true);
+    control.setPrivate(false);
+    read.resolve("frame that showed the password field");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+    await expect(control.observe(async () => "next read")).resolves.toBe("next read");
+  });
 });

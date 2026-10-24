@@ -101,6 +101,25 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
 
+  it("never clicks after Stop, even when Playwright was still waiting for the target", async () => {
+    await page.setContent('<button id="b" disabled onclick="window.clicked = true">Send</button>');
+    let stopped = false;
+    const clicking = ServerBrowserPage.click(
+      page,
+      { locator: "#b", timeoutMs: 10_000 },
+      undefined,
+      () => {
+        if (stopped) throw new Error("stopped");
+      },
+    );
+    void clicking.catch(() => undefined);
+    // A person stops the agent while the click waits for the button, which then becomes usable.
+    stopped = true;
+    await page.evaluate("document.getElementById('b').disabled = false");
+    await expect(clicking).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.clicked === true")).toBe(false);
+  });
+
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
     await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
     const result = await ServerBrowserPage.snapshot({
@@ -547,7 +566,9 @@ describe("server browser drag", () => {
           ? {
               scrollIntoViewIfNeeded: async () => {},
               boundingBox: async () => box,
-              dragTo: () => Promise.reject(timedOut),
+              // The actionability trial passes; the drag itself times out mid-move.
+              dragTo: (_target: unknown, options?: { readonly trial?: boolean }) =>
+                options?.trial ? Promise.resolve() : Promise.reject(timedOut),
             }
           : { boundingBox: () => targetBox.promise },
     } as unknown as Page;

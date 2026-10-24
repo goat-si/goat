@@ -71,7 +71,10 @@ export const PreviewSessionCapabilities = Schema.Struct({
   controls: Schema.Array(PreviewSessionControl),
   /** Whether a live picture exists: the browser stream, or desktop frames once the helper sends them. */
   frames: Schema.Boolean,
+  /** Whether a secret field pauses the agent here; false where the host cannot detect one yet. */
   privateMode: Schema.Boolean,
+  /** Whether a person's own input pauses the agent here; false where the host cannot detect it. */
+  humanInput: Schema.Boolean,
 });
 export type PreviewSessionCapabilities = typeof PreviewSessionCapabilities.Type;
 

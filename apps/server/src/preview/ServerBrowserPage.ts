@@ -172,6 +172,14 @@ export type PointerReporter = (
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
 
+/**
+ * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
+ * action waited. Called after every wait, right before input leaves; Playwright's own
+ * actionability waits run first as trials, so nothing is dispatched after the check.
+ */
+export type DispatchGate = () => void;
+const open: DispatchGate = () => {};
+
 const targetPoint = async (
   page: Page,
   locator: Locator | null,
@@ -772,16 +780,19 @@ export const click = async (
   page: Page,
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ): Promise<{ readonly x: number; readonly y: number }> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   const point = await targetPoint(page, locator, input, timeout);
   await pointer(point, "click");
   const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
+  if (locator !== null) await locator.click({ ...options, timeout, trial: true });
+  gate();
   const clicked =
     locator === null
       ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, timeout });
+      : locator.click({ ...options, timeout, force: true });
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -795,11 +806,17 @@ export const click = async (
   return point;
 };
 
-export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
+export const type = async (
+  page: Page,
+  input: PreviewAutomationTypeInput,
+  gate: DispatchGate = open,
+) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   if (locator !== null && input.clear) {
-    await locator.fill(input.text, { timeout });
+    await locator.waitFor({ state: "visible", timeout });
+    gate();
+    await locator.fill(input.text, { timeout, force: true });
     return;
   }
   // A shadow host also matches :focus; use its innermost focused descendant.
@@ -850,6 +867,7 @@ export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
       "The target is not an enabled text field, so no text was typed.",
     );
   }
+  gate();
   if (input.clear) {
     await page.keyboard.press("ControlOrMeta+A");
     await page.keyboard.press("Delete");
@@ -861,20 +879,25 @@ export const hover = async (
   page: Page,
   input: PreviewAutomationHoverInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   await pointer(await targetPoint(page, locator, input, timeout), "move");
   if (locator === null) {
+    gate();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await locator.hover({ timeout });
+  await locator.hover({ timeout, trial: true });
+  gate();
+  await locator.hover({ timeout, force: true });
 };
 
 export const select = async (
   page: Page,
   input: PreviewAutomationSelectInput,
+  gate: DispatchGate = open,
 ): Promise<PreviewAutomationSelectResult> => {
   const locator = targetLocator(page, input)!;
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -904,21 +927,25 @@ export const select = async (
       "PreviewAutomationTargetNotEditableError",
       "This element is not a <select>. Click a custom dropdown, then click its option.",
     );
-  return { selected: await locator.selectOption(values, { timeout }) };
+  gate();
+  return { selected: await locator.selectOption(values, { timeout, force: true }) };
 };
 
 export const drag = async (
   page: Page,
   input: PreviewAutomationDragInput,
   pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, timeout), "move");
+  await source.dragTo(target, { timeout, trial: true });
+  gate();
   // Observe the drag's outcome as it starts: a rejection nobody handles while the cursor
   // moves exits the server.
-  const dragFailure = source.dragTo(target, { timeout }).then(
+  const dragFailure = source.dragTo(target, { timeout, force: true }).then(
     () => null,
     (error: unknown) => ({ error }),
   );
@@ -928,19 +955,34 @@ export const drag = async (
   if (failure) throw failure.error;
 };
 
-export const setInputFiles = async (page: Page, input: PreviewAutomationUploadInput) => {
+export const setInputFiles = async (
+  page: Page,
+  input: PreviewAutomationUploadInput,
+  gate: DispatchGate = open,
+) => {
   const locator = targetLocator(page, input);
   if (locator === null) return false;
+  gate();
   await locator.setInputFiles([...input.paths], { timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS });
   return true;
 };
 
-export const press = async (page: Page, input: PreviewAutomationPressInput) => {
+export const press = async (
+  page: Page,
+  input: PreviewAutomationPressInput,
+  gate: DispatchGate = open,
+) => {
+  gate();
   await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
-export const scroll = async (page: Page, input: PreviewAutomationScrollInput) => {
+export const scroll = async (
+  page: Page,
+  input: PreviewAutomationScrollInput,
+  gate: DispatchGate = open,
+) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
+  gate();
   const locator = targetLocator(page, input);
   if (locator === null) {
     // Page-side code is passed as source: the server compiles without DOM types.

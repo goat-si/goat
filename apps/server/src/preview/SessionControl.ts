@@ -33,6 +33,8 @@ export class SessionControl {
   private epoch = 0;
   private closed = false;
   private privateMode = false;
+  /** Counts private periods, so a read that overlapped one is withheld even after it ended. */
+  private privateEpoch = 0;
   private agentStopped = false;
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
@@ -75,6 +77,7 @@ export class SessionControl {
   setPrivate(on: boolean) {
     if (this.closed || on === this.privateMode) return;
     this.privateMode = on;
+    if (on) this.privateEpoch++;
     this.epoch++;
     this.onGenerationChange();
     if (on) this.cut(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
@@ -233,9 +236,11 @@ export class SessionControl {
     this.assertOpen();
     if (this.privateMode)
       return Promise.reject(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
-    // A secret that appeared while it read keeps what it saw from the agent.
+    // A secret that appeared while it read, even briefly, keeps what it saw from the agent.
+    const privateEpoch = this.privateEpoch;
     return run().then((result) => {
-      if (this.privateMode) throw new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
+      if (this.privateMode || this.privateEpoch !== privateEpoch)
+        throw new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
       return result;
     });
   }
