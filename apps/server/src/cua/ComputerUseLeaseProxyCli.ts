@@ -19,22 +19,9 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
-
-/** Signals the driver's whole process group on POSIX, where it was started detached. */
-const killGroup = (
-  platform: NodeJS.Platform,
-  child: NodeChildProcess.ChildProcess,
-  signal: NodeJS.Signals,
-) => {
-  if (platform === "win32" || child.pid === undefined) return void child.kill(signal);
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    // The group is already gone.
-  }
-};
 
 const argument = (args: ReadonlyArray<string>, name: string) => {
   const index = args.indexOf(name);
@@ -56,6 +43,8 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
 
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
+  const drivers = new Set<NodeChildProcess.ChildProcess>();
+  endDriversWithProxy(platform, () => drivers);
   const url = process.env[LEASE_PROXY_ENV.url];
   const authorization = process.env[LEASE_PROXY_ENV.authorization];
   const driver = decodeDriver(process.env[LEASE_PROXY_ENV.driver] ?? "");
@@ -105,19 +94,17 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ),
       startDriver: Effect.acquireRelease(
         Effect.sync(() => {
-          const child = NodeChildProcess.spawn(descriptor.command, [...descriptor.args], {
-            env: childEnvironment,
-            stdio: ["pipe", "pipe", "inherit"],
-            windowsHide: true,
-            // Its own process group, so a stop reaches what it started: the computer use
-            // helper runs the driver as its grandchild (ADR-0023 per-session isolation).
-            detached: platform !== "win32",
-          });
-          child.on("error", () => undefined);
-          child.stdin.on("error", () => undefined);
+          const child = spawnDriverProcess(
+            platform,
+            descriptor.command,
+            descriptor.args,
+            childEnvironment,
+          );
+          drivers.add(child);
+          child.once("exit", () => drivers.delete(child));
           return child;
         }),
-        (child) => Effect.sync(() => killGroup(platform, child, "SIGTERM")),
+        (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
       ).pipe(
         Effect.map((child) => ({
           send: (line: string) =>
@@ -130,7 +117,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           ).pipe(Stream.catchCause(() => Stream.empty)),
           kill: Effect.sync(() => {
             child.stdin.end();
-            killGroup(platform, child, "SIGKILL");
+            killDriverGroup(platform, child, "SIGKILL");
           }),
         })),
       ),

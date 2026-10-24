@@ -155,6 +155,25 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
   exit(code)
 }
 
+/// An agent connection's helper ends with the proxy that started it, however that proxy ends:
+/// a driver mid-action reads stdin's end only between calls, so it must not outlive the proxy
+/// that enforces its lease. This launcher leads the connection's process group (the proxy
+/// starts it detached), so the whole group goes: service and driver too.
+func endWithParent(service: pid_t) {
+  let parent = getppid()
+  // Only a group this launcher leads is safe to end whole; otherwise end what it started.
+  let end = {
+    if getpgrp() == getpid() { killpg(getpid(), SIGKILL) } else { kill(service, SIGKILL) }
+    exit(137)
+  }
+  let source = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+  source.setEventHandler(handler: end)
+  source.resume()
+  retained.append(source)
+  // The proxy may already be gone, before the source was watching it.
+  if getppid() != parent { end() }
+}
+
 func runLauncher() -> Never {
   if let refusal = parentRefusal() { refuse("untrusted_parent", refusal, 77) }
   // RTLD_DEFAULT; the symbol is private libsystem API, so a missing one is a typed refusal.
@@ -196,6 +215,7 @@ func runLauncher() -> Never {
     source.resume()
     retained.append(source)
   }
+  if CommandLine.arguments.contains("--mcp") { endWithParent(service: child) }
   DispatchQueue.global().async {
     var waitStatus: Int32 = 0
     while waitpid(child, &waitStatus, 0) == -1 && errno == EINTR {}
@@ -838,8 +858,18 @@ func runMcp() -> Never {
     } + [nil]
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
   var child: pid_t = 0
-  // No file actions: the driver inherits stdin, stdout and stderr.
-  let status = posix_spawn(&child, driverPath, nil, nil, argv, envp)
+  // The driver inherits stdin, stdout and stderr and nothing else this process holds open.
+  var actions: posix_spawn_file_actions_t?
+  posix_spawn_file_actions_init(&actions)
+  defer { posix_spawn_file_actions_destroy(&actions) }
+  for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+    posix_spawn_file_actions_addinherit_np(&actions, descriptor)
+  }
+  var attributes: posix_spawnattr_t?
+  posix_spawnattr_init(&attributes)
+  defer { posix_spawnattr_destroy(&attributes) }
+  posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
   argv.forEach { free($0) }
   envp.forEach { free($0) }
   guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
