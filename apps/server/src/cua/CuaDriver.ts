@@ -666,7 +666,9 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const probe = CuaDisplay.probeDisplay().pipe(
+    const probe = CuaDisplay.probeDisplay(
+      config.mode === "desktop" ? "desktop" : "standalone",
+    ).pipe(
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, path),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
