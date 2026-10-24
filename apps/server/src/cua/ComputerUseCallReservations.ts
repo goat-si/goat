@@ -55,7 +55,9 @@ const foreground = (value: unknown, depth = 0): boolean => {
   if (object === undefined) return false;
   return Object.entries(object).some(
     ([key, child]) =>
-      ((key === "delivery_mode" || key === "dispatch") && child === "foreground") ||
+      ((key === "delivery_mode" || key === "dispatch") &&
+        typeof child === "string" &&
+        child.toLowerCase() === "foreground") ||
       (key.includes("foreground") && child === true) ||
       foreground(child, depth + 1),
   );

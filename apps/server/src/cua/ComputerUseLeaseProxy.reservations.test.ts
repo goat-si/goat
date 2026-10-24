@@ -61,6 +61,8 @@ describe("proxy execution ownership", () => {
           ["launch_app", { bundle_id: "com.example.Build" }],
           ["move_cursor", { x: 1, y: 1 }],
           ["click", { pid: 42, window_id: 7, delivery_mode: "foreground" }],
+          ["click", { pid: 42, window_id: 7, delivery_mode: "FOREGROUND" }],
+          ["press_key", { pid: 42, window_id: 7, delivery_mode: "FoReGrOuNd" }],
           ["press_key", { pid: 42, window_id: 7, dispatch: "foreground" }],
           ["run_steps", { foreground_fallback: true, steps: [{ delivery_mode: "foreground" }] }],
           ["run_steps", { steps: [{ type: "click", pid: 42, window_id: 7 }] }],
