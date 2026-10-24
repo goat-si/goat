@@ -67,6 +67,20 @@ export function cleanOutput(raw: string) {
   return NodeUtil.stripVTControlCharacters(raw).replace(/\r\n?/g, "\n");
 }
 
+/**
+ * Claude's "Error:" text as it appears on screen. The native PTY spaces words with cursor-column
+ * jumps and wraps long text with CR CR LF, so the jumps become spaces and the wrapped lines that
+ * already arrived rejoin into one sentence.
+ */
+export function readDiagnostic(raw: string) {
+  const screen = NodeUtil.stripVTControlCharacters(
+    // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
+    raw.replace(/\u001b\[\d*[GC]/g, " "),
+  ).replace(/\r+\n|\r/g, "\n");
+  const lines = /^[ \t]*Error:[ \t]*(\S.*(?:\n[ \t]*\S.*)*)\n/m.exec(screen)?.[1];
+  return lines?.replace(/\s+/g, " ").trim();
+}
+
 export function readStartReceipt(raw: string) {
   const normalized = cleanOutput(raw);
   // Parse only terminated lines; a chunk can split a session ID or ANSI sequence.
