@@ -6,9 +6,10 @@
 //   node scripts/computer-use-windows-smoke.ts --out <dir>
 //
 // Run it on the signed-in desktop; over SSH or as a service Windows has no desktop (Session 0)
-// and the helper refuses. It drives scripts/computer-use-windows-fixture.cs, then Notepad and
-// Calculator only when neither was running, closes only what it opened (Calculator through its
-// own close button), and writes screenshots and transcript.json to --out.
+// and the helper refuses. It drives scripts/computer-use-windows-fixture.cs, then Calculator
+// only when it was not running, closes only what it opened (Calculator through its own close
+// button), exits non-zero when any expected result or refusal is missing, and writes
+// screenshots and transcript.json to --out.
 // @effect-diagnostics nodeBuiltinImport:off -- A standalone harness around child processes and files.
 // @effect-diagnostics globalTimers:off -- Waits for windows the harness itself opened.
 // @effect-diagnostics globalConsole:off -- Prints progress to the person running it by hand.
@@ -182,7 +183,7 @@ async function main(
       record("observe " + label, observation);
       return observation;
     };
-    /** One element action through a tracker ref; refusals are recorded, never sent. */
+    /** One element action through a tracker ref. A refusal is returned and nothing is sent. */
     const act = async (
       name: string,
       pid: number,
@@ -192,7 +193,10 @@ async function main(
       extra: object = {},
     ) => {
       const resolved = tracker.resolve({ pid, windowId, observationId, element: ref });
-      if (!("token" in resolved)) return record("refused " + name, resolved);
+      if (!("token" in resolved)) {
+        record("refused " + name, resolved);
+        return { refusal: resolved };
+      }
       const result = await tool(name, {
         pid,
         window_id: windowId,
@@ -204,6 +208,20 @@ async function main(
         effect: result.structured?.effect,
         text: result.text,
       });
+      return { isError: result.isError };
+    };
+    /** The action must reach the driver and the driver must not report an error. */
+    const sent = async (...args: Parameters<typeof act>) => {
+      const result = await act(...args);
+      if (result.refusal || result.isError !== false) fail(args[0] + " did not reach the window.");
+    };
+    /** The action must be refused for exactly this reason, before anything is sent. */
+    const refused = async (reason: string, ...args: Parameters<typeof act>) => {
+      const result = await act(...args);
+      if (result.refusal?.reason !== reason)
+        fail(
+          args[0] + " should have been refused as " + reason + ", got " + JSON.stringify(result),
+        );
     };
     const windowOf = async (pids: ReadonlyArray<number>, title: RegExp) => {
       for (let attempt = 0; attempt < 40; attempt++) {
@@ -218,137 +236,149 @@ async function main(
       return fail("No window " + title);
     };
 
-    // 1. The fixture: observe, act, observe the change, then private mode.
-    const fixtureExe = NodePath.join(out, "computer-use-windows-fixture.exe");
-    NodeChildProcess.execFileSync(NodePath.join(frameworkDir, "csc.exe"), [
-      "/nologo",
-      "/target:winexe",
-      "/out:" + fixtureExe,
-      "/r:System.Windows.Forms.dll",
-      "/r:System.Drawing.dll",
-      NodePath.join(repo, "scripts", "computer-use-windows-fixture.cs"),
-    ]);
-    const fixture = NodeChildProcess.spawn(fixtureExe, [], { stdio: "ignore" });
-    opened.push({
-      pid: fixture.pid ?? fail("The fixture did not start."),
-      image: NodePath.basename(fixtureExe),
-    });
-    const fw = await windowOf([fixture.pid ?? 0], /GOAT computer use fixture/u);
-    const first = await observe("fixture-1", fw.pid, fw.window_id);
-    const firstElements = fullElements(first);
-    await act(
-      "set_value",
-      fw.pid,
-      fw.window_id,
-      first.observationId,
-      labelled(firstElements, /^Note$/u).ref,
-      { value: "hello from GOAT" },
-    );
-    await act(
-      "click",
-      fw.pid,
-      fw.window_id,
-      first.observationId,
-      labelled(firstElements, /^Add one$/u).ref,
-    );
-    await observe("fixture-2", fw.pid, fw.window_id, first.observationId);
-    // An older observation's ref is refused before anything is sent.
-    await act(
-      "click",
-      fw.pid,
-      fw.window_id,
-      first.observationId,
-      labelled(firstElements, /^Add one$/u).ref,
-    );
-    const full = await observe("fixture-3", fw.pid, fw.window_id);
-    await act(
-      "click",
-      fw.pid,
-      fw.window_id,
-      full.observationId,
-      labelled(fullElements(full), /^Focus secret$/u).ref,
-    );
-    await sleep(500);
-    const hidden = await observe("fixture-4-private", fw.pid, fw.window_id, full.observationId);
-    await act(
-      "set_value",
-      fw.pid,
-      fw.window_id,
-      hidden.observationId,
-      labelled(fullElements(full), /^Secret$/u).ref,
-      { value: "never sent" },
-    );
-    // Leaving the field needs an element the agent cannot address now; the fixture's own
-    // button stands in for the person moving focus.
-    await tool("click", {
-      pid: fw.pid,
-      window_id: fw.window_id,
-      element_token: (
-        await tool("get_window_state", {
-          pid: fw.pid,
-          window_id: fw.window_id,
-          tree_format: "elements",
-          include_screenshot: false,
-        })
-      ).structured.elements.find((element: { label?: string }) => element.label === "Leave secret")
-        .element_token,
-    });
-    await sleep(500);
-    await observe("fixture-5-public-again", fw.pid, fw.window_id, hidden.observationId);
-
-    // 2. Notepad, only when none was running.
-    if (pidsOf("Notepad.exe").length === 0) {
-      NodeChildProcess.spawn("notepad.exe", [], { stdio: "ignore", detached: true }).unref();
-      await sleep(2000);
-      const notepads = pidsOf("Notepad.exe");
-      opened.push(...notepads.map((pid) => ({ pid, image: "Notepad.exe" })));
-      const nw = await windowOf(notepads, /.+/u);
-      const n1 = await observe("notepad-1", nw.pid, nw.window_id);
-      const editor =
-        fullElements(n1).find(
-          (element) => element.role === "Document" || element.role === "Edit",
-        ) ?? fail("Notepad has no editor");
-      await act("set_value", nw.pid, nw.window_id, n1.observationId, editor.ref, {
-        value: "GOAT computer use smoke",
+    try {
+      // 1. The fixture: observe, act, observe the change, then private mode.
+      const fixtureExe = NodePath.join(out, "computer-use-windows-fixture.exe");
+      NodeChildProcess.execFileSync(NodePath.join(frameworkDir, "csc.exe"), [
+        "/nologo",
+        "/target:winexe",
+        "/out:" + fixtureExe,
+        "/r:System.Windows.Forms.dll",
+        "/r:System.Drawing.dll",
+        NodePath.join(repo, "scripts", "computer-use-windows-fixture.cs"),
+      ]);
+      const fixture = NodeChildProcess.spawn(fixtureExe, [], { stdio: "ignore" });
+      opened.push({
+        pid: fixture.pid ?? fail("The fixture did not start."),
+        image: NodePath.basename(fixtureExe),
       });
-      await observe("notepad-2", nw.pid, nw.window_id, n1.observationId);
-    } else record("notepad", "already running; skipped");
-
-    // 3. Calculator, only when it was not running; closed through its own close button.
-    if (pidsOf("CalculatorApp.exe").length === 0) {
-      NodeChildProcess.spawn("calc.exe", [], { stdio: "ignore", detached: true }).unref();
-      const cw = await windowOf([], /^(Calculator|계산기)$/u);
-      for (const button of [/^1$/u, /^(Plus|더하기)$/u, /^2$/u, /^(Equals|일치)$/u]) {
-        const step = await observe("calculator-step", cw.pid, cw.window_id);
-        await act(
-          "click",
-          cw.pid,
-          cw.window_id,
-          step.observationId,
-          labelled(fullElements(step), button).ref,
-        );
-      }
-      const result = await observe("calculator-2", cw.pid, cw.window_id);
-      record(
-        "calculator display",
-        fullElements(result)
-          .filter((element) => /^(Display is|표시는)/u.test(element.label ?? ""))
-          .map((element) => element.label),
+      const fw = await windowOf([fixture.pid ?? 0], /GOAT computer use fixture/u);
+      const first = await observe("fixture-1", fw.pid, fw.window_id);
+      const firstElements = fullElements(first);
+      await sent(
+        "set_value",
+        fw.pid,
+        fw.window_id,
+        first.observationId,
+        labelled(firstElements, /^Note$/u).ref,
+        { value: "hello from GOAT" },
       );
-      closeButtons.push(async () => {
-        const last = await observe("calculator-close", cw.pid, cw.window_id);
-        const close = fullElements(last).find(
-          (element) => element.role === "Button" && /(Close|닫기)/u.test(element.label ?? ""),
-        );
-        if (close) await act("click", cw.pid, cw.window_id, last.observationId, close.ref);
+      await sent(
+        "click",
+        fw.pid,
+        fw.window_id,
+        first.observationId,
+        labelled(firstElements, /^Add one$/u).ref,
+      );
+      const second = await observe("fixture-2", fw.pid, fw.window_id, first.observationId);
+      const note = labelled(firstElements, /^Note$/u).ref;
+      if (
+        second.kind !== "diff" ||
+        !second.changed.some(
+          (element) => element.ref === note && element.value === "hello from GOAT",
+        )
+      )
+        fail("The diff after set_value does not show Note's new value under the same ref.");
+      await refused(
+        "staleElement",
+        "click",
+        fw.pid,
+        fw.window_id,
+        first.observationId,
+        labelled(firstElements, /^Add one$/u).ref,
+      );
+      const full = await observe("fixture-3", fw.pid, fw.window_id);
+      await sent(
+        "click",
+        fw.pid,
+        fw.window_id,
+        full.observationId,
+        labelled(fullElements(full), /^Focus secret$/u).ref,
+      );
+      await sleep(500);
+      const hidden = await observe("fixture-4-private", fw.pid, fw.window_id, full.observationId);
+      if (
+        !hidden.privateMode ||
+        hidden.kind !== "full" ||
+        hidden.elements.length > 0 ||
+        hidden.screenshot !== undefined
+      )
+        fail("A focused password field must withhold the whole window.");
+      await refused(
+        "privateMode",
+        "set_value",
+        fw.pid,
+        fw.window_id,
+        hidden.observationId,
+        labelled(fullElements(full), /^Secret$/u).ref,
+        { value: "never sent" },
+      );
+      // Leaving the field needs an element the agent cannot address now; the fixture's own
+      // button stands in for the person moving focus.
+      const raw = await tool("get_window_state", {
+        pid: fw.pid,
+        window_id: fw.window_id,
+        tree_format: "elements",
+        include_screenshot: false,
       });
-    } else record("calculator", "already running; skipped");
+      const leave = (raw.structured?.elements ?? []).find(
+        (element: { label?: string }) => element.label === "Leave secret",
+      );
+      await tool("click", {
+        pid: fw.pid,
+        window_id: fw.window_id,
+        element_token: leave?.element_token ?? fail("No Leave secret button"),
+      });
+      await sleep(500);
+      const again = await observe(
+        "fixture-5-public-again",
+        fw.pid,
+        fw.window_id,
+        hidden.observationId,
+      );
+      if (again.privateMode) fail("Private mode did not end when focus left the password field.");
 
-    for (const close of closeButtons.splice(0))
-      await close().catch((error: unknown) => record("close failed", String(error)));
-    driver.uniffiDestroy?.();
-    await helper.call("stop");
-    record("driver alive after stop", alive(started.driverPid));
+      // Notepad is not used: it restores unsaved tabs and open files on its next start, so any
+      // run would leave text behind for the person who uses this computer.
+
+      // 2. Calculator, only when it was not running; closed through its own close button.
+      if (pidsOf("CalculatorApp.exe").length === 0) {
+        NodeChildProcess.spawn("calc.exe", [], { stdio: "ignore", detached: true }).unref();
+        const cw = await windowOf([], /^(Calculator|계산기)$/u);
+        // Registered before anything can fail, so a failed step still closes it.
+        closeButtons.push(async () => {
+          const last = await observe("calculator-close", cw.pid, cw.window_id);
+          const close = fullElements(last).find(
+            (element) => element.role === "Button" && /(Close|닫기)/u.test(element.label ?? ""),
+          );
+          if (close) await act("click", cw.pid, cw.window_id, last.observationId, close.ref);
+        });
+        for (const button of [/^1$/u, /^(Plus|더하기)$/u, /^2$/u, /^(Equals|일치)$/u]) {
+          const step = await observe("calculator-step", cw.pid, cw.window_id);
+          await sent(
+            "click",
+            cw.pid,
+            cw.window_id,
+            step.observationId,
+            labelled(fullElements(step), button).ref,
+          );
+        }
+        const result = await observe("calculator-2", cw.pid, cw.window_id);
+        const display = fullElements(result)
+          .filter((element) => /^(Display is|표시는)/u.test(element.label ?? ""))
+          .map((element) => element.label);
+        record("calculator display", display);
+        if (!display.some((label) => /(^| )3$/u.test(label ?? "")))
+          fail("Calculator does not show 3 after 1 + 2 =.");
+      } else record("calculator", "already running; skipped");
+    } finally {
+      // While the helper and driver still run, so windows close through their own buttons.
+      for (const close of closeButtons.splice(0))
+        await close().catch((error: unknown) => record("close failed", String(error)));
+      driver.uniffiDestroy?.();
+      await helper.call("stop").catch(() => undefined);
+      record("driver alive after stop", alive(started.driverPid));
+    }
   } finally {
     await helper.close();
   }

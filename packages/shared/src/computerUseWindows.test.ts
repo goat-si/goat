@@ -197,6 +197,14 @@ describe("Windows computer use readiness", () => {
     assert.isFalse(
       computerUseReady(windowsComputerUseReadiness({ facts: READY, helper: "authenticated" })),
     );
+    // Without a real read, capture and the tree are each not ready, each with its own reason.
+    assert.deepEqual(
+      windowsComputerUseReadiness({ facts: READY, helper: "authenticated" }).reasons,
+      [
+        "Computer use has not captured a window yet. Run the check.",
+        "Computer use has not read a window's controls yet. Run the check.",
+      ],
+    );
     // Session 0, as the helper answers there (#1216).
     const service = windowsComputerUseReadiness({
       facts: {

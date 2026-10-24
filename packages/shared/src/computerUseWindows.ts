@@ -117,12 +117,23 @@ export function windowsComputerUseReadiness(input: {
   const capture = !visible ? "unavailable" : (input.proof?.capture ?? "pending");
   const tree =
     !usable || !facts.uiAutomation ? "unavailable" : (input.proof?.tree ?? "unavailable");
-  if (capture === "blank") reasons.push("The screenshot was blank. Keep the window visible.");
-  if (capture === "noWindow")
-    reasons.push("There was no window to capture. Open one, then check again.");
-  if (capture === "pending" || (tree === "unavailable" && usable && facts.uiAutomation))
-    reasons.push("Computer use has not read a window yet. Run the check.");
+  // One sentence per step that is not ready, in step order.
+  const captureReason = {
+    ready: undefined,
+    pending: "Computer use has not captured a window yet. Run the check.",
+    blank: "The screenshot was blank. Keep the window visible.",
+    noWindow: "There was no window to capture. Open one, then check again.",
+    unavailable: "Screenshots are not possible until this desktop can be used.",
+  }[capture];
+  if (captureReason) reasons.push(captureReason);
   if (tree === "empty") reasons.push("The window's controls could not be read.");
+  if (tree === "unavailable")
+    reasons.push(
+      usable && facts.uiAutomation
+        ? "Computer use has not read a window's controls yet. Run the check."
+        : "Window controls cannot be read until this desktop can be used.",
+    );
+  if (!usable) reasons.push("Agents cannot send input until this desktop can be used.");
   if (input.helper !== "authenticated")
     reasons.push(
       input.helper === "incompatible"
@@ -140,6 +151,6 @@ export function windowsComputerUseReadiness(input: {
     // UI Automation patterns and posted messages reach a window without raising it.
     input: usable ? "background" : "unavailable",
     blockers,
-    reasons: [...new Set(reasons)],
+    reasons,
   };
 }
