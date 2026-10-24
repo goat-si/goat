@@ -306,13 +306,39 @@ namespace Goat.ComputerUse
                     structured is Dictionary<string, object> &&
                     ((Dictionary<string, object>)structured).TryGetValue("apps", out apps) && apps is object[])
                 {
-                    // The same answer as the macOS helper's listApps.
+                    // The same answer as the macOS helper's listApps, plus each running app's
+                    // executable as Windows reports it for that pid. The driver lists a running
+                    // program without a Start menu entry with no bundle id at all, so without
+                    // its path GOAT's manifest could never admit it (#1368); a path grant is
+                    // matched against the executable the driver attests for the window.
+                    foreach (object entry in (object[])apps)
+                    {
+                        var app = entry as Dictionary<string, object>;
+                        object pid;
+                        if (app == null || app.ContainsKey("executable") || !app.TryGetValue("pid", out pid) || !(pid is int) || (int)pid <= 0) continue;
+                        string executable = ImagePath((int)pid);
+                        if (executable != null) app["executable"] = executable;
+                    }
                     var listed = new Dictionary<string, object>();
                     listed["apps"] = apps;
                     return listed;
                 }
                 throw new HelperException("list_failed", "Cua Driver could not list apps.");
             }
+        }
+
+        /// <summary>The full image path of a running process, or null when Windows does not say.</summary>
+        static string ImagePath(int pid)
+        {
+            IntPtr process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return null;
+            try
+            {
+                var name = new StringBuilder(1024);
+                int size = name.Capacity;
+                return NativeMethods.QueryFullProcessImageNameW(process, 0, name, ref size) ? name.ToString() : null;
+            }
+            finally { NativeMethods.CloseHandle(process); }
         }
 
         static NativeMethods.SECURITY_ATTRIBUTES Inheritable()

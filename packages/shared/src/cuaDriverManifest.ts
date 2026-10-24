@@ -103,17 +103,23 @@ const EXCLUDED_BUNDLE_IDS = new Set([
 ]);
 const EXCLUDED_NAME =
   /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|keychain access|passwords)\b/iu;
+/** The driver and GOAT's helper on Windows, named by their executables. */
+const EXCLUDED_EXECUTABLE = /(^|[\\/])(cua-driver|GOAT Computer Use)\.exe$/iu;
 
 export interface CuaDriverListedApp {
   readonly bundle_id?: string | null;
   readonly name?: string | null;
+  /** A running app's executable path, added by the Windows helper (the driver gives none). */
+  readonly executable?: string | null;
 }
 
 /**
  * Bundle ids GOAT admits for general desktop control: every app the driver itself lists (its
  * list_apps result is what it attests a window's app identity against), minus the host GOAT runs
- * in and the exclusions above. Apps without a bundle id stay out, so an app installed after the
- * driver started needs a restart of computer use.
+ * in and the exclusions above. On Windows a running program with no Start menu entry has no
+ * bundle id; its executable path stands in, which the driver matches against the executable it
+ * attests for the window (#1368). Apps with neither stay out, so an app installed or started
+ * after the driver started needs a restart of computer use.
  */
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
@@ -122,11 +128,16 @@ export function admittedCuaApplications(
   const host = new Set(hostBundleIds.map((id) => id.toLowerCase()));
   const admitted = new Set<string>();
   for (const app of apps) {
-    const id = app.bundle_id?.trim();
+    const id = (app.bundle_id?.trim() || app.executable?.trim()) ?? "";
     if (!id) continue;
     const lower = id.toLowerCase();
     if (host.has(lower) || EXCLUDED_BUNDLE_IDS.has(lower)) continue;
-    if (EXCLUDED_NAME.test(app.name ?? "") || EXCLUDED_NAME.test(id)) continue;
+    if (
+      EXCLUDED_NAME.test(app.name ?? "") ||
+      EXCLUDED_NAME.test(id) ||
+      EXCLUDED_EXECUTABLE.test(id)
+    )
+      continue;
     admitted.add(id);
   }
   return [...admitted].sort();
