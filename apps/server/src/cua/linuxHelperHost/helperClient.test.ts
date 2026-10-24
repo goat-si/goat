@@ -76,4 +76,19 @@ describe("Linux helper client (#1223)", () => {
     helper.event(watchId, humanInput);
     assert.lengthOf(events, 1);
   });
+
+  it("hears a new watch's initial state that follows its answer in the same chunk (#1494 r1)", async () => {
+    const secret = { type: "privateMode", active: true, target: { pid: 7, windowId: 70 } };
+    const helper = fakeHelper({
+      afterAnswer: (request, send) => {
+        if (request.method !== "watch") return;
+        const { watchId } = request.params as { watchId: string };
+        send({ generation: "gen-1", watchId, event: secret });
+      },
+    });
+    const { client, events } = connect(helper);
+    await client.start();
+    assert.isTrue(await client.watch([{ pid: 7, windowId: 70 }], 1000));
+    assert.deepEqual(events, [secret]);
+  });
 });

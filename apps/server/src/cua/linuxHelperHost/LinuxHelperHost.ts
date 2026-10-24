@@ -89,10 +89,11 @@ const RESTART_MS = [2_000, 5_000, 15_000, 60_000] as const;
 
 const decodeReadiness = Schema.decodeUnknownOption(ComputerUseReadiness);
 
-const windowsOf = (result: unknown): ReadonlyArray<ComputerUseWindowTarget> => {
-  if (typeof result !== "object" || result === null || !("windows" in result)) return [];
+/** The windows on screen, or undefined when the listing failed: a refusal, a timeout, an end. */
+const windowsOf = (result: unknown): ReadonlyArray<ComputerUseWindowTarget> | undefined => {
+  if (typeof result !== "object" || result === null || !("windows" in result)) return undefined;
   const windows = result.windows;
-  if (!Array.isArray(windows)) return [];
+  if (!Array.isArray(windows)) return undefined;
   return windows.flatMap((entry: unknown) => {
     if (typeof entry !== "object" || entry === null) return [];
     const { pid, windowId, onScreen } = entry as Record<string, unknown>;
@@ -102,8 +103,18 @@ const windowsOf = (result: unknown): ReadonlyArray<ComputerUseWindowTarget> => {
   });
 };
 
+/** A helper belongs to the daemon session it was started for: its binary and display. */
+const sessionKey = (session: DriverSession) =>
+  [
+    session.command,
+    ...Object.entries(session.display)
+      .map(([name, value]) => name + "=" + value)
+      .sort(),
+  ].join("\n");
+
 interface Running {
   readonly launch: number;
+  readonly session: string;
   readonly process: HelperProcess;
   readonly client: HelperClient;
   signals?: DesktopCuaReadinessReport["signals"];
@@ -183,6 +194,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     });
     const entry: Running = {
       launch,
+      session: sessionKey(session),
       process,
       client,
       readinessAt: 0,
@@ -249,6 +261,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     const targets = windowsOf(
       yield* Effect.promise(() => entry.client.request("listWindows", {}, WATCH_MS)),
     );
+    // A listing that failed says nothing about the windows: the watch in force stands, so a
+    // secret field it guards stays private.
+    if (targets === undefined) return;
     const key = targets
       .map((target) => target.pid + ":" + target.windowId)
       .sort()
@@ -262,18 +277,33 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS))) entry.watched = key;
   });
 
+  /**
+   * Lets the helper go when its daemon stopped or was replaced by another (another binary or
+   * display). Its pending requests end at once, so whatever waited on them moves on.
+   */
+  const dismiss = Effect.fnUntraced(function* (session: Option.Option<DriverSession>) {
+    const entry = current;
+    if (entry === undefined) return;
+    if (Option.isSome(session) && sessionKey(session.value) === entry.session) return;
+    yield* Effect.logInfo("Stopped the Linux computer use helper", {
+      launch: entry.launch,
+      pid: entry.process.pid,
+    });
+    yield* retire(entry);
+  });
+
   const tick = Effect.fnUntraced(function* () {
     const session = yield* deps.session;
     const now = yield* Clock.currentTimeMillis;
+    yield* dismiss(session);
     let entry = current;
-    if (entry !== undefined && (entry.ended || Option.isNone(session))) {
-      const crashed = entry.ended;
-      yield* Effect.logInfo(
-        crashed ? "The Linux computer use helper exited" : "Stopped the Linux computer use helper",
-        { launch: entry.launch, pid: entry.process.pid },
-      );
+    if (entry !== undefined && entry.ended) {
+      yield* Effect.logInfo("The Linux computer use helper exited", {
+        launch: entry.launch,
+        pid: entry.process.pid,
+      });
       yield* retire(entry);
-      if (crashed) retryAt = now + backoff();
+      retryAt = now + backoff();
       entry = undefined;
     }
     if (Option.isNone(session)) return;
@@ -293,6 +323,13 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     Effect.andThen(Effect.race(PubSub.take(kicks), Effect.sleep(TICK_MS))),
     Effect.forever,
     Effect.ensuring(Effect.suspend(() => (current ? retire(current) : Effect.void))),
+    Effect.forkScoped,
+  );
+  // The daemon is checked on its own as well, so a tick waiting on the helper cannot hold a
+  // stopped or replaced daemon's helper, or its readiness, past the next check.
+  yield* Effect.sleep(TICK_MS).pipe(
+    Effect.andThen(Effect.flatMap(deps.session, dismiss)),
+    Effect.forever,
     Effect.forkScoped,
   );
 

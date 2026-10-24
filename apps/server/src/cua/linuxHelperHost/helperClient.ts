@@ -60,14 +60,20 @@ export function makeHelperClient(options: HelperClientOptions) {
   helloWaiter.promise.catch(() => undefined);
   const pending = new Map<
     string,
-    { readonly resolve: (result: unknown) => void; readonly cancel: () => void }
+    {
+      readonly resolve: (result: unknown) => void;
+      readonly cancel: () => void;
+      /** Runs as the reply is admitted, before the next line is read. */
+      readonly admitted?: (result: unknown) => void;
+    }
   >();
 
-  const settle = (id: string, result: unknown) => {
+  const settle = (id: string, result: unknown, delivered = false) => {
     const entry = pending.get(id);
     if (entry === undefined) return;
     pending.delete(id);
     entry.cancel();
+    if (delivered) entry.admitted?.(result);
     entry.resolve(result);
   };
 
@@ -111,7 +117,7 @@ export function makeHelperClient(options: HelperClientOptions) {
         generation: hello.binding.generation,
         pending: new Set(pending.keys()),
       });
-      if (verdict === "deliver") settle(reply.value.id, reply.value.result);
+      if (verdict === "deliver") settle(reply.value.id, reply.value.result, true);
       return;
     }
     const event = decodeEvent(raw);
@@ -127,12 +133,17 @@ export function makeHelperClient(options: HelperClientOptions) {
   };
 
   /** The request's result, or undefined when the helper did not answer in time or went away. */
-  const request = (method: ComputerUseMethod, params: unknown, deadlineMs: number) =>
+  const request = (
+    method: ComputerUseMethod,
+    params: unknown,
+    deadlineMs: number,
+    admitted?: (result: unknown) => void,
+  ) =>
     new Promise<unknown>((resolve) => {
       if (closed || hello === undefined) return resolve(undefined);
       const id = options.newId();
       const cancel = options.after(deadlineMs, () => settle(id, undefined));
-      pending.set(id, { resolve, cancel });
+      pending.set(id, { resolve, cancel, ...(admitted ? { admitted } : {}) });
       options.write(
         JSON.stringify({
           id,
@@ -150,25 +161,29 @@ export function makeHelperClient(options: HelperClientOptions) {
       return helloWaiter.promise;
     },
     line,
-    request,
+    request: (method: ComputerUseMethod, params: unknown, deadlineMs: number) =>
+      request(method, params, deadlineMs),
     /**
-     * Watches these windows. The new watch takes over when its answer arrives: until then events
-     * of the old one (its clearing active:false among them) still count.
+     * Watches these windows. The new watch takes over as its answer is read, before the line
+     * after it: until then events of the old one (its clearing active:false among them) count,
+     * and from then the new one's initial states, which can follow in the same chunk.
      */
     watch: async (targets: ReadonlyArray<ComputerUseWindowTarget>, deadlineMs: number) => {
       const next = options.newId();
-      const result = await request("watch", { watchId: next, targets }, deadlineMs);
-      const accepted =
+      const accepts = (result: unknown) =>
         typeof result === "object" &&
         result !== null &&
         "watchId" in result &&
         result.watchId === next;
-      if (accepted && !closed) watchId = next;
-      return accepted;
+      const result = await request("watch", { watchId: next, targets }, deadlineMs, (answer) => {
+        if (accepts(answer)) watchId = next;
+      });
+      return accepts(result);
     },
     unwatch: async (deadlineMs: number) => {
-      const result = await request("unwatch", {}, deadlineMs);
-      if (result !== undefined) watchId = undefined;
+      const result = await request("unwatch", {}, deadlineMs, () => {
+        watchId = undefined;
+      });
       return result !== undefined;
     },
     watching: () => watchId !== undefined,

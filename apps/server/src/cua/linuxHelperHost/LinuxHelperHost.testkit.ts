@@ -46,6 +46,10 @@ export interface FakeHelperOptions {
   /** Whether a request gets its answer; the rest are left waiting. */
   readonly answers?: (request: FakeRequest) => boolean;
   readonly onRequest?: (request: FakeRequest) => void;
+  /** Runs right after a request's answer is sent, as frames that follow it in the same chunk. */
+  readonly afterAnswer?: (request: FakeRequest, send: (frame: unknown) => void) => void;
+  /** What listWindows answers instead of the windows, such as a refusal. */
+  readonly listing?: () => unknown;
 }
 
 export function fakeHelper(options: FakeHelperOptions = {}) {
@@ -58,7 +62,8 @@ export function fakeHelper(options: FakeHelperOptions = {}) {
   const send = (frame: unknown) => lineListener?.(JSON.stringify(frame));
   const answer = (request: FakeRequest): unknown => {
     if (request.method === "permissions") return READY;
-    if (request.method === "listWindows") return { windows: options.windows?.() ?? [] };
+    if (request.method === "listWindows")
+      return options.listing?.() ?? { windows: options.windows?.() ?? [] };
     if (request.method === "watch") {
       const params = request.params as { watchId: string; targets: unknown };
       return { watchId: params.watchId, watching: params.targets };
@@ -82,6 +87,7 @@ export function fakeHelper(options: FakeHelperOptions = {}) {
       options.onRequest?.(request);
       if (options.answers?.(request) === false) return;
       send({ id: request.id, generation, result: answer(request) });
+      options.afterAnswer?.(request, send);
     },
     onLine: (listener) => {
       lineListener = listener;

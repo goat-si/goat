@@ -8,7 +8,13 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { type DriverSession, makeLinuxHelperHost, TICK_MS } from "./LinuxHelperHost.ts";
-import { CAPABILITIES, type FakeRequest, fakeHelper, READY } from "./LinuxHelperHost.testkit.ts";
+import {
+  CAPABILITIES,
+  type FakeHelperOptions,
+  type FakeRequest,
+  fakeHelper,
+  READY,
+} from "./LinuxHelperHost.testkit.ts";
 
 const SESSION: DriverSession = {
   command: "/opt/goat/cua-driver",
@@ -16,7 +22,10 @@ const SESSION: DriverSession = {
 };
 
 /** A host over a scripted helper whose driver session a test turns on and off. */
-const hostWith = (windows: ReadonlyArray<{ pid: number; windowId: number; onScreen?: boolean }>) =>
+const hostWith = (
+  windows: ReadonlyArray<{ pid: number; windowId: number; onScreen?: boolean }>,
+  options: FakeHelperOptions = {},
+) =>
   Effect.gen(function* () {
     const session = yield* Ref.make(Option.none<DriverSession>());
     const report = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
@@ -30,9 +39,13 @@ const hostWith = (windows: ReadonlyArray<{ pid: number; windowId: number; onScre
       session: Ref.get(session),
       spawn: (env) => {
         const helper = fakeHelper({
+          ...options,
           generation: "gen-" + (spawned.length + 1),
           windows: () => windows,
-          onRequest: (request) => void Queue.offerUnsafe(requests, request),
+          onRequest: (request) => {
+            options.onRequest?.(request);
+            Queue.offerUnsafe(requests, request);
+          },
         });
         spawned.push({ env, helper });
         return helper.process;
@@ -163,6 +176,74 @@ describe("LinuxHelperHost (#1223)", () => {
         // The next tick starts a new helper, whose readiness is the one reported now.
         assert.include(yield* Queue.take(t.safety), { type: "cuaReadiness", generation: 2 });
         assert.lengthOf(t.spawned, 2);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a failed window listing keeps the watch, so a secret field stays private (#1494 r1)",
+    () =>
+      Effect.gen(function* () {
+        let listingFails = false;
+        const t = yield* hostWith([{ pid: 7, windowId: 70 }], {
+          listing: () =>
+            listingFails ? { outcome: "refused", reason: "busy", message: "busy" } : undefined,
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        const watchId = ((yield* t.nextRequest("watch")).params as { watchId: string }).watchId;
+        const helper = t.spawned[0]?.helper;
+        helper?.event(watchId, {
+          type: "privateMode",
+          active: true,
+          target: { pid: 7, windowId: 70 },
+        });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        listingFails = true;
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("listWindows");
+        // The watch still delivers, and private mode was not cleared in between.
+        helper?.event(watchId, { type: "humanInput", source: "keyboard" });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaHumanInput" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a daemon replaced by another (another display) gets a helper of its own (#1494 r1)",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* hostWith([]);
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(t.spawned, 1);
+        yield* Ref.set(
+          t.session,
+          Option.some({ command: "/opt/goat/cua-driver-2", display: { DISPLAY: ":8" } }),
+        );
+        yield* TestClock.adjust(TICK_MS);
+        assert.isTrue(t.spawned[0]?.helper.stopped());
+        assert.lengthOf(t.spawned, 2);
+        assert.include(t.spawned[1]?.env ?? {}, {
+          DISPLAY: ":8",
+          GOAT_COMPUTER_USE_DRIVER: "/opt/goat/cua-driver-2",
+        });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a stopped daemon stops its helper within a check, even with a request waiting (#1494 r1)",
+    () =>
+      Effect.gen(function* () {
+        // The helper never answers permissions, so the host's tick waits on it.
+        const t = yield* hostWith([], { answers: (request) => request.method !== "permissions" });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("permissions");
+        yield* Ref.set(t.session, Option.none());
+        yield* TestClock.adjust(TICK_MS);
+        assert.isTrue(t.spawned[0]?.helper.stopped());
+        assert.deepEqual(yield* t.host.readiness, Option.none());
       }).pipe(Effect.scoped),
   );
 });
