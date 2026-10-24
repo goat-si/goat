@@ -973,7 +973,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HubProxyHttp.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
-    Ws.layer,
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
   ),
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
@@ -1070,12 +1070,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),
-  // Pipe steps are capped at 20, so preview sessions ride with the browser they read.
-  Layer.provide(
-    PreviewSessions.layer.pipe(
-      Layer.provideMerge(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
-    ),
-  ),
+  Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ConnectionCatalogBroker.layer),

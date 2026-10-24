@@ -181,8 +181,7 @@ import * as ServerConfig from "./config.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
-import { makeComputerUseRpcHandlers } from "./cua/ComputerUseRpcHandlers.ts";
-import { makePreviewSessionRpcHandlers } from "./preview/PreviewSessions.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -2549,8 +2548,7 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
-        ...(yield* makeComputerUseRpcHandlers(currentSessionId)),
-        ...(yield* makePreviewSessionRpcHandlers(currentSessionId)),
+        ...(yield* PreviewSessions.makePreviewSessionRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
@@ -3681,6 +3679,7 @@ export const layer = Layer.unwrap(
     const connectionCatalogBroker = yield* ConnectionCatalogBroker.ConnectionCatalogBroker;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
+    const previewSessions = yield* PreviewSessions.PreviewSessions;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshHostSetup = yield* SshHostSetup.SshHostSetup;
@@ -3779,7 +3778,12 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
-              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate),
+                  Layer.succeed(PreviewSessions.PreviewSessions, previewSessions),
+                ),
+              ),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),

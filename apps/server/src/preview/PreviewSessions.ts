@@ -31,7 +31,7 @@ import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
+import { makeComputerUseRpcHandlers, stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
@@ -238,17 +238,15 @@ const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(PreviewSessions, make);
 
+/** The preview session RPCs, with the computer use controls they build on. */
 export const makePreviewSessionRpcHandlers = Effect.fn("PreviewSessions.rpcHandlers")(function* (
   sessionId: AuthSessionId,
 ) {
-  // Absent only in test assemblies, which then have no sessions to show.
-  const sessions = yield* Effect.serviceOption(PreviewSessions);
+  const sessions = yield* PreviewSessions;
   return {
-    [WS_METHODS.previewSessionsSubscribe]: (_input: {}) =>
-      Option.isNone(sessions) ? Stream.make({ sessions: [] }) : sessions.value.changes,
+    ...(yield* makeComputerUseRpcHandlers(sessionId)),
+    [WS_METHODS.previewSessionsSubscribe]: (_input: {}) => sessions.changes,
     [WS_METHODS.previewSessionsControl]: (input: PreviewSessionControlInput) =>
-      Option.isNone(sessions)
-        ? Effect.succeed({ applied: false, reason: "not_found" } as const)
-        : sessions.value.control(input, sessionId),
+      sessions.control(input, sessionId),
   } as const;
 });
