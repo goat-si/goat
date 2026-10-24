@@ -172,4 +172,11 @@ it("a launch that cannot open Devin Cloud reports the CLI's own reason, never ra
       opened(new DevinCloudCliError({ stage: "relay", detail: "vendor token=fixture-secret" })),
     ),
   );
+  // Only known CLI stages count; a decoded error without one is not trusted.
+  assert.isUndefined(
+    knownProviderFailureMessage({
+      _tag: "DevinCloudCliError",
+      message: "vendor /fixture/private-path",
+    }),
+  );
 });
