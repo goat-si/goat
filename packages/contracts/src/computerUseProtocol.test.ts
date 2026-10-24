@@ -16,6 +16,8 @@ import {
   admitComputerUseReply,
   computerUseDeadlineResult,
   computerUseNextStep,
+  computerUseImageInfo,
+  computerUseReady,
   computerUseReplyImageProblem,
   negotiateComputerUseVersion,
   unsupportedComputerUseMethod,
@@ -201,31 +203,65 @@ describe("computer use protocol values", () => {
   });
 });
 
+// An 8x6 PNG and the same picture as JPEG (sips), as base64.
+const PNG_8X6 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC";
+const JPEG_8X6 =
+  "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAACKADAAQAAAABAAAABgAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgABgAIAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMAAgICAgICAwICAwUDAwMFBgUFBQUGCAYGBgYGCAoICAgICAgKCgoKCgoKCgwMDAwMDA4ODg4ODw8PDw8PDw8PD//bAEMBAgICBAQEBwQEBxALCQsQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEP/dAAQAAf/aAAwDAQACEQMRAD8AKKKKAP/Z";
+
 describe("computer use readiness and reply images", () => {
   const decodes = (schema: Schema.Codec<unknown, unknown>, value: unknown) =>
     Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+  const ready = {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  } as const;
 
   it("reports each readiness step on its own, so an unproven step is never shown as done", () => {
     const portalPending = {
+      ...ready,
       grants: { accessibility: "granted", screenCapture: "pending" },
-      helper: "authenticated",
       capture: "pending",
-      tree: "ready",
-      input: "background",
       reasons: ["Allow screen sharing in the dialog GNOME opened."],
       platform: { linux: { displayServer: "wayland" } },
     };
     expect(decodes(ComputerUseReadiness, portalPending)).toBe(true);
+    expect(computerUseReady(Schema.decodeUnknownSync(ComputerUseReadiness)(portalPending))).toBe(
+      false,
+    );
     expect(decodes(ComputerUseReadiness, { ...portalPending, capture: "granted" })).toBe(false);
     expect(
       decodes(ComputerUseReadiness, {
-        ...portalPending,
+        ...ready,
         grants: { accessibility: true, screenCapture: true },
       }),
     ).toBe(false);
+    expect(computerUseReady(ready)).toBe(true);
   });
 
-  it("accepts an image only beside an observation that declares that screenshot, never a private one", () => {
+  it.each([
+    { platform: "a locked Mac", blockers: ["screenLocked"] },
+    { platform: "Windows reached over SSH (Session 0)", blockers: ["noInteractiveDesktop"] },
+    { platform: "a Mac whose grant changed while the helper ran", blockers: ["restartRequired"] },
+    { platform: "a desktop a person took over", blockers: ["userIntervened"] },
+  ])("is not ready on $platform even with every step proven", ({ blockers }) => {
+    const blocked = Schema.decodeUnknownSync(ComputerUseReadiness)({ ...ready, blockers });
+    expect(computerUseReady(blocked)).toBe(false);
+  });
+
+  it("reads an image's real format and size from its bytes", () => {
+    expect(computerUseImageInfo(PNG_8X6)).toEqual({ mimeType: "image/png", width: 8, height: 6 });
+    expect(computerUseImageInfo(JPEG_8X6)).toEqual({ mimeType: "image/jpeg", width: 8, height: 6 });
+    for (const bad of ["iVBORw0KGgo=", "not base64!", "", "AAAA"])
+      expect(computerUseImageInfo(bad)).toBeUndefined();
+  });
+
+  it("accepts an image only beside an observation that declares exactly that screenshot, never a private one", () => {
     const observed = {
       observationId: "o1",
       lineage: "l1",
@@ -237,11 +273,22 @@ describe("computer use readiness and reply images", () => {
       screenshot: { mimeType: "image/png", width: 8, height: 6 },
       elements: [],
     } as const;
-    const png = { mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const png = { mimeType: "image/png", data: PNG_8X6 };
     expect(computerUseReplyImageProblem(observed, png)).toBeUndefined();
     expect(computerUseReplyImageProblem(observed, undefined)).toBeUndefined();
-    expect(computerUseReplyImageProblem(observed, { ...png, mimeType: "image/jpeg" })).toMatch(
-      /image\/jpeg/,
+    // Points are pixels of the declared screenshot, so the size must match exactly.
+    expect(
+      computerUseReplyImageProblem(
+        { ...observed, screenshot: { mimeType: "image/png", width: 16, height: 12 } },
+        png,
+      ),
+    ).toMatch(/8x6/);
+    // The label must match the bytes, not just the observation.
+    expect(
+      computerUseReplyImageProblem(observed, { mimeType: "image/png", data: JPEG_8X6 }),
+    ).toMatch(/image\/jpeg/);
+    expect(computerUseReplyImageProblem(observed, { ...png, data: "iVBORw0KGgo=" })).toMatch(
+      /readable/,
     );
     const { screenshot: _screenshot, ...withoutScreenshot } = observed;
     expect(computerUseReplyImageProblem(withoutScreenshot, png)).toBeDefined();

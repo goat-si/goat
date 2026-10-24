@@ -9,6 +9,7 @@ import {
   ComputerUseHelloReply,
   ComputerUseObservation,
   ComputerUseReadiness,
+  computerUseReady,
   type ComputerUseActionRequest,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -38,14 +39,19 @@ const X11: LinuxSessionFacts = {
   currentDesktop: "GNOME",
   gnomeShellMajor: 46,
 };
+const SHOT = png(42, 32, true).toString("base64");
 const NOT_SECURE: SecureFocus = { known: true, secure: false, windows: 1 };
 
-/** A PNG of width x height, solid unless striped. */
-function png(width: number, height: number, striped: boolean) {
+/** A PNG of width x height: solid, striped, or noise that does not compress. */
+function png(width: number, height: number, fill: boolean | "noise") {
   const raw = Buffer.alloc((width * 3 + 1) * height);
+  let seed = 7;
   for (let row = 0; row < height; row++)
-    for (let x = 0; x < width; x++)
-      raw[row * (width * 3 + 1) + 1 + x * 3] = striped && x % 2 === 0 ? 255 : 10;
+    for (let x = 0; x < width * 3; x++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      raw[row * (width * 3 + 1) + 1 + x] =
+        fill === "noise" ? (seed >>> 16) & 0xff : fill && x % 6 === 0 ? 255 : 10;
+    }
   const chunk = (type: string, body: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(body.length);
@@ -75,7 +81,8 @@ function fixtureDriver() {
     snapshot: 0,
     onScreen: true,
     sent: [] as string[],
-    imageData: "UE5H",
+    // The driver says 420x320; the bytes are what the agent sees.
+    imageData: SHOT,
     setValueEffect: "confirmed",
     loseNext: false,
   };
@@ -359,8 +366,9 @@ describe("Linux computer use helper conformance", () => {
     const helper = await connect();
     const first = await helper.observe();
     expect(first.observation).toMatchObject({ kind: "full", reason: "first", privateMode: false });
-    expect(first.image).toEqual({ mimeType: "image/png", data: "UE5H" });
-    expect(JSON.stringify(first.result)).not.toContain("UE5H");
+    expect(first.image).toEqual({ mimeType: "image/png", data: SHOT });
+    expect(first.observation.screenshot).toEqual({ mimeType: "image/png", width: 42, height: 32 });
+    expect(JSON.stringify(first.result)).not.toContain(SHOT);
     // A password field's value never leaves, focused or not.
     expect(JSON.stringify(first.result)).not.toContain("hunter2");
 
@@ -400,6 +408,19 @@ describe("Linux computer use helper conformance", () => {
       set.observation,
     );
     expect(noop).toMatchObject({ outcome: "suspected_noop", dispatch: "verified" });
+    await helper.close();
+  });
+
+  it("an image its bytes do not describe is not declared, so points into it are refused", async () => {
+    const helper = await connect();
+    helper.driver.state.imageData = "UE5H";
+    const first = await helper.observe();
+    expect(first.observation).not.toHaveProperty("screenshot");
+    expect(first.image).toBeUndefined();
+    expect(
+      await helper.act({ action: "click", at: { x: 20, y: 60 } }, first.observation),
+    ).toMatchObject({ outcome: "refused", reason: "staleElement" });
+    expect(helper.driver.state.sent).toEqual([]);
     await helper.close();
   });
 
@@ -589,7 +610,7 @@ describe("Linux computer use helper conformance", () => {
   it("an action whose answer outgrows the frame keeps its outcome and leaves the evidence out", async () => {
     const helper = await connect({ maxFrameBytes: 4096 });
     const first = await helper.observe();
-    helper.driver.state.imageData = "A".repeat(8192);
+    helper.driver.state.imageData = png(128, 128, "noise").toString("base64");
     const reply = await helper.request(
       "click",
       helper.actionParams(
@@ -672,9 +693,11 @@ describe("Linux computer use helper conformance", () => {
       capture: "ready",
       tree: "ready",
       input: "foregroundOnly",
+      blockers: [],
       platform: { linux: { displayServer: "x11" } },
     });
     expect(readiness.reasons).toHaveLength(1);
+    expect(computerUseReady(readiness)).toBe(true);
     await helper.close();
   });
 

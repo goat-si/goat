@@ -88,6 +88,22 @@ export const ComputerUseReadiness = Schema.Struct({
   /** Proven by a real tree read of a window. */
   tree: Schema.Literals(["ready", "empty", "unavailable"]),
   input: Schema.Literals(["background", "foregroundOnly", "unavailable"]),
+  /**
+   * What stops computer use right now even when every step above is ready, typed so clients
+   * can choose the remedy: screenLocked (unlock the screen), userIntervened (a person has the
+   * input), noInteractiveDesktop (a service or SSH session with no desktop, such as Windows
+   * Session 0), otherUserAtConsole, restartRequired (a grant changed and the helper must start
+   * again to see it).
+   */
+  blockers: Schema.Array(
+    Schema.Literals([
+      "screenLocked",
+      "userIntervened",
+      "noInteractiveDesktop",
+      "otherUserAtConsole",
+      "restartRequired",
+    ]),
+  ),
   /** Written for the person setting it up, one per step that is not ready. */
   reasons: Schema.Array(Schema.String),
   platform: Schema.optionalKey(
@@ -99,6 +115,20 @@ export const ComputerUseReadiness = Schema.Struct({
   ),
 });
 export type ComputerUseReadiness = typeof ComputerUseReadiness.Type;
+
+/**
+ * Whether the helper can observe and act now: both grants given, the helper authenticated,
+ * capture and the tree proven by real reads, some input route, and nothing blocking. Anything
+ * less is not ready, whatever the reasons say.
+ */
+export const computerUseReady = (readiness: ComputerUseReadiness): boolean =>
+  readiness.grants.accessibility === "granted" &&
+  readiness.grants.screenCapture === "granted" &&
+  readiness.helper === "authenticated" &&
+  readiness.capture === "ready" &&
+  readiness.tree === "ready" &&
+  readiness.input !== "unavailable" &&
+  readiness.blockers.length === 0;
 
 /** One exact window of one process. */
 export const ComputerUseWindowTarget = Schema.Struct({
@@ -496,10 +526,65 @@ export const ComputerUseReplyFrame = Schema.Struct({
 });
 export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
 
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+
+/**
+ * The format and size an image's own bytes declare, read from the PNG header or the JPEG
+ * start-of-frame segment; undefined for anything else, or bytes that are not one of those.
+ */
+export function computerUseImageInfo(data: string):
+  | {
+      readonly mimeType: "image/png" | "image/jpeg";
+      readonly width: number;
+      readonly height: number;
+    }
+  | undefined {
+  if (data.length % 4 !== 0 || data.length > COMPUTER_USE_MAX_FRAME_BYTES || !BASE64.test(data))
+    return undefined;
+  const binary = atob(data);
+  const byte = (index: number) => binary.charCodeAt(index);
+  const word = (index: number) => (byte(index) << 8) | byte(index + 1);
+  if (
+    binary.length >= 24 &&
+    binary.startsWith("\x89PNG\r\n\x1a\n") &&
+    binary.slice(12, 16) === "IHDR"
+  ) {
+    const width = (word(16) << 16) | word(18);
+    const height = (word(20) << 16) | word(22);
+    return width > 0 && height > 0 ? { mimeType: "image/png", width, height } : undefined;
+  }
+  if (byte(0) !== 0xff || byte(1) !== 0xd8) return undefined;
+  let index = 2;
+  while (index + 3 < binary.length) {
+    if (byte(index) !== 0xff) return undefined;
+    const marker = byte(index + 1);
+    // Fill bytes, and markers that carry no length.
+    if (marker === 0xff) {
+      index += 1;
+      continue;
+    }
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+      index += 2;
+      continue;
+    }
+    // Start of frame, except DHT (C4), JPG (C8) and DAC (CC).
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      if (index + 8 >= binary.length) return undefined;
+      const height = word(index + 5);
+      const width = word(index + 7);
+      return width > 0 && height > 0 ? { mimeType: "image/jpeg", width, height } : undefined;
+    }
+    index += 2 + word(index + 2);
+  }
+  return undefined;
+}
+
 /**
  * Why a reply's image cannot be shown with its observation, or undefined when it can. An image
- * belongs only with an observation that declares a screenshot of the same type, and never with
- * one in private mode. Size is checked as part of the whole frame (admitComputerUseReply).
+ * belongs only with an observation that declares a screenshot, and its own bytes must be that
+ * format and exactly that size: points the agent picks are pixels of the declared screenshot.
+ * Never beside a private observation. The frame's total size is checked by
+ * admitComputerUseReply. For an action result, pass the observation inside it.
  */
 export function computerUseReplyImageProblem(
   observation: ComputerUseObservation | undefined,
@@ -507,13 +592,30 @@ export function computerUseReplyImageProblem(
 ): string | undefined {
   if (observation?.privateMode && image) return "A private observation carried an image.";
   if (!image) return undefined;
-  if (!observation?.screenshot) return "An image came without an observation that declares one.";
-  if (observation.screenshot.mimeType !== image.mimeType)
+  const declared = observation?.screenshot;
+  if (!declared) return "An image came without an observation that declares one.";
+  const actual = computerUseImageInfo(image.data);
+  if (!actual) return "The image is not a readable PNG or JPEG.";
+  if (actual.mimeType !== image.mimeType || actual.mimeType !== declared.mimeType)
     return (
       "The image is " +
+      actual.mimeType +
+      "; the frame says " +
       image.mimeType +
-      ", the observation declares " +
-      observation.screenshot.mimeType +
+      " and the observation " +
+      declared.mimeType +
+      "."
+    );
+  if (actual.width !== declared.width || actual.height !== declared.height)
+    return (
+      "The image is " +
+      actual.width +
+      "x" +
+      actual.height +
+      "; the observation declares " +
+      declared.width +
+      "x" +
+      declared.height +
       "."
     );
   return undefined;
