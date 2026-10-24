@@ -7,32 +7,79 @@ export interface PreviewSessionStackFocus {
   readonly sessionId?: string;
 }
 
+/** sessionStorage belongs to one tab or Electron window and survives its reloads. */
+const HIDDEN_KEY = "goat:agent-screen-cards:hidden";
+
+const storage = () => {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+};
+
+function writeHidden(hidden: boolean) {
+  try {
+    if (hidden) storage()?.setItem(HIDDEN_KEY, "1");
+    else storage()?.removeItem(HIDDEN_KEY);
+  } catch {
+    // A full or blocked storage only loses the choice across reloads.
+  }
+}
+
 interface PreviewSessionStackState {
-  readonly collapsed: boolean;
+  /** The person hid the cards in this window. */
+  readonly hidden: boolean;
+  /** The thread pane has no room for a card beside the conversation, so cards hide by themselves. */
+  readonly narrow: boolean;
+  /** Shown although the pane is narrow, because the person asked for them there. */
+  readonly revealedWhileNarrow: boolean;
+  /** Stopped sessions whose card the person closed. */
+  readonly dismissed: ReadonlySet<string>;
   readonly focus: PreviewSessionStackFocus | null;
   /** Bumps on each request, so asking for the same session again scrolls to it again. */
   readonly focusRequest: number;
-  readonly setCollapsed: (collapsed: boolean) => void;
+  readonly setShown: (shown: boolean) => void;
+  readonly setNarrow: (narrow: boolean) => void;
+  readonly dismiss: (sessionId: string) => void;
 }
 
-export const usePreviewSessionStack = create<PreviewSessionStackState>()((set) => ({
-  collapsed: false,
+export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, get) => ({
+  hidden: storage()?.getItem(HIDDEN_KEY) === "1",
+  narrow: false,
+  revealedWhileNarrow: false,
+  dismissed: new Set(),
   focus: null,
   focusRequest: 0,
-  setCollapsed: (collapsed) => set({ collapsed }),
+  setShown: (shown) => {
+    const { narrow } = get();
+    // Hiding cards that only a narrow pane let through keeps the window's choice for wide panes.
+    if (!shown && narrow) return set({ revealedWhileNarrow: false });
+    writeHidden(!shown);
+    set({ hidden: !shown, revealedWhileNarrow: shown && narrow });
+  },
+  setNarrow: (narrow) => {
+    if (get().narrow !== narrow) set({ narrow, revealedWhileNarrow: false });
+  },
+  dismiss: (sessionId) => set((state) => ({ dismissed: new Set(state.dismissed).add(sessionId) })),
 }));
 
+export const selectAgentCardsShown = (state: PreviewSessionStackState) =>
+  !state.hidden && (!state.narrow || state.revealedWhileNarrow);
+
 /**
- * Opens the agents-on-screen stack, for example from an @browser or @computer mention, and
- * brings one session's tile into view. The stack shows the environment of the thread on screen;
- * environmentId is accepted for callers that know it and is otherwise unused.
+ * Shows the agents-on-screen cards, even in a narrow pane, and brings one session's card into
+ * view. The cards show the environment of the thread on screen; environmentId is accepted for
+ * callers that know it and is otherwise unused.
  */
 export function openPreviewSessionStack(input?: {
   readonly environmentId?: EnvironmentId;
   readonly focus?: PreviewSessionStackFocus;
 }): void {
+  writeHidden(false);
   usePreviewSessionStack.setState((state) => ({
-    collapsed: false,
+    hidden: false,
+    revealedWhileNarrow: state.narrow,
     focus: input?.focus ?? null,
     focusRequest: state.focusRequest + 1,
   }));

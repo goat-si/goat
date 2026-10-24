@@ -155,6 +155,7 @@ import {
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../previewStateStore";
 import { previewRuntimeTabId } from "../browser/previewRuntimeTabId";
 import { ThreadPreviewMiniPlayer } from "./preview/ThreadPreviewMiniPlayer";
+import { AgentScreenCardsToggle } from "./preview/sessions/AgentScreenCardsToggle";
 import { usePreviewSession } from "./preview/usePreviewSession";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 
@@ -3467,6 +3468,14 @@ export default function ChatView(props: ChatViewProps) {
   const panelToggleControls = (
     <PanelLayoutControls
       {...panelToggleControlProps}
+      leadingControl={
+        embedded ? null : (
+          <AgentScreenCardsToggle
+            environmentId={activeThread.environmentId}
+            threadRef={isServerThread ? activeThreadRef : null}
+          />
+        )
+      }
       showThreadPanelControl={!inlineRightPanelOwnsTitleBar}
     />
   );

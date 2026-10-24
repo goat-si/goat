@@ -406,9 +406,12 @@ export function ServerBrowserSurface(props: {
           else inputRef.current?.blur();
         },
         onPointer: (pointer) => {
-          // A thumbnail shows the page only; the cursor's click marker would keep repainting it.
-          if (thumbnailFrameMs !== undefined) return;
-          const placed = placeAgentCursor(pointer, canvasRef.current, viewportRef.current);
+          // A thumbnail shows where the agent points, without the click marker's repainting ping.
+          const placed = placeAgentCursor(
+            thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" },
+            canvasRef.current,
+            viewportRef.current,
+          );
           if (placed) setAgentCursor(placed);
         },
         onClipboard: (text) => void copyPageText(text),
