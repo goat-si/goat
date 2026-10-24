@@ -5,6 +5,7 @@ import {
   type CuaVerificationStepId,
   type DesktopCuaDriverRequest,
   type DesktopCuaGrants,
+  type DesktopCuaPrivateModeReport,
   type DesktopCuaVerification,
 } from "@goat/contracts";
 import {
@@ -37,7 +38,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { cuaGrantTarget, readCuaGrants, type CuaGrantTarget } from "./DesktopCuaGrants.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
-  HELPER_SIGNALS,
+  helperSignals,
   initialHelperReadiness,
   toReadiness,
   withGrants,
@@ -58,7 +59,19 @@ import {
   type DaemonMetadata,
   type HelperBundle,
   type HelperHostOptions,
+  type HelperSession,
 } from "./ComputerUseHelper.ts";
+import { makePrivateModeFollower } from "./privateModeWatch.ts";
+import {
+  describeDegraded,
+  failedCall,
+  identityFailure,
+  permissionsFailure,
+  readArray,
+  readNumber,
+  readString,
+  type ToolCall,
+} from "./driverChecks.ts";
 import {
   probeWindowsReadiness,
   windowsDriverPipe,
@@ -77,6 +90,10 @@ interface NativeHost {
   readonly uniffiDestroy: () => void;
   /** The helper's service pid, the driver's parent; absent for the in-process host. */
   readonly servicePid?: () => number | undefined;
+  /** The helper session of the running generation, for its private-mode watch (#1235). */
+  readonly session?: () =>
+    | Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch">
+    | undefined;
 }
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
@@ -309,70 +326,6 @@ const VERIFICATION_STEPS = 6;
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-type ToolCall = Option.Option<{ readonly result: ToolResult; readonly structured: unknown }>;
-
-const field = (value: unknown, key: string): unknown =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined;
-const readString = (value: unknown, key: string) => {
-  const found = field(value, key);
-  return typeof found === "string" ? found : undefined;
-};
-const readNumber = (value: unknown, key: string) => {
-  const found = field(value, key);
-  return typeof found === "number" ? found : undefined;
-};
-const readArray = (value: unknown, key: string): readonly unknown[] => {
-  const found = field(value, key);
-  return Array.isArray(found) ? found : [];
-};
-
-/** Drops the driver's diagnostic tail; the first clause names the cause. */
-function describeDegraded(reason: string): string {
-  if (reason.startsWith("screen_locked"))
-    return "The screen is locked. Unlock this Mac, then try again.";
-  return `The driver could not see GOAT's window (${reason.split(/[.:]/u, 1)[0]!.replaceAll("_", " ")}).`;
-}
-
-function failedCall(call: ToolCall): string | undefined {
-  if (Option.isNone(call)) return "The driver did not answer. Try again.";
-  if (call.value.result.isError)
-    return call.value.result.text.trim() || "The driver reported an error.";
-  return undefined;
-}
-
-/** Each check returns why it failed, or undefined when it passed. */
-function permissionsFailure(call: ToolCall): string | undefined {
-  const error = failedCall(call);
-  if (error !== undefined || Option.isNone(call)) return error;
-  const { structured } = call.value;
-  if (readString(field(structured, "source"), "attribution") !== "host")
-    return "The driver is not running under GOAT's permissions. Restart GOAT.";
-  const missing = [
-    ...(field(structured, "accessibility") === true ? [] : ["Accessibility"]),
-    ...(field(structured, "screen_recording") === true ? [] : ["Screen Recording"]),
-  ];
-  return missing.length === 0
-    ? undefined
-    : `The driver does not see ${missing.join(" or ")} yet. Quit and reopen GOAT.`;
-}
-
-function identityFailure(call: ToolCall, bundleId: string, processId: number): string | undefined {
-  const error = failedCall(call);
-  if (error !== undefined || Option.isNone(call)) return error;
-  const check = readArray(call.value.structured, "checks").find(
-    (entry) => readString(entry, "name") === "bundle_identity",
-  );
-  const data = field(check, "data");
-  const ok =
-    readString(check, "status") === "pass" &&
-    readString(data, "identity_source") === "parent_application" &&
-    readString(data, "bundle_identifier") === bundleId &&
-    readNumber(data, "parent_process_id") === processId;
-  return ok
-    ? undefined
-    : (readString(check, "message") ?? "The driver could not confirm it runs inside GOAT.");
-}
-
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("desktop.cua.make")(function* (
   native: DesktopCuaDriverDependencies = dependencies,
@@ -389,6 +342,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperGeneration = 0;
   let helperSeen = false;
   let lastReadiness: string | undefined;
+  let watches = 0;
+  // Whether the running helper said it can watch; a build without the method raises nothing.
+  let helperCanWatch = false;
+  const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport>();
+  const watchRetries = yield* Queue.unbounded<() => void>();
+  const privateMode = makePrivateModeFollower({
+    publish: (report) => Queue.offerUnsafe(safety, report),
+    newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
+    retryLater: (retry) => Queue.offerUnsafe(watchRetries, retry),
+  });
   /** Whether the running check reads through the helper; only then do its reads prove anything. */
   let checkingHelper = false;
   const noteHelper = (update: (state: HelperReadinessState) => HelperReadinessState) =>
@@ -400,7 +363,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         type: "cuaReadiness",
         generation: helperGeneration,
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
-        signals: HELPER_SIGNALS,
+        signals: helperSignals(helperCanWatch),
       } as const;
       const key = encodeJson(report);
       if (key === lastReadiness) return Effect.void;
@@ -444,7 +407,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           Effect.orElseSucceed(() => false),
         )
       : Effect.succeed(true),
-  ).pipe(Effect.tap(() => noteHelper((state) => withRunning(state, false))));
+  ).pipe(
+    Effect.tap(() => noteHelper((state) => withRunning(state, false))),
+    Effect.tap(() => Effect.sync(() => privateMode.detach())),
+  );
   const report = (requestId: string, status: "stopped" | "unavailable", message?: string) =>
     closed
       ? Effect.void
@@ -912,7 +878,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.timeout("20 seconds"),
       );
       const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
-      if (entry.helper) yield* noteHelper((state) => withRunning(state, true));
+      const session = entry.host.session?.();
+      if (entry.helper) {
+        helperCanWatch = session?.canWatch === true;
+        yield* noteHelper((state) => withRunning(state, true));
+      }
+      if (session) yield* Effect.sync(() => void privateMode.attach(session));
       if (!closed)
         yield* publisher.publishCuaReport({
           version: 1,
@@ -969,6 +940,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     grants,
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(publisher.cuaWatch, (active) =>
+        Effect.sync(() => void privateMode.setWatching(active)),
+      ).pipe(Effect.forkScoped);
+      yield* Stream.runForEach(Stream.fromQueue(safety), publisher.publishCuaSafety).pipe(
+        Effect.forkScoped,
+      );
+      yield* Stream.runForEach(Stream.fromQueue(watchRetries), (retry) =>
+        Effect.sleep("1 second").pipe(Effect.andThen(Effect.sync(retry))),
+      ).pipe(Effect.forkScoped);
       yield* Effect.forever(
         Queue.take(crashes).pipe(
           Effect.flatMap((entry) =>
