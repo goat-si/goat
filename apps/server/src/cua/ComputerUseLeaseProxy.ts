@@ -42,7 +42,13 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
-import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
+import {
+  approvedApps,
+  learnApps,
+  type ListedApp,
+  scopeVerdict,
+  takesScreen,
+} from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import {
@@ -59,6 +65,9 @@ const REQUEST = goatCallText("computer_use.request");
 
 const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
+
+const SCREEN_SHARED =
+  "Another thread is using other apps on this screen, so a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Act on this window in the background or through an element, or end your turn and ask the person.";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -266,6 +275,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let finished: LeaseEnd | undefined;
   let paused: ComputerUsePauseReason | undefined;
   let apps: ReadonlySet<string> | undefined;
+  /** Another thread holds apps on this screen; see takesScreen. */
+  let shared = false;
   let running: Running | undefined;
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -496,6 +507,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
+    shared = update.shared === true;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
     const missedPause =
@@ -633,6 +645,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         scopeMessage(verdict.reason, verdict.app, verdict.opaque),
         verdict.app,
       );
+    if (shared && takesScreen(message.params?.name, message.params?.arguments))
+      return refusal(id, message.method, "screen_shared", SCREEN_SHARED);
     return undefined;
   });
 

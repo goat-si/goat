@@ -677,8 +677,8 @@ it.effect("lets one unattended thread at a time hold the screen without a grant"
     assert.isTrue(Option.isSome(held));
     assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
     // Requests and approvals see it as the holder, as they see a grant.
-    assert.equal(Option.getOrThrow(yield* leases.holder(second)).threadId, first);
-    assert.isTrue(Option.isNone(yield* leases.holder(first)));
+    assert.equal(Option.getOrThrow(yield* leases.holder(second, undefined)).threadId, first);
+    assert.isTrue(Option.isNone(yield* leases.holder(first, undefined)));
     // A person directing a thread can still use the screen meanwhile.
     assert.isTrue(Option.isSome(yield* leases.everyAppControl(person, false)));
 
@@ -688,6 +688,47 @@ it.effect("lets one unattended thread at a time hold the screen without a grant"
     assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
     yield* leases.stopAll;
   }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "keeps threads granted different apps to their own apps, stopped one at a time, sharing the screen while both grants last",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const kakao = ThreadId.make("thread-kakao");
+      const aside = ThreadId.make("thread-aside");
+      yield* grant(kakao, "handoff:kakao", ["com.kakao.KakaoTalk"]);
+      yield* grant(aside, "handoff:aside", ["at.studio.AsideBrowser"]);
+      // One unattended control on its grant, one interactive control on its thread's grants.
+      const kakaoControl = yield* leases.control(kakao, yield* leases.active(kakao));
+      const asideControl = yield* leases.control(aside, Option.none());
+      assert.deepInclude(yield* leases.controlState(kakao, kakaoControl.controlId), {
+        _tag: "active",
+        apps: ["com.kakao.KakaoTalk"],
+        shared: true,
+      });
+      assert.deepInclude(yield* leases.controlState(aside, asideControl.controlId), {
+        _tag: "active",
+        apps: ["at.studio.AsideBrowser"],
+        shared: true,
+      });
+
+      yield* leases.stop(kakao);
+      assert.deepEqual(yield* leases.controlState(kakao, kakaoControl.controlId), {
+        _tag: "ended",
+        reason: "stopped",
+      });
+      assert.equal((yield* leases.controlState(aside, asideControl.controlId))._tag, "active");
+
+      // Once the other grant is gone the screen is this thread's alone again.
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'handoff:kakao'`;
+      const alone = yield* leases.controlState(aside, asideControl.controlId);
+      assert.equal(alone._tag, "active");
+      assert.notProperty(alone, "shared");
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect(
@@ -722,7 +763,7 @@ it.effect(
       const claiming = yield* leases.serializeAdmission(
         Effect.gen(function* () {
           // The approval found no holder and has not committed yet.
-          assert.isTrue(Option.isNone(yield* leases.holder(approved)));
+          assert.isTrue(Option.isNone(yield* leases.holder(approved, undefined)));
           const claim = yield* leases
             .everyAppControl(scheduled, true)
             .pipe(Effect.forkChild({ startImmediately: true }));

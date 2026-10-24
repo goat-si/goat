@@ -258,6 +258,11 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     interruptions: Schema.optionalKey(
       Schema.Struct({ count: Schema.Int, last: ComputerUsePauseReason }),
     ),
+    /**
+     * Another thread holds a grant on this screen, so calls that bring a window forward or move
+     * the pointer would take it from that thread.
+     */
+    shared: Schema.optionalKey(Schema.Literal(true)),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
@@ -285,6 +290,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "helper_restarted",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
+  /** It would bring a window forward or move the pointer while another thread holds apps here. */
+  "screen_shared",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

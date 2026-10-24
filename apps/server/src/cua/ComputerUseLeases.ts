@@ -40,6 +40,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { approvedApps } from "./ComputerUseScope.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -58,11 +59,17 @@ export interface ComputerUseLease {
   readonly apps?: ReadonlyArray<string>;
 }
 
-/** The thread holding this host's screen for unattended work, by grant or full access. */
+/** A thread whose admission overlaps one asked for, by grant or by unattended full access. */
 export interface ComputerUseHolder {
   readonly threadId: ThreadId;
   readonly expiresAt: DateTime.Utc;
+  /** The holder's apps in the way, as its grant names them; absent when it holds the whole screen. */
+  readonly apps?: ReadonlyArray<string>;
 }
+
+/** Who holds what an admission would overlap, and until when, as one sentence. */
+export const describeHolder = (holder: ComputerUseHolder) =>
+  `Thread ${holder.threadId} holds ${holder.apps === undefined ? "the whole screen" : holder.apps.join(", ")} on this host until ${DateTime.formatIso(holder.expiresAt)}.`;
 
 /**
  * Whether the host's helper reports a person's input and secret fields at all: true only for a
@@ -103,6 +110,11 @@ export type ComputerUseControlState =
       readonly apps: ReadonlyArray<string> | undefined;
       /** When this state can next change without a signal, epoch ms. */
       readonly wakeAt: number;
+      /**
+       * Another thread holds a grant on this screen, so this one must not raise windows or move
+       * the pointer over it.
+       */
+      readonly shared?: true;
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }
   | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
@@ -130,9 +142,13 @@ export class ComputerUseLeases extends Context.Service<
     readonly active: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
-    /** The thread other than `except` holding this host's screen for unattended work. */
+    /**
+     * The thread other than `except` whose admission reaches an app `apps` names, or any app
+     * when `apps` is absent: a live grant, or unattended work admitted to every app.
+     */
     readonly holder: (
-      except?: ThreadId,
+      except: ThreadId | undefined,
+      apps: ReadonlyArray<string> | undefined,
     ) => Effect.Effect<Option.Option<ComputerUseHolder>, ComputerUseLeaseError>;
     /** Whether the thread is the GOAT Bot thread. Channel workers are known by their id. */
     readonly channelOrigin: (
@@ -240,6 +256,22 @@ const appsOf = (leases: ReadonlyArray<ComputerUseLease>): ReadonlyArray<string> 
     for (const app of lease.apps) apps.add(app);
   }
   return [...apps].sort();
+};
+
+/**
+ * The apps of `held` that `wanted` also reaches, matched as the proxy matches them (case aside);
+ * undefined when they share none. Without a list an admission reaches every app, so it overlaps
+ * every other: the driver acts under it on the whole desktop and in scripts.
+ */
+const overlap = (
+  held: ReadonlyArray<string> | undefined,
+  wanted: ReadonlyArray<string> | undefined,
+): { readonly apps?: ReadonlyArray<string> } | undefined => {
+  if (held === undefined) return {};
+  const names = approvedApps(wanted);
+  if (names === undefined) return { apps: held };
+  const apps = held.filter((app) => names.has(app.toLowerCase()));
+  return apps.length === 0 ? undefined : { apps };
 };
 
 interface ControlRecord extends ComputerUseControl {
@@ -422,49 +454,43 @@ const make = Effect.gen(function* () {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
+    const grants = yield* live();
+    const others = grants.filter((lease) => lease.threadId !== threadId);
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
-    if (
-      record.everyApp === "unattended" &&
-      (yield* live()).some((lease) => lease.threadId !== threadId)
-    ) {
+    if (record.everyApp === "unattended" && others.length > 0) {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
-    if (record.everyApp !== undefined)
-      return {
+    // Other threads' grants hold apps on this screen until they end, which this state outlasts.
+    const active = (apps: ReadonlyArray<string> | undefined, wakeAt: number) =>
+      ({
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
-        apps: scoped(record, undefined),
-        wakeAt: DateTime.toEpochMillis(record.expiresAt),
-      };
+        apps: scoped(record, apps),
+        wakeAt: Math.min(wakeAt, ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt))),
+        ...(others.length === 0 ? {} : ({ shared: true } as const)),
+      }) as const;
+    if (record.everyApp !== undefined)
+      return active(undefined, DateTime.toEpochMillis(record.expiresAt));
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;
-      return {
-        _tag: "active",
-        expiresAt: record.expiresAt,
-        interruptions,
-        apps: scoped(record, grant.lease.apps),
-        wakeAt: DateTime.toEpochMillis(record.expiresAt),
-      };
+      return active(grant.lease.apps, DateTime.toEpochMillis(record.expiresAt));
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
-    const grants = yield* live(threadId);
-    return {
-      _tag: "active",
-      expiresAt: record.expiresAt,
-      interruptions,
-      apps: scoped(record, grants.length === 0 ? [] : appsOf(grants)),
-      wakeAt: Math.min(
+    const own = grants.filter((lease) => lease.threadId === threadId);
+    return active(
+      own.length === 0 ? [] : appsOf(own),
+      Math.min(
         DateTime.toEpochMillis(record.expiresAt),
-        ...grants.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
+        ...own.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
       ),
-    };
+    );
   });
 
   const end = (threadId: ThreadId, reason: ComputerUseControlEnd) => {
@@ -620,9 +646,20 @@ const make = Effect.gen(function* () {
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
-    holder: Effect.fn("ComputerUseLeases.holder")(function* (except?: ThreadId) {
-      const lease = (yield* live()).find((grant) => grant.threadId !== except);
-      if (lease !== undefined) return Option.some<ComputerUseHolder>(lease);
+    holder: Effect.fn("ComputerUseLeases.holder")(function* (
+      except: ThreadId | undefined,
+      apps: ReadonlyArray<string> | undefined,
+    ) {
+      for (const lease of yield* live()) {
+        if (lease.threadId === except) continue;
+        const shared = overlap(lease.apps, apps);
+        if (shared !== undefined)
+          return Option.some<ComputerUseHolder>({
+            threadId: lease.threadId,
+            expiresAt: lease.expiresAt,
+            ...shared,
+          });
+      }
       const admitted = unattendedEveryApp(except, yield* DateTime.now);
       return admitted === undefined
         ? Option.none<ComputerUseHolder>()

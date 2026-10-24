@@ -32,6 +32,9 @@ const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
 /** Run steps or code the proxy cannot attribute to one app before they start. */
 const OPAQUE_TOOLS: ReadonlySet<string> = new Set(["run_steps", "run_script"]);
 
+/** Tools that bring a window forward or move the pointer whatever delivery they name. */
+const SCREEN_TOOLS: ReadonlySet<string> = new Set(["bring_to_front", "move_cursor"]);
+
 export interface ListedApp {
   readonly id: string;
   readonly name: string | undefined;
@@ -60,6 +63,19 @@ const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
   const pid = args?.pid ?? record(args?.target)?.pid;
   return typeof pid === "number" && Number.isInteger(pid) ? pid : undefined;
 };
+
+/**
+ * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
+ * delivers input in the foreground. Background delivery posts to the target process without
+ * either, which is what lets threads admitted to different apps act at once.
+ */
+export function takesScreen(name: unknown, args: unknown): boolean {
+  if (typeof name === "string" && SCREEN_TOOLS.has(name)) return true;
+  const object = record(args);
+  return (
+    object?.delivery_mode === "foreground" || record(object?.target)?.delivery_mode === "foreground"
+  );
+}
 
 const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>
   names.some((name) => name !== undefined && apps.has(name.toLowerCase()));
