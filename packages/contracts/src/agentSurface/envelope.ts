@@ -142,6 +142,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   remote_outdated: before("failed_precondition"),
   caller_changed: before("conflict"),
   duplicate_task: before("conflict"),
+  // The discard kept ownership and skips an absent file, so repeating it is safe.
+  attachment_remove_failed: before("unavailable"),
   // Linked hosts (OrchestratorMcpFailure reason)
   link_refused: before("permission_denied"),
   // Cloud machines (CloudMachineErrorReason)

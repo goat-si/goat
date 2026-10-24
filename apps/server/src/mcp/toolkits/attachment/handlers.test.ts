@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
@@ -84,21 +85,29 @@ it.effect.each(obstacles)(
       const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
       yield* block(fs, folder, folder + "/" + attachmentId + ".png");
 
-      const failed = yield* call("goat_attachment_discard", { attachmentId });
-      expect(declaredFailure(failed)).toMatchObject({ code: "orchestration_error" });
+      const discard = { path: "attachment.discard", args: { attachmentId } };
+      const failed = yield* call("goat_call", discard);
+      expect(failed.structuredContent).toMatchObject({
+        status: "error",
+        error: { reason: "attachment_remove_failed", retryable: true },
+      });
 
       yield* unblock(fs, folder, folder + "/" + attachmentId + ".png");
-      const retried = yield* call("goat_attachment_discard", { attachmentId });
-      expect(retried.isError).toBe(false);
+      const retried = yield* call("goat_call", discard);
+      expect(retried.structuredContent).toMatchObject({ status: "ok" });
       const again = yield* call("goat_attachment_discard", { attachmentId });
       expect(declaredFailure(again)).toMatchObject({ code: "invalid_request" });
     }).pipe(
       Effect.provide(
-        McpHttpServer.layerAttachmentToolkit.pipe(
+        Layer.mergeAll(
+          McpHttpServer.layerAttachmentToolkit,
+          McpHttpServer.catalogRegistrations.agentSurface,
+        ).pipe(
           Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
           Layer.provide(ServerSecretStore.layer),
+          Layer.provide(Sqlite.layerMemory),
           Layer.provideMerge(
             ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" }),
           ),

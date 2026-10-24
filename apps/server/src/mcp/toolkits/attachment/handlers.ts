@@ -79,6 +79,7 @@ export const layer = McpToolAccess.toLayer(
                 () =>
                   new OrchestratorMcpFailure({
                     code: "orchestration_error",
+                    reason: "attachment_remove_failed",
                     message: "The pending upload could not be removed. Discard it again.",
                   }),
               ),
