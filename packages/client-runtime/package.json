@@ -79,6 +79,10 @@
       "types": "./src/device/hubAccess.ts",
       "default": "./src/device/hubAccess.ts"
     },
+    "./state/preview-sessions": {
+      "types": "./src/state/previewSessions.ts",
+      "default": "./src/state/previewSessions.ts"
+    },
     "./preview/server-browser-stream": {
       "types": "./src/preview/serverBrowserStream.ts",
       "default": "./src/preview/serverBrowserStream.ts"
