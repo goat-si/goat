@@ -5,6 +5,7 @@ import {
   type ComputerUseElement,
   type ComputerUseObservation,
   type ComputerUseRefusal,
+  type ComputerUseReadiness,
   type ComputerUseRefusalReason,
   type ComputerUseWindow,
   COMPUTER_USE_ACTIONS,
@@ -177,7 +178,10 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         "ownerMismatch",
         "Window " + windowId + " belongs to process " + window.pid + ", not " + pid + ".",
       );
-    // An unmapped window (minimized, on another workspace) is a different epoch from a shown one.
+    // X11 has one root window and one scale for every monitor, and element frames and points
+    // are window-local, so moving a window between monitors changes nothing a ref means. A
+    // window on another workspace or minimized is unmapped, which is_on_screen reports; that
+    // and a driver restart are what invalidate refs here.
     const epoch = [
       deps.screen,
       driverGeneration,
@@ -274,11 +278,12 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     return image ? { result: observation, image } : { result: observation };
   };
 
-  const readiness = async (deadlineMs: number) => {
+  const readiness = async (deadlineMs: number): Promise<ComputerUseReadiness> => {
     const facts: { -readonly [K in keyof ReadinessFacts]: ReadinessFacts[K] } = {
       session: deps.session,
       driver: null,
       capture: "unproven",
+      tree: "unavailable",
       uinputWritable: await deps.uinputWritable(),
     };
     if (blocked === undefined) {
@@ -308,15 +313,14 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
             typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
           const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
           facts.capture = image === undefined ? "failed" : (colors ?? "varied");
+          // The tree is proven through AT-SPI directly: a driver read would replace the
+          // snapshot the agent's element tokens belong to.
+          const focus = await deps.secureFocus(shown.pid);
+          facts.tree = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
         }
       }
     }
-    const answer = linuxReadiness(facts);
-    return {
-      accessibility: answer.accessibility === "ready",
-      screenCapture: answer.capture === "ready",
-      linux: answer,
-    };
+    return linuxReadiness(facts);
   };
 
   const act = async (

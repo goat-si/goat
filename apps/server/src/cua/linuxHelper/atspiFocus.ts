@@ -15,6 +15,8 @@ export interface SecureFocus {
   /** False when AT-SPI could not say what has focus. */
   readonly known: boolean;
   readonly secure: boolean;
+  /** Top-level windows the process shows to AT-SPI: a real tree read, for readiness. */
+  readonly windows: number;
 }
 
 /** Runs gdbus with these arguments and returns its stdout, or throws. */
@@ -109,11 +111,12 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
   return async (pid: number): Promise<SecureFocus> => {
     try {
       const bus = await busFor(pid);
-      if (bus === null) return { known: false, secure: false };
+      if (bus === null) return { known: false, secure: false, windows: 0 };
       const windows = parseReferences(
         await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"),
       );
-      if (windows.length > MAX_WINDOWS) return { known: false, secure: false };
+      if (windows.length > MAX_WINDOWS)
+        return { known: false, secure: false, windows: windows.length };
       for (const window of windows) {
         const matches = parseReferences(
           await call(
@@ -131,15 +134,16 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
           const role = parseUint32(
             await call(match.bus, match.path, "org.a11y.atspi.Accessible.GetRole"),
           );
-          if (role === ROLE_PASSWORD_TEXT) return { known: true, secure: true };
+          if (role === ROLE_PASSWORD_TEXT)
+            return { known: true, secure: true, windows: windows.length };
         }
       }
-      return { known: true, secure: false };
+      return { known: true, secure: false, windows: windows.length };
     } catch {
       // A restarted app gets a new bus name; look it up again next time.
       busByPid.delete(pid);
       address = null;
-      return { known: false, secure: false };
+      return { known: false, secure: false, windows: 0 };
     }
   };
 }

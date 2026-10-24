@@ -5,6 +5,7 @@ import {
   COMPUTER_USE_METHODS,
   COMPUTER_USE_PROTOCOL_VERSION,
   type ComputerUseCapabilities,
+  type ComputerUseReadiness,
 } from "@goat/contracts";
 
 /**
@@ -99,20 +100,11 @@ export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilitie
 }
 
 /**
- * Readiness as separate answers (computer-use.md, Permission onboarding). Linux has no OS grant
- * on X11; Wayland asks for portal consent, which is pending until a capture proves it.
+ * Readiness as the contract's separate steps (D10). Linux has no OS grant for AT-SPI or for X11
+ * capture, so those read as granted; whether they work is the tree and capture steps, proven by
+ * a real read. Wayland screen capture needs the desktop's consent, pending until a capture
+ * proves it. The helper answers only after its hello, so it is always authenticated here.
  */
-export interface LinuxReadiness {
-  readonly displayServer: LinuxDisplayServer;
-  /** AT-SPI answered and the driver reached it. */
-  readonly accessibility: "ready" | "unavailable";
-  /** A real window capture with more than one color in it. */
-  readonly capture: "ready" | "blank" | "noWindow" | "portalPending" | "unavailable";
-  /** Background pointer and keys need a writable /dev/uinput; else foreground only. */
-  readonly input: "background" | "foregroundOnly" | "unavailable";
-  readonly reasons: ReadonlyArray<string>;
-}
-
 export interface ReadinessFacts {
   readonly session: LinuxSession;
   readonly driver: {
@@ -121,27 +113,36 @@ export interface ReadinessFacts {
     readonly atspi: boolean;
   } | null;
   readonly capture: "uniform" | "varied" | "noWindow" | "failed" | "unproven";
+  /** A real AT-SPI read of the captured window's app: windows found, none, or no answer. */
+  readonly tree: "ready" | "empty" | "unavailable";
   readonly uinputWritable: boolean;
 }
 
-export function linuxReadiness(facts: ReadinessFacts): LinuxReadiness {
+export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const { session } = facts;
+  const platform =
+    session.displayServer === "none"
+      ? {}
+      : { platform: { linux: { displayServer: session.displayServer } } };
   const blocked = session.unavailable ?? session.unsupported;
   if (blocked !== undefined || facts.driver === null)
     return {
-      displayServer: session.displayServer,
-      accessibility: "unavailable",
+      grants: { accessibility: "unknown", screenCapture: "unknown" },
+      helper: "authenticated",
       capture: "unavailable",
+      tree: "unavailable",
       input: "unavailable",
       reasons: [blocked ?? "Cua Driver did not start."],
+      ...platform,
     };
   const reasons: string[] = [];
-  const accessibility = facts.driver.atspi ? "ready" : "unavailable";
-  if (!facts.driver.atspi)
+  const wayland = session.displayServer === "wayland";
+  const tree = facts.driver.atspi ? facts.tree : "unavailable";
+  if (tree === "unavailable")
     reasons.push(
       "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
     );
-  const wayland = session.displayServer === "wayland";
+  if (tree === "empty") reasons.push("The app that was checked shows no windows to AT-SPI.");
   const capture =
     facts.capture === "varied"
       ? "ready"
@@ -150,11 +151,11 @@ export function linuxReadiness(facts: ReadinessFacts): LinuxReadiness {
         : facts.capture === "noWindow"
           ? "noWindow"
           : wayland
-            ? "portalPending"
+            ? "pending"
             : "unavailable";
   if (capture === "blank") reasons.push("A window capture came back as one solid color.");
   if (capture === "noWindow") reasons.push("No window is open to prove capture with.");
-  if (capture === "portalPending")
+  if (capture === "pending")
     reasons.push(
       "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
     );
@@ -166,7 +167,18 @@ export function linuxReadiness(facts: ReadinessFacts): LinuxReadiness {
         ? "Wayland cannot send pointer or key input to a window in the background; controls still work through AT-SPI."
         : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices; controls still work through AT-SPI.",
     );
-  return { displayServer: session.displayServer, accessibility, capture, input, reasons };
+  return {
+    grants: {
+      accessibility: "granted",
+      screenCapture: wayland ? (capture === "ready" ? "granted" : "pending") : "granted",
+    },
+    helper: "authenticated",
+    capture,
+    tree,
+    input,
+    reasons,
+    ...platform,
+  };
 }
 
 /**

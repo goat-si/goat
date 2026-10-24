@@ -3,7 +3,9 @@
 import {
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseHello,
+  ComputerUseObservation,
   ComputerUseRequestFrame,
+  computerUseReplyImageProblem,
   negotiateComputerUseVersion,
   type ComputerUseCapabilities,
   type ComputerUseHelperBinding,
@@ -23,6 +25,18 @@ import type { LinuxHelper } from "./LinuxComputerUseHelper.ts";
 
 const decodeHello = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseHello));
 const decodeFrame = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseRequestFrame));
+const decodeObservation = Schema.decodeUnknownOption(ComputerUseObservation);
+
+/** The observation a result declares a screenshot in: the result itself or an action's diff. */
+const observationOf = (result: unknown) => {
+  const direct = decodeObservation(result);
+  if (direct._tag === "Some") return direct.value;
+  const nested =
+    typeof result === "object" && result !== null && "observation" in result
+      ? decodeObservation(result.observation)
+      : undefined;
+  return nested?._tag === "Some" ? nested.value : undefined;
+};
 
 const refusal = (reason: ComputerUseRefusal["reason"], message: string): ComputerUseRefusal => ({
   outcome: "refused",
@@ -65,7 +79,9 @@ function boundedLines(
       const piece = newline === -1 ? data : data.subarray(0, newline);
       if (overflow === undefined) {
         if (size + piece.length + 1 > maxBytes) {
-          overflow = Buffer.concat([...parts, piece]).subarray(0, 512).toString("utf8");
+          overflow = Buffer.concat([...parts, piece])
+            .subarray(0, 512)
+            .toString("utf8");
           parts = [];
           size = 0;
         } else {
@@ -100,8 +116,14 @@ export function serveHelperChannel(options: {
   const reply = (
     id: string,
     result: unknown,
-    image?: { readonly mimeType: string; readonly data: string },
+    offered?: { readonly mimeType: string; readonly data: string },
   ) => {
+    // An image goes only with an observation that declares a screenshot of its type, and never
+    // with a private one; otherwise it is left out rather than shown against the wrong state.
+    const image =
+      offered && computerUseReplyImageProblem(observationOf(result), offered) === undefined
+        ? offered
+        : undefined;
     const frame = (value: unknown, withImage: boolean) =>
       JSON.stringify({
         id,
@@ -114,11 +136,18 @@ export function serveHelperChannel(options: {
     // Input that was sent keeps its outcome; only the evidence too large to carry is left out,
     // and the agent observes again before acting.
     const sent =
-      typeof result === "object" && result !== null && "outcome" in result && result.outcome !== "refused";
+      typeof result === "object" &&
+      result !== null &&
+      "outcome" in result &&
+      result.outcome !== "refused";
     if (sent) {
       const { observation: _observation, ...rest } = result as Record<string, unknown>;
       const trimmed = frame(
-        { ...rest, detail: "The screenshot and observation were larger than this channel allows. Observe again." },
+        {
+          ...rest,
+          detail:
+            "The screenshot and observation were larger than this channel allows. Observe again.",
+        },
         false,
       );
       if (fits(trimmed)) return options.write(trimmed + "\n");
@@ -135,7 +164,9 @@ export function serveHelperChannel(options: {
           }
         : refusal(
             "frameTooLarge",
-            "The answer is larger than this channel's " + maxFrameBytes + " byte limit. Ask for a smaller screenshot.",
+            "The answer is larger than this channel's " +
+              maxFrameBytes +
+              " byte limit. Ask for a smaller screenshot.",
           ),
     });
   };
@@ -161,7 +192,13 @@ export function serveHelperChannel(options: {
         }
         const id = frameId(prefix);
         if (id)
-          reply(id, refusal("frameTooLarge", "That request is larger than this channel's " + maxFrameBytes + " byte limit."));
+          reply(
+            id,
+            refusal(
+              "frameTooLarge",
+              "That request is larger than this channel's " + maxFrameBytes + " byte limit.",
+            ),
+          );
       },
       line: (line) => {
         if (!open) return;
@@ -192,16 +229,31 @@ export function serveHelperChannel(options: {
         }
         const { id, generation, method, params, deadlineMs } = frame.value;
         if (generation !== binding.generation) {
-          reply(id, refusal("invalidRequest", "That request names helper generation " + generation + ", and this helper is " + binding.generation + "."));
+          reply(
+            id,
+            refusal(
+              "invalidRequest",
+              "That request names helper generation " +
+                generation +
+                ", and this helper is " +
+                binding.generation +
+                ".",
+            ),
+          );
           return;
         }
         void options.helper.handle(method, params, deadlineMs).then(
           (answer) => reply(id, answer.result, answer.image),
           (error: unknown) =>
-            reply(id, refusal("helperUnavailable", error instanceof Error ? error.message : "The helper failed.")),
+            reply(
+              id,
+              refusal(
+                "helperUnavailable",
+                error instanceof Error ? error.message : "The helper failed.",
+              ),
+            ),
         );
       },
     });
   });
 }
-

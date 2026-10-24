@@ -8,6 +8,7 @@ import {
   ComputerUseActionResult,
   ComputerUseHelloReply,
   ComputerUseObservation,
+  ComputerUseReadiness,
   type ComputerUseActionRequest,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
@@ -27,6 +28,7 @@ import {
 const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
 const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
 const decodeHello = Schema.decodeUnknownSync(ComputerUseHelloReply);
+const decodeReadiness = Schema.decodeUnknownSync(ComputerUseReadiness);
 const isActionResult = Schema.is(ComputerUseActionResult);
 
 const X11: LinuxSessionFacts = {
@@ -36,6 +38,7 @@ const X11: LinuxSessionFacts = {
   currentDesktop: "GNOME",
   gnomeShellMajor: 46,
 };
+const NOT_SECURE: SecureFocus = { known: true, secure: false, windows: 1 };
 
 /** A PNG of width x height, solid unless striped. */
 function png(width: number, height: number, striped: boolean) {
@@ -66,110 +69,122 @@ function png(width: number, height: number, striped: boolean) {
  * X11 under Xvfb: AT-SPI clicks and value writes land, keys need a uinput device it lacks.
  */
 function fixtureDriver() {
-  const state = { count: 0, name: "", snapshot: 0, onScreen: true, sent: [] as string[] };
+  const state = {
+    count: 0,
+    name: "",
+    snapshot: 0,
+    onScreen: true,
+    sent: [] as string[],
+    imageData: "UE5H",
+    setValueEffect: "confirmed",
+    loseNext: false,
+  };
   const ok = (structured: unknown, text = "", images: DriverToolResult["images"] = []) =>
     ({ isError: false, text, structured, images }) satisfies DriverToolResult;
   const refused = (code: string, text: string) =>
     ({ isError: true, text, structured: { code }, images: [] }) satisfies DriverToolResult;
   const tokenCurrent = (token: unknown) =>
     typeof token === "string" && token.startsWith("s" + state.snapshot + ":");
+  const call: DriverClient["call"] = async (tool, args) => {
+    if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
+    if (tool === "list_windows")
+      return ok({
+        windows: [
+          {
+            pid: 10,
+            window_id: 20,
+            title: "GOAT CU Fixture",
+            app_name: "fixture.py",
+            is_on_screen: state.onScreen,
+          },
+        ],
+      });
+    if (tool === "get_window_state") {
+      if (args.include_accessibility_tree === false)
+        return ok({}, "", [{ mimeType: "image/png", data: png(8, 4, true).toString("base64") }]);
+      state.snapshot++;
+      const token = (index: number) => "s" + state.snapshot + ":" + index;
+      const shot = args.include_screenshot !== false;
+      const elements = [
+        {
+          element_index: 0,
+          element_token: token(0),
+          role: "text",
+          label: "Count",
+          value: String(state.count),
+          actions: ["activate"],
+        },
+        {
+          element_index: 1,
+          element_token: token(1),
+          role: "push button",
+          label: "Increment",
+          actions: ["click"],
+          screenshot_frame: { x: 12, y: 54, w: 396, h: 34 },
+        },
+        {
+          element_index: 2,
+          element_token: token(2),
+          role: "text",
+          label: "Name",
+          value: state.name,
+          actions: ["activate"],
+        },
+        {
+          element_index: 3,
+          element_token: token(3),
+          role: "password text",
+          label: "Password",
+          value: "hunter2",
+          actions: ["activate"],
+        },
+      ].filter((element) => typeof args.query !== "string" || element.label.includes(args.query));
+      return ok(
+        {
+          pid: 10,
+          window_id: 20,
+          window_bounds: { width: 420, height: 320 },
+          ...(shot
+            ? { screenshot_width: 420, screenshot_height: 320, screenshot_mime_type: "image/png" }
+            : {}),
+          elements,
+        },
+        "",
+        shot ? [{ mimeType: "image/png", data: state.imageData }] : [],
+      );
+    }
+    state.sent.push(tool);
+    if (state.loseNext) return "lost";
+    if (tool === "click") {
+      if (args.element_token === undefined)
+        return refused("background_unavailable", "Background delivery is not available.");
+      if (!tokenCurrent(args.element_token))
+        return refused("stale_element_token", "element_token is stale");
+      if (args.element_token === "s" + state.snapshot + ":1") state.count++;
+      return ok({ effect: "unverifiable", route: "accessibility" }, "Clicked element.");
+    }
+    if (tool === "set_value") {
+      state.name = String(args.value);
+      return ok({ effect: state.setValueEffect }, "Set value.");
+    }
+    if (tool === "press_key" || tool === "hotkey" || tool === "type_text")
+      return refused(
+        "background_unavailable",
+        "Background keyboard delivery on X11 needs a uinput device.",
+      );
+    return refused("invalid_arguments", "unknown tool " + tool);
+  };
   const client: DriverClient = {
     pid: 4242,
     version: "0.37.0",
     exited: new Promise(() => undefined),
     close: async () => undefined,
-    call: async (tool, args) => {
-      if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
-      if (tool === "list_windows")
-        return ok({
-          windows: [
-            {
-              pid: 10,
-              window_id: 20,
-              title: "GOAT CU Fixture",
-              app_name: "fixture.py",
-              is_on_screen: state.onScreen,
-            },
-          ],
-        });
-      if (tool === "get_window_state") {
-        if (args.include_accessibility_tree === false)
-          return ok({}, "", [{ mimeType: "image/png", data: png(8, 4, true).toString("base64") }]);
-        state.snapshot++;
-        const token = (index: number) => "s" + state.snapshot + ":" + index;
-        const shot = args.include_screenshot !== false;
-        return ok(
-          {
-            pid: 10,
-            window_id: 20,
-            window_bounds: { width: 420, height: 320 },
-            ...(shot
-              ? { screenshot_width: 420, screenshot_height: 320, screenshot_mime_type: "image/png" }
-              : {}),
-            elements: [
-              {
-                element_index: 0,
-                element_token: token(0),
-                role: "text",
-                label: "Count",
-                value: String(state.count),
-                actions: ["activate"],
-              },
-              {
-                element_index: 1,
-                element_token: token(1),
-                role: "push button",
-                label: "Increment",
-                actions: ["click"],
-                screenshot_frame: { x: 12, y: 54, w: 396, h: 34 },
-              },
-              {
-                element_index: 2,
-                element_token: token(2),
-                role: "text",
-                label: "Name",
-                value: state.name,
-                actions: ["activate"],
-              },
-              {
-                element_index: 3,
-                element_token: token(3),
-                role: "password text",
-                label: "Password",
-                value: "hunter2",
-                actions: ["activate"],
-              },
-            ],
-          },
-          "",
-          shot ? [{ mimeType: "image/png", data: "UE5H" }] : [],
-        );
-      }
-      state.sent.push(tool);
-      if (tool === "click") {
-        if (args.element_token === undefined)
-          return refused("background_unavailable", "Background delivery is not available.");
-        if (!tokenCurrent(args.element_token))
-          return refused("stale_element_token", "element_token is stale");
-        if (args.element_token === "s" + state.snapshot + ":1") state.count++;
-        return ok({ effect: "unverifiable", route: "accessibility" }, "Clicked element [1].");
-      }
-      if (tool === "set_value") {
-        state.name = String(args.value);
-        return ok({ effect: "confirmed" }, "Set value; read back.");
-      }
-      if (tool === "press_key" || tool === "hotkey" || tool === "type_text")
-        return refused(
-          "background_unavailable",
-          "Background keyboard delivery on X11 needs a virtual master keyboard fed by a uinput device.",
-        );
-      return refused("invalid_arguments", "unknown tool " + tool);
-    },
+    call,
   };
   return { state, client };
 }
 
-/** An action as the agent writes it; the helper fills in the target and observation. */
+/** An action as the agent writes it; the helper test fills in the target and observation. */
 type ActionInput = ComputerUseActionRequest extends infer Request
   ? Request extends ComputerUseActionRequest
     ? Omit<Request, "target" | "observationId" | "delivery"> & {
@@ -178,81 +193,108 @@ type ActionInput = ComputerUseActionRequest extends infer Request
     : never
   : never;
 
+type Reply = { result: Record<string, unknown>; image?: { mimeType: string; data: string } };
+
 /** One helper behind its real channel, and a client that speaks the protocol to it. */
 async function connect(
   options: {
     readonly session?: LinuxSessionFacts;
     readonly focus?: SecureFocus;
     readonly clientApiVersion?: number;
+    readonly maxFrameBytes?: number;
+    readonly helloPadding?: number;
   } = {},
 ) {
   const session = detectLinuxSession(options.session ?? X11);
   const driver = fixtureDriver();
-  const focus = { current: options.focus ?? { known: true, secure: false } };
+  const focus = { current: options.focus ?? NOT_SECURE };
+  const clock = { now: 0 };
+  // Armed, the next focus check waits until released, so a test can act while a request is
+  // held inside the helper.
+  const gate = {
+    armed: false,
+    entered: Promise.withResolvers<void>(),
+    release: Promise.withResolvers<void>(),
+  };
+  let starts = 0;
   let id = 0;
   const helper = makeLinuxHelper({
     session,
     screen: ":91",
-    startDriver: async () => driver.client,
-    secureFocus: async () => focus.current,
+    startDriver: async () => {
+      starts++;
+      return driver.client;
+    },
+    secureFocus: async () => {
+      if (gate.armed) {
+        gate.armed = false;
+        gate.entered.resolve();
+        await gate.release.promise;
+      }
+      return focus.current;
+    },
     uinputWritable: async () => false,
     settle: async () => undefined,
     newId: () => "o" + ++id,
+    now: () => clock.now,
   });
   const input = new NodeStream.PassThrough();
-  const lines: string[] = [];
-  const waiters: Array<() => void> = [];
+  const ended = new Promise<void>((resolve) => input.once("end", () => resolve()));
+  const replies = new Map<string, Reply>();
+  const lines: Array<Record<string, unknown>> = [];
+  let wake: () => void = () => undefined;
   const served = serveHelperChannel({
     input,
     write: (line) => {
-      lines.push(line.trimEnd());
-      waiters.splice(0).forEach((wake) => wake());
+      const value = JSON.parse(line) as Record<string, unknown>;
+      if (typeof value.id === "string") replies.set(value.id, value as Reply);
+      else lines.push(value);
+      wake();
     },
     binding: { executable: "/opt/goat/goat-computer-use", pid: 77, generation: "g1" },
     capabilities: linuxCapabilities(session),
-    maxFrameBytes: 1024 * 1024,
+    maxFrameBytes: options.maxFrameBytes ?? 1024 * 1024,
     helper,
   });
-  const nextLine = async () => {
-    while (lines.length === 0) await new Promise<void>((wake) => waiters.push(wake));
-    return JSON.parse(lines.shift() ?? "") as Record<string, unknown>;
+  const until = async <T>(read: () => T | undefined): Promise<T> => {
+    for (;;) {
+      const value = read();
+      if (value !== undefined) return value;
+      await new Promise<void>((resolve) => (wake = resolve));
+    }
   };
   input.write(
     JSON.stringify({
       clientApiVersion: options.clientApiVersion ?? COMPUTER_USE_PROTOCOL_VERSION,
+      ...(options.helloPadding ? { padding: "x".repeat(options.helloPadding) } : {}),
     }) + "\n",
   );
-  const hello = await nextLine();
+  const hello = await until(() => lines.shift());
   let serial = 0;
-  const request = async (method: string, params: unknown = {}, generation = "g1") => {
+  const send = (method: string, params: unknown = {}, generation = "g1", deadlineMs = 5_000) => {
     const frameId = String(++serial);
-    input.write(
-      JSON.stringify({ id: frameId, generation, method, deadlineMs: 5_000, params }) + "\n",
-    );
-    const reply = await nextLine();
-    expect(reply.id).toBe(frameId);
-    return reply as { result: Record<string, unknown>; image?: { mimeType: string; data: string } };
+    input.write(JSON.stringify({ id: frameId, generation, method, deadlineMs, params }) + "\n");
+    return frameId;
   };
-  const observe = async (since?: string) => {
+  const answer = (frameId: string) => until(() => replies.get(frameId));
+  const request = (method: string, params: unknown = {}, generation = "g1") =>
+    answer(send(method, params, generation));
+  const observe = async (extra: Record<string, unknown> = {}) => {
     const reply = await request("observe", {
       target: { pid: 10, windowId: 20 },
       screenshot: true,
-      ...(since ? { since } : {}),
+      ...extra,
     });
-    return {
-      ...reply,
-      observation: decodeObservation(reply.result),
-    };
+    return { ...reply, observation: decodeObservation(reply.result) };
   };
-  const act = async (action: ActionInput, from: ComputerUseObservation) => {
-    const reply = await request(action.action, {
-      delivery: "background",
-      ...action,
-      target: from.target,
-      observationId: from.observationId,
-    });
-    return decodeResult(reply.result);
-  };
+  const actionParams = (action: ActionInput, from: ComputerUseObservation) => ({
+    delivery: "background",
+    ...action,
+    target: from.target,
+    observationId: from.observationId,
+  });
+  const act = async (action: ActionInput, from: ComputerUseObservation) =>
+    decodeResult((await request(action.action, actionParams(action, from))).result);
   const ref = (observation: ComputerUseObservation, label: string) => {
     const elements =
       observation.kind === "full"
@@ -264,12 +306,23 @@ async function connect(
   };
   return {
     hello,
+    send,
+    answer,
     request,
     observe,
     act,
+    actionParams,
     ref,
     driver,
     focus,
+    clock,
+    gate,
+    starts: () => starts,
+    /** Ends stdin and waits until the channel has seen it, as a launcher closing the pipe. */
+    end: () => {
+      input.end();
+      return ended;
+    },
     close: async () => (input.end(), served),
   };
 }
@@ -297,7 +350,12 @@ describe("Linux computer use helper conformance", () => {
     expect(helper.driver.state.sent).toEqual([]);
   });
 
-  it("observe, act, observe: a click is confirmed by the diff it caused and refs stay stable", async () => {
+  it("a hello larger than the frame limit is refused as it streams in", async () => {
+    const helper = await connect({ maxFrameBytes: 64 * 1024, helloPadding: 65 * 1024 });
+    expect(helper.hello).toMatchObject({ outcome: "refused", reason: "frameTooLarge" });
+  });
+
+  it("observe, act, observe: a change elsewhere in the window is shown but does not confirm the click", async () => {
     const helper = await connect();
     const first = await helper.observe();
     expect(first.observation).toMatchObject({ kind: "full", reason: "first", privateMode: false });
@@ -310,30 +368,45 @@ describe("Linux computer use helper conformance", () => {
       { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
       first.observation,
     );
+    // The counter changed, not the button that was clicked: an app can change on its own.
     expect(result).toMatchObject({
-      outcome: "confirmed",
-      dispatch: "verified",
+      outcome: "unverifiable",
+      dispatch: "dispatched_unknown",
       delivery: "background",
     });
-    if (result.outcome === "refused" || !result.observation) throw new Error("no observation");
-    expect(result.observation).toMatchObject({
-      kind: "diff",
-      since: first.observation.observationId,
-    });
-    if (result.observation.kind !== "diff") throw new Error("not a diff");
+    if (result.outcome === "refused" || result.observation?.kind !== "diff")
+      throw new Error("no diff");
     expect(result.observation.changed).toEqual([
       expect.objectContaining({ ref: helper.ref(first.observation, "Count"), value: "1" }),
     ]);
 
-    const again = await helper.observe(result.observation.observationId);
+    const again = await helper.observe({ since: result.observation.observationId });
     expect(again.observation).toMatchObject({ kind: "diff", added: [], changed: [], removed: [] });
+    await helper.close();
+  });
+
+  it("a change to the element the action named confirms it, and no change at all is suspected_noop", async () => {
+    const helper = await connect();
+    helper.driver.state.setValueEffect = "unverifiable";
+    const first = await helper.observe();
+    const set = await helper.act(
+      { action: "setValue", element: helper.ref(first.observation, "Name"), value: "hello" },
+      first.observation,
+    );
+    expect(set).toMatchObject({ outcome: "confirmed", dispatch: "verified" });
+    if (set.outcome === "refused" || !set.observation) throw new Error("no observation");
+    const noop = await helper.act(
+      { action: "click", at: { element: helper.ref(first.observation, "Name") } },
+      set.observation,
+    );
+    expect(noop).toMatchObject({ outcome: "suspected_noop", dispatch: "verified" });
     await helper.close();
   });
 
   it("a ref from an older observation is staleElement and sends nothing", async () => {
     const helper = await connect();
     const first = await helper.observe();
-    const second = await helper.observe(first.observation.observationId);
+    const second = await helper.observe({ since: first.observation.observationId });
     const result = await helper.act(
       { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
       { ...second.observation, observationId: first.observation.observationId },
@@ -353,14 +426,14 @@ describe("Linux computer use helper conformance", () => {
     );
     expect(result).toMatchObject({ outcome: "refused", reason: "epochChanged" });
     expect(helper.driver.state.sent).toEqual([]);
-    const after = await helper.observe(first.observation.observationId);
+    const after = await helper.observe({ since: first.observation.observationId });
     expect(after.observation).toMatchObject({ kind: "full", reason: "unknown_since" });
     expect(after.observation.target.epoch).not.toBe(first.observation.target.epoch);
     await helper.close();
   });
 
-  it("a focused password field pauses everything: no tree, no screenshot, actions refused", async () => {
-    const helper = await connect({ focus: { known: true, secure: true } });
+  it("a focused password field pauses everything: the contract's private shape, actions refused", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
     const seen = await helper.observe();
     expect(seen.observation).toMatchObject({
       privateMode: true,
@@ -377,10 +450,11 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
-  it("when AT-SPI cannot say what has focus and a password field is present, it fails closed", async () => {
-    const helper = await connect({ focus: { known: false, secure: false } });
-    const seen = await helper.observe();
-    expect(seen.observation.privateMode).toBe(true);
+  it("when AT-SPI cannot say what has focus it fails closed, even for a read that shows no password field", async () => {
+    const helper = await connect({ focus: { known: false, secure: false, windows: 0 } });
+    const seen = await helper.observe({ query: "Count" });
+    expect(seen.observation).toMatchObject({ privateMode: true, elements: [] });
+    expect(seen.image).toBeUndefined();
     await helper.close();
   });
 
@@ -421,17 +495,6 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
-  it("setValue confirmed by the driver's read back carries the diff", async () => {
-    const helper = await connect();
-    const first = await helper.observe();
-    const result = await helper.act(
-      { action: "setValue", element: helper.ref(first.observation, "Name"), value: "hello" },
-      first.observation,
-    );
-    expect(result).toMatchObject({ outcome: "confirmed", dispatch: "verified" });
-    await helper.close();
-  });
-
   it("keys Linux has no name for and actions the driver cannot name are typed unsupported", async () => {
     const helper = await connect();
     const first = await helper.observe();
@@ -466,18 +529,95 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("a driver that exits after the action was sent makes it unverifiable, never a refusal", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    helper.driver.state.loseNext = true;
+    const result = await helper.act(
+      { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    expect(result).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+    expect(helper.driver.state.sent).toEqual(["click"]);
+    await helper.close();
+  });
+
+  it("an action held inside the helper when it shuts down sends nothing and starts no driver", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    helper.gate.armed = true;
+    const frameId = helper.send(
+      "click",
+      helper.actionParams(
+        { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+        first.observation,
+      ),
+    );
+    await helper.gate.entered.promise;
+    await helper.end();
+    helper.gate.release.resolve();
+    expect((await helper.answer(frameId)).result).toMatchObject({
+      outcome: "refused",
+      reason: "helperUnavailable",
+    });
+    expect(helper.driver.state.sent).toEqual([]);
+    expect(helper.starts()).toBe(1);
+  });
+
+  it("a request whose deadline passes while it waits in line is refused before anything is sent", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    const params = helper.actionParams(
+      { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    helper.gate.armed = true;
+    const held = helper.send("observe", { target: { pid: 10, windowId: 20 }, screenshot: false });
+    await helper.gate.entered.promise;
+    const late = helper.send("click", params, "g1", 5);
+    helper.clock.now += 10;
+    helper.gate.release.resolve();
+    await helper.answer(held);
+    expect((await helper.answer(late)).result).toMatchObject({
+      outcome: "refused",
+      reason: "busy",
+    });
+    expect(helper.driver.state.sent).toEqual([]);
+    await helper.close();
+  });
+
+  it("an action whose answer outgrows the frame keeps its outcome and leaves the evidence out", async () => {
+    const helper = await connect({ maxFrameBytes: 4096 });
+    const first = await helper.observe();
+    helper.driver.state.imageData = "A".repeat(8192);
+    const reply = await helper.request(
+      "click",
+      helper.actionParams(
+        { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+        first.observation,
+      ),
+    );
+    expect(reply.result).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+    expect(reply.result).not.toHaveProperty("observation");
+    expect(reply.image).toBeUndefined();
+    expect(helper.driver.state.sent).toEqual(["click"]);
+    await helper.close();
+  });
+
   it("without a desktop session every window method is a typed helperUnavailable refusal", async () => {
     const helper = await connect({ session: { ...X11, display: undefined } });
     for (const method of ["listWindows", "observe", "click"]) {
       const reply = await helper.request(method, {});
       expect(reply.result).toMatchObject({ outcome: "refused", reason: "helperUnavailable" });
     }
-    const permissions = await helper.request("permissions", {});
-    expect(permissions.result).toMatchObject({
-      accessibility: false,
-      screenCapture: false,
-      linux: { displayServer: "none" },
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({
+      helper: "authenticated",
+      capture: "unavailable",
+      tree: "unavailable",
+      input: "unavailable",
     });
+    expect(readiness.platform).toBeUndefined();
     expect(helper.driver.state.sent).toEqual([]);
     await helper.close();
   });
@@ -519,23 +659,22 @@ describe("Linux computer use helper conformance", () => {
       { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
       first.observation,
     );
-    expect(result.outcome).toBe("confirmed");
+    expect(result.outcome).not.toBe("refused");
     await helper.close();
   });
 
-  it("readiness reports AT-SPI, a proven non-blank capture and foreground-only input without uinput", async () => {
+  it("readiness proves the tree and a non-blank capture, and says input is foreground only without uinput", async () => {
     const helper = await connect();
-    const reply = await helper.request("permissions", {});
-    expect(reply.result).toMatchObject({
-      accessibility: true,
-      screenCapture: true,
-      linux: {
-        displayServer: "x11",
-        accessibility: "ready",
-        capture: "ready",
-        input: "foregroundOnly",
-      },
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({
+      grants: { accessibility: "granted", screenCapture: "granted" },
+      helper: "authenticated",
+      capture: "ready",
+      tree: "ready",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "x11" } },
     });
+    expect(readiness.reasons).toHaveLength(1);
     await helper.close();
   });
 

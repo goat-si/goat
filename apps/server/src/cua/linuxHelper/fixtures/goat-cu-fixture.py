@@ -60,5 +60,3 @@ GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, focus_password)
 
 window.show_all()
 Gtk.main()
-
-

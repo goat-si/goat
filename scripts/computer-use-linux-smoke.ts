@@ -28,7 +28,6 @@ const { values } = NodeUtil.parseArgs({
     helper: { type: "string" },
     evidence: { type: "string", default: "computer-use-linux-evidence" },
     xvfb: { type: "string", default: "Xvfb" },
-    display: { type: "string", default: ":93" },
   },
 });
 if (!values.helper) throw new Error("--helper <path to goat-computer-use> is required.");
@@ -85,12 +84,29 @@ const check = (name: string, ok: boolean, detail: Record<string, unknown> = {}) 
 };
 
 try {
+  // -displayfd: Xvfb picks a free display itself and writes its number once it is listening,
+  // so this run never lands on a display someone else owns.
   const xvfb = start(
     values.xvfb,
-    [values.display, "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
+    ["-displayfd", "3", "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
     process.env,
+    ["ignore", "ignore", "ignore", "pipe"],
   );
-  await sleep(1000);
+  const displayOutput = xvfb.stdio[3];
+  if (!displayOutput || !("on" in displayOutput)) throw new Error("Xvfb has no display pipe.");
+  const display = await Promise.race([
+    new Promise<string>((resolve) =>
+      NodeReadline.createInterface({ input: displayOutput }).once("line", (line) =>
+        resolve(":" + line.trim()),
+      ),
+    ),
+    new Promise<never>((_, reject) =>
+      xvfb.once("exit", (code) => reject(new Error("Xvfb exited with " + code + "."))),
+    ),
+    sleep(10_000).then(() => {
+      throw new Error("Xvfb did not report a display.");
+    }),
+  ]);
   const dbus = start("dbus-daemon", ["--session", "--nofork", "--print-address=1"], process.env, [
     "ignore",
     "pipe",
@@ -105,7 +121,7 @@ try {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
     LANG: process.env.LANG ?? "C.UTF-8",
-    DISPLAY: values.display,
+    DISPLAY: display,
     DBUS_SESSION_BUS_ADDRESS: address,
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     GTK_A11Y: "atspi",
@@ -114,7 +130,7 @@ try {
   await sleep(800);
   const app = start("python3", [fixture], env, ["ignore", "pipe", "ignore"]);
   await sleep(2000);
-  log("environment", { xvfb: xvfb.pid, dbus: dbus.pid, fixture: app.pid, display: values.display });
+  log("environment", { xvfb: xvfb.pid, dbus: dbus.pid, fixture: app.pid, display });
 
   const helper = NodeChildProcess.spawn(values.helper, [], {
     env,
@@ -186,8 +202,11 @@ try {
   );
   const permissions = await request("permissions");
   check(
-    "readiness: AT-SPI and a non-blank capture are proven",
-    permissions.result.accessibility === true && permissions.result.screenCapture === true,
+    "readiness: a real tree and a non-blank capture are proven, on X11",
+    permissions.result.tree === "ready" &&
+      permissions.result.capture === "ready" &&
+      permissions.result.helper === "authenticated" &&
+      permissions.result.platform?.linux?.displayServer === "x11",
     permissions.result,
   );
   const windows = await request("listWindows");
@@ -229,8 +248,10 @@ try {
     (element: any) => element.label === "Count",
   );
   check(
-    "background AT-SPI click is confirmed by the diff it caused",
-    click.result.outcome === "confirmed" && counter?.value === "1",
+    // The counter changed, not the clicked button, so the helper shows the change without
+    // claiming it: unverifiable, with the diff for the agent to judge.
+    "background AT-SPI click lands; its diff shows the counter, unclaimed",
+    click.result.outcome === "unverifiable" && counter?.value === "1",
     {
       ms: click.ms,
       result: {
