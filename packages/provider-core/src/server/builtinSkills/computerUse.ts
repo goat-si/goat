@@ -25,8 +25,8 @@ Prefer element actions and setting a field's value through the accessibility tre
 Read each action result's \`effect\` field.
 - \`confirmed\`: continue.
 - \`suspected_noop\`, \`no_drop\` or \`not_applied\`: nothing changed. Observe and decide; do not repeat the action blindly.
-- Nothing was sent only when \`effect\` is \`refused\` or the error \`code\` is one checked before input leaves: \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\`, \`background_unavailable\`, \`permission_denied\`. Fix that cause instead of repeating the call.
-- \`partial\`, any other error (such as \`delivery_failed\`), or no clear effect: the input may have landed. Observe first and never resend it unchanged; a repeated keystroke can send a message twice.
+- An \`effect\` always outranks a \`code\`. Nothing was sent only when \`effect\` is \`refused\`, or there is no \`effect\` and the \`code\` is checked before input leaves: \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\`, \`permission_denied\`. Fix that cause; do not repeat the call.
+- \`partial\`, \`unverifiable\`, any other error or code, or no clear effect: the input may have landed. Observe first and never resend it unchanged; a repeated keystroke can send a message twice.
 - When the person says stop, takes over the computer, the computer use session ends, or the tools stop answering, stop: end the computer use part of the task and say so. Never route around a stop with other tools, and never replay earlier steps afterwards; observe first if you are asked to continue.
 
 ## Input
@@ -68,7 +68,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
   linux: `<computer_use_host os="Linux">
 - X11 sessions work best. On Wayland the person approves screen capture and input through the desktop portal, and fewer apps can be read or driven; while that approval is missing, say so instead of retrying.
 - The control tree comes from AT-SPI. Without it (no \`at-spi2-core\`, no session bus, or an app with accessibility off) you get screenshots, pointer, and keys only.
-- When background input is unavailable (\`background_unavailable\`), foreground delivery is the only route. It takes focus from the person, so tell them before you use it.
+- After \`background_unavailable\`, observe first; it can come after partial input. Foreground delivery is then the only route, and it takes focus, so tell the person first.
 - Password fields are private fields (see above).
 - \`command\` is Super and \`option\` is Alt.
 </computer_use_host>`,
