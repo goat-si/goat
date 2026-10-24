@@ -101,7 +101,10 @@ export const fixture = Effect.fn(function* (
     permissionMode: number | undefined;
     approved: boolean;
   }> = [];
-  const prepared = new Map<string, { scope: string; hostBundleIds: ReadonlyArray<string> }>();
+  const prepared = new Map<
+    string,
+    { scope: string; hostBundleIds: ReadonlyArray<string>; listedThrough?: string | undefined }
+  >();
   const holdMonitor = options.hold === "monitor";
   let allowed = !options.denyPermissions;
   let starts = 0;
@@ -202,7 +205,11 @@ export const fixture = Effect.fn(function* (
     imageHasContent: async () => !options.blankCapture,
     prepareManifest: async (input) => {
       const path = `${input.directory}/${input.scope}.yaml`;
-      prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
+      prepared.set(path, {
+        scope: input.scope,
+        hostBundleIds: input.hostBundleIds,
+        listedThrough: input.listThrough?.bundleId,
+      });
       return path;
     },
     processId: HOST_PID,
@@ -341,6 +348,7 @@ export const fixture = Effect.fn(function* (
     launches,
     helperProbes,
     helperLaunches,
+    manifests: () => [...prepared.values()],
     counts: () => ({ starts, stops, destroys }),
   };
 });

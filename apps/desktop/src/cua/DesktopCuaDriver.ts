@@ -43,6 +43,7 @@ import {
   type HelperHostOptions,
 } from "./ComputerUseHelper.ts";
 import {
+  listWindowsApps,
   probeWindowsReadiness,
   windowsDriverPipe,
   windowsHelperBundle,
@@ -130,6 +131,8 @@ export interface DesktopCuaDriverDependencies {
     readonly hostBundleIds: ReadonlyArray<string>;
     readonly directory: string;
     readonly platform: NodeJS.Platform;
+    /** The Windows helper that lists apps from its verified driver; absent elsewhere. */
+    readonly listThrough?: HelperBundle;
   }) => Promise<string>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
@@ -212,7 +215,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
-  prepareManifest: async (input) => {
+  prepareManifest: async ({ listThrough, ...input }) => {
     const { join } = await import("node:path");
     return input.scope === "verify"
       ? writeCuaDriverCapabilityManifest(
@@ -228,6 +231,15 @@ const dependencies: DesktopCuaDriverDependencies = {
           environment: cuaDriverListingEnvironment(process.env),
           hostBundleIds: input.hostBundleIds,
           path: join(input.directory, "capability-manifest.yaml"),
+          ...(listThrough
+            ? {
+                listApplications: () =>
+                  listWindowsApps(
+                    spawnHelperProcess(listThrough.executable, input.platform),
+                    listThrough.bundleId,
+                  ),
+              }
+            : {}),
         });
   },
   processId: process.pid,
@@ -477,6 +489,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         hostBundleIds: hostBundleIds(engine),
         directory: environment.path.join(environment.stateDir, "cua-driver"),
         platform: environment.platform,
+        // The Windows helper runs the driver only after checking its pinned hashes, so the
+        // listing goes through it too.
+        ...(engine.kind === "helper" && environment.platform === "win32"
+          ? { listThrough: engine.bundle }
+          : {}),
       }),
     );
     if (closed) return undefined;
