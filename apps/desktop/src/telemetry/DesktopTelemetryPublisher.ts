@@ -3,6 +3,7 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
+  type DesktopCuaReadinessReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -70,6 +71,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
     readonly publishCuaReport: (report: DesktopCuaDriverReport) => Effect.Effect<void>;
+    /**
+     * The helper's readiness, for this host's own server only. The latest report goes to every
+     * server connection that starts later, so a restarted server learns it without asking.
+     */
+    readonly publishCuaReadiness: (report: DesktopCuaReadinessReport) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
       message: DesktopTelemetryControlMessage,
@@ -182,6 +188,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
+  const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+  // Readiness is state: a connection that falls behind needs only the newest report.
+  const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
   interface CuaSource {
     readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
     requestId?: string;
@@ -463,7 +472,15 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           Stream.filter(() => cuaSource === source),
           Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
         );
-        return Stream.merge(encoded, privateReports);
+        const readinessSubscription = yield* PubSub.subscribe(cuaReadinessChanges);
+        const readiness = Stream.concat(
+          Option.match(yield* Ref.get(latestCuaReadiness), {
+            onNone: () => Stream.empty,
+            onSome: Stream.make,
+          }),
+          Stream.fromSubscription(readinessSubscription),
+        ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
+        return Stream.mergeAll([encoded, privateReports, readiness], { concurrency: "unbounded" });
       }),
     );
   };
@@ -479,6 +496,11 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         cuaSource && cuaSource.requestId === report.requestId
           ? PubSub.publish(cuaSource.reports, report).pipe(Effect.asVoid)
           : Effect.void,
+      ),
+    publishCuaReadiness: (report) =>
+      Ref.set(latestCuaReadiness, Option.some(report)).pipe(
+        Effect.andThen(PubSub.publish(cuaReadinessChanges, report)),
+        Effect.asVoid,
       ),
     handleControlForSource,
     removeControlSource,

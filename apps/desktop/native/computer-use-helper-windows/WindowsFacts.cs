@@ -18,6 +18,12 @@ namespace Goat.ComputerUse
         // Mandatory label RIDs (winnt.h).
         public const int IntegrityMedium = 0x2000;
 
+        /// <summary>
+        /// The virtual desktop each window was last seen on. The shell sometimes answers with an
+        /// empty id for a window that did not move, which would otherwise read as a new epoch.
+        /// </summary>
+        static readonly Dictionary<long, Guid> KnownDesktops = new Dictionary<long, Guid>();
+
         public static uint SessionOf(int processId)
         {
             uint session;
@@ -179,6 +185,13 @@ namespace Goat.ComputerUse
             }
             catch (COMException) { }
             catch (InvalidCastException) { }
+            lock (KnownDesktops)
+            {
+                Guid known;
+                if (desktopId != Guid.Empty) KnownDesktops[windowId] = desktopId;
+                else if (KnownDesktops.TryGetValue(windowId, out known)) desktopId = known;
+                if (KnownDesktops.Count > 256) KnownDesktops.Clear();
+            }
             long monitor = NativeMethods.MonitorFromWindow(window, NativeMethods.MONITOR_DEFAULTTONEAREST).ToInt64();
             uint dpi = NativeMethods.GetDpiForWindow(window);
             result["epoch"] = "hwnd-" + windowId.ToString("x") + ":vd-" + desktopId.ToString("N") + ":mon-" + monitor.ToString("x") + ":dpi-" + dpi;
@@ -266,8 +279,11 @@ namespace Goat.ComputerUse
 
         /// <summary>
         /// Release helpers serve only the GOAT executable installed beside them and signed by the
-        /// same publisher. Electron's ELECTRON_RUN_AS_NODE still lets that executable run other
-        /// code; release builds ship the helper only once #1210 closes that.
+        /// same publisher. This keeps other programs from using the helper by accident; it is not
+        /// a boundary against code running as this user, which can pick any parent for a process
+        /// it starts or open GOAT itself and run code there. Electron's ELECTRON_RUN_AS_NODE
+        /// also lets that executable run other code; release builds ship the helper only once
+        /// #1210 closes that.
         /// </summary>
         public static string ParentRefusal(bool allowAnyParent, string helperPath, string expectedParentName)
         {

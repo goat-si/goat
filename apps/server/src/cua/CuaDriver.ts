@@ -148,6 +148,14 @@ export interface CuaDriverOptions {
   readonly observeGrants?: (
     mcp: CuaDriverMcpConfiguration,
   ) => Effect.Effect<CuaDisplay.MacGrants | null>;
+  /**
+   * What the host's computer use helper last reported: its readiness steps and the safety
+   * signals it raises. The desktop host's helper reports through desktop telemetry; a server
+   * that runs its own helper (Linux, #1223) passes that helper's answer here.
+   */
+  readonly helperReadiness?: Effect.Effect<
+    Option.Option<Pick<CuaHostStatus, "readiness" | "signals">>
+  >;
 }
 
 export const make = Effect.fn("CuaDriver.make")(function* (
@@ -327,8 +335,8 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     acquire,
     enabled,
     lastFailure: Effect.sync(() => failure),
-    status: reported.pipe(
-      Effect.map((display) => ({
+    status: Effect.all([reported, options.helperReadiness ?? Effect.succeedNone]).pipe(
+      Effect.map(([display, helper]) => ({
         platform:
           platform === "darwin" || platform === "linux" || platform === "win32"
             ? platform
@@ -339,6 +347,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
         display,
+        ...(Option.isSome(helper) ? helper.value : {}),
       })),
     ),
     computerUse: Effect.all([enabled, reported]).pipe(
@@ -550,6 +559,15 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
   },
 );
 
+/** The desktop host's helper readiness, as desktop telemetry last carried it. */
+const desktopHelperReadiness = Effect.map(
+  DesktopTelemetryReceiver.DesktopTelemetryReceiver,
+  (receiver) =>
+    receiver.cuaReadiness.pipe(
+      Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
+    ),
+);
+
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
@@ -630,10 +648,14 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install } =
+    const { factory, install, helperReadiness } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
-          { factory: yield* makeDesktopHostFactory(), install: undefined }
+          {
+            factory: yield* makeDesktopHostFactory(),
+            install: undefined,
+            helperReadiness: yield* desktopHelperReadiness,
+          }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
               baseDir: config.baseDir,
@@ -661,7 +683,7 @@ export const layer = Layer.effect(
                       new CuaDriverHostError({ operation: "install", cause: error.message }),
                   ),
                 );
-            return { factory, install };
+            return { factory, install, helperReadiness: undefined };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -675,6 +697,7 @@ export const layer = Layer.effect(
     );
     return yield* make(factory, probe, {
       ...(install ? { install } : {}),
+      ...(helperReadiness ? { helperReadiness } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
     });
   }),

@@ -6,6 +6,8 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
   type DesktopCuaDriverReport,
+  type DesktopCuaReadinessReport,
+  type DesktopCuaSafetyReport,
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
@@ -192,6 +194,13 @@ export class DesktopTelemetryReceiver extends Context.Service<
       Scope.Scope
     >;
     readonly cuaReports: Stream.Stream<DesktopCuaDriverReport>;
+    /**
+     * The helper's safety reports: a person's input, a secret field, and its readiness with what
+     * it can detect. Readiness from an earlier helper launch than the latest seen never appears.
+     */
+    readonly cuaSafety: Stream.Stream<DesktopCuaSafetyReport>;
+    /** The latest readiness the desktop host's helper reported, if any. */
+    readonly cuaReadiness: Effect.Effect<Option.Option<DesktopCuaReadinessReport>>;
     readonly requestCuaDriver: (
       requestId: string,
       enabled: boolean,
@@ -200,6 +209,15 @@ export class DesktopTelemetryReceiver extends Context.Service<
 >()("goat/resourceTelemetry/DesktopTelemetryReceiver") {}
 
 const decodeMessage = Schema.decodeUnknownEffect(DesktopHostTelemetryMessage);
+
+/**
+ * Whether a readiness report replaces the one held: same or later helper launch. The desktop
+ * reports again on every launch, so an earlier generation can only be a late leftover.
+ */
+export const supersedesCuaReadiness = (
+  current: Option.Option<DesktopCuaReadinessReport>,
+  next: DesktopCuaReadinessReport,
+): boolean => Option.isNone(current) || next.generation >= current.value.generation;
 const encodeControlMessage = Schema.encodeEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
@@ -351,6 +369,9 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
   const cuaReports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+  // Every report counts: a dropped private-mode change would leave agents watching a secret.
+  const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
+  const cuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   const controlMutex = yield* Semaphore.make(1);
   const snapshotMutex = yield* Semaphore.make(1);
   const health = yield* Ref.make<DesktopTelemetryReceiverHealth>({
@@ -543,6 +564,31 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        if (message.type === "cuaReadiness") {
+          // A late report from a helper launch the desktop has since replaced says nothing
+          // about the helper running now.
+          return recordContact.pipe(
+            Effect.andThen(
+              Ref.modify(cuaReadiness, (current) =>
+                supersedesCuaReadiness(current, message)
+                  ? [true, Option.some(message)]
+                  : [false, current],
+              ),
+            ),
+            Effect.flatMap((accepted) =>
+              accepted ? PubSub.publish(cuaSafety, message) : Effect.void,
+            ),
+            Effect.asVoid,
+          );
+        }
+
+        if (message.type === "cuaHumanInput" || message.type === "cuaPrivateMode") {
+          return recordContact.pipe(
+            Effect.andThen(PubSub.publish(cuaSafety, message)),
+            Effect.asVoid,
+          );
+        }
+
         const sampledAt = DateTime.makeUnsafe(message.sampledAtUnixMs);
         return snapshotMutex.withPermits(1)(
           recordContact.pipe(
@@ -638,6 +684,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
 
   return DesktopTelemetryReceiver.of({
     cuaReports: Stream.fromPubSub(cuaReports),
+    cuaSafety: Stream.fromPubSub(cuaSafety),
+    cuaReadiness: Ref.get(cuaReadiness),
     requestCuaDriver: (requestId, enabled) =>
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
@@ -719,6 +767,8 @@ export const layerTest = (
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
       cuaReports: Stream.empty,
+      cuaSafety: overrides.cuaSafety ?? Stream.empty,
+      cuaReadiness: Effect.succeedNone,
       requestCuaDriver: () =>
         Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
       desktopUpdates:
