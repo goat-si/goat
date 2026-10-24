@@ -1,14 +1,10 @@
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { buildFleet, type FleetShell } from "@goat/client-runtime/state/fleet";
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRouter,
-  RouterProvider,
-} from "@tanstack/react-router";
-import { act, useSyncExternalStore } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
+import { act, render } from "../../../test/render";
+import { THREAD_CONTEXT_DROP_EVENT, threadContextDropTargetProps } from "../chat/threadContextDrag";
+import type { FleetThread } from "@goat/client-runtime/state/fleet";
+import type { ScopedThreadRef } from "@goat/contracts";
 
 import { FleetThreadList } from "./FleetThreadList";
 
@@ -53,81 +49,130 @@ function shell(
   };
 }
 
-let container: HTMLDivElement;
-let root: Root;
-const store = {
-  shells: [] as ReadonlyArray<FleetShell>,
-  listeners: new Set<() => void>(),
-  subscribe: (listener: () => void) => {
-    store.listeners.add(listener);
-    return () => store.listeners.delete(listener);
-  },
-};
-
-function List() {
-  const shells = useSyncExternalStore(store.subscribe, () => store.shells);
-  const { threads } = buildFleet({
+function threads(shells: ReadonlyArray<FleetShell>) {
+  return buildFleet({
     environments: [{ environmentId: local, label: "Mac", sshAliases: [] }],
     primaryEnvironmentId: local,
     shells,
     remote: [],
-  });
-  return <FleetThreadList threads={threads} />;
+  }).threads;
 }
+const rows = (container: HTMLElement) => [...container.querySelectorAll("li")];
+const titles = (container: HTMLElement) =>
+  rows(container).map((row) => row.querySelector(".truncate")?.textContent);
 
-async function show(next: ReadonlyArray<FleetShell>) {
-  await act(async () => {
-    store.shells = next;
-    for (const listener of store.listeners) listener();
-  });
-}
-
-const rows = () => [...container.querySelectorAll("li")];
-const titles = () => rows().map((row) => row.querySelector(".truncate")?.textContent);
-
-beforeEach(async () => {
-  container = document.createElement("div");
-  document.body.append(container);
-  root = createRoot(container);
-  store.shells = [shell("first", 1), shell("second", 2), shell("third", 3)];
-  const router = createRouter({
-    routeTree: createRootRoute({ component: List }),
-    history: createMemoryHistory({ initialEntries: ["/fleet"] }),
-  });
-  await router.load();
-  await act(async () => root.render(<RouterProvider router={router} />));
+it("keeps rows in place as threads stream, change state, finish and join", async () => {
+  await using screen = await render(
+    <FleetThreadList
+      threads={threads([shell("first", 1), shell("second", 2), shell("third", 3)])}
+    />,
+  );
+  const before = rows(screen.container);
+  await screen.rerender(
+    <FleetThreadList
+      threads={threads([
+        shell("third", 3, { updatedMinute: 40 }),
+        shell("first", 1),
+        shell("second", 2, { approval: true }),
+      ])}
+    />,
+  );
+  expect(titles(screen.container)).toEqual(["first", "second", "third"]);
+  expect(rows(screen.container).every((row, index) => row === before[index])).toBe(true);
+  await expect.element(screen.getByText("Needs you")).toBeVisible();
+  await screen.rerender(
+    <FleetThreadList
+      threads={threads([
+        shell("first", 1),
+        shell("second", 2, { status: "completed" }),
+        shell("third", 3),
+        shell("fourth", 9),
+      ])}
+    />,
+  );
+  expect(titles(screen.container)).toEqual(["first", "third", "fourth"]);
+  expect(rows(screen.container)[0]).toBe(before[0]);
+  expect(rows(screen.container)[1]).toBe(before[2]);
 });
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-});
-
-describe("FleetThreadList", () => {
-  it("keeps rows in place, without remounting, as threads stream and change state", async () => {
-    expect(titles()).toEqual(["first", "second", "third"]);
-    const before = rows();
-
-    await show([
-      shell("third", 3, { updatedMinute: 40 }),
-      shell("first", 1, { updatedMinute: 30 }),
-      shell("second", 2, { approval: true, updatedMinute: 50 }),
-    ]);
-    expect(titles()).toEqual(["first", "second", "third"]);
-    expect(rows().every((row, index) => row === before[index])).toBe(true);
-    expect(rows()[1]!.textContent).toContain("Needs you");
+function pointer(type: string, y: number, buttons = 1) {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    buttons,
+    clientX: 20,
+    clientY: y,
   });
+}
 
-  it("appends a new thread, drops a finished one, and keeps the rest mounted", async () => {
-    const [first, , third] = rows();
-    await show([
-      shell("first", 1),
-      shell("second", 2, { status: "completed" }),
-      shell("third", 3),
-      shell("fourth", 9),
-    ]);
-    expect(titles()).toEqual(["first", "third", "fourth"]);
-    expect(rows()[0]).toBe(first);
-    expect(rows()[1]).toBe(third);
+it("drops a remote Fleet thread vertically into a composer without navigating", async () => {
+  const remote = EnvironmentId.make("remote");
+  const ref = { environmentId: remote, threadId: ThreadId.make("remote-work") };
+  const thread: FleetThread = {
+    ...threads([shell("first", 1)])[0]!,
+    key: "remote-work",
+    ref,
+    title: "Remote work",
+    subagents: [{ key: "sub", title: "Worker", status: "running" }],
+  };
+  await using screen = await render(
+    <>
+      <FleetThreadList
+        threads={[
+          thread,
+          { ...thread, key: "reported", ref: null, title: "Reported only", subagents: [] },
+        ]}
+      />
+      <form {...threadContextDropTargetProps()} aria-label="Composer" />
+    </>,
+    { router: "/fleet" },
+  );
+  const composer = screen.getByRole("form").element();
+  const drops: ReadonlyArray<ScopedThreadRef>[] = [];
+  composer.addEventListener(THREAD_CONTEXT_DROP_EVENT, (event) =>
+    drops.push((event as CustomEvent<ReadonlyArray<ScopedThreadRef>>).detail),
+  );
+  using _hitTest = vi
+    .spyOn(document, "elementFromPoint")
+    .mockImplementation((_x, y) => (y > 100 ? composer : null));
+  const link = screen.getByRole("link", { name: "Remote work" }).element();
+  await act(() => {
+    link.dispatchEvent(pointer("pointerdown", 20));
+    document.dispatchEvent(pointer("pointermove", 140));
+    document.dispatchEvent(pointer("pointerup", 140, 0));
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
   });
+  expect(drops).toEqual([[ref]]);
+  expect(screen.router!.state.location.pathname).toBe("/fleet");
+  expect(link.getAttribute("draggable")).toBe("false");
+  await act(() => {
+    link.dispatchEvent(pointer("pointerdown", 20));
+    document.dispatchEvent(pointer("pointermove", 140));
+    document.dispatchEvent(pointer("pointercancel", 140));
+    document.dispatchEvent(pointer("pointerup", 140, 0));
+  });
+  for (const target of [
+    screen.getByRole("button", { name: /1 subagent/ }).element(),
+    screen.getByText("Reported only").element(),
+  ]) {
+    await act(() => {
+      target.dispatchEvent(pointer("pointerdown", 20));
+      document.dispatchEvent(pointer("pointermove", 140));
+      document.dispatchEvent(pointer("pointerup", 140, 0));
+    });
+  }
+  expect(drops).toHaveLength(1);
+  await act(() => {
+    link.dispatchEvent(pointer("pointerdown", 20));
+    document.dispatchEvent(pointer("pointerup", 20, 0));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+  });
+  await vi.waitFor(() =>
+    expect(screen.router!.state.location.pathname).toBe("/remote/remote-work"),
+  );
 });
