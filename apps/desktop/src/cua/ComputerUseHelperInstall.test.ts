@@ -5,7 +5,11 @@ import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
 
-import { type HelperInstallDependencies, makeHelperInstaller } from "./ComputerUseHelperInstall.ts";
+import {
+  type HelperInstallDependencies,
+  makeHelperInstaller,
+  runBounded,
+} from "./ComputerUseHelperInstall.ts";
 
 const TEAM = "U9ATA49N28";
 const ID = "si.goat.desktop.computer-use";
@@ -219,6 +223,31 @@ describe("ComputerUseHelperInstall", () => {
     await f.install(f.input());
     assert.equal(await f.link("current"), "g3");
     assert.isUndefined(await f.link("rejected"));
+  });
+
+  it("copies a rejected generation again once its directory is gone, and checks its grants again", async () => {
+    await using f = await fixture();
+    await f.ship({ cdhash: "g1", granted: true });
+    await f.install(f.input());
+    await f.ship({ cdhash: "g2", granted: false });
+    await f.install(f.input());
+    assert.equal(await f.link("rejected"), "g2");
+    await NodeFSP.rm(NodePath.join(f.root, "generations", "g2"), { recursive: true });
+    const copies = f.copies.length;
+    const result = await f.install(f.input());
+    assert.lengthOf(f.copies, copies + 1);
+    // Still without its grants, so the previous generation keeps running.
+    assert.equal(result.kind === "found" && NodePath.basename(NodePath.dirname(result.path)), "g1");
+    assert.equal(await f.link("rejected"), "g2");
+  });
+
+  it("kills a tool that outlives its deadline instead of waiting on it", async () => {
+    const failure = await runBounded("/bin/sleep", ["30"], 200).then(
+      () => undefined,
+      (error: NodeJS.ErrnoException & { killed?: boolean; signal?: string }) => error,
+    );
+    assert.isTrue(failure?.killed);
+    assert.equal(failure?.signal, "SIGKILL");
   });
 
   it("keeps a new generation that lost grants when the previous one carries another driver", async () => {

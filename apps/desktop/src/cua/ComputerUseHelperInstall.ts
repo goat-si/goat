@@ -82,7 +82,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
     const generations = NodePath.join(input.root, "generations");
     const bundleOf = (generation: string) => NodePath.join(generations, generation, HELPER_APP);
     /** The generation a link this installer wrote names; anything else reads as no link. */
-    const linked = async (name: string, mustExist = true) => {
+    const linked = async (name: string) => {
       const target = await NodeFSP.readlink(NodePath.join(input.root, name)).catch(() => undefined);
       const generation = target === undefined ? undefined : NodePath.basename(target);
       if (
@@ -91,7 +91,6 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
         target !== NodePath.join("generations", generation)
       )
         return undefined;
-      if (!mustExist) return generation;
       return (await NodeFSP.stat(NodePath.join(generations, generation)).then(
         (stat) => stat.isDirectory(),
         () => false,
@@ -143,7 +142,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
     const currentValid = await valid(current);
     if (current !== undefined && currentValid) {
       if (current === wanted) return use(current);
-      if (input.busy || (await linked("rejected", false)) === wanted) return use(current);
+      if (input.busy || (await linked("rejected")) === wanted) return use(current);
     }
     // Busy with a copy that fails its check: the sealed one in GOAT.app is the only safe choice.
     if (input.busy) return { kind: "found", path: input.source };
@@ -198,7 +197,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
           kept,
           "The updated " +
             COMPUTER_USE_HELPER_NAME +
-            " lost an Accessibility or Screen Recording grant the previous one holds, so the previous one keeps running. Grant the new one to move to it.",
+            " lost an Accessibility or Screen Recording grant the previous one holds, so the previous one keeps running until GOAT carries a newer helper.",
         );
       }
     }
@@ -215,7 +214,17 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
   };
 }
 
-const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
+
+/**
+ * Runs a tool with a deadline and kills it when the deadline passes, so a stuck codesign or
+ * ditto cannot hold the install queue, and with it every computer use start, forever.
+ */
+export const runBounded = (program: string, args: ReadonlyArray<string>, timeoutMs: number) =>
+  execFileAsync(program, [...args], { timeout: timeoutMs, killSignal: "SIGKILL" });
+const TOOL_DEADLINE_MS = 60_000;
+const execFile = (program: string, args: ReadonlyArray<string>) =>
+  runBounded(program, args, TOOL_DEADLINE_MS);
 
 const helperInstallDependencies: HelperInstallDependencies = {
   signature: async (bundle) => {
