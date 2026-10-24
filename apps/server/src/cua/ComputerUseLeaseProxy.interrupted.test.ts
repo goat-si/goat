@@ -79,10 +79,11 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
   it.effect("a call whose window report a pause overtook never reaches the next driver", () =>
     Effect.gen(function* () {
       const targetGate = yield* Deferred.make<void>();
-      const h = yield* harness({ onTarget: () => true, targetGate });
+      const h = yield* harness({ onTarget: () => true, targetGate, humanInput: true });
       yield* h.push(active());
       yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
       yield* h.reported;
+      assert.equal(yield* h.agentCallsQueued, 0);
       yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
       yield* h.killed;
       yield* h.push(active());
@@ -93,8 +94,10 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
       assert.equal(answer.id, 1);
       assert.deepInclude(answer.result.structuredContent, { detail: "waiting_for_human" });
       assert.notProperty(answer.result.structuredContent, "effect");
+      assert.equal(yield* h.agentCallsQueued, 0);
       yield* h.send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
       assert.equal((yield* h.nextToDriver).id, 2);
+      assert.equal(yield* h.agentCall, "start 2");
     }),
   );
 });

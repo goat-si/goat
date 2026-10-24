@@ -90,35 +90,54 @@ export function scopeVerdict(input: {
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
-  return approves(input.apps, app.id, app.name)
-    ? { _tag: "allow" }
-    : { _tag: "refuse", reason: "app_not_approved", app: app.id };
+  if (approves(input.apps, app.id, app.name)) return { _tag: "allow" };
+  // Known only by a name, such as a Linux window's process name, the pid may still have a
+  // desktop id a grant names; the listing says.
+  if (app.id === app.name) return { _tag: "resolve", pid };
+  return { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
 
 /**
  * Records every app a driver answer names with its pid, such as list_apps, list_windows and
- * launch_app results. Ids prefer the bundle id, which is what grants name.
+ * launch_app results. Ids prefer the bundle id, which is what grants name, then a window's app
+ * name, then a process name. Within one answer the best of these wins for each pid: Linux
+ * list_apps names each app again in the windows it nests and in a processes list (#1428).
  */
-export function learnApps(value: unknown, into: Map<number, ListedApp>, depth = 0): void {
-  if (depth > 5) return;
-  if (Array.isArray(value)) {
-    for (const item of value) learnApps(item, into, depth + 1);
-    return;
-  }
-  const object = record(value);
-  if (object === undefined) return;
-  const pid = object.pid;
-  const bundle = text(object.bundle_id);
-  const name = text(object.app_name) ?? text(object.name);
-  const id = bundle ?? name;
-  if (typeof pid === "number" && Number.isInteger(pid) && id !== undefined) {
+export function learnApps(value: unknown, into: Map<number, ListedApp>): void {
+  const best = new Map<number, number>();
+  learn(value, 0, (pid, rank) => best.set(pid, Math.max(rank, best.get(pid) ?? 0)));
+  learn(value, 0, (pid, rank, bundle, name) => {
+    if (rank < (best.get(pid) ?? 0)) return;
+    const id = bundle ?? name;
+    if (id === undefined) return;
     const known = into.get(pid);
     // Replies such as get_window_state name the app without its bundle id. A name cannot tell
     // the listed app from another that reused its pid, and keeping the name as its id would
     // refuse every grant naming the bundle id, so the pid is listed again before it is judged.
     if (bundle === undefined && known !== undefined && known.id !== known.name) into.delete(pid);
     else into.set(pid, { id, name });
+  });
+}
+
+function learn(
+  value: unknown,
+  depth: number,
+  visit: (pid: number, rank: number, bundle: string | undefined, name: string | undefined) => void,
+): void {
+  if (depth > 5) return;
+  if (Array.isArray(value)) {
+    for (const item of value) learn(item, depth + 1, visit);
+    return;
+  }
+  const object = record(value);
+  if (object === undefined) return;
+  const pid = object.pid;
+  if (typeof pid === "number" && Number.isInteger(pid)) {
+    const bundle = text(object.bundle_id);
+    const appName = text(object.app_name);
+    const rank = bundle !== undefined ? 2 : appName !== undefined ? 1 : 0;
+    visit(pid, rank, bundle, appName ?? text(object.name));
   }
   for (const nested of Object.values(object))
-    if (typeof nested === "object" && nested !== null) learnApps(nested, into, depth + 1);
+    if (typeof nested === "object" && nested !== null) learn(nested, depth + 1, visit);
 }

@@ -40,6 +40,7 @@ const contextChipVariants = cva(
       state: {
         unresolved: "border-dashed",
         invalid: "",
+        unavailable: "",
       },
     },
     compoundVariants: [
@@ -71,6 +72,13 @@ const contextChipVariants = cva(
         className: "border-destructive/35 bg-destructive/8 text-destructive",
       },
       { appearance: "link", state: "invalid", className: "text-destructive-foreground" },
+      {
+        appearance: "pill",
+        state: "unavailable",
+        className:
+          "border-border/70 bg-muted text-muted-foreground [button:enabled&,a&]:hover:border-border [button:enabled&,a&]:hover:bg-muted/80",
+      },
+      { appearance: "link", state: "unavailable", className: "text-muted-foreground" },
     ],
   },
 );
@@ -88,7 +96,7 @@ const LINK_KINDS: ReadonlySet<ContextChipKind> = new Set([
 
 interface ContextChipProps extends useRender.ComponentProps<"span"> {
   kind?: ContextChipKind;
-  state?: "unresolved" | "invalid";
+  state?: "unresolved" | "invalid" | "unavailable";
 }
 
 function ContextChip({ className, kind, state, render, ...props }: ContextChipProps) {

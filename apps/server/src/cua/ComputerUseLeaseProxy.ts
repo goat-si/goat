@@ -24,6 +24,7 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
+  type ComputerUseHumanInputSource,
   type ComputerUseOverlayCommand,
   type ComputerUseControlEnd,
   ComputerUseLeaseUpdate,
@@ -45,6 +46,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
+import { makeAgentInputLog, postsInput } from "./agentInputLog.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
@@ -152,6 +154,14 @@ export interface LeaseProxyDriver {
    * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
    */
   readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
+  /**
+   * Keyboard and pointer events the macOS helper saw, each with when it happened on this
+   * process's clock, every agent's own included (#1235). Absent where the child reports none.
+   */
+  readonly humanInput?: Stream.Stream<{
+    readonly source: ComputerUseHumanInputSource;
+    readonly at: number;
+  }>;
 }
 
 export interface LeaseProxyOptions<EU, ED> {
@@ -176,6 +186,24 @@ export interface LeaseProxyOptions<EU, ED> {
    * true when the server took it. Reported only on a change, observations included.
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
+  /**
+   * Tells the server of a keyboard or pointer event outside this agent's own input calls; the
+   * server drops it if another agent's input covers it, else pauses every agent. True when the
+   * server took it; until then each later event is offered again.
+   */
+  readonly onHumanInput?: (input: {
+    readonly source: ComputerUseHumanInputSource;
+    readonly at: number;
+  }) => Effect.Effect<boolean>;
+  /**
+   * Tells the server one of this agent's calls that can post input started or ended, so another
+   * agent's helper seeing that input is not taken for a person. Best effort, never awaited.
+   */
+  readonly onAgentInput?: (report: {
+    readonly call: string;
+    readonly state: "start" | "end";
+    readonly at: number;
+  }) => Effect.Effect<unknown>;
 }
 
 const WRONG_DISPLAY =
@@ -444,6 +472,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The control's window survives pauses: the server keeps it until the control ends.
   let reported: ComputerUseCallTarget | undefined;
   let overlay = initialOverlayState;
+  /** When the agent's own input calls were on their way, to tell a person's input apart. */
+  const agentInput = makeAgentInputLog();
+  const tellAgentInput = (call: string, state: "start" | "end", at: number) =>
+    options.onAgentInput === undefined
+      ? Effect.void
+      : options.onAgentInput({ call, state, at }).pipe(Effect.ignoreCause, Effect.forkIn(scope));
+  const inputStarted = Effect.fn("ComputerUseLeaseProxy.inputStarted")(function* (key: string) {
+    const at = yield* Clock.currentTimeMillis;
+    agentInput.prune(at);
+    agentInput.started(key, at);
+    yield* tellAgentInput(key, "start", at);
+  });
+  const inputEnded = Effect.fn("ComputerUseLeaseProxy.inputEnded")(function* (key: string) {
+    const at = yield* Clock.currentTimeMillis;
+    if (agentInput.ended(key, at)) yield* tellAgentInput(key, "end", at);
+  });
 
   /** Updates what the overlay shows and waits until the helper has drawn it. */
   const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
@@ -468,6 +512,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     running = undefined;
     const pending = [...outstanding.values()];
     outstanding.clear();
+    const cutAt = yield* Clock.currentTimeMillis;
+    for (const key of agentInput.endAll(cutAt)) yield* tellAgentInput(key, "end", cutAt);
     if (current !== undefined) {
       for (const request of pending)
         yield* current.driver.send(
@@ -521,6 +567,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            yield* inputEnded(key);
             const session = message.result?.structuredContent?.session;
             if (request.method === "tools/call" && typeof session === "string")
               sessions.add(session);
@@ -581,6 +628,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
     const current: Running = { driver, scope: child };
     running = current;
+    if (driver.humanInput !== undefined && options.onHumanInput !== undefined) {
+      const report = options.onHumanInput;
+      // Once the server took one, this child is done: the pause that follows stops it.
+      let told = false;
+      yield* driver.humanInput.pipe(
+        Stream.runForEach((input) =>
+          Effect.gen(function* () {
+            if (told || finished !== undefined || paused !== undefined || running !== current)
+              return;
+            if (agentInput.isAgents(input.at)) return;
+            told = yield* report(input);
+          }),
+        ),
+        Effect.forkIn(child),
+      );
+    }
     // A new helper draws nothing yet.
     overlay = initialOverlayState;
     // A fresh child after a pause hears the provider's handshake again; its answers are dropped.
@@ -754,7 +817,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         id,
         message.method,
         "app_not_approved",
-        scopeMessage("app_not_approved", `the app with pid ${verdict.pid}`),
+        scopeMessage(
+          "app_not_approved",
+          listed.get(verdict.pid)?.id ?? `the app with pid ${verdict.pid}`,
+        ),
       );
     if (verdict._tag === "refuse")
       return refusal(
@@ -876,7 +942,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
     }
     const cancelled = cancelledRequestKey(line);
-    if (cancelled !== undefined) outstanding.delete(cancelled);
+    if (cancelled !== undefined) {
+      outstanding.delete(cancelled);
+      yield* inputEnded(cancelled);
+    }
     if (isRequest)
       outstanding.set(JSON.stringify(id), {
         id,
@@ -884,6 +953,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
         unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
       });
+    if (
+      isRequest &&
+      message?.method === "tools/call" &&
+      postsInput(typeof message.params?.name === "string" ? message.params.name : "")
+    )
+      yield* inputStarted(JSON.stringify(id));
     yield* current.driver.send(line);
   });
 
