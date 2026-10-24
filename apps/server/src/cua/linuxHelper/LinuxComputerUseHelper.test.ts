@@ -58,7 +58,9 @@ function png(width: number, height: number, fill: boolean | "noise") {
   const chunk = (type: string, body: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(body.length);
-    return Buffer.concat([length, Buffer.from(type), body, Buffer.alloc(4)]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(NodeZlib.crc32(Buffer.concat([Buffer.from(type), body])));
+    return Buffer.concat([length, Buffer.from(type), body, crc]);
   };
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
