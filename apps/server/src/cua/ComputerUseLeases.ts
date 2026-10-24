@@ -395,6 +395,15 @@ const make = Effect.gen(function* () {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
+    // An approval that checked holder() before this claim can commit after it. A person's
+    // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
+    if (
+      record.everyApp === "unattended" &&
+      (yield* live()).some((lease) => lease.threadId !== threadId)
+    ) {
+      if (end(threadId, "revoked")) yield* changed;
+      return { _tag: "ended", reason: "revoked" };
+    }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };

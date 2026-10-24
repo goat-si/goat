@@ -663,3 +663,23 @@ it.effect("lets one unattended thread at a time hold the screen without a grant"
     yield* leases.stopAll;
   }).pipe(Effect.provide(everyAppLayer)),
 );
+
+it.effect(
+  "ends unattended full access work when a person approved another thread's grant meanwhile",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const scheduled = ThreadId.make("thread-scheduled-race");
+      const approved = ThreadId.make("thread-approved-race");
+      yield* threadIn(scheduled, "full-access");
+      // The approval checked holder() before the claim, so it commits after the claim succeeds.
+      const claimed = Option.getOrThrow(yield* leases.everyAppControl(scheduled, true));
+      yield* grant(approved, "handoff:approved-race");
+      assert.deepEqual(yield* leases.controlState(scheduled, claimed.controlId), {
+        _tag: "ended",
+        reason: "revoked",
+      });
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(everyAppLayer)),
+);
