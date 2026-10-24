@@ -111,15 +111,18 @@ describe("searchSettings", () => {
       to: "/settings/appearance",
       requiresDesktopWindowMaterial: true,
     };
-    vi.stubGlobal("window", { desktopBridge: {} });
-    expect(searchSettings("system glass", [item])).toEqual([]);
-    vi.stubGlobal("window", {
-      desktopBridge: { getWindowMaterialState: vi.fn(), onWindowMaterialStateChanged: vi.fn() },
-    });
-    expect(searchSettings("system glass", [item]).map((result) => result.id)).toEqual([
-      "desktop-system-material",
-    ]);
-    vi.unstubAllGlobals();
+    try {
+      vi.stubGlobal("window", { desktopBridge: {} });
+      expect(searchSettings("system glass", [item])).toEqual([]);
+      vi.stubGlobal("window", {
+        desktopBridge: { getWindowMaterialState: vi.fn(), onWindowMaterialStateChanged: vi.fn() },
+      });
+      expect(searchSettings("system glass", [item]).map((result) => result.id)).toEqual([
+        "desktop-system-material",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("hides settings whose controls are unavailable", () => {
