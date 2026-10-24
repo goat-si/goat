@@ -32,10 +32,10 @@ describe("Cursor Cloud failed run", () => {
     ["Permission denied for repository fixture/repo", ACCESS],
     // Supported phrases still count when they end a sentence.
     ["Insufficient credits.", BILLING],
-    ["Quota exceeded.", BILLING],
+    ["Usage quota exceeded.", BILLING],
     ["Authentication required.", ACCESS],
     ["Unauthorized.", ACCESS],
-    ["No access.", ACCESS],
+    ["No access to this repository.", ACCESS],
     ["The agent stopped because of an unexpected error.", UNEXPECTED],
     // Transport failures that only share a word with account problems.
     ["WebSocket upgrade failed: 502 Bad Gateway", UNEXPECTED],
@@ -47,7 +47,14 @@ describe("Cursor Cloud failed run", () => {
     ["Cloning forbidden..git: ETIMEDOUT", UNEXPECTED],
     ["ENOENT: no such file or directory, open 'authentication/failed'", UNEXPECTED],
     ["Cloning authentication-failed: ECONNRESET", UNEXPECTED],
-    ["remote: 403 Forbidden while cloning payment-service.git", ACCESS],
+    // Technical failures that use account words for something else keep the general sentence.
+    ["remote: 403 Forbidden while cloning payment-service.git", UNEXPECTED],
+    ["ERR_CRYPTO_INVALID_KEYLEN: Invalid key length", UNEXPECTED],
+    ["Container setup failed: disk quota exceeded", UNEXPECTED],
+    ["EACCES: permission denied, open '/workspace/file'", UNEXPECTED],
+    ["npm ERR! 403 Forbidden - GET https://registry.npmjs.org/fixture", UNEXPECTED],
+    ["Quota exceeded.", UNEXPECTED],
+    ["No access.", UNEXPECTED],
     ["   ", UNEXPECTED],
   ])("says what to fix for %j", (message, expected) => {
     expect(resultTask(task, failed({ message })).error).toBe(expected);

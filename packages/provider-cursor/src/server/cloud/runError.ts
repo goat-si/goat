@@ -10,7 +10,8 @@ const ACCOUNT_LIMIT = ALONE(
   [
     "(?:no|insufficient|not enough|out of)(?: usage)? credits?",
     "credit balance",
-    "quota (?:exceeded|reached)",
+    // A bare quota can be a disk's; only an account's or plan's counts.
+    "(?:usage|request|monthly|team|account|plan) quota (?:exceeded|reached)",
     "usage limit",
     "spend(?:ing)? limit",
     "plan limit",
@@ -27,11 +28,11 @@ const ACCESS_REFUSED = ALONE(
     "authenticat\\w{0,6}:? +(?:required|failed)",
     "not (?:signed|logged) in",
     "(?:sign|log)[- ]?in (?:required|again)",
-    "permission denied",
-    "forbidden",
-    "access denied",
-    "no access",
-    "invalid (?:api )?key",
+    // Bare "permission denied", "forbidden" or "invalid key" also come from files, package
+    // registries and ciphers; only a refusal naming the repository or an API key counts.
+    "(?:permission|access) denied (?:to|for) (?:the |this )?(?:repository|repo|project)",
+    "no access to (?:the |this )?(?:repository|repo|project|team|workspace)",
+    "invalid api key",
   ].join("|"),
 );
 
