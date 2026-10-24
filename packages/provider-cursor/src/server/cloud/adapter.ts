@@ -103,7 +103,8 @@ export function shouldRetryCursorRun(task: Task, result: RunResult, stopRequeste
   const { prUrl: _prUrl, branch: _branch, ...fresh } = task;
   const output = resultTask(fresh, result);
   if (output.prUrl !== undefined || output.branch !== undefined) return false;
-  return !PERMANENT_ERROR.test(result.error?.code ?? "");
+  // The SDK's error code is optional, so a refusal may explain itself only in its message.
+  return !PERMANENT_ERROR.test(`${result.error?.code ?? ""} ${result.error?.message ?? ""}`);
 }
 type TurnInput = ProviderAdapter.ProviderAdapterV2TurnInput;
 type AttachInput = Omit<TurnInput, "message" | "cloudLaunchSource">;
