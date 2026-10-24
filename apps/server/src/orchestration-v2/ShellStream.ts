@@ -106,7 +106,7 @@ export type ShellApplicationEvent =
       readonly event: Pick<OrchestrationV2StoredEvent["event"], "threadId">;
     };
 
-export const subagentThreadIdsOf = (
+const subagentThreadIdsOf = (
   threads: ReadonlyArray<Pick<OrchestrationV2ThreadShell, "id" | "lineage">>,
 ) =>
   new Set<string>(
@@ -144,14 +144,20 @@ export function shouldPublishShellApplicationEvent(
 ): boolean {
   if ("aggregateKind" in stored) return true;
   const { event } = stored;
-  if (event.type === "thread.created" || event.type === "thread.metadata-updated") {
+  // These carry the thread's lineage. Unarchiving restores a subagent the active snapshot left
+  // out, and GOAT promotion detaches a delegated task in place.
+  if (
+    event.type === "thread.created" ||
+    event.type === "thread.metadata-updated" ||
+    event.type === "thread.archived" ||
+    event.type === "thread.unarchived"
+  ) {
     const applied = order.appliedByThread.get(event.threadId) ?? order.through;
     if (stored.sequence <= applied) return true;
     order.appliedByThread.set(event.threadId, stored.sequence);
     if (event.payload.lineage.relationshipToParent === "subagent") {
       subagentThreadIds.add(event.threadId);
-    } else if (event.type === "thread.metadata-updated") {
-      // GOAT promotion detaches a delegated task in place, so it stops being a subagent.
+    } else {
       subagentThreadIds.delete(event.threadId);
     }
     return true;

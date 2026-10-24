@@ -118,6 +118,41 @@ describe("subagent shell events", () => {
     ).toBe(true);
   });
 
+  it("classifies an unarchived subagent the active snapshot left out", () => {
+    const subagents = new Set<string>();
+    const order = subagentLineageOrder(5);
+    const event = (sequence: number, type: string, relationshipToParent: string | null) =>
+      ({
+        sequence,
+        event: { threadId: "child", type, payload: { lineage: { relationshipToParent } } },
+      }) as ApplicationStoredEvent;
+    shouldPublishShellApplicationEvent(event(6, "thread.unarchived", "subagent"), subagents, order);
+    expect(
+      shouldPublishShellApplicationEvent(event(7, "message.updated", null), subagents, order),
+    ).toBe(false);
+
+    // A live promotion seen before a replayed unarchive keeps the promoted thread published.
+    const promoted = new Set<string>();
+    const promotedOrder = subagentLineageOrder(5);
+    shouldPublishShellApplicationEvent(
+      event(8, "thread.metadata-updated", null),
+      promoted,
+      promotedOrder,
+    );
+    shouldPublishShellApplicationEvent(
+      event(6, "thread.unarchived", "subagent"),
+      promoted,
+      promotedOrder,
+    );
+    expect(
+      shouldPublishShellApplicationEvent(
+        event(9, "message.updated", null),
+        promoted,
+        promotedOrder,
+      ),
+    ).toBe(true);
+  });
+
   it("classifies a subagent created after the snapshot even when replay delivers it", () => {
     const subagents = new Set<string>();
     const order = subagentLineageOrder(5);
