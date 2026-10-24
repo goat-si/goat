@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   PreviewAutomationHost,
-  PreviewAutomationOpenInput,
   PreviewAutomationStatus,
   PreviewAutomationLogsInput,
 } from "./previewAutomation.ts";
@@ -36,12 +35,6 @@ describe("PreviewAutomationLogsInput", () => {
     ]) {
       expect(() => decode(invalid)).toThrow();
     }
-  });
-});
-
-describe("PreviewAutomationOpenInput", () => {
-  it("retains the legacy show visibility alias", () => {
-    expect(decodeOpenInput({ show: false })).toEqual({ show: false });
   });
 });
 

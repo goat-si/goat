@@ -1,8 +1,4 @@
-import {
-  DEFAULT_SERVER_SETTINGS,
-  ProviderDriverKind,
-  ProviderInstanceId,
-} from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { filterSharedServerPatch, pickSharedServerSettings } from "./sharedSettings.ts";
