@@ -125,7 +125,10 @@ interface Envelope {
     readonly name?: unknown;
     readonly arguments?: { readonly session?: unknown };
   };
-  readonly result?: { readonly structuredContent?: { readonly session?: unknown } };
+  readonly result?: {
+    readonly structuredContent?: { readonly session?: unknown };
+    readonly isError?: unknown;
+  };
   readonly error?: unknown;
 }
 
@@ -264,12 +267,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               sessions.add(session);
             if (request.method === "tools/call") {
               const image = replyImageSize(message.result);
-              const result: { readonly isError?: unknown } | undefined = message.result;
               yield* drawOverlay({
                 type: "reply",
                 id: JSON.stringify(message.id),
                 ...(image ? { image } : {}),
-                ...(message.error !== undefined || result?.isError === true
+                ...(message.error !== undefined || message.result?.isError === true
                   ? { failed: true }
                   : {}),
               });
