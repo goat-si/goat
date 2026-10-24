@@ -69,7 +69,7 @@ const sweep = (options: {
                   "autoResume=" +
                     input.autoResume +
                     " triggers=" +
-                    input.fallbackTriggers?.join(","),
+                    input.fallbackClasses?.join(","),
                 );
                 return options.candidates ?? [candidate("a"), candidate("b"), candidate("goal")];
               }),
@@ -203,5 +203,32 @@ describe("UsageLimitRecoveryWorker fallback branch", () => {
       const off = yield* sweep({ autoResume: false, coversThreads: false, switched: new Set() });
       assert.deepStrictEqual(off.queried, ["autoResume=false triggers="]);
     }),
+  );
+
+  it.effect(
+    "asks for threads a route refused when a thread chain moves on unavailable (#1205)",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* sweep({
+          autoResume: false,
+          coversThreads: true,
+          switched: new Set(),
+          fleet: {
+            fallbackChains: {
+              argon: {
+                steps: [
+                  { instanceId: ProviderInstanceId.make("codex"), model: "command-code/argon" },
+                  { instanceId: ProviderInstanceId.make("codex"), model: "antigravity/argon" },
+                ],
+                on: ["usage_limit", "unavailable"],
+                scope: "goals_and_threads",
+              },
+            },
+          },
+        });
+        assert.deepStrictEqual(result.queried, [
+          "autoResume=false triggers=usage_limit,unavailable,permission_error",
+        ]);
+      }),
   );
 });

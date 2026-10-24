@@ -9,6 +9,13 @@ export interface Availability {
   readonly reason?: string;
 }
 
+/**
+ * Device access is a person's grant: no agent path may turn it on (#1196), so the refusal says who
+ * can and where.
+ */
+export const AGENT_DEVICE_ACCESS_OFF =
+  "Agent device access is off for this thread. Only a person can turn it on, in Settings → Integrations → Devices → Agent device access (a project can override it). Ask the user to turn it on, and stop device work until they do.";
+
 /** A thread caller's goatclaw profile as its calls resolve it, or why it does not resolve. */
 export type CallerProfile =
   | { readonly resolved: true; readonly effective: Profiles.EffectiveProfile }
@@ -65,6 +72,12 @@ export const availability = (
     return { now: false, reason: "Only an outside MCP client can call it." };
   if (entry.effect !== "read" && scope.client?.access === "read-only")
     return { now: false, reason: "This MCP client was approved for read-only access." };
+  if (
+    entry.resource === "device" &&
+    scope.thread !== undefined &&
+    !scope.capabilities.has("device")
+  )
+    return { now: false, reason: AGENT_DEVICE_ACCESS_OFF };
   const refusal = profile === undefined ? undefined : profileRefusal(entry, profile);
   return refusal === undefined ? { now: true } : { now: false, reason: refusal };
 };

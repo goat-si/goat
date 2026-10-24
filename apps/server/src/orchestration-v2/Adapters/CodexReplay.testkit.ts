@@ -162,6 +162,7 @@ export function makeCodexReplayTranscript(input: {
       recorderThreadConfigKeys: [
         "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT",
         "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION",
+        "shell_environment_policy.set.TMPDIR",
         "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT",
         "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION",
       ],

@@ -43,6 +43,8 @@ export interface HelperAnswer {
   readonly granted: boolean;
   readonly detail?: string;
   readonly blocker?: ComputerUseReadiness["blockers"][number];
+  /** Fails the read the way a helper that cannot answer does. */
+  readonly fails?: Error;
 }
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
@@ -154,6 +156,7 @@ export const fixture = Effect.fn(function* (
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
+      if (helperAnswer?.fails) throw helperAnswer.fails;
       const granted = helperAnswer?.granted ?? false;
       return {
         accessibility: granted,
@@ -362,6 +365,7 @@ export const fixture = Effect.fn(function* (
   return {
     restart: driver.restart,
     verify: driver.verify,
+    grants: driver.grants,
     toolCalls,
     clientsOpen: () => clientsOpen,
     request: (requestId: string, enabled = true) =>

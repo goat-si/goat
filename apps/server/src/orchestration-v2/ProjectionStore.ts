@@ -21,7 +21,7 @@ import {
 } from "@goat/shared/orchestrationV2ThreadError";
 import { threadPullRequestsOf } from "@goat/shared/threadPullRequests";
 import type {
-  FallbackTrigger,
+  FallbackFailure,
   EnvironmentId,
   OrchestrationV2AppThread,
   OrchestrationV2Checkpoint,
@@ -533,8 +533,8 @@ export interface ProjectionStoreV2Shape {
      * asks for them; `limitRecoveryCommand` arms nothing for such a failure.
      */
     readonly withoutReset?: boolean;
-    /** Reevaluate these configured ordinary-thread triggers, including armed waits. */
-    readonly fallbackTriggers?: ReadonlyArray<FallbackTrigger>;
+    /** Reevaluate failures of these classes, armed waits included. */
+    readonly fallbackClasses?: ReadonlyArray<FallbackFailure>;
   }) => Effect.Effect<ReadonlyArray<ProjectionLimitRecoveryCandidate>, ProjectionStoreV2Error>;
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
@@ -4112,8 +4112,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const getLimitRecoveryCandidates = Effect.fn("ProjectionStore.getLimitRecoveryCandidates")(
       function* (options: Parameters<ProjectionStoreV2Shape["getLimitRecoveryCandidates"]>[0]) {
-        const fallbackTriggers = options.fallbackTriggers ?? [];
-        const failureClasses = [...new Set(["usage_limit", ...fallbackTriggers])];
+        const fallbackClasses = options.fallbackClasses ?? [];
+        const failureClasses = [...new Set(["usage_limit", ...fallbackClasses])];
         const rows = yield* sql<{
           readonly payload_json: string;
           readonly run_id: string;
@@ -4169,7 +4169,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             AND json_extract(t.payload_json, '$.settledOverride') IS NOT 'settled'
             AND (
               (
-                json_extract(item.payload_json, '$.failure.class') IN ${sql.in(fallbackTriggers)}
+                json_extract(item.payload_json, '$.failure.class') IN ${sql.in(fallbackClasses)}
                 AND (
                   json_extract(t.payload_json, '$.snoozedUntil') IS NULL
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
@@ -7511,7 +7511,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 const resetMs = Date.parse(thread.usageLimitResetAt ?? "");
                 const nowMs = DateTime.toEpochMillis(options.now);
                 if (
-                  options.fallbackTriggers?.some((trigger) => trigger === thread.lastErrorClass) &&
+                  options.fallbackClasses?.some((failure) => failure === thread.lastErrorClass) &&
                   !thread.latestRunStopRequested &&
                   (thread.snoozedUntil == null ||
                     DateTime.toEpochMillis(thread.snoozedUntil) <= nowMs) &&
