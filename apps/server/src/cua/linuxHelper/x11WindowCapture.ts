@@ -32,7 +32,7 @@ export type X11WindowCapture =
 export const UNREDIRECTED_CAPTURE =
   "This X display does not render the window by itself (no compositing manager, or it stopped redirecting windows), so a capture could show whatever covers it, other apps included. Screenshots are off here; app controls still work. A desktop with a compositor (GNOME, KDE, or picom on other window managers) can show GOAT a single window.";
 export const SHARED_CAPTURE =
-  "Another app's window is drawn over this one inside the same frame, so its screenshot would show that app. Observe it without a screenshot, or move the other window away.";
+  "Another app's window overlaps this one inside the same frame, so its screenshot could show that app. Observe it without a screenshot, or move the other window away.";
 const UNREADABLE = "The window's pixels could not be read in a format GOAT understands.";
 export const BUSY_CAPTURE =
   "The window took too long to read without holding up the rest of the desktop. Observe it again.";
@@ -376,9 +376,10 @@ const overlaps = (a: Rect, b: Rect) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 /**
- * Whether a window another client drew is painted over the target inside its top-level
- * ancestor: every window stacked after the target or one of its ancestors, with all it holds.
- * Undefined when that cannot be read.
+ * Whether a window another client drew can show in the target's rectangle inside its top-level
+ * ancestor: every sibling of the target or one of its ancestors, with all it holds. Siblings
+ * stacked below count too, since a shaped target or one without a background shows what lies
+ * under it in the pixmap. Undefined when that cannot be read.
  */
 async function drawnOver(
   x: Connection,
@@ -395,7 +396,7 @@ async function drawnOver(
     const children = childrenOf(tree);
     const at = children.indexOf(chain[level] ?? 0);
     if (at < 0) return undefined;
-    pending.push(...children.slice(at + 1));
+    pending.push(...children.filter((_, index) => index !== at));
   }
   let checked = 0;
   while (pending.length > 0) {

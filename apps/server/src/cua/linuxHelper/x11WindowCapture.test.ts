@@ -308,6 +308,19 @@ describe("X11 window capture against a scripted server", () => {
     }
   });
 
+  it("refuses when another client's window lies under it inside the same frame (#1335 shaped targets)", async () => {
+    // A shaped target, or one without a background, shows what is stacked below it in the pixmap.
+    const below: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x400001: { ...FRAMED[0x400001]!, children: [0x600001, 0x200001] },
+      0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+    };
+    await using server = await scriptedServer(below, { redirected: [0x400001] });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: SHARED_CAPTURE });
+  });
+
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
     expect(
