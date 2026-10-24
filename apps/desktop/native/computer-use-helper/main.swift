@@ -56,12 +56,37 @@ func signingTeam(_ code: SecStaticCode) -> String? {
   return dictionary[kSecCodeInfoTeamIdentifier as String] as? String
 }
 
-func guestCode(pid: pid_t) -> SecCode? {
-  var code: SecCode?
-  let attributes = [kSecGuestAttributePid: NSNumber(value: pid)] as CFDictionary
-  guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess else {
-    return nil
+/// The code of the process that launched this one, named by its audit token. Nil when the parent
+/// cannot be read or is gone.
+///
+/// A pid reused after the parent exits cannot stand in for it: macOS re-parents an orphan to
+/// launchd, so if the parent died at any point before the final getppid() that call no longer
+/// returns the pid we looked up, whatever process took that pid. What remains is a parent that
+/// exits after the check, which no longer matters. The stronger check, asking the kernel who
+/// holds the other end of stdin, is not available: macOS reports peer credentials only for
+/// Unix sockets (LOCAL_PEERTOKEN), not pipes.
+func parentCode(_ parent: pid_t = getppid()) -> SecCode? {
+  // launchd: the launcher is already orphaned, or was started by launchd itself.
+  guard parent > 1 else { return nil }
+  var task: mach_port_name_t = 0
+  guard task_name_for_pid(mach_task_self_, parent, &task) == KERN_SUCCESS else { return nil }
+  defer { mach_port_deallocate(mach_task_self_, task) }
+  var token = audit_token_t()
+  var count = mach_msg_type_number_t(
+    MemoryLayout<audit_token_t>.size / MemoryLayout<natural_t>.size)
+  let status = withUnsafeMutablePointer(to: &token) {
+    $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+      task_info(task, task_flavor_t(TASK_AUDIT_TOKEN), $0, &count)
+    }
   }
+  guard status == KERN_SUCCESS, audit_token_to_pid(token) == parent else { return nil }
+  let data = Data(bytes: &token, count: MemoryLayout<audit_token_t>.size)
+  var code: SecCode?
+  let attributes = [kSecGuestAttributeAudit: data] as CFDictionary
+  guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
+    // Still the same parent: had it exited, this process would have been re-parented.
+    getppid() == parent
+  else { return nil }
   return code
 }
 
@@ -80,7 +105,7 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 ///
 /// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
 /// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
-func parentRefusal() -> String? {
+func parentRefusal(_ parent: pid_t) -> String? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
   }
@@ -92,7 +117,7 @@ func parentRefusal() -> String? {
     return "This helper's bundle identifier does not name its GOAT app."
   }
   let appId = String(ownId.dropLast(suffix.count))
-  guard let parent = guestCode(pid: getppid()),
+  guard let parent = parentCode(parent),
     satisfies(
       parent,
       "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
@@ -106,7 +131,7 @@ func parentRefusal() -> String? {
 /// The service half accepts only its own launcher as a parent, so setting the disclaimed
 /// variable by hand cannot skip the launcher's parent check.
 func launcherIsSelf() -> Bool {
-  guard let own = selfStaticCode(), let parent = guestCode(pid: getppid()) else { return false }
+  guard let own = selfStaticCode(), let parent = parentCode() else { return false }
   var requirement: SecRequirement?
   guard SecCodeCopyDesignatedRequirement(own, [], &requirement) == errSecSuccess,
     let requirement
@@ -120,12 +145,42 @@ typealias DisclaimFunction = @convention(c) (UnsafeMutablePointer<posix_spawnatt
   Int32
 
 func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
+  // An agent connection's stdout is MCP; its refusal goes to stderr (see mcpFail).
+  if CommandLine.arguments.contains("--mcp") {
+    FileHandle.standardError.write(Data(("GOAT Computer Use: " + message + "\n").utf8))
+    exit(code)
+  }
   emit(["type": "refused", "reason": reason, "message": message])
   exit(code)
 }
 
+/// An agent connection's helper ends with the proxy that started it, however that proxy ends:
+/// a driver mid-action reads stdin's end only between calls, so it must not outlive the proxy
+/// that enforces its lease. This launcher leads the connection's process group (the proxy
+/// starts it detached), so the whole group goes: service and driver too.
+func endWithParent(_ parent: pid_t, service: pid_t) {
+  // Only a group this launcher leads is safe to end whole; otherwise end what it started.
+  let end = {
+    if getpgrp() == getpid() { killpg(getpid(), SIGKILL) } else { kill(service, SIGKILL) }
+    exit(137)
+  }
+  let source = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: .main)
+  source.setEventHandler(handler: end)
+  source.resume()
+  retained.append(source)
+  // The proxy may have gone at any point since this launcher started: then this process has
+  // been re-parented, so getppid() no longer names the parent it was started by.
+  if getppid() != parent { end() }
+}
+
 func runLauncher() -> Never {
-  if let refusal = parentRefusal() { refuse("untrusted_parent", refusal, 77) }
+  // The parent this launcher was started by, captured once: every later check compares with it,
+  // so a parent that dies before the watch below starts is still noticed.
+  let parent = getppid()
+  if CommandLine.arguments.contains("--mcp") && parent <= 1 {
+    refuse("untrusted_parent", "The process that started this connection is gone.", 77)
+  }
+  if let refusal = parentRefusal(parent) { refuse("untrusted_parent", refusal, 77) }
   // RTLD_DEFAULT; the symbol is private libsystem API, so a missing one is a typed refusal.
   guard
     let symbol = dlsym(
@@ -148,7 +203,8 @@ func runLauncher() -> Never {
   var environment = ProcessInfo.processInfo.environment
   environment[disclaimedVariable] = "1"
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-  let argv = [strdup(executable), nil]
+  // The service gets this launch's arguments: --mcp selects the agent connection mode.
+  let argv = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
   var child: pid_t = 0
   let status = posix_spawn(&child, executable, nil, &attributes, argv, envp)
   envp.forEach { free($0) }
@@ -164,11 +220,18 @@ func runLauncher() -> Never {
     source.resume()
     retained.append(source)
   }
+  if CommandLine.arguments.contains("--mcp") { endWithParent(parent, service: child) }
   DispatchQueue.global().async {
-    var waitStatus: Int32 = 0
-    while waitpid(child, &waitStatus, 0) == -1 && errno == EINTR {}
-    let signalled = waitStatus & 0x7f
-    exit(signalled == 0 ? (waitStatus >> 8) & 0xff : 128 + signalled)
+    // Wait without reaping: the service stays a zombie until this launcher exits, so its PID, and
+    // every signal forwarded to it above, can never reach a recycled process.
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+    // A service that died alone (a crash, a stray SIGKILL) leaves its driver behind. This launcher
+    // still leads the connection's group and is alive, so the group id is still this group's.
+    if CommandLine.arguments.contains("--mcp") && getpgrp() == getpid() {
+      killpg(getpid(), SIGTERM)
+    }
+    exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
 }
@@ -768,7 +831,91 @@ func runService() -> Never {
   dispatchMain()
 }
 
+// MARK: - Agent connection (D3 amendment 2)
+
+/// Failures in --mcp mode: stdout already belongs to MCP, so the reason goes to stderr and the
+/// exit code names it for the proxy (77 parent, 79 driver, 64 arguments, 78 spawn).
+func mcpFail(_ code: Int32, _ message: String) -> Never {
+  FileHandle.standardError.write(Data(("GOAT Computer Use: " + message + "\n").utf8))
+  exit(code)
+}
+
+/// One agent connection: the bundled driver's MCP server owns its runtime in a direct child of
+/// this service, on the service's own stdin and stdout. There is no socket, so nothing but the
+/// process that launched this helper reaches the driver (#1210). The driver inherits this
+/// process's disclaimed responsibility, so macOS charges its grants to this bundle.
+func runMcp() -> Never {
+  // The launcher this service was started by, captured before anything can re-parent it.
+  let launcher = getppid()
+  guard launcherIsSelf() else { mcpFail(77, "Start the helper through its launcher.") }
+  let arguments = Array(CommandLine.arguments.dropFirst())
+  guard let flag = arguments.firstIndex(of: "--capability-manifest"),
+    flag + 1 < arguments.count, arguments[flag + 1].hasPrefix("/")
+  else { mcpFail(64, "--mcp needs --capability-manifest with an absolute path.") }
+  let service = DriverService()
+  guard let driverPath = service.driverPath, FileManager.default.isExecutableFile(atPath: driverPath)
+  else { mcpFail(79, "The helper bundle has no Cua Driver.") }
+  if let refusal = service.driverRefusal(driverPath) { mcpFail(79, refusal) }
+
+  // Only the knobs a host may set come from this process's environment; the rest is fixed.
+  let settable = ProcessInfo.processInfo.environment.filter { hostSettableNames.contains($0.key) }
+    .map { ["name": $0.key, "value": $0.value] }
+  var environment = service.driverEnvironment(settable)
+  environment["CUA_DRIVER_CAPABILITY_MANIFEST_FILE"] = arguments[flag + 1]
+  environment["CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED"] = "1"
+  environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
+
+  let argv =
+    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId].map {
+      strdup($0)
+    } + [nil]
+  let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+  var child: pid_t = 0
+  // The driver inherits stdin, stdout and stderr and nothing else this process holds open.
+  var actions: posix_spawn_file_actions_t?
+  posix_spawn_file_actions_init(&actions)
+  defer { posix_spawn_file_actions_destroy(&actions) }
+  for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
+    posix_spawn_file_actions_addinherit_np(&actions, descriptor)
+  }
+  var attributes: posix_spawnattr_t?
+  posix_spawnattr_init(&attributes)
+  defer { posix_spawnattr_destroy(&attributes) }
+  posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
+  argv.forEach { free($0) }
+  envp.forEach { free($0) }
+  guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
+  // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
+  // service ends the driver it started. The driver is waited on without reaping below, so
+  // `child` names it for as long as this process runs.
+  let endDriver = {
+    kill(child, SIGKILL)
+    exit(137)
+  }
+  let launcherWatch = DispatchSource.makeProcessSource(
+    identifier: launcher, eventMask: .exit, queue: .main)
+  launcherWatch.setEventHandler(handler: endDriver)
+  launcherWatch.resume()
+  retained.append(launcherWatch)
+  if getppid() != launcher { endDriver() }
+  for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
+    signal(signalNumber, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+    source.setEventHandler { kill(child, signalNumber) }
+    source.resume()
+    retained.append(source)
+  }
+  DispatchQueue.global().async {
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+    exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
+  }
+  dispatchMain()
+}
+
 if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
+  if CommandLine.arguments.contains("--mcp") { runMcp() }
   runService()
 } else {
   runLauncher()

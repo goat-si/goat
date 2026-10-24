@@ -9,13 +9,14 @@
 // Every process is stopped by the pid it was started with; the person's desktop is never used.
 //
 //   node scripts/build-computer-use-helper-linux.ts --out /tmp/gcu
-//   node scripts/computer-use-linux-smoke.ts --helper /tmp/gcu/goat-computer-use --evidence /tmp/gcu-evidence [--xvfb /path/to/Xvfb]
+//   node scripts/computer-use-linux-smoke.ts --helper /tmp/gcu/goat-computer-use --evidence /tmp/gcu-evidence [--xvfb /path/to/Xvfb] [--compositor /path/to/xcompmgr]
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 import * as NodeUtil from "node:util";
+import * as NodeZlib from "node:zlib";
 
 import {
   admitComputerUseReply,
@@ -31,6 +32,9 @@ const { values } = NodeUtil.parseArgs({
     helper: { type: "string" },
     evidence: { type: "string", default: "computer-use-linux-evidence" },
     xvfb: { type: "string", default: "Xvfb" },
+    // Without a compositing manager an X11 window capture can show what covers it, so the
+    // helper refuses screenshots (#1328); the run checks that, then starts this one.
+    compositor: { type: "string", default: "xcompmgr" },
   },
 });
 if (!values.helper) throw new Error("--helper <path to goat-computer-use> is required.");
@@ -99,6 +103,27 @@ const children = async (pid: number) => {
     pids.push(...text.split(/\s+/u).filter(Boolean).map(Number));
   }
   return pids;
+};
+
+/** Pure red pixels in a PNG the helper wrote: 8-bit RGB, every row unfiltered. */
+const redPixels = (png: Buffer) => {
+  const width = png.readUInt32BE(16);
+  const height = png.readUInt32BE(20);
+  const chunks: Buffer[] = [];
+  for (let offset = 8; offset < png.length;) {
+    const length = png.readUInt32BE(offset);
+    if (png.toString("ascii", offset + 4, offset + 8) === "IDAT")
+      chunks.push(png.subarray(offset + 8, offset + 8 + length));
+    offset += 12 + length;
+  }
+  const raw = NodeZlib.inflateSync(Buffer.concat(chunks));
+  let count = 0;
+  for (let row = 0; row < height; row++)
+    for (let x = 0; x < width; x++) {
+      const at = row * (width * 3 + 1) + 1 + x * 3;
+      if (raw[at] === 255 && raw[at + 1] === 0 && raw[at + 2] === 0) count++;
+    }
+  return count;
 };
 
 let failed = false;
@@ -240,6 +265,24 @@ try {
     COMPUTER_USE_METHODS.every((method) => method in capabilities.result.methods),
     capabilities.result,
   );
+  const windows = await request("listWindows");
+  const window = windows.result.windows.find((entry: any) => entry.title === "GOAT CU Fixture");
+  check("listWindows finds the fixture by its own pid", window?.pid === app.pid, {
+    windows: windows.result.windows,
+  });
+  const target = { pid: window.pid, windowId: window.windowId };
+
+  const uncomposited = await request("observe", { target, screenshot: true });
+  check(
+    "without a compositing manager a screenshot is refused, typed, and nothing is sent",
+    uncomposited.result.outcome === "refused" &&
+      uncomposited.result.reason === "unsupported" &&
+      uncomposited.image === undefined,
+    uncomposited.result,
+  );
+  const compositor = start(values.compositor, [], env);
+  await sleep(1000);
+  log("compositor", { pid: compositor.pid });
   const permissions = await request("permissions");
   check(
     "readiness: a real tree and a non-blank capture are proven, on X11",
@@ -249,12 +292,6 @@ try {
       permissions.result.platform?.linux?.displayServer === "x11",
     permissions.result,
   );
-  const windows = await request("listWindows");
-  const window = windows.result.windows.find((entry: any) => entry.title === "GOAT CU Fixture");
-  check("listWindows finds the fixture by its own pid", window?.pid === app.pid, {
-    windows: windows.result.windows,
-  });
-  const target = { pid: window.pid, windowId: window.windowId };
 
   const first = await request("observe", { target, screenshot: true });
   const elements = first.result.elements as Array<any>;
@@ -347,6 +384,91 @@ try {
     keys.result.outcome === "refused" && keys.result.reason === "backgroundUnavailable",
     keys.result,
   );
+
+  // A point in the helper's own screenshot: the driver still has the scale of the screenshot it
+  // took for that read, so the point reaches input delivery instead of a missing context.
+  const button = (first.result.elements as Array<any>).find(
+    (element) => element.label === "Increment",
+  );
+  const pointClick = await request("click", {
+    action: "click",
+    target: latest.target,
+    observationId: set.result.observation.observationId,
+    delivery: "background",
+    at: {
+      x: button.frame.x + button.frame.width / 2,
+      y: button.frame.y + button.frame.height / 2,
+    },
+  });
+  check(
+    "a point in the window's own screenshot reaches the driver's pointer input",
+    !JSON.stringify(pointClick.result).includes("screenshot_context") &&
+      (pointClick.result.outcome !== "refused" ||
+        pointClick.result.reason === "backgroundUnavailable"),
+    pointClick.result,
+  );
+
+  // Another app's window over the fixture: what the screen shows there must not reach the
+  // fixture's screenshot (#1328). Pure red marks the other app.
+  const cover = start(
+    "python3",
+    [
+      "-c",
+      [
+        "import gi",
+        "gi.require_version('Gtk', '3.0')",
+        "from gi.repository import Gtk, Gdk",
+        "w = Gtk.Window(title='Other app')",
+        "w.set_default_size(260, 160)",
+        "w.move(40, 40)",
+        "w.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(1, 0, 0, 1))",
+        "w.show_all()",
+        "Gtk.main()",
+      ].join("\n"),
+    ],
+    env,
+  );
+  await sleep(1500);
+  const screen = NodeChildProcess.spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import gi, sys",
+        "gi.require_version('Gdk', '3.0')",
+        "from gi.repository import Gdk",
+        "root = Gdk.get_default_root_window()",
+        "shot = Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360)",
+        "shot.savev(sys.argv[1], 'png', [], [])",
+        // Pure red pixels the screen shows where the fixture is (no window manager: its corner is 0,0).
+        "data, stride, step = shot.get_pixels(), shot.get_rowstride(), shot.get_n_channels()",
+        "print(sum(1 for y in range(320) for x in range(420) if tuple(data[y * stride + x * step:y * stride + x * step + 3]) == (255, 0, 0)))",
+      ].join("\n"),
+      NodePath.join(evidence, "4-screen-with-other-app.png"),
+    ],
+    { env, timeout: 5000, encoding: "utf8" },
+  );
+  const onScreen = Number(screen.stdout.trim());
+  check(
+    "the other app's window really covers the fixture on screen",
+    cover.exitCode === null && onScreen > 1000,
+    {
+      redOnScreen: onScreen,
+      screenCapture: screen.status,
+    },
+  );
+  const covered = await request("observe", { target, screenshot: true });
+  const red = covered.image ? redPixels(Buffer.from(covered.image.data, "base64")) : -1;
+  check(
+    "another app's window over the fixture never reaches its screenshot",
+    covered.result.kind === "full" && red === 0,
+    {
+      redPixels: red,
+      file: await saveImage("5-fixture-under-other-app.png", covered.image),
+    },
+  );
+  cover.kill("SIGTERM");
+  await sleep(300);
 
   // Give the fixture window X input focus (no window manager runs here), then focus the password.
   const xdotool = NodeChildProcess.spawnSync(

@@ -1,0 +1,149 @@
+import { assert, describe, it } from "@effect/vitest";
+import { computerUseReady } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import { afterEach, vi } from "vite-plus/test";
+
+import {
+  fixture,
+  healthyTools,
+  HELPER_ID,
+  HELPER_PID,
+  helperTools,
+  toolResult,
+} from "./DesktopCuaDriver.testkit.ts";
+
+afterEach(() => vi.unstubAllEnvs());
+
+const helperFixture = (platform: "darwin" | "win32") =>
+  fixture({
+    platform,
+    helper: { granted: true },
+    tools:
+      platform === "win32"
+        ? { ...healthyTools(), check_permissions: toolResult({ elevated: false, uia: true }) }
+        : helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+  });
+
+describe("DesktopCuaDriver readiness after a passing check", () => {
+  it.effect.each(["darwin", "win32"] as const)(
+    "drops an earlier check's proof when a later start cannot use the helper on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          const proven = test.readiness.at(-1)?.readiness;
+          assert.isTrue(proven ? computerUseReady(proven) : false);
+
+          // The helper's identity no longer matches when the next agent asks for it.
+          yield* test.answerAsHelper({ granted: true, fails: new Error("bundle_mismatch") });
+          yield* test.request("mismatch");
+          assert.equal((yield* test.next).status, "unavailable");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.equal(after?.helper, "unauthenticated");
+          assert.equal(after?.capture, "pending");
+          assert.isFalse(after ? computerUseReady(after) : true);
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "drops an earlier check's proof when the running helper exits unexpectedly on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const running = test.readiness.at(-1)?.readiness;
+          assert.isTrue(running ? computerUseReady(running) : false);
+
+          const crash = yield* test.nextAgentCrash;
+          yield* crash;
+          assert.equal((yield* test.next).status, "unavailable");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.equal(after?.helper, "unauthenticated");
+          assert.isFalse(after ? computerUseReady(after) : true);
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "keeps a crash's lost proof when the host is detached right after it on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+
+          const crash = yield* test.nextAgentCrash;
+          // The exit is seen, but the owner goes away before the crash is handled, so retiring
+          // the host takes the lock first.
+          yield* crash;
+          yield* test.request("detach", false);
+          yield* test.request("replacement");
+          const detached = yield* test.next;
+          assert.equal(detached.requestId, "detach");
+          assert.equal(detached.status, "stopped");
+          const replacement = yield* test.next;
+          assert.equal(replacement.requestId, "replacement");
+          assert.equal(replacement.status, "ready");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.equal(after?.capture, "pending");
+          assert.isFalse(after ? computerUseReady(after) : true);
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "keeps a newer check's proof after retiring a crashed agent on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const crash = yield* test.nextAgentCrash;
+          yield* crash;
+          assert.isTrue((yield* test.verify).verified);
+          assert.equal((yield* test.next).status, "stopped");
+          yield* test.request("replacement");
+          assert.equal((yield* test.next).status, "ready");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.isTrue(after ? computerUseReady(after) : false);
+        }),
+      ),
+  );
+
+  it.effect.each([
+    { platform: "darwin", action: "detach" },
+    { platform: "darwin", action: "restart" },
+    { platform: "win32", action: "detach" },
+    { platform: "win32", action: "restart" },
+  ] as const)(
+    "keeps a check's proof through an intentional stop on $platform ($action)",
+    ({ platform, action }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          yield* test.nextAgentCrash.pipe(Effect.asVoid);
+          yield* action === "detach" ? test.request("detach", false) : test.restart;
+          assert.equal((yield* test.next).status, "stopped");
+          const idle = test.readiness.at(-1)?.readiness;
+          assert.equal(idle?.helper, "authenticated");
+          assert.isTrue(idle ? computerUseReady(idle) : false);
+          yield* test.request("replacement");
+          assert.equal((yield* test.next).status, "ready");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.isTrue(after ? computerUseReady(after) : false);
+        }),
+      ),
+  );
+});
