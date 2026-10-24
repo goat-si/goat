@@ -1,8 +1,10 @@
 # ADR-0023 — decision recorded under "Computer use host"
 
 - Contract owner: [desktop.md](../desktop.md#computer-use-host)
-- Commit: pending on branch gcu/adr-goat-computer-use (recorded before implementation; decided by
-  Jun on 2026-10-24 for the GOAT Computer Use epic, goat-si/goat#1140, workstream #1128)
+- Commit: `276d781642` in #1184, with review follow-ups on the same branch, recorded before
+  implementation. The commit messages record the documents only. The decision is Jun's of
+  2026-10-24 (the lead decisions for epic #1140, workstream #1128); the alternatives and reasons
+  come from the epic's research notes, which live outside the repository.
 - Amends: [ADR-0022](ADR-0022-cua-driver-computer-use.md). Its "Identity" bullet (the Electron
   process owns the driver and macOS grants land on `si.goat.desktop`) and its note that the
   Electron host is ported separately are superseded here. The pin, telemetry opt-outs, capability
@@ -88,9 +90,11 @@
     pauses the agent and marks it waiting for the person.
   - **Parity.** Every platform implements every protocol method or returns a typed `unsupported`;
     tests enforce the matrix in the design doc.
-  - **Packaging.** Inner executables are signed first, then the helper, then GOAT.app, and builds
-    never reset TCC. Signing in CI is a separate proposal for maintainers; this epic adds local
-    scripts only.
+  - **Packaging and updates.** Inner executables are signed first, then the helper, then GOAT.app,
+    and builds never reset TCC. The copy in GOAT.app seeds an installed helper that updates on its
+    own as a signed, notarized artifact, switched one generation at a time after its signature and
+    protocol version are checked. Signing in CI is a separate proposal for maintainers; this epic
+    adds local scripts only.
 - **Reasons.**
   - A separate identity is the only way the grant can name what it allows, survive GOAT updates
     under a stable designated requirement, and stay off the provider processes GOAT starts. Aside
