@@ -45,11 +45,28 @@ describe("agentInputLog", () => {
     assert.isFalse(log.isAgents(11_100, "pointer"));
   });
 
+  it("forgetting old calls does not restart an unbroken run", () => {
+    // As the server uses it: every report prunes by its own clock, and the helper reports an
+    // event a little after it happened.
+    const log = makeAgentInputLog();
+    for (let call = 0; call < 60; call++) {
+      const now = 1_000 + call * 400;
+      log.prune(now);
+      log.started(String(call), now, ["pointer"]);
+      log.ended(String(call), now + 100);
+      if (now > 12_000) assert.isFalse(log.isAgents(now - 300, "pointer"), String(now));
+    }
+  });
+
   it("names the kinds a call can post from its tool and arguments", () => {
     for (const tool of ["get_window_state", "list_apps", "zoom", "invoke_menu", "launch_app"])
       assert.isFalse(postsInput(tool));
     assert.deepEqual(inputKinds("click", { x: 1, y: 1 }), ["pointer"]);
-    assert.deepEqual(inputKinds("click", { modifiers: ["shift"] }), ["pointer", "keyboard"]);
+    assert.deepEqual(inputKinds("click", { modifier: ["shift"] }), ["pointer", "keyboard"]);
+    assert.deepEqual(inputKinds("drag", { modifier: ["option"] }), ["pointer", "keyboard"]);
+    // Without a point, scroll focuses the element and presses Page Down or arrow keys.
+    assert.deepEqual(inputKinds("scroll", { direction: "down", by: "page" }), ["keyboard"]);
+    assert.deepEqual(inputKinds("scroll", { direction: "down", x: 5, y: 5 }), ["pointer"]);
     assert.deepEqual(inputKinds("type_text", { text: "a" }), ["keyboard"]);
     assert.deepEqual(inputKinds("type_text", { text: "a", x: 1, y: 1 }), ["keyboard", "pointer"]);
     for (const tool of ["run_script", "run_steps", "some_new_tool"])

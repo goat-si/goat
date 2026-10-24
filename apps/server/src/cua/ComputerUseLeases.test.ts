@@ -399,16 +399,24 @@ layer("ComputerUseLeases controls", (it) => {
       yield* leases.stopAll;
       const mine = yield* leases.control(thread, Option.none());
       const bots = yield* leases.control(other, Option.none());
-      // A click every 400 ms, each answered after 100 ms: its cover never lapses.
-      for (let call = 0; call < 30; call++) {
+      // A click every 400 ms, each answered after 100 ms: its cover never lapses. The server's
+      // own clock moves with it, so old calls are forgotten as it goes.
+      yield* TestClock.adjust(30_000);
+      for (let call = 0; call < 60; call++) {
         const at = 30_000 + call * 400;
         const report = { call: String(call), kinds: ["pointer"] as const };
         yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at });
         yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: at + 100 });
+        // The helper reports an event a little after it happened.
+        if (call === 10)
+          assert.equal(
+            yield* leases.humanInput(thread, mine.controlId, at - 300, "pointer"),
+            "agents",
+          );
+        yield* TestClock.adjust(400);
       }
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 34_000, "pointer"), "agents");
       // Past ten seconds of unbroken cover, pointer input pauses the agents, erring toward a person.
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 41_100, "pointer"), "paused");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 53_300, "pointer"), "paused");
     }),
   );
 
