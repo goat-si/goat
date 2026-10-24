@@ -402,6 +402,10 @@ final class DriverService {
   /// The apps the driver can see, for the host's capability manifest. The driver runs only
   /// after the same seal check as start, as a short-lived socket-free process in this helper's
   /// responsibility chain (#1241); listing reads LaunchServices and needs no grant.
+  ///
+  /// Spawned and reaped here, not through Process: one thread reads with poll() against an
+  /// absolute deadline, and the child is signalled only while it is still unreaped, so its pid
+  /// cannot have been reused by the time TERM or KILL is sent.
   func listApps() throws -> [String: Any] {
     guard let driverPath, FileManager.default.isExecutableFile(atPath: driverPath) else {
       throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.")
@@ -409,74 +413,108 @@ final class DriverService {
     if let refusal = driverRefusal(driverPath) {
       throw HelperError(code: "driver_untrusted", message: refusal)
     }
-    let process = Process()
-    let input = Pipe()
-    let output = Pipe()
-    process.executableURL = URL(fileURLWithPath: driverPath)
-    process.arguments = ["mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
+    var toDriver: [Int32] = [-1, -1]
+    var fromDriver: [Int32] = [-1, -1]
+    guard pipe(&toDriver) == 0 else {
+      throw HelperError(code: "spawn_failed", message: "Could not create a pipe for Cua Driver.")
+    }
+    guard pipe(&fromDriver) == 0 else {
+      close(toDriver[0])
+      close(toDriver[1])
+      throw HelperError(code: "spawn_failed", message: "Could not create a pipe for Cua Driver.")
+    }
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_adddup2(&actions, toDriver[0], 0)
+    posix_spawn_file_actions_adddup2(&actions, fromDriver[1], 1)
+    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+    // Only the three descriptors above reach the driver: not this helper's channel to the
+    // desktop, nor a running daemon's liveness pipe.
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
     var environment = driverEnvironment([])
     environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
-    process.environment = environment
-    process.standardInput = input
-    process.standardOutput = output
-    process.standardError = FileHandle.nullDevice
-    do { try process.run() } catch {
-      throw HelperError(code: "spawn_failed", message: "Could not start Cua Driver: \(error).")
+    let argv = [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
+      .map { strdup($0) } + [nil]
+    let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    var child: pid_t = 0
+    let spawned = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
+    argv.forEach { free($0) }
+    envp.forEach { free($0) }
+    close(toDriver[0])
+    close(fromDriver[1])
+    guard spawned == 0 else {
+      close(toDriver[1])
+      close(fromDriver[0])
+      throw HelperError(code: "spawn_failed", message: "Could not start Cua Driver (\(spawned)).")
     }
     defer {
-      try? input.fileHandleForWriting.close()
-      // Bounded: TERM, a short grace, then KILL, so a stuck driver never holds the service queue.
-      if process.isRunning { process.terminate() }
-      let grace = Date().addingTimeInterval(1)
-      while process.isRunning && Date() < grace { usleep(20_000) }
-      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-      process.waitUntilExit()
-      // Closing the read end ends the reader thread even if the driver left a child holding it.
-      try? output.fileHandleForReading.close()
+      close(toDriver[1])
+      var status: Int32 = 0
+      // TERM, a short grace, then KILL, all before this helper reaps the child, so the pid
+      // still names it; then reap it, so it never lingers as a zombie.
+      if waitpid(child, &status, WNOHANG) == 0 {
+        kill(child, SIGTERM)
+        let grace = Date().addingTimeInterval(1)
+        var reaped = false
+        while Date() < grace {
+          if waitpid(child, &status, WNOHANG) != 0 {
+            reaped = true
+            break
+          }
+          usleep(20_000)
+        }
+        if !reaped {
+          kill(child, SIGKILL)
+          while waitpid(child, &status, 0) == -1 && errno == EINTR {}
+        }
+      }
+      close(fromDriver[0])
     }
+    signal(SIGPIPE, SIG_IGN)
     func send(_ message: [String: Any]) {
       guard var data = try? JSONSerialization.data(withJSONObject: message) else { return }
       data.append(0x0A)
-      input.fileHandleForWriting.write(data)
+      data.withUnsafeBytes { bytes in
+        var offset = 0
+        while offset < bytes.count {
+          let written = write(toDriver[1], bytes.baseAddress! + offset, bytes.count - offset)
+          if written <= 0 { return }
+          offset += written
+        }
+      }
     }
-    // Reads the driver's replies on another thread so a silent driver cannot hang the helper.
+    let deadline = Date().addingTimeInterval(15)
+    var buffer = Data()
     var replies: [Int: [String: Any]] = [:]
-    let lock = NSLock()
-    let arrived = DispatchSemaphore(value: 0)
-    Thread.detachNewThread {
-      var buffer = Data()
-      while true {
-        let chunk = output.fileHandleForReading.availableData
-        if chunk.isEmpty { break }
-        buffer.append(chunk)
+    /// Reads until the reply with id arrives, the driver closes its output, or the deadline.
+    func reply(_ id: Int) -> [String: Any]? {
+      var chunk = [UInt8](repeating: 0, count: 65_536)
+      while replies[id] == nil {
+        let remaining = deadline.timeIntervalSinceNow
+        if remaining <= 0 { return nil }
+        var descriptor = pollfd(fd: fromDriver[0], events: Int16(POLLIN), revents: 0)
+        let ready = poll(&descriptor, 1, Int32(min(remaining, 1) * 1000))
+        if ready < 0 && errno == EINTR { continue }
+        if ready <= 0 { continue }
+        let count = read(fromDriver[0], &chunk, chunk.count)
+        if count <= 0 { return nil }
+        buffer.append(contentsOf: chunk[0..<count])
+        if buffer.count > maxLineBytes * 4 { return nil }
         while let newline = buffer.firstIndex(of: 0x0A) {
           let line = buffer.subdata(in: buffer.startIndex..<newline)
           buffer.removeSubrange(buffer.startIndex...newline)
-          guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-            let id = message["id"] as? Int
-          else { continue }
-          lock.lock()
-          replies[id] = message
-          lock.unlock()
-          arrived.signal()
+          if let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let messageId = message["id"] as? Int
+          {
+            replies[messageId] = message
+          }
         }
       }
-      arrived.signal()
-    }
-    let deadline = DispatchTime.now() + .seconds(15)
-    func reply(_ id: Int) -> [String: Any]? {
-      while true {
-        lock.lock()
-        let found = replies[id]
-        lock.unlock()
-        if let found { return found }
-        // The deadline is absolute: replies to other ids cannot keep this loop going past it.
-        if !process.isRunning || DispatchTime.now() >= deadline
-          || arrived.wait(timeout: deadline) == .timedOut
-        {
-          return nil
-        }
-      }
+      return replies[id]
     }
     send([
       "jsonrpc": "2.0", "id": 1, "method": "initialize",
