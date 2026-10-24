@@ -326,16 +326,23 @@ function validateNightlyWorkflow(source, yaml) {
     // prepare verifies the commit and never needs it.
     if (Object.hasOwn(job, "permissions")) {
       const permissions = job.permissions;
+      // publish may also read issues: its stable recheck counts release-blocker issues
+      // inside the publish lock (.github/scripts/release-train.cjs).
+      const extraKeys = name === "publish" ? ["issues"] : [];
       const contentsWrite =
         isMapping(permissions) &&
-        Object.keys(permissions).length === 1 &&
-        permissions.contents === "write";
+        permissions.contents === "write" &&
+        Object.keys(permissions).every(
+          (key) => key === "contents" || (extraKeys.includes(key) && permissions[key] === "read"),
+        );
       const readOnly = !JSON.stringify(permissions ?? {}).includes("write");
       if (name === "prepare" ? !readOnly : !(contentsWrite || readOnly)) {
         fail(
           name === "prepare"
             ? "jobs.prepare must not request write permissions"
-            : `jobs.${name} may only request contents: write`,
+            : name === "publish"
+              ? "jobs.publish may only request contents: write and issues: read"
+              : `jobs.${name} may only request contents: write`,
         );
       }
     }
@@ -442,10 +449,12 @@ function mentionsSecrets(value, key = "") {
   return false;
 }
 
-// prepare's resolve step is what picks and checks the commit (dev or main); every checkout
-// trusts its sha output. Changing that step means updating this pin on purpose.
+// prepare's resolve step is what picks and checks the commit on dev: a green commit for a
+// nightly, a published nightly's commit for stable (release-train.cjs from the workflow's own
+// commit decides which); every checkout trusts its sha output. Changing that step means
+// updating this pin on purpose.
 // The whole step is pinned (any added key such as if or continue-on-error changes it).
-const pinnedResolveSha256 = "6fb945d95a5266693efa8c6e9ad2acbed7e46cada427b728672a2488e43561c5";
+const pinnedResolveSha256 = "e02d48d68328cdacbcce9c79f3f23a73d0e29fdfe03ec7dba36da9ac163889fa";
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value !== null && typeof value === "object") {
@@ -463,7 +472,7 @@ function isPinnedResolve(step) {
 }
 
 // close-outside-prs.yml stays active on goat-si/goat on purpose (#426, #430). It runs on
-// pull_request_target with a write token from the default branch (main), so it must never check out or
+// pull_request_target with a write token from the default branch (dev), so it must never check out or
 // run pull request code. A blocklist of commands cannot promise that, so the reviewed job is
 // pinned whole: any change to it, including step names, scripts and env, means reviewing it
 // again and updating this hash on purpose.

@@ -912,10 +912,10 @@ describe("goat pre-push nightly workflow guard", () => {
     expect(result.status).toBe(0);
   });
 
-  it("allows contents: write on jobs that use the staging hand-off", () => {
+  it("allows contents: write on hand-off jobs, and issues: read on publish", () => {
     const jobs = nightlyJobs();
     jobs.build_mac = { ...jobs.build_mac, permissions: { contents: "write" } };
-    jobs.publish = { ...jobs.publish, permissions: { contents: "write" } };
+    jobs.publish = { ...jobs.publish, permissions: { contents: "write", issues: "read" } };
     jobs.cleanup = {
       needs: ["prepare", "publish"],
       if: `${downstreamGateText} && (always())`,
@@ -1199,7 +1199,7 @@ describe("goat pre-push nightly workflow guard", () => {
     ],
     [
       "write permissions beyond contents",
-      withJob("publish", { permissions: { contents: "write", actions: "write" } }),
+      withJob("publish", { permissions: { contents: "write", issues: "write" } }),
       "jobs.publish may only request contents: write",
     ],
     [
@@ -1208,8 +1208,8 @@ describe("goat pre-push nightly workflow guard", () => {
       "jobs.build_mac may only request contents: write",
     ],
     [
-      "a non-contents write permission",
-      withJob("build_other", { permissions: { packages: "write" } }),
+      "issues: read outside publish",
+      withJob("build_other", { permissions: { contents: "write", issues: "read" } }),
       "jobs.build_other may only request contents: write",
     ],
     [

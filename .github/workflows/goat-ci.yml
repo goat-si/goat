@@ -24,7 +24,7 @@ run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('goat-ci {0} on {1}', inputs.lane, github.ref_name) || github.event.pull_request.title }}
 on:
   pull_request:
-    branches: [main, dev, preview, "goat/**"]
+    branches: [dev, "goat/**"]
     # labeled lets a ci:* label start its run without a re-run. A draft gets the same quick run as
     # a ready pull request, so leaving draft starts nothing.
     types: [opened, synchronize, reopened, labeled]
@@ -347,6 +347,7 @@ jobs:
         run: >-
           node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
           .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
+          .github/scripts/release-train.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.
