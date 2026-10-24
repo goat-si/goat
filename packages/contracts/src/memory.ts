@@ -1251,7 +1251,7 @@ export const MemoryCausalBoundary = struct({
 export type MemoryCausalBoundary = typeof MemoryCausalBoundary.Type;
 
 export const MemoryContextSnapshot = struct({
-  protocolVersion: Schema.Literal(1),
+  protocolVersion: Schema.Literals([1, 2]),
   memorySpaceId: MemorySpaceId,
   projectionWatermark: NonNegativeInt,
   items: array(
