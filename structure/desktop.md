@@ -70,19 +70,23 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 When the server asks for a Cua Driver host on the private control pipe, the Electron main process
 owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
 "GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
-packaged builds look in `Contents/Helpers` and, when GOAT.app is Developer ID signed, run a
+packaged builds look in `Contents/Helpers`, where signed mac builds always put it and
+`build-desktop-artifact.ts --computer-use-helper` puts an ad-hoc one in an unsigned build
+(`scripts/desktop-artifact-computer-use.ts`), and, when GOAT.app is Developer ID signed, run a
 verified installed generation of it from the state directory
-(`apps/desktop/src/cua/ComputerUseHelperInstall.ts`), development builds need `GOAT_CUA_HELPER_PATH` to a
-helper built by `scripts/build-computer-use-helper.ts`, and a helper that is present but unusable
-keeps computer use off. A release helper (`apps/desktop/native/computer-use-helper/main.swift`)
-serves only a parent signed by GOAT's team with the GOAT app identifier; a development helper,
-built with `GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
+(`apps/desktop/src/cua/ComputerUseHelperInstall.ts`). Development builds need
+`GOAT_CUA_HELPER_PATH` to a helper built by `scripts/build-computer-use-helper.ts`, and a helper
+that is present but unusable keeps computer use off. A release helper
+(`apps/desktop/native/computer-use-helper/main.swift`) serves only a parent signed by GOAT's team
+with the GOAT app identifier; a development or ad-hoc helper, built with
+`GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
 with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
-and that the driver it reports is the helper's child. Desktop artifacts do not embed the helper
-yet, so packaged builds run the driver in the Electron process from `resources/cua-driver` under
-GOAT's own grants; development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
+and that the driver it reports is the helper's child. Packaged builds without the helper (an
+unsigned build without the flag) run the driver in the Electron process from
+`resources/cua-driver` under GOAT's own grants; development builds without a helper need
+`GOAT_CUA_DRIVER_PATH`. On macOS the
 host checks both permissions before starting and reports `unavailable` until they are granted. It
 reuses a running driver, retires a crashed one, and passes the same telemetry and update-check
 opt-outs as the standalone host ([server.md](server.md#computer-use)).

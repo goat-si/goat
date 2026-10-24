@@ -128,6 +128,18 @@ describe("build-computer-use-helper", () => {
       }),
       "error",
     );
+    // An unsigned local GOAT.app has no team either, so the helper it embeds may be ad-hoc.
+    for (const channel of ["stable", "nightly"] as const)
+      assert.deepEqual(
+        chooseSigningIdentity({
+          channel,
+          explicit: undefined,
+          adHoc: true,
+          unsignedPackage: true,
+          findIdentityOutput: NONE,
+        }),
+        { identity: "-", warning: AD_HOC_WARNING },
+      );
   });
 
   it("accepts an explicit identity only when it is a Developer ID in this keychain", () => {
@@ -227,16 +239,16 @@ describe("build-computer-use-helper", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it("lets only a dev helper serve any parent, under its own per-channel bundle id", () => {
+  it("lets only dev and ad-hoc helpers serve any parent, under per-channel bundle ids", () => {
     const template = NodeFS.readFileSync(
       new URL("../apps/desktop/native/computer-use-helper/Info.plist", import.meta.url),
       "utf8",
     );
-    const render = (channel: "stable" | "nightly" | "dev") =>
+    const render = (channel: "stable" | "nightly" | "dev", allowAnyParent = channel === "dev") =>
       renderHelperInfoPlist(template, {
         bundleId: helperBundleIdForChannel(channel),
         version: "1.2.3",
-        channel,
+        allowAnyParent,
       });
     for (const channel of ["stable", "nightly", "dev"] as const)
       assert.notMatch(render(channel), /@[A-Z_]+@/);
@@ -244,5 +256,6 @@ describe("build-computer-use-helper", () => {
     assert.match(render("nightly"), /<string>si\.goat\.desktop\.nightly\.computer-use<\/string>/);
     assert.match(render("stable"), /GOATComputerUseAllowAnyParent<\/key>\s*<false\/>/);
     assert.match(render("dev"), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
+    assert.match(render("stable", true), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
   });
 });
