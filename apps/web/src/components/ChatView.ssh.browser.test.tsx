@@ -855,7 +855,7 @@ it("uses reconciled SSH presentation in the chat banner while keeping fresh fail
   await fixture.rerender(<div />);
   await mount();
   expect(banner()?.textContent).toContain(
-    "Installing GOAT runtime — first setup can take a few minutes",
+    "Installing GOAT runtime. First setup can take a few minutes",
   );
   expect(banner()?.textContent).not.toContain("OLD SETUP TIMEOUT");
 });

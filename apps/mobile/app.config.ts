@@ -244,7 +244,7 @@ const config: ExpoConfig = {
   slug: "goat",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: repoEnv.GOAT_MOBILE_VERSION ?? "2.0.0",
+  version: repoEnv.GOAT_MOBILE_VERSION ?? "2.1.0",
   runtimeVersion: {
     // Development manifests resolve on every launch, so avoid fingerprint's
     // expensive native-project calculation there. Preview and production stay

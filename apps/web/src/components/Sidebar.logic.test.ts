@@ -78,6 +78,7 @@ import { DraftId } from "../composerDraftStore";
 import { excludeGlobalAgentThreads } from "../globalAgentRoute";
 import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import { completeSidebarRouteReveal, pendingSidebarRouteReveal } from "./sidebar/routeReveal";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 
@@ -2009,3 +2010,23 @@ const delegatedChildKey = (thread: ReturnType<typeof delegatedChild>) =>
 const delegatedParentKey = scopedThreadKey(
   scopeThreadRef(localEnvironmentId, ThreadId.make("parent")),
 );
+describe("pendingSidebarRouteReveal", () => {
+  it("keeps a revealed thread settled across a mount that reads no route params", () => {
+    const reveal = { observedKey: null, pendingKey: null };
+    expect(pendingSidebarRouteReveal(reveal, "env:a1")).toBe("env:a1");
+    completeSidebarRouteReveal(reveal);
+
+    // Back from Settings: location commits before the thread match does.
+    expect(pendingSidebarRouteReveal(reveal, null)).toBeNull();
+    expect(pendingSidebarRouteReveal(reveal, "env:a1")).toBeNull();
+
+    expect(pendingSidebarRouteReveal(reveal, "env:b1")).toBe("env:b1");
+  });
+
+  it("keeps a pending reveal through a render without route params", () => {
+    const reveal = { observedKey: null, pendingKey: null };
+    pendingSidebarRouteReveal(reveal, "env:a1");
+    expect(pendingSidebarRouteReveal(reveal, null)).toBeNull();
+    expect(pendingSidebarRouteReveal(reveal, "env:a1")).toBe("env:a1");
+  });
+});

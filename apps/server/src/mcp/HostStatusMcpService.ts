@@ -1,16 +1,12 @@
 import {
   GoatHostStatusResult,
-  ORCHESTRATION_PROTOCOL_VERSION,
   OrchestratorMcpFailure,
   type EnvironmentId,
   type GoatHostStatusInput,
   type HostStatusEntry,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import {
-  ownRuntimeProtocolRanges,
-  servedRuntimeProtocolRanges,
-} from "@goat/shared/sshRuntimeProtocol";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -47,6 +43,7 @@ import {
   hostStatusProviders,
   hostStatusQuotas,
   isUnsupportedHostStatusMessage,
+  LOCAL_HOST_COMPATIBILITY,
   markHostCompatibility,
   quotaRefreshDue,
   tagRemoteHostStatus,
@@ -62,12 +59,6 @@ import {
 export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
-
-/** This machine reads every host as a client, so it compares the protocols it speaks. */
-const LOCAL_COMPATIBILITY = {
-  version: packageJson.version,
-  speaks: ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION),
-};
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -355,7 +346,7 @@ const make = Effect.gen(function* () {
                   input.repositories === true,
                   options?.requireReady === true,
                 ),
-                LOCAL_COMPATIBILITY,
+                LOCAL_HOST_COMPATIBILITY,
               ),
             ),
           ],
@@ -383,7 +374,7 @@ const make = Effect.gen(function* () {
         hosts: [
           local,
           ...(yield* Effect.forEach(remote, (entry) =>
-            withGoatclaw(markHostCompatibility(entry, LOCAL_COMPATIBILITY)),
+            withGoatclaw(markHostCompatibility(entry, LOCAL_HOST_COMPATIBILITY)),
           )),
         ],
       };

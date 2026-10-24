@@ -65,7 +65,7 @@ export function sshRuntimePhaseText(phase: SshRuntimePhase): string {
     case "checking":
       return "Checking GOAT runtime";
     case "uploading":
-      return "Installing GOAT runtime — first setup can take a few minutes";
+      return "Installing GOAT runtime. First setup can take a few minutes";
     case "starting":
       return "Starting GOAT";
   }

@@ -65,6 +65,8 @@ interface BaseTraceRecord {
 
 export interface EffectTraceRecord extends BaseTraceRecord {
   readonly type: "effect-span";
+  /** Set by writers whose trace file can hold runs of several app versions (desktop). */
+  readonly resourceAttributes?: Readonly<Record<string, unknown>>;
   readonly exit:
     | {
         readonly _tag: "Success";

@@ -316,10 +316,13 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       : null;
   const installationDetail =
     state?.installationNotice ?? idleTooltip?.detail ?? (!state?.enabled ? state?.message : null);
+  // A failed automatic download raises no toast, so the button is where its reason shows.
+  const downloadError = state?.enabled && state.errorContext === "download" ? state.message : null;
   const tooltip = [
     heading,
     detail,
     installationDetail && !detail?.includes(installationDetail) ? installationDetail : null,
+    downloadError,
   ]
     .filter(Boolean)
     .join("\n");

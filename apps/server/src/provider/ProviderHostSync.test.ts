@@ -6,10 +6,12 @@ import {
   ProviderHostMatrixResult,
   ProviderInstanceId,
 } from "@goat/contracts";
+import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
+import packageJson from "../../package.json" with { type: "json" };
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HostSync from "./ProviderHostSync.ts";
@@ -63,6 +65,61 @@ it.effect("reports old, stopped, and mismatched hosts instead of failing the mat
     expect(byHost.stopped?.message).toContain("no ready connection to GOAT on stopped");
     expect(byHost.box).toMatchObject({ status: "ok", versionMismatch: true });
     expect(result.rows.map((row) => row.host)).toEqual([null, "old", "stopped", "box"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("regression #1002: judges hosts by the protocols they serve, not by GOAT version", () => {
+  const served = servedRuntimeProtocolRanges();
+  const protocols: Record<string, unknown> = {
+    nightly: served,
+    behind: { ssh: { min: 1, max: served.ssh.min - 1 }, orchestration: served.orchestration },
+    ahead: {
+      ssh: served.ssh,
+      orchestration: { min: served.orchestration.max + 1, max: served.orchestration.max + 1 },
+    },
+    same: served,
+    malformed: { ssh: { min: 5, max: 1 }, orchestration: served.orchestration },
+  };
+  const { layer } = harness({
+    answer: (call) =>
+      Effect.succeed({
+        rows: [
+          {
+            host: null,
+            status: "ok",
+            goatVersion: call.host === "same" ? packageJson.version : "0.0.1-nightly.20261023.246",
+            ...(protocols[call.host] === undefined ? {} : { protocol: protocols[call.host] }),
+            // What a remote says about itself never decides the verdict this machine shows.
+            versionMismatch: true,
+            compatibility: "incompatible",
+            message: "Remote's own warning.",
+            providers: [],
+          },
+        ],
+      }),
+  });
+  return Effect.gen(function* () {
+    const sync = yield* HostSync.ProviderHostSync;
+    const result = yield* sync.matrix(
+      { hosts: ["nightly", "behind", "ahead", "legacy", "same", "malformed"] },
+      { kind: "client", sessionId: viewer },
+    );
+    const byHost = Object.fromEntries(result.rows.map((row) => [row.host ?? "local", row]));
+    // A different build serving the same protocols is informational only: no warning.
+    expect(byHost.nightly).not.toHaveProperty("message");
+    expect(byHost.nightly).toMatchObject({ compatibility: "compatible", versionMismatch: true });
+    expect(byHost.local?.protocol).toEqual(served);
+    expect(byHost.behind?.compatibility).toBe("incompatible");
+    expect(byHost.behind?.message).toMatch(/Update GOAT on behind\.$/);
+    expect(byHost.ahead?.compatibility).toBe("incompatible");
+    expect(byHost.ahead?.message).toMatch(/Update GOAT on this machine\.$/);
+    expect(byHost.legacy?.compatibility).toBe("degraded");
+    expect(byHost.legacy?.message).toContain("does not report the protocols it serves");
+    expect(byHost.same).toMatchObject({ compatibility: "compatible" });
+    expect(byHost.same).not.toHaveProperty("versionMismatch");
+    expect(byHost.same).not.toHaveProperty("message");
+    expect(byHost.malformed?.compatibility).toBe("degraded");
+    expect(byHost.malformed?.message).toContain("does not report the protocols it serves");
   }).pipe(Effect.provide(layer));
 });
 

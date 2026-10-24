@@ -39,6 +39,15 @@ const TraceRecordLine = Schema.Struct({
 
 const decodeTraceRecordLine = Schema.decodeUnknownSync(Schema.fromJsonString(TraceRecordLine));
 
+const decodeTraceResourceLine = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      name: Schema.String,
+      resourceAttributes: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+    }),
+  ),
+);
+
 const environmentInput = (baseDir: string) =>
   ({
     dirname: "/repo/apps/desktop/dist-electron",
@@ -190,6 +199,37 @@ describe("DesktopObservability", () => {
           (record) => record.name === "desktop.observability.backendOutput.writeOutputChunk",
         ),
       );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, layerEmptyEnv)),
+    ),
+  );
+
+  // Stable and nightly apps can run together and share one desktop.trace.ndjson.
+  it.effect("regression: every desktop trace record names the app version that wrote it", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-desktop-trace-version-test-",
+      });
+      const layerEnvironment = layerEnvironmentFor(baseDir, false);
+      const tracePath = yield* Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        return environment.path.join(environment.logDir, "desktop.trace.ndjson");
+      }).pipe(Effect.provide(layerEnvironment));
+
+      yield* Effect.void.pipe(
+        Effect.withSpan("desktop.test.quietSpan"),
+        Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(layerEnvironment))),
+      );
+
+      const record = (yield* fileSystem.readFileString(tracePath))
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0)
+        .map((line) => decodeTraceResourceLine(line))
+        .find((line) => line.name === "desktop.test.quietSpan");
+      assert.deepEqual(record?.resourceAttributes, { "service.version": "1.2.3" });
     }).pipe(
       Effect.scoped,
       Effect.provide(Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerUndici, layerEmptyEnv)),

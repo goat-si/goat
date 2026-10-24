@@ -73,6 +73,7 @@ export const make = Effect.gen(function* () {
   const windows = environment.platform === "win32";
   const launcher = DesktopCliShim.launcherPath(environment);
   const binDirectory = path.dirname(launcher);
+  // Nightly and stable share the state dir, so this records whichever channel's folder was added.
   const ownedPathMarker = path.join(environment.stateDir, "goat-cli-command-path-entry");
 
   const fail = (message: string) => new DesktopCliCommandError({ message });
@@ -123,6 +124,13 @@ export const make = Effect.gen(function* () {
       Effect.asVoid,
       Effect.mapError(() => fail("Could not update your PATH.")),
     );
+  const ownedPathEntry = fs.readFileString(ownedPathMarker).pipe(
+    Effect.map((content) => content.trim() || binDirectory),
+    Effect.option,
+  );
+  const recordOwnedPathEntry = fs
+    .writeFileString(ownedPathMarker, `${binDirectory}\n`)
+    .pipe(Effect.mapError(() => fail("Added goat to your PATH but could not record it.")));
 
   const firstOnPath = Effect.gen(function* () {
     for (const directory of pathEntries(process.env.PATH, ":")) {
@@ -141,10 +149,11 @@ export const make = Effect.gen(function* () {
 
   const installedAt = Effect.gen(function* () {
     if (windows) {
-      if (!(yield* exists(ownedPathMarker))) return Option.none<string>();
+      const owned = yield* ownedPathEntry;
+      if (Option.isNone(owned)) return Option.none<string>();
       const entries = pathEntries(yield* readUserPath, ";");
-      return entries.some((entry) => sameWindowsPath(entry, binDirectory))
-        ? Option.some(launcher)
+      return entries.some((entry) => sameWindowsPath(entry, owned.value))
+        ? Option.some(path.join(owned.value, path.basename(launcher)))
         : Option.none<string>();
     }
     for (const directory of unixCandidates(environment.homeDirectory, environment.platform)) {
@@ -185,11 +194,25 @@ export const make = Effect.gen(function* () {
     yield* ensureLauncher;
     if (windows) {
       const entries = pathEntries(yield* readUserPath, ";");
-      if (!entries.some((entry) => sameWindowsPath(entry, binDirectory))) {
+      const owned = Option.getOrUndefined(yield* ownedPathEntry);
+      const listed = (directory: string) =>
+        entries.some((entry) => sameWindowsPath(entry, directory));
+      if (owned !== undefined && !sameWindowsPath(owned, binDirectory) && listed(owned)) {
+        // Another channel's folder would resolve `goat` first. This folder takes its place, keeping
+        // its PATH position; one the user already listed stays theirs and unclaimed.
+        if (listed(binDirectory)) {
+          yield* writeUserPath(entries.filter((entry) => !sameWindowsPath(entry, owned)).join(";"));
+          yield* fs.remove(ownedPathMarker).pipe(Effect.ignore);
+        } else {
+          const next = entries.map((entry) =>
+            sameWindowsPath(entry, owned) ? binDirectory : entry,
+          );
+          yield* writeUserPath(next.join(";"));
+          yield* recordOwnedPathEntry;
+        }
+      } else if (!listed(binDirectory)) {
         yield* writeUserPath([...entries, binDirectory].join(";"));
-        yield* fs
-          .writeFileString(ownedPathMarker, `${binDirectory}\n`)
-          .pipe(Effect.mapError(() => fail("Added goat to your PATH but could not record it.")));
+        yield* recordOwnedPathEntry;
       }
       return yield* state;
     }
@@ -234,9 +257,10 @@ export const make = Effect.gen(function* () {
 
   const uninstall: DesktopCliCommand["Service"]["uninstall"] = Effect.gen(function* () {
     if (windows) {
-      if (yield* exists(ownedPathMarker)) {
+      const owned = yield* ownedPathEntry;
+      if (Option.isSome(owned)) {
         const entries = pathEntries(yield* readUserPath, ";");
-        const kept = entries.filter((entry) => !sameWindowsPath(entry, binDirectory));
+        const kept = entries.filter((entry) => !sameWindowsPath(entry, owned.value));
         if (kept.length !== entries.length) yield* writeUserPath(kept.join(";"));
         yield* fs.remove(ownedPathMarker).pipe(Effect.ignore);
       }

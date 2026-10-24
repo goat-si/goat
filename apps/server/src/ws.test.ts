@@ -419,6 +419,7 @@ it.live.each(["thread", "shell"] as const)(
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
+          getShellSnapshot: () => Effect.succeed({ threads: [] }),
           streamStoredEventsFrom: (
             input: Parameters<
               ThreadManagement.ThreadManagementService["Service"]["streamStoredEventsFrom"]

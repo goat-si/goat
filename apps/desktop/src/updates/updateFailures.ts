@@ -4,6 +4,8 @@ import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 
+import { UpdaterRequestStalledError } from "../electron/electronRequestTimeout.ts";
+
 // Each updater request has its own response deadline (ElectronUpdater.installRequestDeadlines),
 // but a check can chain several requests and redirects. This bound frees GOAT's check and
 // shows the stall; electron-updater keeps the request in flight and hands it to later
@@ -82,6 +84,12 @@ export function describeUpdateErrorCause(cause: unknown): string {
 
 export function checkFailureMessage(reason: string): string {
   return `Could not check for updates: ${reason}`;
+}
+
+export function downloadFailureMessage(cause: unknown): string {
+  return cause instanceof UpdaterRequestStalledError
+    ? `Download stopped: ${cause.message}.`
+    : `Download failed: ${describeUpdateErrorCause(cause)}`;
 }
 
 /**
