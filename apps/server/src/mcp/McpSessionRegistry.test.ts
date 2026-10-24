@@ -475,6 +475,9 @@ it.effect(
         const directories = [first.config.temporaryDirectory, second.config.temporaryDirectory];
         expect(new Set(directories).size).toBe(2);
         expect(again.config.temporaryDirectory).toBe(first.config.temporaryDirectory);
+        // The system directory a thread shell's `goat app` still looks in holds the thread ones.
+        const system = first.config.systemTemporaryDirectory ?? "\0";
+        expect(first.config.temporaryDirectory?.startsWith(system)).toBe(true);
         for (const directory of directories) {
           expect((yield* fileSystem.stat(directory!)).type).toBe("Directory");
         }
