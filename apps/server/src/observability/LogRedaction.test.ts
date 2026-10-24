@@ -231,6 +231,43 @@ describe("redactLogMessage", () => {
     expect((wide as Array<unknown>).at(-1)).toBe("[Truncated]");
   });
 
+  it("summarizes binary data without reading it", () => {
+    const bytes = Object.defineProperty(new Uint8Array(1), "byteLength", {
+      get() {
+        return "Cookie: sid=canary-binary";
+      },
+    });
+    const buffer = new ArrayBuffer(8);
+    const detached = new DataView(buffer);
+    structuredClone(buffer, { transfer: [buffer] });
+    expect(redactLogMessage({ bytes, detached })).toEqual({
+      bytes: "[binary data]",
+      detached: "[binary data]",
+    });
+  });
+
+  it("bounds a sparse array, getter-only slots and a huge bigint", () => {
+    const sparse = redactLogMessage(Array.from({ length: 1 }).concat(new Array(100_000)));
+    assert.isArray(sparse);
+    expect((sparse as Array<unknown>).length).toBeLessThan(2_100);
+    expect((sparse as Array<unknown>).at(-1)).toBe("[Truncated]");
+
+    const getters: Array<unknown> = [];
+    for (let index = 0; index < 3_000; index++)
+      Object.defineProperty(getters, index, {
+        enumerable: true,
+        get: () => {
+          throw new Error("getter must not run");
+        },
+      });
+    expect((redactLogMessage(getters) as Array<unknown>).at(-1)).toBe("[Truncated]");
+
+    const huge = redactLogMessage(10n ** 100_000n);
+    expect(typeof huge).toBe("string");
+    expect(String(huge).length).toBeLessThanOrEqual(64_001);
+    expect(redactLogMessage(42n)).toBe(42n);
+  });
+
   it("bounds a deep or wide message", () => {
     let deep: Record<string, unknown> = { leaf: true };
     for (let depth = 0; depth < 20; depth++) deep = { deep };

@@ -216,6 +216,7 @@ function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
 const MAX_DEPTH = 8;
 const MAX_NODES = 2_000;
 const MAX_TOTAL_CHARS = 64_000;
+const MAX_BIGINT_DIGITS = 64;
 const TRUNCATED = "[Truncated]";
 
 /** One log call's allowance, shared by every value it visits, so no input can make it large. */
@@ -255,8 +256,11 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
     case "number":
     case "boolean":
     case "undefined":
-    case "bigint":
       return value;
+    case "bigint": {
+      const digits = value.toString();
+      return digits.length <= MAX_BIGINT_DIGITS ? value : fit(digits, budget);
+    }
     case "symbol":
       return text(`Symbol(${value.description ?? ""})`, budget);
     case "function":
@@ -287,8 +291,8 @@ function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
     }
     return sanitize(redacted, depth, budget);
   }
-  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value))
-    return `[binary ${value.byteLength} bytes]`;
+  // Nothing is read from binary data: even its length can be an own getter.
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return "[binary data]";
   // Intrinsic iteration: a subclass's own iterator never runs.
   if (value instanceof Map)
     return collect(Map.prototype.entries.call(value), budget, ([key, entry]) => [
@@ -316,6 +320,7 @@ function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
       projection["…"] = TRUNCATED;
       break;
     }
+    budget.nodes -= 1;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     projection[text(key, budget)] = property(descriptor, isCredentialKey.test(key), depth, budget);
   }
@@ -334,6 +339,8 @@ function collect<T>(
       copied.push(TRUNCATED);
       break;
     }
+    // Every slot costs, including holes, getters and masked values that copy nothing.
+    budget.nodes -= 1;
     copied.push(each(item));
   }
   return copied;
