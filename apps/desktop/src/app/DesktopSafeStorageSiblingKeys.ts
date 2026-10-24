@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import { bypassesOsKeyStore } from "./DesktopDevSecretStorage.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import {
   platformSafeStorageKeyStore,
@@ -156,7 +157,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     return makeWith(
-      platformSafeStorageKeyStore,
+      // Bypassed runs never read the key store; an unreadable file is still backed up, not lost.
+      (yield* bypassesOsKeyStore(environment)) ? async () => null : platformSafeStorageKeyStore,
       environment.platform,
       DesktopEnvironment.desktopRuntimeAppName(environment.branding.stageLabel),
     );
