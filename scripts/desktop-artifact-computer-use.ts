@@ -247,6 +247,9 @@ export function withComputerUseHelper(
         : {
             identity: "-",
             sign: NodeURL.fileURLToPath(new URL("./sign-macos-ad-hoc.ts", import.meta.url)),
+            // Apple credentials left in the environment would otherwise send an ad-hoc app to
+            // the notary service.
+            notarize: false,
           }),
     },
   };

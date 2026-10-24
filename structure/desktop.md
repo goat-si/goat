@@ -80,9 +80,10 @@ with the GOAT app identifier; a development or ad-hoc helper, built with
 with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
-and that the driver it reports is the helper's child. Desktop artifacts do not embed the helper
-yet, so packaged builds run the driver in the Electron process from `resources/cua-driver` under
-GOAT's own grants; development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
+and that the driver it reports is the helper's child. Packaged builds without the helper, which
+includes every release until #1210, run the driver in the Electron process from
+`resources/cua-driver` under GOAT's own grants; development builds without a helper need
+`GOAT_CUA_DRIVER_PATH`. On macOS the
 host checks both permissions before starting and reports `unavailable` until they are granted. It
 reuses a running driver, retires a crashed one, and passes the same telemetry and update-check
 opt-outs as the standalone host ([server.md](server.md#computer-use)).

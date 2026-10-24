@@ -108,6 +108,7 @@ describe("desktop computer use payload", () => {
 
     const adHoc = withComputerUseHelper({ mac: {} }, { ...signed, signed: false });
     assert.propertyVal(adHoc.mac, "identity", "-");
+    assert.propertyVal(adHoc.mac, "notarize", false);
     assert.match(String((adHoc.mac as { sign: string }).sign), /sign-macos-ad-hoc\.ts$/);
     assert.strictEqual(withComputerUseHelper(config, undefined), config);
   });
