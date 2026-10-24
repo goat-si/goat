@@ -62,6 +62,7 @@ const fixture = Effect.gen(function* () {
       answer = value;
     },
     seedLost,
+    sql,
   };
 });
 
@@ -159,4 +160,46 @@ test("a launch lost only moments ago is left alone while it may still bind", (f,
     yield* coordinator.resolveLostLaunches;
     assert.strictEqual(f.asked.length, 0);
     assert.strictEqual((yield* coordinator.get(id))?.state, "lost");
+  }));
+
+test("a thread deleted on the destination is recorded cancelled", (f, coordinator) =>
+  Effect.gen(function* () {
+    yield* f.seedLost(LONG_AGO);
+    f.answer(
+      Effect.succeed({
+        _tag: "bound",
+        threadId: remoteThread,
+        originThreadId: origin,
+        threadExists: true,
+        threadDeleted: true,
+        activeRunId: null,
+      }),
+    );
+    yield* coordinator.resolveLostLaunches;
+    const record = yield* coordinator.get(id);
+    assert.strictEqual(record?.state, "cancelled");
+    assert.include(record?.lastError ?? "", "deleted");
+  }));
+
+test("a row another writer settles while the destination answers is left as that writer set it", (f, coordinator) =>
+  Effect.gen(function* () {
+    yield* f.seedLost(LONG_AGO);
+    // The answer arrives after another writer already settled the row.
+    f.answer(
+      f.sql`UPDATE remote_dispatches SET state = 'settled' WHERE correlation_id = ${id}`.pipe(
+        Effect.orDie,
+        Effect.as({
+          _tag: "bound",
+          threadId: remoteThread,
+          originThreadId: origin,
+          threadExists: true,
+          threadDeleted: false,
+          activeRunId: RunId.make("remote-run"),
+        }),
+      ),
+    );
+    yield* coordinator.resolveLostLaunches;
+    const record = yield* coordinator.get(id);
+    assert.strictEqual(record?.state, "settled");
+    assert.isNull(record?.remoteThreadId);
   }));
