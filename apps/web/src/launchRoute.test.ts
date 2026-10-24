@@ -18,8 +18,8 @@ describe("openLaunchRoute", () => {
     expect(history.length).toBe(1);
   });
 
-  it("keeps the search and hash a root launch carried", () => {
-    expect(launchAt("/?from=update#top").location.href).toBe("/fleet?from=update#top");
+  it("opens a bare Fleet route whatever query the root carried", () => {
+    expect(launchAt("/?from=update#top").location.href).toBe("/fleet");
   });
 
   it("opens a deep link as asked", () => {

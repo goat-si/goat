@@ -8,14 +8,15 @@ export const LAUNCH_PATH = "/fleet";
  * replacing the entry so Back does not return to "/". Later visits to "/" (the logo, Go home)
  * still open the global agent, and any other starting address, such as a thread, a draft, or a
  * prompt link, opens as asked. The hosted app keeps "/", which owns its empty state and sign-in.
+ * Nothing at "/" reads a query, and Electron's hash history reports the outer query as the
+ * route's, so carrying it would copy it into the hash and double it on every reload.
  */
 export function openLaunchRoute(
   history: RouterHistory,
   options: { readonly hostedStatic: boolean },
 ): void {
-  const { pathname, search, hash } = history.location;
-  if (options.hostedStatic || pathname !== "/") return;
-  history.replace(`${LAUNCH_PATH}${search}${hash}`);
+  if (options.hostedStatic || history.location.pathname !== "/") return;
+  history.replace(LAUNCH_PATH);
 }
 
 /**
