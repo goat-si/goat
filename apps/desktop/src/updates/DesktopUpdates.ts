@@ -41,6 +41,7 @@ import {
   checkFailureMessage,
   DesktopUpdateCheckTimeoutError,
   describeUpdateErrorCause,
+  downloadFailureMessage,
   isAbandonedCheckFailure,
   UPDATE_CHECK_TIMEOUT,
   UPDATE_CHECK_TIMEOUT_MINUTES,
@@ -62,6 +63,7 @@ import {
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
   resolveNotAppliedInstallVersion,
+  shouldBroadcastDownloadProgress,
 } from "./updateMachine.ts";
 
 const AUTO_UPDATE_STARTUP_DELAY = "15 seconds";
@@ -253,24 +255,6 @@ function createBaseUpdateState(
 
 function getCanRetryFromState(state: DesktopUpdateState): boolean {
   return state.availableVersion !== null || state.downloadedVersion !== null;
-}
-
-function shouldBroadcastDownloadProgress(
-  currentState: DesktopUpdateState,
-  nextPercent: number,
-): boolean {
-  if (currentState.status !== "downloading") {
-    return true;
-  }
-
-  const currentPercent = currentState.downloadPercent;
-  if (currentPercent === null) {
-    return true;
-  }
-
-  const previousStep = Math.floor(currentPercent / 10);
-  const nextStep = Math.floor(nextPercent / 10);
-  return nextStep !== previousStep || nextPercent === 100;
 }
 
 function getAutoUpdateDisabledReason(args: {
@@ -667,7 +651,10 @@ export const make = Effect.gen(function* () {
         ElectronUpdaterDownloadUpdateError: Effect.fn("desktop.updates.handleDownloadFailure")(
           function* (error) {
             yield* updateState((current) => ({
-              ...reduceDesktopUpdateStateOnDownloadFailure(current, error.message),
+              ...reduceDesktopUpdateStateOnDownloadFailure(
+                current,
+                downloadFailureMessage(error.cause),
+              ),
               recoveryStatus: null,
             }));
             yield* logUpdaterError(error.message, {

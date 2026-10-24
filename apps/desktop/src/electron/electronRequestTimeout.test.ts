@@ -2,7 +2,11 @@
 import * as NodeStream from "node:stream";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { addIdleDeadline, type StartTimer } from "./electronRequestTimeout.ts";
+import {
+  addIdleDeadline,
+  type StartTimer,
+  UpdaterRequestStalledError,
+} from "./electronRequestTimeout.ts";
 
 // Electron's net.ClientRequest is a Writable with autoDestroy, so ending its body emits
 // "finish" and "close" before any response arrives.
@@ -58,7 +62,7 @@ function setup() {
   return { request, clock, fail };
 }
 
-const timedOut = new Error("Request timed out after 60000 ms without data");
+const timedOut = new UpdaterRequestStalledError(60_000);
 
 describe("addIdleDeadline", () => {
   it("regression: a request that sent its body but never gets a response fails at the deadline", async () => {

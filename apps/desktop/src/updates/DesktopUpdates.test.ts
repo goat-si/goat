@@ -13,6 +13,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
+import { addIdleDeadline } from "../electron/electronRequestTimeout.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -24,6 +25,23 @@ import {
   getDesktopUpdateInstallationMessage,
   type DesktopUpdateInstallationReason,
 } from "./updateInstallation.ts";
+
+/** The error electron-updater receives when a request's idle deadline fires. */
+function stalledRequestError(): unknown {
+  let failure: unknown;
+  addIdleDeadline(
+    { on: () => undefined, abort: () => undefined },
+    (error) => {
+      failure = error;
+    },
+    60_000,
+    (run) => {
+      run();
+      return () => undefined;
+    },
+  );
+  return failure;
+}
 
 describe("DesktopUpdates", () => {
   const installationScenarios: ReadonlyArray<{
@@ -463,6 +481,34 @@ describe("DesktopUpdates", () => {
 
         const changedState = yield* updates.setChannel("nightly");
         assert.equal(changedState.channel, "nightly");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  it.effect("regression: a download whose server stops sending data reports the stall", () => {
+    const harness = makeHarness({
+      downloadUpdate: Effect.fail(
+        new ElectronUpdater.ElectronUpdaterDownloadUpdateError({
+          channel: "latest",
+          cause: stalledRequestError(),
+        }),
+      ),
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+        assert.isFalse(result.completed);
+        assert.equal(result.state.errorContext, "download");
+        assert.equal(
+          result.state.message,
+          "Download stopped: the update server sent no data for 60 seconds.",
+        );
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });

@@ -10,6 +10,14 @@ export interface TimedRequest extends TimedEmitter {
 
 export type StartTimer = (run: () => void, delayMs: number) => () => void;
 
+/** electron-updater rejects the check or download with this error, so the update UI can name the stall. */
+export class UpdaterRequestStalledError extends Error {
+  override readonly name = "UpdaterRequestStalledError";
+  constructor(timeoutMs: number) {
+    super(`the update server sent no data for ${Math.round(timeoutMs / 1000)} seconds`);
+  }
+}
+
 const startNodeTimer: StartTimer = (run, delayMs) => {
   const timer = setTimeout(run, delayMs);
   return () => clearTimeout(timer);
@@ -48,7 +56,7 @@ export function addIdleDeadline(
     cancel = startTimer(() => {
       settled = true;
       request.abort();
-      fail(new Error(`Request timed out after ${timeoutMs} ms without data`));
+      fail(new UpdaterRequestStalledError(timeoutMs));
     }, timeoutMs);
   };
   arm();
