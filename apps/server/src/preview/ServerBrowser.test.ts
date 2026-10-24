@@ -1054,6 +1054,40 @@ it.live("allows a wait to observe a human-driven tab without taking control", ()
   ).pipe(Effect.provide(layer)),
 );
 
+it.live("lets an agent read its own tab while a human controls it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker, tabId } = yield* ready;
+      const viewer = yield* browser.attachViewer(viewerInput(tabId, true));
+      yield* viewer.input({ type: "takeControl" });
+      const page = contexts[0]!.page;
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: {},
+      });
+      expect(snapshot.accessibilityTree).toBeTruthy();
+      page.emitConsole("own tab evidence");
+      const diagnostics = yield* broker.invoke<PreviewAutomationLogs>({
+        scope,
+        tabId,
+        operation: "logs",
+        input: {},
+      });
+      expect(diagnostics.console.entries[0]?.text).toBe("own tab evidence");
+      yield* broker.invoke({ scope, tabId, operation: "waitFor", input: { loadState: "load" } });
+      expect(page.waitForLoadState).toHaveBeenCalledWith("load", { timeout: expect.any(Number) });
+      // Reading needs no control, but acting still waits for the human to release it.
+      const refused = yield* broker
+        .invoke<void>({ scope, tabId, operation: "evaluate", input: { expression: "read()" } })
+        .pipe(Effect.flip);
+      expect(refused).toMatchObject({ reason: "humanControl" });
+      yield* viewer.input({ type: "releaseControl" });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("reports a pending dialog without evaluating the page and resolves it explicitly", () =>
   Effect.scoped(
     Effect.gen(function* () {
