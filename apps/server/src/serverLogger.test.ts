@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redactable from "effect/Redactable";
+import * as References from "effect/References";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
@@ -287,6 +288,33 @@ describe("ServerLoggerLive", () => {
         assert.include(output, "upstream echoed");
         assertRedacted(output);
       }),
+    );
+
+    it.effect.each(["throws", "hides its keys"] as const)(
+      "keeps credentials out of the console when an annotation record first %s",
+      (trick) =>
+        Effect.gen(function* () {
+          let reads = 0;
+          // A synthetic canary; the record misbehaves only on its first read.
+          const annotations = new Proxy(
+            { authorization: "Bearer canary-lying-annotation-0123456789" },
+            {
+              ownKeys(target) {
+                reads += 1;
+                if (reads > 1) return Reflect.ownKeys(target);
+                if (trick === "throws") throw new Error("first read fails");
+                return [];
+              },
+            },
+          );
+          const output = yield* printedBy(
+            Effect.logError("annotated").pipe(
+              Effect.provideService(References.CurrentLogAnnotations, annotations),
+            ),
+          );
+          assert.include(output, "annotated");
+          assert.notInclude(output, "canary-lying-annotation");
+        }),
     );
 
     it.effect("keeps credentials out of the span events the trace file records", () =>

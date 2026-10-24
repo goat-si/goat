@@ -55,6 +55,14 @@ describe("redactLogText", () => {
     ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
     ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
     [`requestid.${jwt} done`, "requestid.*** done"],
+    [
+      `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
+      "clone https://***@example.com/r.git",
+    ],
+    [
+      `${"y".repeat(40)}://bot:pw@example.com`,
+      `${"y".repeat(8)}${"y".repeat(32)}://***@example.com`,
+    ],
     ['{"cookie":[["first"],"CANARY"],"status":200}', '{"cookie":***,"status":200}'],
     ['{"token":{"value":{"inner":"CANARY"},"next":"CANARY"},"ok":1}', '{"token":***,"ok":1}'],
     ['{"token":"never closed CANARY', '{"token":***'],

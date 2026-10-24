@@ -161,8 +161,9 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // whitespace the header holds. Each part of a dotted run is tried, so a dotted prefix cannot
   // hide a token, and dotted names such as serverLogger.test.ts are left alone.
   [/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g, maskJoseToken],
-  // https://user:token@host/repo.git; bounded so a long run without one stays linear.
-  [/\b([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s@]{1,512}@/gi, `$1${MASK}@`],
+  // https://user:token@host/repo.git. The scheme is bounded (any longer run is matched by its end)
+  // so text without one stays linear; userinfo cannot hold a slash, so its scan stops at the next.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s@]+@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
@@ -482,24 +483,31 @@ function dateText(date: Date): string {
 }
 
 /**
- * The fiber a sink reads, with its log annotations and log span labels redacted. Sinks read both
- * straight from the fiber, and GOAT annotates logs with errors, so redacting the message is not
- * enough. The live fiber is left untouched.
+ * The fiber a sink reads, with its log annotations and log span labels replaced by a redacted
+ * snapshot taken once here. Sinks read both straight from the fiber, and GOAT annotates logs with
+ * errors, so redacting the message is not enough. The live fiber is left untouched; when the
+ * snapshot cannot be taken, the sink sees no annotations or spans rather than the live ones.
  */
 function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknown, unknown> {
-  const annotations = fiber.getRef(References.CurrentLogAnnotations);
-  const spans = fiber.getRef(References.CurrentLogSpans);
-  if (Object.keys(annotations).length === 0 && spans.length === 0) return fiber;
-  const safeAnnotations = redactLogMessage(annotations);
-  const safeSpans = spans.map(([label, startTime]) => [redactLogText(label), startTime]);
+  const annotations = guarded(
+    () => redactLogMessage(fiber.getRef(References.CurrentLogAnnotations)),
+    {},
+  );
+  const spans = guarded(
+    () =>
+      fiber
+        .getRef(References.CurrentLogSpans)
+        .map(([label, startTime]) => [redactLogText(String(label)), Number(startTime)]),
+    [],
+  );
   return new Proxy(fiber, {
     get(target, key) {
       if (key === "getRef")
         return (reference: unknown) =>
           reference === References.CurrentLogAnnotations
-            ? safeAnnotations
+            ? annotations
             : reference === References.CurrentLogSpans
-              ? safeSpans
+              ? spans
               : target.getRef(reference as Context.Reference<unknown>);
       const value: unknown = Reflect.get(target, key, target);
       return typeof value === "function" ? value.bind(target) : value;
@@ -523,7 +531,7 @@ export const redacting = <Output>(logger: Logger.Logger<unknown, Output>) =>
       ...options,
       message: guarded(() => redactLogMessage(options.message), "[unloggable message]"),
       cause: guarded(() => redactCause(options.cause), Cause.die(new Error("unloggable cause"))),
-      fiber: guarded(() => redactedFiber(options.fiber), options.fiber),
+      fiber: redactedFiber(options.fiber),
     }),
   );
 
