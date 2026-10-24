@@ -1,10 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
 import * as NodeFS from "node:fs";
-import * as NodeFSPromises from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
+
+import * as HostProcess from "./HostProcess.ts";
 
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
@@ -213,10 +215,9 @@ describe("cuaDriverManifest app listing", () => {
     await writeCuaDriverCapabilityManifest(driver.input.path, before);
     const written = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
-    const { writeFile: original } =
-      await vi.importActual<typeof NodeFSPromises>("node:fs/promises");
+    const { writeFile: original } = await vi.importActual<typeof NodeFSP>("node:fs/promises");
     using _write = vi
-      .spyOn(NodeFSPromises, "writeFile")
+      .spyOn(NodeFSP, "writeFile")
       .mockImplementation(async (path, text, options) => {
         await original(path, text, options);
         written.resolve();
@@ -235,7 +236,7 @@ describe("cuaDriverManifest app listing", () => {
       "cua-driver",
       "manifest.yaml",
     ]);
-    if (process.platform !== "win32")
+    if (HostProcess.Platform.defaultValue() !== "win32")
       expect(NodeFS.statSync(driver.input.path).mode & 0o777).toBe(0o600);
   });
 
@@ -246,7 +247,7 @@ describe("cuaDriverManifest app listing", () => {
     const before = cuaDriverCapabilityManifest({ applications: ["com.example.before"] });
     await writeCuaDriverCapabilityManifest(driver.input.path, before);
     const denied = new Error("rename denied");
-    using _rename = vi.spyOn(NodeFSPromises, "rename").mockRejectedValueOnce(denied);
+    using _rename = vi.spyOn(NodeFSP, "rename").mockRejectedValueOnce(denied);
     await expect(writeCuaDriverCapabilityManifest(driver.input.path, "replacement")).rejects.toBe(
       denied,
     );
