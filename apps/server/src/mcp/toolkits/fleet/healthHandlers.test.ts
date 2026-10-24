@@ -137,6 +137,20 @@ it.effect("a reschedule whose host allowlist narrows while it waits is refused",
 );
 
 it.effect(
+  "regression #969: a reschedule forwards the caller's goatclaw profile as its ceiling",
+  () =>
+    Effect.gen(function* () {
+      const limited = yield* rescheduleWithout(["box", "lab"]);
+      expect(limited.requests.map((request) => request.permissionProfileCeiling)).toEqual([
+        { ...BUILTIN_PERMISSION_PROFILES.owner!, hosts: ["box", "lab"] },
+      ]);
+      // goatclaw off: nothing is bound on the destination, as before.
+      const open = yield* rescheduleWithout(undefined);
+      expect(open.requests.map((request) => request.permissionProfileCeiling)).toEqual([undefined]);
+    }),
+);
+
+it.effect(
   "regression #980: draining a host says its goal attempts stay instead of claiming a move",
   () =>
     Effect.gen(function* () {

@@ -36,6 +36,8 @@ export const permissionProfileEntries = {
     requires: "client",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "GoatclawFleetSync.receive ignores a policy that does not supersede the current version, checking again under the settings lock before assigning it.",
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
 } as const;

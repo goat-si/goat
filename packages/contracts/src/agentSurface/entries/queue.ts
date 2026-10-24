@@ -47,6 +47,8 @@ export const queueEntries = {
     summary: "Replace a queued message's text, preserving its attachments.",
     description: "Replace a queued message's text while preserving its attachments.",
     guide: "The service rejects runs that are no longer queued.",
+    idempotencyReason:
+      "queued-run.edit replaces text on the specified queued run while preserving its attachments; it does not append a message and rejects a run that has left the queue.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -68,6 +70,8 @@ export const queueEntries = {
       "Cancel a queued run. Cancelling a delegated-completion message also drops the pending automatic result deliveries of its cohort.",
     guide:
       "The run must still be queued.\n\nCancellation uses the existing queue command. A delegated-completion message belongs to its parent run's completion cohort; cancelling it disposes every task completion delivery that cohort still owes, so later automatic parent wakes for those tasks do not come.",
+    idempotencyReason:
+      "queued-run.cancel only accepts the specified run while queued, then cancels it and disposes its completion cohort. A repeat after cancellation is refused before further cancellation effects.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -89,6 +93,8 @@ export const queueEntries = {
       "Move a queued run before another queued run, or to the end with beforeRunId=null.",
     guide:
       "Pass the queued run id and beforeRunId. Both runs must still be queued when beforeRunId is non-null.",
+    idempotencyReason:
+      "queued-run.reorder removes the specified run from the order then inserts it before the same target (or at the end), emitting updates only for changed positions; repeating yields the same order.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -109,6 +115,8 @@ export const queueEntries = {
     description:
       "Deliver a queued message as steering to the specified active run. Cancels the queued run when promoting its message.",
     guide: "Existing provider and run-state rules apply.",
+    idempotencyReason:
+      "queued-message.promote-to-steer only accepts a queued run and cancels that run when its message is delivered as steering. The same queuedRunId cannot be promoted again once cancelled.",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
