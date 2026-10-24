@@ -3,16 +3,11 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodePath from "node:path";
 
-import {
-  windowsComputerUseReadiness,
-  WindowsHelperReadiness,
-} from "@goat/shared/computerUseWindows";
+import type { ComputerUseReadiness } from "@goat/contracts";
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
 import * as Schema from "effect/Schema";
 
 import { type HelperBundle, type HelperProcess, openHelperSession } from "./ComputerUseHelper.ts";
-
-const decodeReadiness = Schema.decodeUnknownSync(WindowsHelperReadiness);
 
 /**
  * GOAT Computer Use on Windows (apps/desktop/native/computer-use-helper-windows): a folder with
@@ -32,32 +27,75 @@ export const windowsDriverPipe = async () => ({
   release: async () => undefined,
 });
 
+/** The helper's readiness answer: the macOS grant pair plus what decides it on Windows. */
+export const WindowsReadiness = Schema.Struct({
+  accessibility: Schema.Boolean,
+  screenRecording: Schema.Boolean,
+  interactiveSession: Schema.Boolean,
+  connectState: Schema.String,
+  inputDesktop: Schema.String,
+  uiAutomation: Schema.Boolean,
+  helperElevated: Schema.Boolean,
+});
+export type WindowsReadiness = typeof WindowsReadiness.Type;
+const decodeReadiness = Schema.decodeUnknownSync(WindowsReadiness);
+
 /**
- * Readiness from a fresh helper, in the grant shape the desktop host checks. The protocol's
- * readiness (computerUseWindows.ts) decides it; a desktop that cannot be used yet says why with
- * its first reason.
+ * Windows has no grant to give. What stands in for one is a desktop to work on: an interactive,
+ * connected session showing the normal desktop, with UI Automation answering, and a helper that
+ * is not elevated. The first missing piece is the reason, in the words onboarding shows.
  */
+export function windowsReadinessFailure(readiness: WindowsReadiness): string | undefined {
+  if (!readiness.interactiveSession)
+    return "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Start GOAT from the signed-in desktop on this computer to use computer use.";
+  if (readiness.helperElevated)
+    return "GOAT is running as administrator, and computer use never runs elevated. Start GOAT without Run as administrator.";
+  if (readiness.connectState === "disconnected")
+    return "This Windows session is disconnected, so there is no screen to see. Reconnect to it, then try again.";
+  if (readiness.inputDesktop !== "Default")
+    return "The screen is locked or showing a Windows security prompt. Unlock it, then try again.";
+  if (!readiness.uiAutomation) return "UI Automation did not answer on this desktop. Try again.";
+  if (!readiness.screenRecording)
+    return "This Windows session is not showing a screen right now. Sign in to it, then try again.";
+  return undefined;
+}
+
+/**
+ * The typed cause behind windowsReadinessFailure's reason, where one fits, so clients can offer
+ * the remedy. Checked in the same order, so the two always describe the same failure.
+ */
+export function windowsReadinessBlocker(
+  readiness: WindowsReadiness,
+): ComputerUseReadiness["blockers"][number] | undefined {
+  if (!readiness.interactiveSession) return "noInteractiveDesktop";
+  if (readiness.helperElevated) return undefined;
+  if (readiness.connectState === "disconnected") return "noInteractiveDesktop";
+  if (readiness.inputDesktop !== "Default") return "screenLocked";
+  return undefined;
+}
+
+/** Readiness from a fresh helper, in the grant shape the desktop host checks. */
 export async function probeWindowsReadiness(
   process: HelperProcess,
   expectedBundleId: string,
-): Promise<{ accessibility: boolean; screenRecording: boolean; detail?: string }> {
+): Promise<{
+  accessibility: boolean;
+  screenRecording: boolean;
+  detail?: string;
+  blocker?: ComputerUseReadiness["blockers"][number];
+}> {
   const session = await openHelperSession(process, expectedBundleId);
   try {
-    const readiness = windowsComputerUseReadiness({
-      facts: decodeReadiness(await session.request("permissions", { prompt: false })),
-      helper: "authenticated",
-    });
-    const usable =
-      readiness.blockers.length === 0 &&
-      readiness.input !== "unavailable" &&
-      readiness.grants.accessibility === "granted" &&
-      readiness.grants.screenCapture === "granted";
-    return usable
-      ? { accessibility: true, screenRecording: true }
+    const readiness = decodeReadiness(await session.request("permissions", { prompt: false }));
+    const detail = windowsReadinessFailure(readiness);
+    const blocker = windowsReadinessBlocker(readiness);
+    return detail === undefined
+      ? { accessibility: readiness.accessibility, screenRecording: readiness.screenRecording }
       : {
           accessibility: false,
           screenRecording: false,
-          detail: readiness.reasons[0] ?? "GOAT Computer Use cannot use this desktop.",
+          detail,
+          ...(blocker === undefined ? {} : { blocker }),
         };
   } finally {
     await session.close();

@@ -207,6 +207,22 @@ export const ComputerUseElement = Schema.Struct({
   parent: Schema.optionalKey(ComputerUseElementRef),
   /** A password field or an equivalent the platform marks secure. */
   secure: Schema.optionalKey(Schema.Boolean),
+  /**
+   * What the platform says about the element's state, so a toggle or a disabled control shows
+   * in a diff and an action can be read back (D5). Absent fields are unknown, not false.
+   * selected: chosen in a list, tab or menu, and on some platforms a checked box. checked: a
+   * check box, radio button or switch, mixed for indeterminate. expanded: a disclosure, tree
+   * row or combo box that is open; partially expanded counts as open, and an element that
+   * cannot expand (a leaf) has no expanded at all.
+   */
+  state: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      selected: Schema.optionalKey(Schema.Boolean),
+      checked: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Literal("mixed")])),
+      expanded: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
 });
 export type ComputerUseElement = typeof ComputerUseElement.Type;
 

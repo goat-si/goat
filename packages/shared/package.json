@@ -343,6 +343,10 @@
       "types": "./src/composerContextReferences.ts",
       "import": "./src/composerContextReferences.ts"
     },
+    "./turnCapabilities": {
+      "types": "./src/turnCapabilities.ts",
+      "import": "./src/turnCapabilities.ts"
+    },
     "./composerContextLegacy": {
       "types": "./src/composerContextLegacy.ts",
       "import": "./src/composerContextLegacy.ts"

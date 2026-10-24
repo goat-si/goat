@@ -290,9 +290,12 @@ Both hosts start the driver in standard mode under the capability manifest from
 scheduled and webhook runs, and what they launch; `ComputerUseOrigin.ts`) get the driver only
 while their thread holds a lease: an approved `computer_use.grant` handoff before its expiry
 (`ComputerUseLeases.ts`), requested with `goat_computer_use_request` (`ComputerUseRequests.ts`).
-Such a turn's provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead
-of `cua-driver mcp`; it follows the lease over `/api/computer-use/lease`
-(`ComputerUseLeaseRoute.ts`) and kills its driver child when the lease ends.
+A grant may name apps, and interactive turns act only on apps a grant names. Every attached
+provider runs the `cua-lease-proxy` subcommand (`ComputerUseLeaseProxy.ts`) instead of
+`cua-driver mcp`, under a per-thread control from `ComputerUseLeases`; it follows the control over
+`/api/computer-use/lease` (`ComputerUseLeaseRoute.ts`), checks each call's app
+(`ComputerUseScope.ts`), and kills its driver child on Stop, the `computerUse.stopAll` kill switch,
+expiry, or a pause for a person's input until `computerUse.resume` (`ComputerUseRpcHandlers.ts`).
 
 > Decision record: [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md)
 
