@@ -104,6 +104,16 @@ export const stopIdsFor = (eventId: ChannelTaskEventId, attempt?: string) => {
 };
 
 /**
+ * Stopping one child-work record's thread under a task stop. Keyed by the owning stop's attempt
+ * like the worker's ids, so a refused child stop retries as a fresh command, never a replay of
+ * the refused one.
+ */
+export const childWorkStopCommandIdFor = (childWorkId: ChannelChildWorkId, attempt?: string) =>
+  CommandId.make(
+    stableId("channel-stop-child", attempt === undefined ? [childWorkId] : [childWorkId, attempt]),
+  );
+
+/**
  * A follow-up sent to the worker already doing its work; a retried input sends it once. The
  * "queued" attempt is the second and last one, used only after the orchestrator rejected the
  * first, since a rejected command id is refused for good.

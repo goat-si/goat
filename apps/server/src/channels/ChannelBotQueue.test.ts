@@ -1,12 +1,18 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ChannelReceptionInput, ChannelReceptionReadResult } from "@goat/contracts";
+import {
+  ChannelTaskReportInput,
+  type ChannelReceptionInput,
+  type ChannelReceptionReadResult,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
-import { stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
+import { deliveryIdFor, stopIdsFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
@@ -487,6 +493,123 @@ describe("GOAT Bot worker slots", () => {
         [stopIdsFor(stop!.event.eventId, "attempt-1").interrupt],
       );
       assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("GOAT Bot worker milestones", () => {
+  it.effect(
+    "keeps a milestone pending until narration creates one origin receipt, even on replay",
+    () => {
+      const { harness } = queueHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        yield* gateway.ingest(goatInput("do: fix the build", "milestone-start"), rpcContext);
+        yield* runtime.drain;
+        const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        const report = yield* Schema.decodeUnknownEffect(ChannelTaskReportInput)({
+          taskId: task!.taskId,
+          generation: task!.generation,
+          eventId: "milestone-finding",
+          status: "running",
+          summary: "Found the cause: the remote build uses the wrong configuration.",
+          milestone: true,
+        });
+        const deliveryId = deliveryIdFor("narration:" + report.eventId + ":origin");
+        yield* reports.report(report, task!.worker!.threadId);
+        yield* reports.report(report, task!.worker!.threadId);
+        const pending = yield* ledger.listPendingNarrations(10);
+        assert.lengthOf(pending, 1);
+        assert.strictEqual(pending[0]!.event.type, "task.progress");
+        assert.deepStrictEqual(pending[0]!.event.payload, {
+          generation: task!.generation,
+          summary: report.summary,
+          milestone: true,
+        });
+        assert.isUndefined(yield* ledger.getDeliveryState(deliveryId));
+        assert.deepStrictEqual(yield* ledger.listPendingNarrations(10), pending);
+        // A task's earlier chip must reach its destination before the next receipt can send.
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const chips = yield* ledger.claimDueDeliveries({
+          owner: runtime.ownerToken,
+          now,
+          limit: 100,
+        });
+        for (const chip of chips) {
+          yield* ledger.recordDelivery({
+            owner: runtime.ownerToken,
+            deliveryId: chip.deliveryId,
+            outcome: { type: "delivered" },
+            now,
+          });
+        }
+        yield* reception.narrate(pending[0]!, runtime.ownerToken);
+        assert.lengthOf(yield* ledger.listPendingNarrations(10), 0);
+        assert.strictEqual(yield* ledger.getDeliveryState(deliveryId), "pending");
+        yield* reports.report(report, task!.worker!.threadId);
+        yield* reception.narrate(pending[0]!, runtime.ownerToken);
+        const deliveries = yield* ledger.claimDueDeliveries({
+          owner: runtime.ownerToken,
+          now: DateTime.formatIso(yield* DateTime.now),
+          limit: 100,
+        });
+        const origin = deliveries.filter((delivery) => delivery.deliveryId === deliveryId);
+        assert.lengthOf(origin, 1);
+        assert.strictEqual(origin[0]!.message.text, report.summary);
+        assert.strictEqual(origin[0]!.message.kind, "receipt");
+        assert.deepStrictEqual(origin[0]!.message.destination, task!.originAddress);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("records unmarked running progress without narrating it", () => {
+    const { harness } = queueHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      yield* gateway.ingest(goatInput("do: fix the build", "routine-start"), rpcContext);
+      yield* runtime.drain;
+      const [task] = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+      const report = yield* Schema.decodeUnknownEffect(ChannelTaskReportInput)({
+        taskId: task!.taskId,
+        generation: task!.generation,
+        eventId: "routine-progress",
+        status: "running",
+        summary: "Checking the build configuration.",
+      });
+      yield* reports.report(report, task!.worker!.threadId);
+      assert.isTrue(yield* ledger.hasTaskEvent(report.eventId));
+      assert.lengthOf(yield* ledger.listPendingNarrations(10), 0);
+      // Even a legacy progress event queued for narration must stay silent.
+      yield* reception.narrate(
+        {
+          sequence: 0,
+          event: {
+            eventId: report.eventId,
+            taskId: task!.taskId,
+            taskVersion: task!.version + 1,
+            sequence: 0,
+            occurredAt: DateTime.formatIso(yield* DateTime.now),
+            actor: "agent",
+            type: "task.progress",
+            payload: { generation: report.generation, summary: report.summary },
+          },
+        },
+        runtime.ownerToken,
+      );
+      yield* runtime.drain;
+      assert.isUndefined(
+        yield* ledger.getDeliveryState(deliveryIdFor("narration:" + report.eventId + ":origin")),
+      );
     }).pipe(Effect.provide(harness.layer));
   });
 });

@@ -84,7 +84,18 @@ const fakeRun = (status: string, ordinal = 1) => ({ id: "run-1", status, ordinal
 
 const unused = () => Effect.die("Unexpected test dependency call");
 
-const threadsLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>>) =>
+interface DispatchedStop {
+  readonly commandId: string;
+  readonly threadId: string;
+  readonly stopDelegatedTasks: boolean | undefined;
+}
+
+const threadsLayer = (
+  runs: ReadonlyMap<string, ReadonlyArray<unknown>>,
+  failures: ReadonlyMap<string, unknown> = new Map(),
+  dispatched: Array<DispatchedStop> = [],
+  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
+) =>
   Layer.succeed(
     ThreadManagementService.ThreadManagementService,
     ThreadManagementService.ThreadManagementService.of({
@@ -95,7 +106,23 @@ const threadsLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>>) =>
       getShellSnapshot: unused,
       readShellSnapshot: unused,
       ensureLegacyTranscript: unused,
-      dispatch: unused,
+      dispatch: ((command: {
+        readonly type: string;
+        readonly commandId: string;
+        readonly threadId?: string;
+        readonly stopDelegatedTasks?: boolean;
+      }) => {
+        if (command.threadId === undefined) return Effect.die("unexpected non-thread command");
+        dispatched.push({
+          commandId: command.commandId,
+          threadId: command.threadId,
+          stopDelegatedTasks: command.stopDelegatedTasks,
+        });
+        const failure = failures.get(command.threadId);
+        return failure === undefined
+          ? Effect.succeed({ sequence: 0, storedEvents: [] } as never)
+          : Effect.fail(failure as never);
+      }) as never,
       searchThread: unused,
       searchThreadStream: () => Stream.empty,
       getThreadHistoryPage: unused,
@@ -112,11 +139,12 @@ const threadsLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>>) =>
             deletedAt: null,
             pullRequests: [],
             updatedAt: NOW,
+            activeProviderThreadId: null,
           },
           runs: runs.get(threadId) ?? [],
           runtimeRequests: [],
           turnItems: [],
-          providerThreads: [],
+          providerThreads: providerThreads.get(threadId) ?? [],
           subagents: [],
           messages: [],
         } as never)) as never,
@@ -148,11 +176,16 @@ const threadsLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>>) =>
     }),
   );
 
-const makeLayer = (runs: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map()) =>
+const makeLayer = (
+  runs: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
+  failures: ReadonlyMap<string, unknown> = new Map(),
+  dispatched: Array<DispatchedStop> = [],
+  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
+) =>
   ChannelChildWork.layer.pipe(
     Layer.provideMerge(ChannelChildWorkStore.layer),
     Layer.provideMerge(ChannelLedger.layer),
-    Layer.provideMerge(threadsLayer(runs)),
+    Layer.provideMerge(threadsLayer(runs, failures, dispatched, providerThreads)),
     Layer.provideMerge(SqlitePersistence.layerMemory),
   );
 
@@ -414,6 +447,17 @@ describe("ChannelChildWork admission", () => {
       assert.strictEqual(fourth.reason, "at_capacity");
     }).pipe(Effect.provide(makeLayer())),
   );
+
+  it.effect("refuses new child work once the owning task is terminal", () =>
+    Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+      const error = yield* Effect.flip(admit("too late"));
+      assert.strictEqual(error.reason, "owner_terminal");
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.deepStrictEqual(yield* store.listForTask(taskId), []);
+    }).pipe(Effect.provide(makeLayer())),
+  );
 });
 
 describe("ChannelChildWork reconcile", () => {
@@ -428,8 +472,9 @@ describe("ChannelChildWork reconcile", () => {
       const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
       const record = yield* store.get(taskId, admission.record.childWorkId);
       assert.strictEqual(record?.state, "released");
-      const next = yield* admit("after release");
-      assert.strictEqual(next._tag, "admitted");
+      // A terminal owner admits nothing new; the release keeps the accounting honest.
+      const next = yield* Effect.flip(admit("after release"));
+      assert.strictEqual(next.reason, "owner_terminal");
     }).pipe(Effect.provide(makeLayer())),
   );
 
@@ -537,8 +582,252 @@ describe("ChannelChildWork reconcile", () => {
           (yield* store.get(taskId, admission.record.childWorkId))?.state,
           "released",
         );
-        const next = yield* admit("after release", { surface: "delegate_remote" });
-        assert.strictEqual(next._tag, "admitted");
+        // A terminal owner admits nothing new; the release keeps the accounting honest.
+        const next = yield* Effect.flip(admit("after release", { surface: "delegate_remote" }));
+        assert.strictEqual(next.reason, "owner_terminal");
       }).pipe(Effect.provide(makeLayer())),
   );
+});
+
+describe("ChannelChildWork cancelForTask", () => {
+  it.effect("stops launched thread children and releases reservations on a task stop", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const launched = yield* admit("thread child", { surface: "thread_launch" });
+      const reserved = yield* admit("reserved child", {
+        surface: "thread_launch",
+        destinationKey: "other-host",
+      });
+      if (launched._tag !== "admitted" || reserved._tag !== "admitted")
+        return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(launched.record, { threadId: childThread });
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId: taskEventIdFor(taskId, 99),
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "settled");
+      assert.deepStrictEqual(
+        dispatched.map((entry) => ({
+          threadId: entry.threadId,
+          stopDelegatedTasks: entry.stopDelegatedTasks,
+        })),
+        [{ threadId: childThread, stopDelegatedTasks: true }],
+      );
+      assert.include(dispatched[0]!.commandId, "channel-stop-child");
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, launched.record.childWorkId))?.state,
+        "cancelled",
+      );
+      assert.strictEqual(
+        (yield* store.get(taskId, reserved.record.childWorkId))?.state,
+        "released",
+      );
+    }).pipe(Effect.provide(makeLayer(new Map(), new Map(), dispatched)));
+  });
+
+  it.effect("leaves delegated children to the worker's own cascade", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const delegate = yield* admit("delegate child");
+      const thread = yield* admit("thread child", { surface: "thread_launch" });
+      if (delegate._tag !== "admitted" || thread._tag !== "admitted")
+        return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(delegate.record, {
+        threadId: ThreadId.make("delegate-1"),
+      });
+      yield* childWork.markLaunched(thread.record, { threadId: childThread });
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId: taskEventIdFor(taskId, 99),
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "settled");
+      assert.deepStrictEqual(
+        dispatched.map((entry) => entry.threadId),
+        [childThread],
+      );
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      // The delegate's stop arrives through the worker's subagent cascade; its record settles
+      // when reconcile observes the run.
+      assert.strictEqual(
+        (yield* store.get(taskId, delegate.record.childWorkId))?.state,
+        "launched",
+      );
+      assert.strictEqual((yield* store.get(taskId, thread.record.childWorkId))?.state, "cancelled");
+    }).pipe(Effect.provide(makeLayer(new Map(), new Map(), dispatched)));
+  });
+
+  it.effect("advances the owning stop's attempt when a child stop is refused while live", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* admit("thread child", { surface: "thread_launch" });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      const stopEventId = taskEventIdFor(taskId, 99);
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const first = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(first, "retry");
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 1);
+      const second = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 1,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(second, "retry");
+      // A refused command id is refused for good, so the retry used a fresh one.
+      assert.notStrictEqual(dispatched[1]!.commandId, dispatched[0]!.commandId);
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 2);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, admission.record.childWorkId))?.state,
+        "launched",
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          new Map([[childThread, [fakeRun("running")]]]),
+          new Map([[childThread, { _tag: "OrchestratorCommandRejectedError" }]]),
+          dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("settles a refused child stop when the thread already ended", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* admit("thread child", { surface: "thread_launch" });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      const stopEventId = taskEventIdFor(taskId, 99);
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "settled");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 0);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, admission.record.childWorkId))?.state,
+        "cancelled",
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          new Map([[childThread, [fakeRun("cancelled")]]]),
+          new Map([[childThread, { _tag: "OrchestratorCommandRejectedError" }]]),
+          dispatched,
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps retrying a refused child stop while a cloud task keeps the thread live", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* admit("thread child", { surface: "thread_launch" });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      const stopEventId = taskEventIdFor(taskId, 99);
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "retry");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 1);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, admission.record.childWorkId))?.state,
+        "launched",
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          new Map([[childThread, [fakeRun("cancelled")]]]),
+          new Map([[childThread, { _tag: "OrchestratorCommandRejectedError" }]]),
+          dispatched,
+          new Map([
+            [
+              childThread,
+              [
+                {
+                  id: "pt-1",
+                  providerInstanceId: "pi-1",
+                  cloudTask: { status: "running" },
+                  pendingBackgroundTasks: [],
+                },
+              ],
+            ],
+          ]),
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps the stop pending when a child stop dispatch fails transiently", () => {
+    const dispatched: Array<DispatchedStop> = [];
+    return Effect.gen(function* () {
+      const taskId = yield* seedWorker;
+      const childWork = yield* ChannelChildWork.ChannelChildWork;
+      const admission = yield* admit("thread child", { surface: "thread_launch" });
+      if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      const stopEventId = taskEventIdFor(taskId, 99);
+      const outcome = yield* childWork.cancelForTask({
+        taskId,
+        generation: 1,
+        stopEventId,
+        attempt: 0,
+        reason: "Stopped.",
+      });
+      assert.strictEqual(outcome, "retry");
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      assert.strictEqual(yield* ledger.stopAttempt(stopEventId), 0);
+      const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+      assert.strictEqual(
+        (yield* store.get(taskId, admission.record.childWorkId))?.state,
+        "launched",
+      );
+    }).pipe(
+      Effect.provide(
+        makeLayer(
+          new Map([[childThread, [fakeRun("running")]]]),
+          new Map([[childThread, new Error("connection reset")]]),
+          dispatched,
+        ),
+      ),
+    );
+  });
 });
