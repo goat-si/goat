@@ -57,12 +57,48 @@ export const ComputerUseCapabilities = Schema.Struct({
 });
 export type ComputerUseCapabilities = typeof ComputerUseCapabilities.Type;
 
-export const ComputerUsePermissions = Schema.Struct({
-  /** Accessibility (macOS), UI Automation access (Windows), AT-SPI (Linux). */
-  accessibility: Schema.Boolean,
-  screenCapture: Schema.Boolean,
+/**
+ * Where one OS grant stands. pending: asked and not answered yet (an open prompt or portal
+ * dialog). denied: the person refused. abandoned: a prompt closed without an answer.
+ */
+export const ComputerUseGrant = Schema.Literals([
+  "granted",
+  "pending",
+  "denied",
+  "abandoned",
+  "unknown",
+]);
+export type ComputerUseGrant = typeof ComputerUseGrant.Type;
+
+/**
+ * The helper's answer to permissions: each readiness step on its own, so setup never shows an
+ * unproven step as done (D10). Whether the model may use the tool is decided by the server from
+ * the thread's attachment and lease, so it is not part of the helper's answer.
+ */
+export const ComputerUseReadiness = Schema.Struct({
+  grants: Schema.Struct({
+    /** Accessibility (macOS), UI Automation access (Windows), AT-SPI (Linux). */
+    accessibility: ComputerUseGrant,
+    screenCapture: ComputerUseGrant,
+  }),
+  /** incompatible: the hello failed version negotiation. */
+  helper: Schema.Literals(["authenticated", "unauthenticated", "incompatible"]),
+  /** Proven by a real capture: blank is an all-black frame, noWindow had nothing to capture. */
+  capture: Schema.Literals(["ready", "blank", "noWindow", "pending", "unavailable"]),
+  /** Proven by a real tree read of a window. */
+  tree: Schema.Literals(["ready", "empty", "unavailable"]),
+  input: Schema.Literals(["background", "foregroundOnly", "unavailable"]),
+  /** Written for the person setting it up, one per step that is not ready. */
+  reasons: Schema.Array(Schema.String),
+  platform: Schema.optionalKey(
+    Schema.Struct({
+      linux: Schema.optionalKey(
+        Schema.Struct({ displayServer: Schema.Literals(["x11", "wayland", "xwayland"]) }),
+      ),
+    }),
+  ),
 });
-export type ComputerUsePermissions = typeof ComputerUsePermissions.Type;
+export type ComputerUseReadiness = typeof ComputerUseReadiness.Type;
 
 /** One exact window of one process. */
 export const ComputerUseWindowTarget = Schema.Struct({
@@ -450,8 +486,38 @@ export const ComputerUseReplyFrame = Schema.Struct({
   id: TrimmedNonEmptyString,
   generation: TrimmedNonEmptyString,
   result: Schema.Unknown,
+  /**
+   * The screenshot of the observation in result, base64. The frame is the only place its bytes
+   * travel; GOAT's MCP layer turns it into a content image block (D3).
+   */
+  image: Schema.optionalKey(
+    Schema.Struct({ mimeType: TrimmedNonEmptyString, data: TrimmedNonEmptyString }),
+  ),
 });
 export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
+
+/**
+ * Why a reply's image cannot be shown with its observation, or undefined when it can. An image
+ * belongs only with an observation that declares a screenshot of the same type, and never with
+ * one in private mode. Size is checked as part of the whole frame (admitComputerUseReply).
+ */
+export function computerUseReplyImageProblem(
+  observation: ComputerUseObservation | undefined,
+  image: ComputerUseReplyFrame["image"],
+): string | undefined {
+  if (observation?.privateMode && image) return "A private observation carried an image.";
+  if (!image) return undefined;
+  if (!observation?.screenshot) return "An image came without an observation that declares one.";
+  if (observation.screenshot.mimeType !== image.mimeType)
+    return (
+      "The image is " +
+      image.mimeType +
+      ", the observation declares " +
+      observation.screenshot.mimeType +
+      "."
+    );
+  return undefined;
+}
 
 /**
  * Whether a reply may reach the caller. Replies from another generation, to a request no longer
