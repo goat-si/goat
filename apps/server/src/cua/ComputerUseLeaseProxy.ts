@@ -62,7 +62,7 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   stopped_all: "A person stopped computer use for every thread on this host.",
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
   helper_restarted:
-    "GOAT Computer Use stopped or restarted (for example after an update), so this connection ended. A call already in progress may have acted before it stopped. Do not retry in this turn; a later turn gets computer use back once it is ready and should observe the screen again before acting.",
+    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped and needs to be started again.",
 };
 
 export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
