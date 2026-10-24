@@ -67,7 +67,7 @@ const STEP_ICONS: Record<CuaPermission, ReactNode> = {
  * What a grant's row offers: the System Settings guide, or that it is allowed. Kept apart from
  * the row so the shared readiness list can place it in its grant slot.
  */
-export function CuaGrantAction({
+function CuaGrantAction({
   step,
   busy,
   onOpen,

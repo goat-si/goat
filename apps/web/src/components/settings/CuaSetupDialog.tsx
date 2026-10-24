@@ -102,7 +102,7 @@ export function CuaSetupDialog({
     : undefined;
   const needsRelaunch =
     localMac &&
-    relaunch !== undefined &&
+    onRelaunch !== undefined &&
     cuaNeedsRelaunch({ grants: holder, opened, verification });
   const verify = () =>
     run("verify", async () => {
