@@ -3,7 +3,6 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
   type GoatclawCeilingAdvice,
-  IsoDateTime,
   isOrchestrationV2WorkActive,
   isProviderAvailable,
   MessageId,
@@ -2566,15 +2565,20 @@ const make = Effect.gen(function* () {
           )
           .pipe(Effect.result);
         if (launched._tag === "Failure") {
+          // The coordinator wraps a failure it proved happened before any remote write
+          // (stage "authorize"); the task key it deleted frees this lane and slot too.
+          const preSend =
+            isRemoteDispatchError(launched.failure) && launched.failure.stage === "authorize";
           const underlying = isRemoteDispatchError(launched.failure)
             ? launched.failure.cause
             : launched.failure;
           const refusedBeforeLaunch =
-            underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-            (underlying.reason === "remote_refused" ||
-              underlying.reason === "invalid_request" ||
-              underlying.reason === "host_unknown") &&
-            underlying.launchMayHaveStarted !== true;
+            preSend ||
+            (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+              (underlying.reason === "remote_refused" ||
+                underlying.reason === "invalid_request" ||
+                underlying.reason === "host_unknown") &&
+              underlying.launchMayHaveStarted !== true);
           // The destination never started, so the lane and the child-work slot return.
           if (refusedBeforeLaunch) {
             if (admitted.enabled) yield* permissions.release(taskId);
@@ -2608,6 +2612,17 @@ const make = Effect.gen(function* () {
               "invalid_request",
               "An earlier goat_task_create with this clientRequestId did not finish launching; use a new clientRequestId.",
             );
+        }
+        if (
+          launched._tag === "Failure" &&
+          isRemoteDispatchError(launched.failure) &&
+          launched.failure.stage === "authorize"
+        ) {
+          // A proven pre-send failure wraps the one the caller can act on.
+          const ownerError = launched.failure.cause;
+          if (isOrchestratorMcpFailure(ownerError)) return yield* ownerError;
+          if (ownerError instanceof SshRemoteDispatch.SshRemoteDispatchError)
+            return yield* hostFailure(ownerError);
         }
         if (launched._tag === "Failure" || launched.success.launch.runId === null) {
           const refreshed = yield* loadProjection(scope.thread.threadId);
@@ -2753,7 +2768,6 @@ const make = Effect.gen(function* () {
           workspaceStrategy,
         };
       }).pipe(Effect.onError(() => releaseReservation(channelChildWork, admission)));
-      const isRetryOfAcceptedDelegation = prepared.isRetryOfAcceptedDelegation;
       const target = prepared.target;
       const requestedRuntimeMode = prepared.requestedRuntimeMode;
       const interactionMode = prepared.interactionMode;
@@ -2799,8 +2813,17 @@ const make = Effect.gen(function* () {
               ? permissions.release(commandId, true).pipe(Effect.ignore)
               : Effect.void,
           ),
-          // A dispatch error means the command never committed, so the launch never happened.
-          Effect.onError(() => releaseChildWork(channelChildWork, admission)),
+          // Only a dispatch that left no accepted-command receipt never committed, so just
+          // that failure returns the reservation; an accepted command's work keeps its slot.
+          Effect.onError(() =>
+            threadManagement.hasReceipt(commandId).pipe(
+              Effect.flatMap((committed) =>
+                committed ? Effect.void : releaseChildWork(channelChildWork, admission),
+              ),
+              // A failed read proves nothing; keep the capacity.
+              Effect.ignore,
+            ),
+          ),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"
               ? threadManagementFailure(error)

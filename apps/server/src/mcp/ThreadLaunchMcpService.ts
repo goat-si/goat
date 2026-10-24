@@ -640,8 +640,21 @@ const make = Effect.gen(function* () {
                       ? permissions.release(commandId, true).pipe(Effect.ignore)
                       : Effect.void,
                   ),
-                  // A launch error means no thread committed, so the admission releases.
-                  Effect.onError(() => releaseChildWork(channelChildWork, admission)),
+                  // Only a launch that never created its thread returns the capacity. The
+                  // launch reads projections after the create commits, so a failure can
+                  // arrive with the thread already running; its record stays bound and
+                  // reconcile settles it.
+                  Effect.onError(() =>
+                    context.threads.getThreadShell(threadId).pipe(
+                      Effect.flatMap((shell) =>
+                        shell === null
+                          ? releaseChildWork(channelChildWork, admission)
+                          : bindChildWork(channelChildWork, admission, { threadId }),
+                      ),
+                      // A failed read proves nothing; keep the capacity.
+                      Effect.ignore,
+                    ),
+                  ),
                 );
                 const result = yield* report === undefined
                   ? protectedLaunch

@@ -11,7 +11,6 @@ import {
   RuntimeRequestId,
   ThreadId,
   RuntimeMode,
-  IsoDateTime,
   RemoteDispatchState,
   RemoteReportDeliveryMode,
   RemoteReportKind,
@@ -70,6 +69,7 @@ export class RemoteDispatchError extends Schema.TaggedError<RemoteDispatchError>
       "unsupported_task",
       "not_found",
       "launch",
+      "authorize",
     ]),
     reason: Schema.optional(Schema.Literal("duplicate_task")),
     cause: Schema.optional(Schema.Defect()),
@@ -1043,23 +1043,28 @@ const make = Effect.gen(function* () {
               .launchThread(legacyLaunch, register)
               .pipe(Effect.map((value) => ({ ...value, reportsSupported: false })));
           }),
-          Effect.tapError((error) =>
+          // No remote write can precede beforeLaunch. When the failure is proven to be from
+          // before any write, the row goes away so the request can retry, and the failure
+          // reaches the launcher wrapped as stage "authorize": its surfaces release the
+          // capacity they reserved, while its cause keeps the message the caller should see.
+          Effect.catch((error) =>
             Effect.gen(function* () {
-              // No remote write can precede beforeLaunch. Release the task key if
-              // registration never committed, so the same request can retry.
               const registered = yield* Deferred.isDone(owner);
               const refused =
                 (error instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                  // Every reason except a transport failure, after which the send may have landed.
-                  !["ssh_failed", "host_unavailable"].includes(error.reason)) ||
+                  // Every reason except a transport failure, after which the send may have
+                  // landed; launchMayHaveStarted says even a refusal came too late to know.
+                  !["ssh_failed", "host_unavailable"].includes(error.reason) &&
+                  error.launchMayHaveStarted !== true) ||
                 (isOrchestratorMcpFailure(error) && !registered);
               if ((input.kind === "task" && !registered) || (input.kind === "thread" && refused)) {
                 yield* db(sql`DELETE FROM remote_dispatches WHERE correlation_id = ${id}`);
-                return;
+                return yield* new RemoteDispatchError({ stage: "authorize", cause: error });
               }
               yield* db(sql`UPDATE remote_dispatches SET state = 'lost',
       last_error = 'Launch outcome unknown or refused; check goat_thread_list with host before retrying.',
       updated_at = ${at} WHERE correlation_id = ${id}`);
+              return yield* Effect.fail(error);
             }),
           ),
         );

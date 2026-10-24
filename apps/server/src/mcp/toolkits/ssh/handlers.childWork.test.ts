@@ -6,6 +6,7 @@ import {
   ChannelTask,
   ChannelTaskEvent,
   EnvironmentId,
+  OrchestratorMcpFailure,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -216,6 +217,8 @@ interface LaunchFailures {
   readonly refuseLaunchOnCalls?: ReadonlyArray<number>;
   /** 0-based validateLaunchAttachments call indexes that fail before any launch is attempted. */
   readonly failValidationOnCalls?: ReadonlyArray<number>;
+  /** 0-based coordinator.launch call indexes that fail in beforeLaunch, before any remote write. */
+  readonly failAuthorizeOnCalls?: ReadonlyArray<number>;
 }
 
 /** Runs goat_ssh_thread_launch with a channel-owned caller over one shared in-memory database. */
@@ -309,6 +312,17 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
             const call = launchCalls;
             launchCalls += 1;
             launches.push({ correlationId: input.correlationId });
+            if (failures.failAuthorizeOnCalls?.includes(call) === true) {
+              return Effect.fail(
+                new RemoteDispatchCoordinator.RemoteDispatchError({
+                  stage: "authorize",
+                  cause: new OrchestratorMcpFailure({
+                    code: "capability_denied",
+                    message: "The caller's permission profile no longer allows this launch.",
+                  }),
+                }),
+              );
+            }
             if (failures.refuseLaunchOnCalls?.includes(call) === true) {
               return Effect.fail(
                 new SshRemoteDispatch.SshRemoteDispatchError({
@@ -485,5 +499,28 @@ it.effect(
       expect(launches).toHaveLength(1);
       expect(records).toHaveLength(1);
       expect(records[0]!.state).toBe("released");
+    }),
+);
+
+it.effect(
+  "a beforeLaunch refusal releases the slot and the caller keeps the original failure",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records } = yield* launchFromWorker(
+        ["Denied audit", "Audit one", "Audit two", "Audit three"],
+        { failAuthorizeOnCalls: [0] },
+      );
+      // The coordinator's pre-send wrap is unwrapped back to the refusal the caller can act on.
+      expect(responses[0]).toMatchObject({
+        code: "capability_denied",
+        message: "The caller's permission profile no longer allows this launch.",
+      });
+      expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
+      expect(launches).toHaveLength(3);
+      expect(records).toHaveLength(3);
+      expect(records.filter((record) => record.state === "released")).toHaveLength(1);
+      expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
     }),
 );

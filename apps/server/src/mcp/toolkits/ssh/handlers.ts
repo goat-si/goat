@@ -58,6 +58,8 @@ import { SshToolkit, SshThreadHandoffFailure } from "./tools.ts";
 const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 
+const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
+
 /**
  * The remote's local branches are usually behind origin, so a dispatched
  * worktree starts from origin unless the caller says otherwise. The remote
@@ -569,13 +571,17 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     return { ...value.launch, correlationId: value.correlationId };
                   }).pipe(
                     Effect.tapError((error) => {
+                      // The coordinator wraps a failure it proved happened before any remote
+                      // write (stage "authorize"); the launcher's slot returns for those too.
+                      const preSend = isRemoteDispatchError(error) && error.stage === "authorize";
                       const underlying = isRemoteDispatchError(error) ? error.cause : error;
                       const refusedBeforeLaunch =
-                        underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-                        (underlying.reason === "remote_refused" ||
-                          underlying.reason === "invalid_request" ||
-                          underlying.reason === "host_unknown") &&
-                        underlying.launchMayHaveStarted !== true;
+                        preSend ||
+                        (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+                          (underlying.reason === "remote_refused" ||
+                            underlying.reason === "invalid_request" ||
+                            underlying.reason === "host_unknown") &&
+                          underlying.launchMayHaveStarted !== true);
                       // The destination never started, so the lane and the child-work slot return.
                       return refusedBeforeLaunch
                         ? Effect.andThen(
@@ -584,13 +590,20 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           )
                         : Effect.void;
                     }),
-                    Effect.mapError((error) =>
-                      error instanceof SshRemoteDispatch.SshRemoteDispatchError
+                    Effect.mapError((error) => {
+                      // A proven pre-send failure wraps the one the caller can act on.
+                      if (isRemoteDispatchError(error) && error.stage === "authorize") {
+                        const cause = error.cause;
+                        if (cause instanceof SshRemoteDispatch.SshRemoteDispatchError)
+                          return toMcpFailure(cause);
+                        if (isOrchestratorMcpFailure(cause)) return cause;
+                      }
+                      return error instanceof SshRemoteDispatch.SshRemoteDispatchError
                         ? toMcpFailure(error)
                         : isRemoteDispatchError(error)
                           ? toCoordinationFailure(error)
-                          : error,
-                    ),
+                          : error;
+                    }),
                   );
                   if (admitted.enabled)
                     yield* permissions.complete(
