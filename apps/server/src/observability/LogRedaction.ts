@@ -146,7 +146,8 @@ function isJoseHeader(part: string): boolean {
 
 /**
  * A cut text can end inside a token whose remaining dots fall past the cut. Its trailing dotted
- * run is masked from any part that is a JOSE header, so an unfinished token is hidden as well.
+ * run is masked from any part that is a JOSE header, or from a last part that the cut leaves as
+ * the start of a JSON object, so an unfinished token or header is hidden as well.
  */
 function maskUnfinishedJose(text: string): string {
   let start = text.length;
@@ -154,10 +155,15 @@ function maskUnfinishedJose(text: string): string {
   const parts = text.slice(start).split(".");
   for (let index = 0; index < parts.length; index++) {
     const part = parts[index] ?? "";
-    if (part.length >= 8 && isJoseHeader(part))
+    const cut = index === parts.length - 1 && startsJsonObject(part);
+    if (part.length >= 8 && (cut || isJoseHeader(part)))
       return text.slice(0, start) + [...parts.slice(0, index), MASK].join(".");
   }
   return text;
+}
+
+function startsJsonObject(part: string): boolean {
+  return /^\s*\{/.test(Buffer.from(part.slice(0, 64), "base64url").toString("utf8"));
 }
 
 /** A dotted run from its first part that is a JOSE header on, masked; otherwise the run itself. */
@@ -177,9 +183,10 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // whitespace the header holds. Each part of a dotted run is tried, so a dotted prefix cannot
   // hide a token, and dotted names such as serverLogger.test.ts are left alone.
   [/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g, maskJoseToken],
-  // https://user:token@host/repo.git. The scheme is bounded (any longer run is matched by its end)
-  // so text without one stays linear; userinfo cannot hold a slash, so its scan stops at the next.
-  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s@]+@/gi, `$1${MASK}@`],
+  // https://user:token@host/repo.git. Userinfo runs to the authority's last @, as URL parsers read
+  // it, so a password holding @ is hidden whole. The scheme is bounded (a longer run is matched by
+  // its end) and an authority ends at the next slash, so scanning stays linear.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s?#]*@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
@@ -254,23 +261,43 @@ const MAX_STACK_CHARS = 8_000;
  * any redaction, so the frames are rendered here instead and redacted with the rest.
  */
 export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> => {
-  if (cause.reasons.length === 0) return cause;
-  const reasons = cause.reasons.slice(0, MAX_REASONS).map(redactReason);
-  if (cause.reasons.length > MAX_REASONS)
-    reasons.push(
-      Cause.makeDieReason(new Error(`${cause.reasons.length - MAX_REASONS} more reasons omitted`)),
-    );
+  // The reasons are read once, through descriptors: neither the cause nor its list can run code
+  // that shows a sink something other than what was redacted here.
+  const listed = guarded(() => Reflect.get(cause, "reasons"), []);
+  const length = Array.isArray(listed)
+    ? Number(guarded(() => Object.getOwnPropertyDescriptor(listed, "length")?.value, 0))
+    : 0;
+  const reasons: Array<Cause.Reason<unknown>> = [];
+  for (let index = 0; index < Math.min(length, MAX_REASONS); index++)
+    reasons.push(redactReason(dataProperty(listed, index)));
+  if (length > MAX_REASONS)
+    reasons.push(Cause.makeDieReason(new Error(`${length - MAX_REASONS} more reasons omitted`)));
   return Cause.fromReasons(reasons);
 };
 
-function redactReason(reason: Cause.Reason<unknown>): Cause.Reason<unknown> {
-  switch (reason._tag) {
+/** An own data property's value; a getter, a missing property or a throwing object give nothing. */
+function dataProperty(target: unknown, key: PropertyKey): unknown {
+  return guarded(() => {
+    if (typeof target !== "object" || target === null) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(target, key);
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  }, undefined);
+}
+
+function redactReason(reason: unknown): Cause.Reason<unknown> {
+  const annotations = dataProperty(reason, "annotations");
+  const frames = annotations instanceof Map ? annotations : undefined;
+  switch (dataProperty(reason, "_tag")) {
     case "Fail":
-      return Cause.makeFailReason(sanitizedError(reason.error, reason.annotations));
+      return Cause.makeFailReason(sanitizedError(dataProperty(reason, "error"), frames));
     case "Die":
-      return Cause.makeDieReason(sanitizedError(reason.defect, reason.annotations));
-    case "Interrupt":
-      return Cause.makeInterruptReason(reason.fiberId);
+      return Cause.makeDieReason(sanitizedError(dataProperty(reason, "defect"), frames));
+    case "Interrupt": {
+      const fiberId = dataProperty(reason, "fiberId");
+      return Cause.makeInterruptReason(typeof fiberId === "number" ? fiberId : undefined);
+    }
+    default:
+      return Cause.makeDieReason(uninspectable());
   }
 }
 

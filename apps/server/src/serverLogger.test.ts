@@ -332,6 +332,17 @@ describe("ServerLoggerLive", () => {
       }),
     );
 
+    it.effect("keeps credentials out of the console when a cause forges its reason list", () =>
+      Effect.gen(function* () {
+        // A synthetic canary that only the list's own methods would let through.
+        const reasons = [Cause.makeDieReason(new Error("Cookie: sid=canary-forged-cause"))];
+        Object.assign(reasons, { slice: () => reasons, map: () => reasons });
+        const output = yield* printedBy(Effect.logError("forged", Cause.fromReasons(reasons)));
+        assert.include(output, "forged");
+        assert.notInclude(output, "canary-forged-cause");
+      }),
+    );
+
     it.effect("keeps credentials out of the span events the trace file records", () =>
       Effect.gen(function* () {
         const { spans } = yield* logInSpanThrough({}, leakyLog);

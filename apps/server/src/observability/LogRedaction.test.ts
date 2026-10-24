@@ -55,6 +55,7 @@ describe("redactLogText", () => {
     ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
     ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
     [`requestid.${jwt} done`, "requestid.*** done"],
+    ["https://user:p@CANARY@example.com/x?q=1", "https://***@example.com/x?q=1"],
     [
       `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
       "clone https://***@example.com/r.git",
@@ -93,6 +94,14 @@ describe("redactLogText", () => {
     const text = redactLogText(`start ${header}.${payload}.c2ln end`);
     expect(text).not.toContain(header);
     expect(text).not.toContain(payload.slice(0, 40));
+  });
+
+  it("hides a header that the scanned part of a huge text cuts open", () => {
+    const header = Buffer.from(
+      JSON.stringify({ alg: "HS256", marker: "canary-header", pad: "x".repeat(220_000) }),
+    ).toString("base64url");
+    const text = redactLogText(`start ${header}.e30.c2ln`);
+    expect(text).not.toContain(header.slice(0, 40));
   });
 
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {
@@ -138,6 +147,20 @@ describe("redactCause", () => {
     expect(Cause.squash(redacted)).not.toHaveProperty("headers");
     const exported = Cause.prettyErrors(redacted, { includeCauseInStack: true });
     expect(exported.map((e) => [e.name, e.message, e.stack]).join("\n")).not.toContain("canary");
+  });
+
+  it("reads a cause's reasons once, without running the list's methods", () => {
+    const leaky = () => [Cause.makeDieReason(new Error("Cookie: sid=canary-forged-reason"))];
+    const forgedList = leaky();
+    Object.assign(forgedList, { slice: () => forgedList, map: () => forgedList });
+    const lyingCause = Cause.fromReasons(leaky());
+    let reads = 0;
+    Object.defineProperty(lyingCause, "reasons", {
+      get: () => (reads++ === 0 ? [] : leaky()),
+    });
+    for (const cause of [Cause.fromReasons(forgedList), lyingCause]) {
+      expect(Cause.pretty(redactCause(cause))).not.toContain("canary-forged-reason");
+    }
   });
 
   it("keeps an error whose cause cannot be inspected", () => {
