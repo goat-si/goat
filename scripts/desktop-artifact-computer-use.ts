@@ -17,9 +17,9 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import { buildComputerUseHelper } from "../build-computer-use-helper.ts";
-import { runReleaseCommand } from "./release-verify.ts";
-import { windowsSystemTar } from "./windows-tar.ts";
+import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
+import { runReleaseCommand } from "./lib/release-verify.ts";
+import { windowsSystemTar } from "./lib/windows-tar.ts";
 
 type DesktopPlatform = "mac" | "linux" | "win";
 type DesktopArch = "arm64" | "x64" | "universal";

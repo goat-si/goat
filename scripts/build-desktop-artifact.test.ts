@@ -87,7 +87,7 @@ import {
   sandboxedPreloadSyntaxError,
   stampReleaseVersionForBuild,
 } from "./build-desktop-artifact.ts";
-import { stageCuaDriverExecutable } from "./lib/desktop-computer-use.ts";
+import { stageCuaDriverExecutable } from "./desktop-artifact-computer-use.ts";
 import {
   ReleasePackageManifestError,
   releasePackageFiles,

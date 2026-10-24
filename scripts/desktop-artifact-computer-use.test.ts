@@ -4,7 +4,7 @@ import {
   COMPUTER_USE_HELPER_IN_APP,
   embeddedHelperProblems,
   withComputerUseHelper,
-} from "./desktop-computer-use.ts";
+} from "./desktop-artifact-computer-use.ts";
 
 const signed = {
   bundle: "/stage/computer-use-helper/GOAT Computer Use.app",
@@ -61,7 +61,7 @@ describe("desktop computer use payload", () => {
       signed,
     );
     const mac = config.mac as {
-      extraFiles: Array<{ to: string }>;
+      extraFiles: Array<{ from: string; to: string }>;
       signIgnore: string[];
       icon: string;
     };

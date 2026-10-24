@@ -70,11 +70,13 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 When the server asks for a Cua Driver host on the private control pipe, the Electron main process
 owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
 "GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
-packaged builds look in `Contents/Helpers`, development builds need `GOAT_CUA_HELPER_PATH` to a
-helper built by `scripts/build-computer-use-helper.ts`, and a helper that is present but unusable
-keeps computer use off. A release helper (`apps/desktop/native/computer-use-helper/main.swift`)
-serves only a parent signed by GOAT's team with the GOAT app identifier; a development helper,
-built with `GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
+packaged builds look in `Contents/Helpers`, where `build-desktop-artifact.ts --computer-use-helper`
+puts it (`scripts/desktop-artifact-computer-use.ts`; signed builds wait for #1210), development
+builds need `GOAT_CUA_HELPER_PATH` to a helper built by `scripts/build-computer-use-helper.ts`, and
+a helper that is present but unusable keeps computer use off. A release helper
+(`apps/desktop/native/computer-use-helper/main.swift`) serves only a parent signed by GOAT's team
+with the GOAT app identifier; a development or ad-hoc helper, built with
+`GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
 with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello

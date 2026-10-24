@@ -265,10 +265,22 @@ GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.a
 
 The script signs with the keychain's Developer ID Application identity when one is usable, and
 `--identity -` signs ad-hoc. An ad-hoc helper gets a new code hash on every build, so macOS asks
-for Accessibility and Screen Recording again after each rebuild. Only `--channel dev` may be
-ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team, launched them.
+for Accessibility and Screen Recording again after each rebuild. Stable and nightly helpers verify
+that GOAT.app, signed by the same team, launched them, so they are ad-hoc only when `--identity -`
+asks for it, and then serve any parent.
 Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
 session that cannot unlock it (`errSecInternalComponent`).
+
+A packaged build carries the helper in `GOAT.app/Contents/Helpers` when asked to:
+
+```sh
+node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
+```
+
+Unsigned builds embed an ad-hoc helper and sign GOAT.app ad-hoc around it. The build fails when
+the helper inside GOAT.app is not byte for byte the one it signed, or when a signed GOAT.app and
+its helper carry different teams. Release builds leave the flag off until the helper brokers the
+driver over stdio (#1210).
 
 ### Windows computer use helper
 

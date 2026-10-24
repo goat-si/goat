@@ -52,7 +52,7 @@ import {
   stageCuaDriverExecutable,
   verifyEmbeddedComputerUseHelper,
   withComputerUseHelper,
-} from "./lib/desktop-computer-use.ts";
+} from "./desktop-artifact-computer-use.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
 import {
