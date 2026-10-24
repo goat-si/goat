@@ -408,8 +408,10 @@ examples as tests.
 through `goat_call`; each tool also stays callable by its own names. MCP clients, including
 other GOAT hosts, keep the full listing (D22): a host's dispatch reads a remote's `tools/list` to
 learn which launch arguments and memory tools it supports, and hosts on older versions have no
-other way. A client's `tools/list` result names the listing agents get in
-`_meta["goat/agentToolListing"]`, which is how the D8 runner checks a core arm.
+other way. An outside agent that does not need that sends `x-goat-tool-listing: core` on its
+`/mcp` requests and is listed only the core tools; calls never read the header. A client's
+`tools/list` result names the listing agents get in `_meta["goat/agentToolListing"]`, which is
+how the D8 runner checks a core arm.
 
 **Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 
@@ -446,14 +448,15 @@ with a resource as `path` it searches only that resource. See
 visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
 callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
 `available.now` refuses for the caller, except that a profile that does not resolve hides
-nothing, because a client keeps its listing for the session. The server setting `agentToolListing` picks `full` (every
-other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
+nothing, because a client keeps its listing for the session. The server setting
+`agentToolListing` picks the listing of the agents GOAT runs: `full` (every other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
 `_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
 tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
 a harness that regresses, and a change to the setting or to the goatclaw policy sends
 `notifications/tools/list_changed`.
 [context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness
-receives under the default listing, and `goat-ci` fails when a harness goes over 6 KiB of
+receives under the default listing and what an outside client that asks for core receives, and
+`goat-ci` fails when a harness goes over 6 KiB of
 instructions, 6 KiB of listing, 12 KiB for its first prompt, or 300 B on each later turn.
 
 Known risk of the core default: an agent in a shell harness that does not find a tool in its
@@ -1027,7 +1030,7 @@ every gate runs per step (D7).
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                                         | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                                                                                                                                                                                                                            | Renaming paths to match shipped names                                                        |
 | D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                                                                                                                                                                                                      | Registering alias tools, which would list them                                               |
 | D21 | Every agent GOAT runs gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback; CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KiB per harness; D8 verifies the default and tunes the core set rather than gating it                                                                                                                                                                          | Opt-in core, measured before it became the default                                           |
-| D22 | The core listing applies to thread callers (agents GOAT runs); MCP clients, including SSH dispatch, linked hosts, and outside agents, keep the full listing                        | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed; the diet targets what GOAT injects into the agents it runs. Follow-up: [#1066](https://github.com/goat-si/goat/issues/1066) lets outside clients opt into core and moves remotes to a versioned capability record | Origins learning launch arguments through `goat_describe`, which does not help older origins |
+| D22 | Thread callers (agents GOAT runs) get the core listing; MCP clients, including SSH dispatch and linked hosts, keep the full one unless they send `x-goat-tool-listing: core`       | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed. Outside agents opt into core with the header ([#1066](https://github.com/goat-si/goat/issues/1066)); a versioned capability record for remotes cannot change the no-header default while any older origin remains | Origins learning launch arguments through `goat_describe`, which does not help older origins |
 
 ## Open questions
 
