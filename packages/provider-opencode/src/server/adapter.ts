@@ -3346,7 +3346,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 buildRuntimeInstructions({
                   harness: "OpenCode",
                   model: turnInput.modelSelection.model,
-                  computerUse: yield* syncCuaDriver(turnInput.threadId),
+                  computerUse:
+                    (yield* syncCuaDriver(turnInput.threadId)) &&
+                    McpProviderSession.carriesComputerUseSkill(
+                      yield* mcpSessions.read(turnInput.threadId),
+                    ),
                 }),
               ]
                 .filter(Boolean)

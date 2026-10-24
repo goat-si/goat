@@ -7240,7 +7240,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               hasGoatMcp: mcpSession !== undefined,
               browserToolsAvailable: mcpSession?.browserToolsAvailable ?? true,
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
-              computerUse: mcpSession !== undefined && runtime.cuaDriver !== undefined,
+              computerUse:
+                mcpSession !== undefined &&
+                runtime.cuaDriver !== undefined &&
+                McpProviderSession.carriesComputerUseSkill(mcpSession),
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });

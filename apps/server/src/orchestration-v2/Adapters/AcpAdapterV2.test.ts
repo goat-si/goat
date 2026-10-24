@@ -396,9 +396,13 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live.each([true, false])(
-    "lists the managed Cua Driver in both server forms and describes it only when attached (%s)",
-    (attached) =>
+  it.live.each([
+    { attached: true, skill: true },
+    { attached: false, skill: true },
+    { attached: true, skill: false },
+  ])(
+    "lists the managed Cua Driver in both server forms and loads the skill only when attached and not switched off (%o)",
+    ({ attached, skill }) =>
       Effect.gen(function* () {
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const path = yield* Path.Path;
@@ -407,8 +411,8 @@ describe("AcpAdapterV2", () => {
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
-        const instanceId = ProviderInstanceId.make(`acp-test-cua-${attached}`);
-        const threadId = ThreadId.make(`thread-acp-cua-${attached}`);
+        const instanceId = ProviderInstanceId.make(`acp-test-cua-${attached}-${skill}`);
+        const threadId = ThreadId.make(`thread-acp-cua-${attached}-${skill}`);
         const cuaDriver = {
           command: "/resources/cua-driver",
           args: ["mcp"],
@@ -423,6 +427,7 @@ describe("AcpAdapterV2", () => {
           authorizationHeader: "Bearer acp-cua-token",
           browserToolsAvailable: false,
           ...(attached ? { cuaDriver } : {}),
+          ...(skill ? {} : { builtInSkills: [] }),
         });
         let runtimeInput: AcpAdapterV2RuntimeInput | undefined;
         const makeRuntime = makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents });
@@ -446,7 +451,9 @@ describe("AcpAdapterV2", () => {
         const modelSelection = { instanceId, model: "default" } as const;
         const runtime = yield* adapter.openSession({
           threadId,
-          providerSessionId: ProviderSessionId.make(`provider-session-acp-cua-${attached}`),
+          providerSessionId: ProviderSessionId.make(
+            `provider-session-acp-cua-${attached}-${skill}`,
+          ),
           modelSelection,
           runtimePolicy,
         });
@@ -493,7 +500,7 @@ describe("AcpAdapterV2", () => {
           const prompt = rawProtocolPromptTextBlocks(event)
             .map((block) => block.text)
             .join("\n");
-          assert.equal(prompt.includes("<computer_use>"), attached);
+          assert.equal(prompt.includes("<computer_use>"), attached && skill);
           break;
         }
       }).pipe(Effect.provide(layerTest), Effect.scoped),

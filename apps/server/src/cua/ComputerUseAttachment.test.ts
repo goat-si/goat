@@ -7,12 +7,14 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as ComputerUse from "./ComputerUseAttachment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import type { ComputerUseLease } from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
@@ -86,8 +88,31 @@ describe("computerUseAttachment", () => {
         _tag: "direct",
         mcp,
         overrideUserConfig: false,
+        skills: ["computer-use"],
       });
       assert.equal(driver.calls.acquire, 1);
+    }),
+  );
+
+  it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      const attached = yield* decide(driver).pipe(
+        Effect.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            disabledBuiltInSkills: ["computer-use", "skill-from-a-newer-build"],
+          }),
+        ),
+      );
+      assert.deepEqual(attached, { _tag: "direct", mcp, overrideUserConfig: false, skills: [] });
+      const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+      assert.deepEqual(config.cuaDriver, mcp);
+      assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
+      assert.isTrue(
+        McpProviderSession.carriesComputerUseSkill(
+          ComputerUse.withComputerUse(session, yield* decide(driver), ROUTE),
+        ),
+      );
     }),
   );
 
@@ -163,6 +188,7 @@ describe("computerUseAttachment", () => {
         mcp,
         lease,
         proxy,
+        skills: ["computer-use"],
       });
       assert.deepEqual(
         yield* decide(driver, {
@@ -191,7 +217,7 @@ describe("computerUseAttachment", () => {
     assert.isFalse("cuaDriverBlocked" in detached);
     const attached = ComputerUse.withComputerUse(
       detached,
-      { _tag: "direct", mcp, overrideUserConfig: false },
+      { _tag: "direct", mcp, overrideUserConfig: false, skills: ["computer-use"] },
       ROUTE,
     );
     assert.deepEqual(attached.cuaDriver, mcp);
@@ -208,7 +234,7 @@ describe("computerUseAttachment", () => {
   it("hands a leased turn the proxy with its lease, credential and driver, never the raw driver", () => {
     const leased = ComputerUse.withComputerUse(
       session,
-      { _tag: "leased", mcp, lease, proxy },
+      { _tag: "leased", mcp, lease, proxy, skills: ["computer-use"] },
       ROUTE,
     );
     assert.isTrue(leased.cuaDriverOverridesUserConfig);
