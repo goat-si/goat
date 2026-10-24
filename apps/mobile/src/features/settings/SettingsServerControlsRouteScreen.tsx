@@ -35,6 +35,7 @@ import { SettingsProjectOverridesSection } from "./components/SettingsProjectOve
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
 import {
+  planMobileBuiltInSkillToggle,
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
@@ -230,7 +231,8 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
       if (queued?.key === targetsKey) write({ ...patch, ...queued.patch });
     });
   };
-  const clearProjectOverrides = () => {
+  // Each environment gets its own patch; a draft queued over these targets would undo them.
+  const writeEach = (writes: Parameters<typeof writeSettings>[1]) => {
     if (
       writeInFlight.current ||
       !targets.every((target) =>
@@ -238,19 +240,19 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
       )
     )
       return;
-    const writes = planMobileScopedSettingsClear(targets, PAGE_PROJECT_KEYS[props.page]);
     if (writes.length === 0) return;
     writeInFlight.current = true;
     setPendingTargets(targets);
     setPendingWrites((count) => count + 1);
     void writeSettings(targets, writes).finally(() => {
       writeInFlight.current = false;
-      // Resending a draft over these pre-clear targets would undo the clear.
       queuedPatch.current = null;
       setPendingTargets(null);
       setPendingWrites((count) => count - 1);
     });
   };
+  const clearProjectOverrides = () =>
+    writeEach(planMobileScopedSettingsClear(targets, PAGE_PROJECT_KEYS[props.page]));
   const supportsProjectOverrides = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.projectSettingsOverrides === true,
@@ -474,14 +476,9 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
                       value={computerUseSkillOn}
                       disabled={disabledFor("disabledBuiltInSkills")}
-                      onValueChange={(value) => {
-                        const others = (reference?.settings.disabledBuiltInSkills ?? []).filter(
-                          (name) => name !== "computer-use",
-                        );
-                        write({
-                          disabledBuiltInSkills: value ? others : [...others, "computer-use"],
-                        });
-                      }}
+                      onValueChange={(value) =>
+                        writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
+                      }
                     />
                   </SettingsSection>
                   <SettingsSection
