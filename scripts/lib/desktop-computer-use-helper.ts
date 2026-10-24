@@ -19,7 +19,8 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
       "--output",
       input.output,
     ];
-    if (process.env.CSC_NAME) args.push("--identity", process.env.CSC_NAME);
+    if (process.env.GOAT_CLI_MAC_SIGN_IDENTITY)
+      args.push("--identity", process.env.GOAT_CLI_MAC_SIGN_IDENTITY);
     if (process.env.APPLE_KEYCHAIN_PROFILE)
       args.push("--notary-profile", process.env.APPLE_KEYCHAIN_PROFILE);
     const result = yield* runReleaseCommand(process.execPath, args);
