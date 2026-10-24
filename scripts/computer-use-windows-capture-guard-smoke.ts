@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Live check for the Windows capture guard (#1329): an agent's screenshot of a covered window
-// shows that window alone. It drives the built helper exactly as GOAT's lease proxy does
+// Live check for the Windows capture guard (#1329): an agent's screenshot or zoom of a covered
+// window shows that window alone. It drives the built helper exactly as GOAT's lease proxy does
 // ("GOAT Computer Use.exe mcp ..." over stdio) against the fixture window, with the fixture's
 // magenta "cover" window on top.
 //
@@ -36,8 +36,7 @@ const frameworkDir = NodePath.join(
 );
 NodeFS.mkdirSync(out, { recursive: true });
 
-const REPLACED = "GOAT replaced this screenshot";
-const WITHHELD = "GOAT withheld this";
+const WITHHELD = "GOAT withheld this image";
 const transcript: Array<{ readonly step: string; readonly detail: unknown }> = [];
 const record = (step: string, detail: unknown) => {
   transcript.push({ step, detail });
@@ -65,12 +64,13 @@ function lines(child: {
       return waiting.get(message.id)?.(message);
     first(message);
   });
-  const ask = (message: Record<string, unknown>) =>
+  const askRaw = (line: string, id: unknown) =>
     new Promise<Record<string, unknown>>((resolve) => {
-      waiting.set(message.id, resolve);
-      child.stdin.write(JSON.stringify(message) + "\n");
+      waiting.set(id, resolve);
+      child.stdin.write(line + "\n");
     });
-  return { greeting, ask };
+  const ask = (message: Record<string, unknown>) => askRaw(JSON.stringify(message), message.id);
+  return { greeting, ask, askRaw };
 }
 
 interface ToolResult {
@@ -198,7 +198,7 @@ async function main() {
       fail("No fixture window");
     const args = { pid: target.pid, window_id: window.window_id };
 
-    // 1. Nothing on top: the driver's own screenshot passes untouched.
+    // 1. Nothing on top: the screenshot is the window, at the driver's size.
     const clear = await tool("get_window_state", args);
     const clearPng = save(clear, "1-uncovered-agent.png");
     record("uncovered", {
@@ -206,8 +206,8 @@ async function main() {
       magenta: magentaPixels(clearPng),
     });
     expectThat(
-      !texts(clear).some((text) => text.startsWith(REPLACED) || text.startsWith(WITHHELD)),
-      "An uncovered window was rewritten",
+      !texts(clear).some((text) => text.startsWith(WITHHELD)),
+      "The window's screenshot was withheld",
     );
 
     // 2. The magenta cover on top: the screen under the window shows it, the agent's image must not.
@@ -228,10 +228,6 @@ async function main() {
       screenMagenta > 1000,
       "The cover is not over the fixture window; the check proves nothing",
     );
-    expectThat(
-      texts(covered).some((text) => text.startsWith(REPLACED)),
-      "The covered screenshot was not replaced",
-    );
     expectThat(agentMagenta === 0, "The agent's screenshot shows the covering window");
     const size = (png: string) => {
       const bytes = NodeFS.readFileSync(png);
@@ -242,13 +238,15 @@ async function main() {
       "The replacement changed the screenshot's size",
     );
 
-    // 3. A zoom of a covered window is withheld.
-    const zoom = await tool("zoom", { ...args, x1: 10, y1: 10, x2: 200, y2: 120 });
-    record("zoom covered", { notes: texts(zoom), images: images(zoom).length });
-    expectThat(
-      images(zoom).length === 0 && texts(zoom).some((text) => text.startsWith(WITHHELD)),
-      "The covered zoom was not withheld",
-    );
+    // 3. A zoom over the covered middle is cut from the helper's own capture.
+    const zoom = await tool("zoom", { ...args, x1: 100, y1: 60, x2: 300, y2: 180 });
+    const zoomPng = save(zoom, "3-covered-zoom-agent.png");
+    const zoomMagenta = magentaPixels(zoomPng);
+    record("zoom covered", {
+      notes: texts(zoom).filter((text) => text.startsWith("GOAT ")),
+      zoomMagenta,
+    });
+    expectThat(zoomMagenta === 0, "The agent's zoom shows the covering window");
 
     // 4. screenshot_out_file cannot route an image around the helper.
     const file = NodePath.join(out, "should-not-exist.png");
@@ -258,6 +256,35 @@ async function main() {
       !NodeFS.existsSync(file) && images(toFile).length === 1,
       "screenshot_out_file was not dropped",
     );
+
+    // 5. A reply the relay cannot pair with its request keeps no image: this id comes back from
+    // .NET's JSON reader as a date, so the driver's echo does not match it.
+    const dated = await agent.askRaw(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "@ID@",
+        method: "tools/call",
+        params: { name: "get_window_state", arguments: args },
+      }).replace('"@ID@"', '"\\/Date(0)\\/"'),
+      "/Date(0)/",
+    );
+    const datedResult = dated.result as ToolResult;
+    record("unpaired", {
+      images: images(datedResult).length,
+      notes: texts(datedResult).filter((text) => text.startsWith("GOAT ")),
+    });
+    expectThat(
+      images(datedResult).length === 0 &&
+        texts(datedResult).some((text) => text.startsWith(WITHHELD)),
+      "An unpaired reply kept its image",
+    );
+
+    // 6. A line the relay cannot read is refused, not forwarded.
+    for (const line of ["not json", "[]"]) {
+      const refused = await agent.askRaw(line, null);
+      record("refused " + line, refused);
+      expectThat(refused.error !== undefined, "The relay forwarded " + line);
+    }
   } finally {
     relay.stdin.end();
     await new Promise((resolve) => relay.once("exit", resolve));

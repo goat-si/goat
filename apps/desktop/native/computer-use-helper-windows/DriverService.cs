@@ -344,18 +344,32 @@ namespace Goat.ComputerUse
                 using (inRead)
                 using (outWrite)
                     child = Launch(relayJob, new List<string>(arguments), DriverEnvironment(new Dictionary<string, object>()), inRead, outWrite, out pid);
-                string driver = DriverExecutable;
-                var relay = new McpRelay(window => CaptureGuard.Covered(window, driver), CaptureGuard.CaptureAlone);
+                var relay = new McpRelay(CaptureGuard.CaptureNative);
                 var toDriver = new FileStream(inWrite, FileAccess.Write);
+                Stream toAgent = Console.OpenStandardOutput();
+                var agentLock = new object();
                 var inbound = new Thread(delegate ()
                 {
-                    try { Pump(Console.OpenStandardInput(), toDriver, relay.Inbound); }
+                    try
+                    {
+                        Pump(Console.OpenStandardInput(), delegate (string line)
+                        {
+                            string refusal;
+                            string forward = relay.Inbound(line, out refusal);
+                            if (forward != null) Write(toDriver, forward, null);
+                            else Write(toAgent, refusal, agentLock);
+                        });
+                    }
                     finally { toDriver.Dispose(); }
                 });
                 inbound.IsBackground = true;
                 inbound.Start();
                 using (var fromDriver = new FileStream(outRead, FileAccess.Read))
-                    Pump(fromDriver, Console.OpenStandardOutput(), relay.Outbound);
+                    Pump(fromDriver, delegate (string line)
+                    {
+                        string forward = relay.Outbound(line);
+                        if (forward != null) Write(toAgent, forward, agentLock);
+                    });
                 uint code;
                 NativeMethods.WaitForSingleObject(child, 5000);
                 return NativeMethods.GetExitCodeProcess(child, out code) && code != 259 ? (int)code : 1;
@@ -368,23 +382,24 @@ namespace Goat.ComputerUse
             }
         }
 
-        /// <summary>Copies lines until either side closes, each passed through transform.</summary>
-        static void Pump(Stream from, Stream to, Func<string, string> transform)
+        /// <summary>Hands each line to handle until the stream or a write closes.</summary>
+        static void Pump(Stream from, Action<string> handle)
         {
-            var encoding = new UTF8Encoding(false);
             try
             {
-                var reader = new StreamReader(from, encoding);
+                var reader = new StreamReader(from, new UTF8Encoding(false));
                 string line;
-                while ((line = reader.ReadLine()) != null)
-                {
-                    byte[] bytes = encoding.GetBytes(transform(line) + "\n");
-                    to.Write(bytes, 0, bytes.Length);
-                    to.Flush();
-                }
+                while ((line = reader.ReadLine()) != null) handle(line);
             }
             catch (IOException) { }
             catch (ObjectDisposedException) { }
+        }
+
+        static void Write(Stream to, string line, object gate)
+        {
+            byte[] bytes = new UTF8Encoding(false).GetBytes(line + "\n");
+            if (gate == null) { to.Write(bytes, 0, bytes.Length); to.Flush(); return; }
+            lock (gate) { to.Write(bytes, 0, bytes.Length); to.Flush(); }
         }
 
         static NativeMethods.SECURITY_ATTRIBUTES Inheritable()
