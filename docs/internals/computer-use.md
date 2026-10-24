@@ -125,6 +125,9 @@ The rule: the screenshot the model saw is the screenshot the person sees.
   and mobile.
 - Contract fixtures cover image-only, structured-only, mixed and error results for each provider
   harness GOAT ships.
+- A screenshot carries the request id, helper generation, thread and environment it was taken
+  for, and stays within a size and format check. A late result from before a Stop or owner change,
+  or one addressed to another session, is discarded instead of attached (#1163).
 
 ## Preview session protocol
 
@@ -173,6 +176,10 @@ PreviewSession {
   `settings:write` in an authenticated client session. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
+  An approval binds the app's canonical identity (bundle id or executable path) at approval time,
+  and the action runs on that frozen target, so a request cannot be approved for one app and
+  executed against another. "Always" approvals are listed in Settings, where a person removes them;
+  a removed app asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.
@@ -217,6 +224,9 @@ PreviewSession {
 - **Linux.** X11 needs a reachable display, a session bus and an AT-SPI bus that answer (the
   existing probe). Wayland needs the portal consent for screen cast and remote desktop, kept with
   a restore token, and reports `partial` until the person grants it.
+- Readiness is four separate answers, shown separately: the OS grant, an authenticated helper,
+  a real capture and tree, and the tools attached for this turn. Pending, denied and abandoned
+  prompts are distinct states; a closed prompt never reads as granted.
 - The same `permission-needed` status and chip appear on every client. Remote clients show which
   machine needs the grant; it can only be granted at that machine.
 
@@ -235,7 +245,11 @@ PreviewSession {
 - The helper has its own version and records the driver version and patch set it carries. It
   updates with GOAT.app through GOAT's updater, so a helper and the host that launches it always
   come from one build; the handshake still checks the protocol version. A separate helper download
-  channel is not planned, because it lets host and helper drift apart.
+  channel is not planned, because it lets host and helper drift apart. An update never deletes and
+  re-copies a helper that is running: active sessions end through the normal Stop path with their
+  cleanup report first, and the new helper must pass readiness before agents get it. Grants
+  surviving an update, and a revoked grant being noticed, are negative qualification cases
+  (#1162).
 - Windows and Linux helpers are signed with the existing platform signing paths and staged beside
   the driver.
 - This epic adds local build and signing scripts. Wiring them into CI and release workflows is a
@@ -258,8 +272,8 @@ separate file with its source and license recorded:
 Where the driver already exposes a setting, use it instead of a patch
 (`CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS`, `CUA_DRIVER_KEY_GAP_MS`). Do not re-patch focus and
 background delivery code 0.37 already contains, and do not carry Cua browser tool patches: GOAT
-has its own browser surface. Several of these patches come from synara (MIT, copyright T3 Tools
-Inc. and Emanuele Di Pietro); their notices go into the helper's third-party notices.
+has its own browser surface. Several of these patches come from synara (MIT); its copyright
+notice goes into the helper's third-party notices with them.
 
 ## Licensing and provenance
 
@@ -270,10 +284,12 @@ Inc. and Emanuele Di Pietro); their notices go into the helper's third-party not
   [open-source-licenses.md](open-source-licenses.md).
 - Aside, the Codex app and Ego Lite's browser are proprietary. GOAT takes their product patterns
   (a separate helper identity, per-app approval, typed refusals, handoff) and writes its own code;
-  nothing from their binaries or reverse-engineered sources enters the repository. Ego Lite's
-  public harness is MIT and is used only as a naming and behavior reference.
+  nothing from their binaries, keys, names or reverse-engineered sources enters the repository,
+  test fixtures included (#1161). Ego Lite's public harness is MIT and is used only as a naming
+  and behavior reference.
 - Research behind this design lives outside the repository (notes L1–L5 and R1–R4 for the epic,
-  plus a live probe of the Codex baseline). It is cited by name only.
+  a static analysis of the Codex computer use build 26.1016.51333, and a live probe of the Codex
+  baseline). It is cited by name only.
 
 ## Cross-platform parity
 
