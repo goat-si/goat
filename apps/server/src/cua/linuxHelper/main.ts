@@ -109,7 +109,7 @@ const signals = makeSignalMonitor({
     const timer = setInterval(() => void task(), ms);
     return () => clearInterval(timer);
   },
-  afterReply: (task) => void setImmediate(task),
+  afterReply: (task) => void setImmediate(() => void task()),
   // Events are a few hundred bytes, far inside any frame limit.
   emit: (watchId, event) =>
     process.stdout.write(JSON.stringify({ generation, watchId, event }) + "\n"),

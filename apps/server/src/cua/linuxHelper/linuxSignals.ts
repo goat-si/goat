@@ -19,8 +19,8 @@ import type { IdleSource } from "./idleSource.ts";
  * tell keys from the pointer, so the source is "unknown".
  */
 
-export const PRIVATE_MODE_EVERY_MS = 500;
-export const HUMAN_INPUT_EVERY_MS = 250;
+const PRIVATE_MODE_EVERY_MS = 500;
+const HUMAN_INPUT_EVERY_MS = 250;
 /** Input from a dispatch can reach the idle counter a little after the driver answers. */
 const DISPATCH_TAIL_MS = 500;
 /** At most one human input event per this long; the server pauses on the first anyway. */
@@ -36,7 +36,7 @@ export interface SignalMonitorDependencies {
   /** Runs task every ms until the returned function is called. */
   readonly every: (ms: number, task: () => Promise<void>) => () => void;
   /** Runs task after the current reply has been written. */
-  readonly afterReply: (task: () => void) => void;
+  readonly afterReply: (task: () => Promise<void>) => void;
   readonly emit: (watchId: string, event: ComputerUseEvent) => void;
 }
 
@@ -93,7 +93,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     if (id === undefined || busy.focus) return;
     busy.focus = true;
     try {
-      for (const target of [...targets]) {
+      for (const target of targets) {
         if ((await deps.windowOpen(target)) === false && watchId === id) {
           release(id, target);
           targets = targets.filter((entry) => entry !== target);
@@ -148,9 +148,10 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       lastInputAt = deps.now();
       lastEventAt = -Infinity;
       busy = { focus: false, idle: false };
-      deps.afterReply(() => {
+      deps.afterReply(async () => {
         if (watchId !== id) return;
-        for (const target of targets) void readFocus(id, target, true);
+        await Promise.all(targets.map((target) => readFocus(id, target, true)));
+        if (watchId !== id) return;
         stops = [
           deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
           ...(deps.idle ? [deps.every(HUMAN_INPUT_EVERY_MS, checkIdle)] : []),

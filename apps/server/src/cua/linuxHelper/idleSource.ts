@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; X11 needs a raw socket.
 // @effect-diagnostics globalTimers:off -- A connect deadline at a socket callback boundary.
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -23,7 +23,7 @@ export interface IdleSource {
 const pad4 = (length: number) => (4 - (length % 4)) % 4;
 
 /** The first screen's root window from an X connection setup reply (little-endian). */
-export function setupRoot(reply: Uint8Array): number | undefined {
+function setupRoot(reply: Uint8Array): number | undefined {
   if (reply[0] !== 1 || reply.byteLength < 40) return undefined;
   const view = new DataView(reply.buffer, reply.byteOffset, reply.byteLength);
   const vendorLength = view.getUint16(24, true);
@@ -33,7 +33,7 @@ export function setupRoot(reply: Uint8Array): number | undefined {
 }
 
 /** A QueryExtension request for name. */
-export function queryExtensionRequest(name: string): Uint8Array {
+function queryExtensionRequest(name: string): Uint8Array {
   const encoded = new TextEncoder().encode(name);
   const request = new Uint8Array(8 + encoded.length + pad4(encoded.length));
   const view = new DataView(request.buffer);
@@ -45,7 +45,7 @@ export function queryExtensionRequest(name: string): Uint8Array {
 }
 
 /** ScreenSaverQueryInfo (minor 1) on a drawable. */
-export function screenSaverQueryInfoRequest(major: number, drawable: number): Uint8Array {
+function screenSaverQueryInfoRequest(major: number, drawable: number): Uint8Array {
   const request = new Uint8Array(8);
   const view = new DataView(request.buffer);
   request[0] = major;
@@ -69,7 +69,7 @@ export async function openX11Idle(environment: {
   const display = localDisplayNumber(environment.DISPLAY);
   if (display === null) return undefined;
   const authFile = environment.XAUTHORITY?.trim() || NodePath.join(NodeOS.homedir(), ".Xauthority");
-  const cookie = await NodeFS.readFile(authFile).then(
+  const cookie = await NodeFSP.readFile(authFile).then(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
@@ -144,7 +144,7 @@ export async function openX11Idle(environment: {
 }
 
 /** `(uint64 N,)` from org.gnome.Mutter.IdleMonitor.GetIdletime. */
-export const parseUint64 = (output: string): number | undefined => {
+const parseUint64 = (output: string): number | undefined => {
   const match = /\(uint64 (\d+),\)/u.exec(output);
   return match ? Number(match[1]) : undefined;
 };
