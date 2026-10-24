@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Redactable from "effect/Redactable";
 
-import { defectSummary, redactCause, redactLogMessage } from "./LogRedaction.ts";
+import { defectSummary, redactCause, redactedDefects, redactLogMessage } from "./LogRedaction.ts";
 import { redactLogText } from "./LogTextRedaction.ts";
 
 // Synthetic canaries throughout; none of them is a real credential.
@@ -343,6 +343,32 @@ describe("redactCause", () => {
       }
     }),
   );
+});
+
+describe("redactedDefects", () => {
+  it("ends on a prototype chain a Proxy reports as cyclic or endless, and reports the defect", () => {
+    let cyclic: object = {};
+    cyclic = new Proxy({}, { getPrototypeOf: () => cyclic });
+    const endless: ProxyHandler<object> = { getPrototypeOf: () => new Proxy({}, endless) };
+    expect(redactedDefects(Cause.die(cyclic))).toHaveLength(1);
+    expect(redactedDefects(Cause.die(new Proxy({}, endless)))).toHaveLength(1);
+  });
+
+  it("walks a prototype chain shared by many defects once", () => {
+    let reads = 0;
+    const counting: ProxyHandler<object> = {
+      getOwnPropertyDescriptor: (target, key) => {
+        reads += 1;
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    };
+    let leaf: object = new Proxy({}, counting);
+    for (let index = 0; index < 200; index++) leaf = new Proxy(Object.create(leaf), counting);
+    const defects = Array.from({ length: 100 }, () => Cause.makeDieReason(leaf));
+    expect(redactedDefects(Cause.fromReasons(defects)).length).toBeGreaterThan(0);
+    // One walk of the shared chain plus a constant per defect, not one walk per defect.
+    expect(reads).toBeLessThan(450);
+  });
 });
 
 describe("redactLogMessage", () => {

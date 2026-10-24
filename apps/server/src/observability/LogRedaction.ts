@@ -78,12 +78,14 @@ export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<
   const listed = dataProperty(cause, "reasons");
   const total = listLength(listed);
   const defects: Array<Cause.Cause<unknown>> = [];
+  const ignored = new Map<object, boolean>();
+  const budget = { steps: MAX_PROTOTYPE_STEPS };
   let omitted = 0;
   for (let index = 0; index < total; index++) {
     const reason = dataProperty(listed, index);
     const tag = dataProperty(reason, "_tag");
     if (tag === "Fail" || tag === "Interrupt") continue;
-    if (inheritedData(dataProperty(reason, "defect"), ErrorReporter.ignore) === true) continue;
+    if (ignoredDefect(dataProperty(reason, "defect"), ignored, budget)) continue;
     if (defects.length < MAX_REASONS) defects.push(Cause.fromReasons([redactReason(reason)]));
     else omitted += 1;
   }
@@ -99,18 +101,38 @@ function listLength(listed: unknown): number {
   );
 }
 
-/** A data property's value found on the object or its prototypes; getters give nothing. */
-function inheritedData(target: unknown, key: PropertyKey): unknown {
-  return guarded(() => {
-    let current: unknown = target;
-    // Prototype chains cannot cycle, so the walk ends at the chain's root, however deep.
+// Prototype steps one report may take; only a Proxy inventing a fresh prototype each step gets near.
+const MAX_PROTOTYPE_STEPS = 100_000;
+
+/**
+ * Whether a defect carries Effect's ignore marker as a data property, on itself or a prototype.
+ * Answers are cached per report, so defects sharing a chain walk it once, and a chain a Proxy
+ * reports as cyclic or endless stops at a repeat or at the step budget; the defect is then
+ * reported rather than hidden.
+ */
+function ignoredDefect(
+  defect: unknown,
+  cache: Map<object, boolean>,
+  budget: { steps: number },
+): boolean {
+  const path: Array<object> = [];
+  const onPath = new Set<object>();
+  const result = guarded(() => {
+    let current: unknown = defect;
     while (typeof current === "object" && current !== null) {
-      const descriptor = Object.getOwnPropertyDescriptor(current, key);
-      if (descriptor !== undefined) return "value" in descriptor ? descriptor.value : undefined;
+      const known = cache.get(current);
+      if (known !== undefined) return known;
+      if (onPath.has(current) || --budget.steps < 0) return false;
+      path.push(current);
+      onPath.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, ErrorReporter.ignore);
+      if (descriptor !== undefined) return "value" in descriptor && descriptor.value === true;
       current = Object.getPrototypeOf(current);
     }
-    return undefined;
-  }, undefined);
+    return false;
+  }, false);
+  for (const object of path) cache.set(object, result);
+  return result;
 }
 
 /**
