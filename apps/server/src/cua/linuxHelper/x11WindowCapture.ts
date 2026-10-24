@@ -17,8 +17,8 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
  * is drawn inside the ancestor. Another client's window can still be drawn there, over the
  * target (a shared frame, a virtual root), so every window painted after the target inside the
  * ancestor is checked, and one from another client that overlaps it refuses the capture. The
- * server is held from the check through the read, so what was checked is what is read, and
- * never longer than GRAB_LIMIT_MS.
+ * server is held from the check through the read, so what was checked is what is read, with a
+ * best-effort limit of GRAB_LIMIT_MS.
  * An unredirected window (no compositor, a fullscreen unredirect, rootful Xwayland) is refused.
  */
 export type X11WindowCapture =
@@ -452,8 +452,8 @@ async function exchange(
     }),
   );
   if (!version || (u32(version, 8) === 0 && u32(version, 12) < 2)) return undefined;
-  // Read without holding the server: the window's place in the tree, and its top-level
-  // ancestor's border and visual. What can change in between is read again while held.
+  // Read without holding the server: the window's place in the tree and its top-level ancestor's
+  // visual. What can change in between is read again while held.
   const first = await getGeometry(x, windowId);
   if (!first) return undefined;
   if (u16(first, 16) * u16(first, 18) > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
@@ -478,6 +478,8 @@ async function exchange(
     if (!geometry) return undefined;
     const width = u16(geometry, 16);
     const height = u16(geometry, 18);
+    // The window may have grown since it was first read; the reply is never larger than this.
+    if (width * height > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
     if (width !== size.windowWidth || height !== size.windowHeight)
       return { refused: RESIZED_CAPTURE };
     const inFrame = await translate(x, windowId, topLevel);

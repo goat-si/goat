@@ -117,6 +117,8 @@ async function scriptedServer(
     readonly closeOnGeometry?: number;
     /** Never answer GetImage, as a server stuck mid-read. */
     readonly stallImage?: boolean;
+    /** The target window's size from its second GetGeometry on, as a window that grew. */
+    readonly grows?: { readonly width: number; readonly height: number };
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -135,6 +137,7 @@ async function scriptedServer(
     let buffer = Buffer.alloc(0);
     let started = false;
     let geometries = 0;
+    const sizes = new Map<number, number>();
     let named: number | undefined;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
@@ -184,8 +187,15 @@ async function scriptedServer(
         } else if (op === 14) {
           geometries++;
           if (geometries === options.closeOnGeometry) return void socket.destroy();
-          const found = window(4);
-          if (!found) return error();
+          const target = body.readUInt32LE(4);
+          const seen = (sizes.get(target) ?? 0) + 1;
+          sizes.set(target, seen);
+          const listed = window(4);
+          if (!listed) return error();
+          const found =
+            options.grows && target === 0x200001 && seen > 1
+              ? { ...listed, ...options.grows }
+              : listed;
           const parent = windows[found.parent];
           const extra = payload(24);
           extra.writeUInt32LE(ROOT, 0);
@@ -359,6 +369,22 @@ describe("X11 window capture against a scripted server", () => {
     // The server sees the connection end, which releases the hold.
     await server.ended;
     expect(held).toHaveLength(1);
+  });
+
+  it("a window that grew past the pixel budget after its first read is refused before any pixels are asked for", async () => {
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      grows: { width: 8000, height: 8000 },
+    });
+    const capture = await captureX11Window(
+      environment,
+      0x200001,
+      { width: 1568, height: 1568, windowWidth: 8000, windowHeight: 8000 },
+      { socketPath: server.path },
+    );
+    expect(capture).toEqual({ refused: expect.stringContaining("could not be read") });
+    await server.ended;
+    expect(server.requests).not.toContain(73);
   });
 
   it("a window whose size differs from the driver's read by any amount is refused", async () => {
