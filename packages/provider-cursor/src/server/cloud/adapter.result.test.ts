@@ -34,6 +34,11 @@ describe("Cursor Cloud failed run", () => {
     // Transport failures that only share a word with account problems.
     ["WebSocket upgrade failed: 502 Bad Gateway", UNEXPECTED],
     ["Could not access the repository host: ETIMEDOUT", UNEXPECTED],
+    // Keywords inside repository names are not account problems.
+    ["payment-service.git: ETIMEDOUT", UNEXPECTED],
+    ["credit.git: ECONNRESET", UNEXPECTED],
+    ["forbidden.git: ETIMEDOUT", UNEXPECTED],
+    ["remote: 403 Forbidden while cloning payment-service.git", ACCESS],
     ["   ", UNEXPECTED],
   ])("says what to fix for %j", (message, expected) => {
     expect(resultTask(task, failed({ message })).error).toBe(expected);

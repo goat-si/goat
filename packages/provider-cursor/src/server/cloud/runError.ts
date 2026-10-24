@@ -1,11 +1,36 @@
 // Cursor's reason tells the person what to fix, but its text can carry anything, so it is only
-// classified here (on a bounded prefix, with plain keyword tests) and never shown.
-// Specific phrases only: a bare "upgrade" or "access" also appears in transport errors, which
-// keep the general sentence.
-const ACCOUNT_LIMIT =
-  /credits?\b|quota|billing|payment|usage limit|spend(?:ing)? limit|plan limit|upgrade (?:your|to a) plan|out of (?:usage|requests)/i;
-const ACCESS_REFUSED =
-  /unauthori[sz]ed|unauthenticated|authenticat\w{0,6}\W{0,3}(?:required|failed)|not (?:signed|logged) in|(?:sign|log)[- ]?in (?:required|again)|permission denied|forbidden|access denied|no access|invalid (?:api )?key/i;
+// classified here (on a bounded prefix, with plain phrase tests) and never shown. Phrases must
+// stand alone, not inside a repository name or path, and a bare "upgrade" or "access" is not
+// enough; anything unclear keeps the general sentence.
+const ALONE = (phrases: string) => new RegExp("(?<![\\w./-])(?:" + phrases + ")(?![\\w./-])", "i");
+const ACCOUNT_LIMIT = ALONE(
+  [
+    "(?:no|insufficient|not enough|out of)(?: usage)? credits?",
+    "credit balance",
+    "quota (?:exceeded|reached)",
+    "usage limit",
+    "spend(?:ing)? limit",
+    "plan limit",
+    "billing (?:issue|problem|required|error)",
+    "payment (?:required|failed|method)",
+    "upgrade (?:your|to a) plan",
+    "out of (?:usage|requests)",
+  ].join("|"),
+);
+const ACCESS_REFUSED = ALONE(
+  [
+    "unauthori[sz]ed",
+    "unauthenticated",
+    "authenticat\\w{0,6}\\W{0,3}(?:required|failed)",
+    "not (?:signed|logged) in",
+    "(?:sign|log)[- ]?in (?:required|again)",
+    "permission denied",
+    "forbidden",
+    "access denied",
+    "no access",
+    "invalid (?:api )?key",
+  ].join("|"),
+);
 
 export function runErrorText(message: string | undefined) {
   const reason = message?.slice(0, 2000) ?? "";
