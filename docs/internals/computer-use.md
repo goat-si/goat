@@ -216,7 +216,9 @@ PreviewSession {
   `autocomplete=current-password` or WebAuthn in the browser; `AXSecureTextField`, UI Automation
   `IsPassword` or the AT-SPI password role on desktops. Observation, frame streaming and recording
   pause, in-flight results from before the switch are dropped by generation, and the agent gets
-  `privateMode` refusals until it ends. Only the person's explicit action ends it.
+  `privateMode` refusals until it ends. In this design only the person's explicit action ends
+  it. What ships today on the desktop path lifts the pause by itself once the field loses focus
+  (`apps/server/src/cua/ComputerUseLeases.ts`), and the built-in skill teaches that.
 - Ego Lite level for the browser means: a task space that groups an agent's tabs and keeps their
   login state together (profile policy shared, isolated per task, or incognito, each explained),
   a text-only snapshot, and a handoff in which a person finishes a step in the same tab and the
