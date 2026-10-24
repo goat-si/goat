@@ -45,7 +45,7 @@ export const DriverWindowState = Schema.Struct({
 });
 export type DriverWindowState = typeof DriverWindowState.Type;
 
-/** Windows tracked at once; the least recently observed one is forgotten first. */
+/** Windows tracked at once, private ones included; the least recently observed goes first. */
 const MAX_WINDOWS = 32;
 
 interface Tracked {
@@ -79,8 +79,10 @@ const sizeOf = (read: DriverWindowState) =>
 function positions(elements: ReadonlyArray<DriverElement>) {
   const addressable = elements.filter((element) => element.element_index !== undefined);
   const byIndex = new Map<number, { key: string; matchable: boolean }>();
+  // Each step is a JSON pair, which escapes quotes and brackets, so no label can make one path
+  // read as another.
   const base = (element: DriverElement, parentKey: string) =>
-    parentKey + "/" + element.role + ":" + (element.label ?? "");
+    parentKey + JSON.stringify([element.role, element.label ?? null]);
   // First pass: how many siblings share each base, with parents resolved in document order.
   const counts = new Map<string, number>();
   const draft = new Map<number, string>();
@@ -139,27 +141,27 @@ export interface ObservationTracker {
 }
 
 export function makeObservationTracker(newId: () => string): ObservationTracker {
-  const lineages = new Map<string, Lineage>();
-  const privateWindows = new Set<string>();
+  /** A window's lineage, or "private" while a secure field has focus in it. */
+  const windows = new Map<string, Lineage | "private">();
   const targetKey = (pid: number, windowId: number) => pid + ":" + windowId;
   const refuse = (reason: "staleElement" | "privateMode", message: string): ComputerUseRefusal => ({
     outcome: "refused",
     reason,
     message,
   });
-  const remember = (key: string, lineage: Lineage) => {
-    lineages.delete(key);
-    lineages.set(key, lineage);
-    for (const oldest of lineages.keys()) {
-      if (lineages.size <= MAX_WINDOWS) break;
-      lineages.delete(oldest);
+  const remember = (key: string, entry: Lineage | "private") => {
+    windows.delete(key);
+    windows.set(key, entry);
+    for (const oldest of windows.keys()) {
+      if (windows.size <= MAX_WINDOWS) break;
+      windows.delete(oldest);
     }
   };
   const current = (pid: number, windowId: number, observationId: string) => {
     const key = targetKey(pid, windowId);
-    if (privateWindows.has(key))
+    const lineage = windows.get(key);
+    if (lineage === "private")
       return refuse("privateMode", "A password field has focus. Wait for the person to leave it.");
-    const lineage = lineages.get(key);
     return lineage?.latest === observationId
       ? lineage
       : refuse(
@@ -176,8 +178,7 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
       if (privateMode) {
         // Nothing of the window leaves while a secure field has focus (D6), not even labels,
         // which the driver can derive from a field's value.
-        lineages.delete(key);
-        privateWindows.add(key);
+        remember(key, "private");
         return {
           observationId,
           lineage: observationId,
@@ -189,8 +190,8 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
           elements: [],
         };
       }
-      privateWindows.delete(key);
-      const previous = lineages.get(key);
+      const stored = windows.get(key);
+      const previous = stored === "private" ? undefined : stored;
       const entries = positions(read.elements ?? []);
       const size = sizeOf(read);
       const complete = read.truncated !== true && read.degraded_reason === undefined;
@@ -335,8 +336,7 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
     },
 
     forget: (pid, windowId) => {
-      lineages.delete(targetKey(pid, windowId));
-      privateWindows.delete(targetKey(pid, windowId));
+      windows.delete(targetKey(pid, windowId));
     },
   };
 }
