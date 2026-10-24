@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { beforeEach, expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -45,11 +47,13 @@ beforeEach(() => {
 it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
   Effect.gen(function* () {
     const handlers = new Map<string, DesktopIpc.DesktopIpcHandleListener>();
+    const mainFrame = {};
+    const sender = { id: 1, mainFrame, isDestroyed: () => false };
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* installNotificationBadge();
         const handler = handlers.get("desktop:set-notification-badge")!;
-        const event = { sender: { id: 1 } };
+        const event = { sender, senderFrame: mainFrame };
         for (const invalid of [
           { ...badge, count: -1 },
           { ...badge, count: 0.5 },
@@ -80,16 +84,22 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide([
         ElectronApp.layer,
-        DesktopIpc.layer({
-          handle: (channel, handler) => {
-            handlers.set(channel, handler);
-          },
-          removeHandler: (channel) => {
-            handlers.delete(channel);
-          },
-          on: vi.fn(),
-          removeAllListeners: vi.fn(),
-        }),
+        Layer.succeed(
+          DesktopIpc.DesktopIpc,
+          DesktopIpc.make(
+            {
+              handle: (channel, handler) => {
+                handlers.set(channel, handler);
+              },
+              removeHandler: (channel) => {
+                handlers.delete(channel);
+              },
+              on: vi.fn(),
+              removeAllListeners: vi.fn(),
+            },
+            Effect.succeed(Option.some({ webContents: sender })),
+          ),
+        ),
       ]),
     );
     expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);

@@ -20,6 +20,7 @@ import {
   type ShortcutModifierStateLike,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
+import { isFileViewFocused } from "./lib/fileViewFocus";
 import { isNotesPageOpen } from "./notes/notesPageVisibility";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
@@ -65,6 +66,9 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
     isDesktop: isElectron,
     editableFocus: false,
     notesPageOpen: isNotesPageOpen(),
+    // Every listener resolves this the same way, so a copy-path rule rebound onto
+    // another command's keys wins in the file view instead of in the first listener.
+    fileViewFocus: isFileViewFocused(),
     ...options?.context,
   };
 }
