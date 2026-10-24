@@ -383,7 +383,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         ? undefined
         : named === undefined
           ? { ...view.profile, capabilities: [], hosts: [] }
-          : Profiles.intersectProfiles(named, view.profile);
+          : Profiles.roleProfile(role, named, view);
     return {
       profileId: view.enabled ? view.profile.id : null,
       ceiling: view.runtimeMode,

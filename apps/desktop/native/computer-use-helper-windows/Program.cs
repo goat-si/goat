@@ -112,8 +112,9 @@ namespace Goat.ComputerUse
             hello["platform"] = "windows";
             hello["generation"] = Generation;
             hello["signals"] = Signals.Capabilities();
-            // Methods beyond protocol 1's first set, as the macOS helper lists them.
-            hello["features"] = new[] { "frames" };
+            // Methods beyond protocol 1's first set, as the macOS helper lists them; the host
+            // starts a private-mode watch only for a helper that lists watch (#1415).
+            hello["features"] = new[] { "watch", "frames" };
             Emit(hello);
 
             Stream input = Console.OpenStandardInput();
@@ -248,12 +249,15 @@ namespace Goat.ComputerUse
             return failure;
         }
 
-        /// <summary>watch's targets, at least one, each an exact window of a process.</summary>
+        /// <summary>
+        /// watch's targets, each an exact window of a process; none watches the whole desktop,
+        /// which is how the desktop host asks (as on macOS).
+        /// </summary>
         static List<Signals.Target> Targets(Dictionary<string, object> parameters)
         {
             object raw;
-            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]) || ((object[])raw).Length == 0)
-                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...].");
+            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]))
+                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...] or [].");
             var targets = new List<Signals.Target>();
             var seen = new HashSet<string>();
             foreach (object entry in (object[])raw)

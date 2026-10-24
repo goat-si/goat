@@ -6,6 +6,7 @@ import {
   type DeviceSummary,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -19,6 +20,7 @@ import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { AGENT_DEVICE_ACCESS_OFF } from "../../toolAvailability.ts";
+import { threadDeviceAccess } from "./deviceAccess.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
 function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
@@ -64,13 +66,20 @@ export function agentDeviceQuickStart(
   ].join("\n");
 }
 
-const requireDeviceAccess = McpInvocationContext.requireThreadMcpCapability("device").pipe(
-  Effect.mapError(
-    () =>
-      new DeviceToolUnavailableError({
-        reason: AGENT_DEVICE_ACCESS_OFF,
-      }),
-  ),
+const deviceAccessOff = () => new DeviceToolUnavailableError({ reason: AGENT_DEVICE_ACCESS_OFF });
+
+/** A thread credential issued with device access; enough to release a device. */
+const requireDeviceCredential = McpInvocationContext.requireThreadMcpCapability("device").pipe(
+  Effect.mapError(deviceAccessOff),
+);
+
+const authorizeThread = (threadId: ThreadId) =>
+  threadDeviceAccess(threadId).pipe(
+    Effect.flatMap((allowed) => (allowed ? Effect.void : Effect.fail(deviceAccessOff()))),
+  );
+
+const requireDeviceAccess = requireDeviceCredential.pipe(
+  Effect.tap((scope) => authorizeThread(scope.thread.threadId)),
 );
 
 const pickDevice = Effect.fn("handlers.pickDevice")(function* (
@@ -155,13 +164,16 @@ const handlers = {
               "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
           });
         }
-        // Resolve consent and agent connectivity before booting or registering a session.
+        // Resolve agent connectivity before booting or registering a session.
         if (!(yield* devices.agentReadinessIfSupported(input.hostId ?? LOCAL_DEVICE_HOST_ID))) {
           return yield* new DeviceToolUnavailableError({
             reason:
-              "Agent device access needs device support and Agent device access turned on in Settings → Integrations → Devices, and an available simulator platform on this host. Only a person can change those settings; ask the user.",
+              "Agent device tools need device support turned on in Settings → Integrations → Devices and an available simulator platform on this host. Only a person can change those settings; ask the user.",
           });
         }
+        // Starting agent tools can wait, and admission may replay an earlier result without
+        // running the checks below, so access is checked again right before admission.
+        yield* authorizeThread(scope.thread.threadId);
         yield* McpToolAccess.admit(input);
         // Android boot replaces an AVD name with a serial; replay must precede discovery by id.
         const target = yield* pickDevice(state.devices, input);
@@ -179,6 +191,8 @@ const handlers = {
           after.devices.find(
             (candidate) => candidate.hostId === session.hostId && candidate.id === session.deviceId,
           ) ?? target;
+        // Opening can boot for minutes; access revoked meanwhile must not configure agent-device.
+        yield* authorizeThread(scope.thread.threadId);
         // Target the opened device: an EAS device and its agent-device daemon
         // exist only once its session runs, and Android ids change on boot.
         const agent = yield* devices.agentTarget({
@@ -213,6 +227,8 @@ const handlers = {
           shimDir,
           platform === "win32" ? "agent-device.cmd" : "agent-device",
         );
+        // Targeting can wait behind other device work; recheck before handing out its flags.
+        yield* authorizeThread(scope.thread.threadId);
         return {
           device,
           agentDevice: { command, targetArgs },
@@ -255,7 +271,8 @@ const handlers = {
   device_close: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) =>
       Effect.gen(function* () {
-        const scope = yield* requireDeviceAccess;
+        // Closing stays available after access is revoked, so an agent can release its device.
+        const scope = yield* requireDeviceCredential;
         const devices = yield* DeviceService.DeviceService;
         yield* devices.close({
           threadId: scope.thread.threadId,

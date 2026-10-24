@@ -32,6 +32,7 @@ import { resolveRuntimeMode } from "../../mcp/OrchestratorMcpService.ts";
 import { assertFullAccess, type Caller, loadCaller } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { initialStatus } from "./goalPlan.ts";
+import { GoalRecovery } from "./GoalRecovery.ts";
 import { GoalStore, type GoalStoreError } from "./GoalStore.ts";
 import { REMOTE_WORKERS_DISABLED } from "./GoalWorkerRuntime.ts";
 
@@ -103,6 +104,7 @@ const assertMayManage = (caller: Caller, goal: FleetGoal) =>
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const store = yield* GoalStore;
+  const recovery = yield* GoalRecovery;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   /** The calling thread, read with the caller's own scope. */
@@ -338,6 +340,7 @@ const make = Effect.gen(function* () {
         yield* assertMayManage(caller, goal);
         if (input.force === true) {
           const deleted = yield* store.remove(goal.id).pipe(Effect.mapError(storeFailure));
+          yield* recovery.forget(goal.id);
           return {
             id: goal.id,
             deleted,

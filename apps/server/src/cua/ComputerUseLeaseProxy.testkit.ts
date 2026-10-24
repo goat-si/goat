@@ -15,7 +15,12 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { NamedWindow } from "./x11WindowPlacement.ts";
-import { LEASE_END_MESSAGES, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import {
+  LEASE_END_MESSAGES,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
+  runLeaseProxy,
+} from "./ComputerUseLeaseProxy.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -53,6 +58,8 @@ export const harness = Effect.fn(function* (
     readonly placementGate?: Deferred.Deferred<void>;
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
+    /** Holds every window report until it is done, as a slow server would. */
+    readonly targetGate?: Deferred.Deferred<void>;
     /**
      * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
@@ -84,7 +91,12 @@ export const harness = Effect.fn(function* (
       ? {}
       : {
           onTarget: (target: { pid: number; windowId: number }) =>
-            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
+            Queue.offer(targets, target).pipe(
+              Effect.andThen(
+                options.targetGate === undefined ? Effect.void : Deferred.await(options.targetGate),
+              ),
+              Effect.as(options.onTarget?.(target) ?? true),
+            ),
         }),
     ...(options.humanInput
       ? {
@@ -191,6 +203,7 @@ export const harness = Effect.fn(function* (
     person: Queue.take(people),
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
+    agentCallsQueued: Queue.size(agentCalls),
     revoked,
     log,
     proxy,
@@ -206,3 +219,30 @@ export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES)
     isError: true,
   },
 });
+
+/** A call the driver already had when the control ended: it may have acted, so no refusal. */
+export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, read = false) => ({
+  jsonrpc: "2.0",
+  id,
+  result: {
+    content: [
+      {
+        type: "text",
+        text: `${read ? READ_CUT_OFF : MAY_HAVE_ACTED} ${LEASE_END_MESSAGES[reason]}`,
+      },
+    ],
+    structuredContent: read
+      ? { code: "interrupted", detail: reason }
+      : { effect: "unverifiable", code: "interrupted", detail: reason },
+    isError: true,
+  },
+});
+
+export interface ToolAnswer {
+  readonly id: unknown;
+  readonly result: {
+    readonly content: ReadonlyArray<{ readonly text: string }>;
+    readonly structuredContent: Record<string, unknown>;
+    readonly isError: boolean;
+  };
+}
