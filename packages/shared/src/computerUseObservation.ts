@@ -138,13 +138,27 @@ export interface ObservationTracker {
   }) => true | ComputerUseRefusal;
   /** Drops everything known about a window, such as when it closes or the session ends. */
   readonly forget: (pid: number, windowId: number) => void;
+  /**
+   * Whether an action may still be sent for observationId: it is the window's latest
+   * observation, under the same epoch, and no secure field has focus. Every action passes this,
+   * keyboard input included, before anything reaches the driver.
+   */
+  readonly confirm: (input: {
+    readonly pid: number;
+    readonly windowId: number;
+    readonly observationId: string;
+    readonly epoch: string;
+  }) => true | ComputerUseRefusal;
 }
 
 export function makeObservationTracker(newId: () => string): ObservationTracker {
   /** A window's lineage, or "private" while a secure field has focus in it. */
   const windows = new Map<string, Lineage | "private">();
   const targetKey = (pid: number, windowId: number) => pid + ":" + windowId;
-  const refuse = (reason: "staleElement" | "privateMode", message: string): ComputerUseRefusal => ({
+  const refuse = (
+    reason: "staleElement" | "privateMode" | "epochChanged",
+    message: string,
+  ): ComputerUseRefusal => ({
     outcome: "refused",
     reason,
     message,
@@ -337,6 +351,17 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
 
     forget: (pid, windowId) => {
       windows.delete(targetKey(pid, windowId));
+    },
+
+    confirm: ({ pid, windowId, observationId, epoch }) => {
+      const lineage = current(pid, windowId, observationId);
+      if ("outcome" in lineage) return lineage;
+      return lineage.epoch === epoch
+        ? true
+        : refuse(
+            "epochChanged",
+            "The window moved or changed since that observation. Observe it again.",
+          );
     },
   };
 }

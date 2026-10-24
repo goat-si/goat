@@ -9,6 +9,7 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
+import { HUB_SETTINGS_SEARCH_ITEMS } from "./settingsSearchHubItems";
 import {
   validateSettingsScopeSearch,
   type ResolvedSettingsScope,
@@ -90,13 +91,13 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/memory": "Memory",
   "/settings/integrations": "Integrations",
   "/settings/goat-bot": "GOAT Bot",
-  "/settings/decision-inbox": "Decision inbox",
+  "/settings/decision-inbox": "Decision Inbox",
   "/settings/hub": "Hub",
   "/settings/scheduled-tasks": "Scheduled Tasks",
   "/settings/source-control": "Source Control",
   "/settings/storage": "Storage",
   "/settings/connections": "Connections",
-  "/settings/archived": "Archive",
+  "/settings/archived": "Archived Threads",
 };
 
 export function keybindingSearchAnchorId<Command extends KeybindingCommand>(command: Command) {
@@ -147,39 +148,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/decision-inbox",
     searchTerms: ["decisions approvals questions pending answers"],
   },
-  {
-    id: "hub-enabled",
-    title: "This machine is the hub",
-    to: "/settings/hub",
-    searchTerms: ["hub goatclaw opencodex home fleet parity remote link"],
-  },
-  {
-    id: "hub-cloud-holder",
-    title: "Cloud runs",
-    to: "/settings/hub",
-    searchTerms: ["cloud holder claude cloud cursor cloud devin cloud hub"],
-  },
-  {
-    id: "hub-permission-profiles",
-    title: "Permission profiles",
-    to: "/settings/hub",
-    searchTerms: ["goatclaw permission profiles supervisor agents capabilities limits"],
-  },
-  {
-    id: "hub-default-profile",
-    title: "Default profile",
-    to: "/settings/hub",
-    searchTerms: ["goatclaw default permission profile worker manager owner observer"],
-  },
-  {
-    id: "hub-devices",
-    title: "Hub devices",
-    to: "/settings/hub",
-    searchTerms: [
-      "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
-      "add device join leave remove disconnect repair relink",
-    ],
-  },
+  ...HUB_SETTINGS_SEARCH_ITEMS,
   {
     id: "memory-records",
     title: "Memory",
@@ -801,6 +770,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/providers",
     searchTerms: [
       "agents cli codex claude cursor grok opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "opencodex home model route connect to home",
     ],
   },
   {
@@ -1057,9 +1027,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-device",
-    title: "Use this device as a hub",
+    title: "Connect your phone",
     to: "/settings/connections",
-    searchTerms: ["hub phone qr pair pairing tailscale https share device"],
+    searchTerms: [
+      "use this device as a hub",
+      "hub phone qr pair pairing tailscale https share device",
+    ],
   },
   {
     id: "tailscale-https",
@@ -1131,6 +1104,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     searchTerms: [
       "add device environment pair backend host code ssh config agent tunnel saved goat connect tailscale server",
+    ],
+  },
+  {
+    id: "hub-nodes",
+    title: "Devices on this hub",
+    to: "/settings/connections",
+    searchTerms: [
+      "hub devices nodes machines ssh hosts linked goat servers cloud machines phone check routes",
     ],
   },
   {

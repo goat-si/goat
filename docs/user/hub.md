@@ -1,11 +1,18 @@
 # Hub
 
-A hub is one GOAT environment that runs your fleet. Its machine is also the
-[OpenCodex Home](./providers-codex.md#use-opencodex-home) that holds every
-provider sign-in, and your other machines reach their models through it. GOAT
-shows whether each linked device really uses the hub, and holds cloud runs there.
+A hub is one GOAT environment that runs your fleet. It is the GOAT server your
+phone [pairs with](./remote-access.md#connect-your-phone-to-a-hub), and its
+machine is also the [OpenCodex Home](./providers-codex.md#use-opencodex-home)
+that holds every provider sign-in, so your other machines reach their models
+through it. GOAT shows whether each linked device really uses the hub, and holds
+cloud runs there.
 
 The hub is off until you turn it on. Make only one environment the hub.
+
+Hub settings live in three places. **Settings → Hub** turns the hub on and lists
+its **OpenCodex devices**. **Settings → Connections** pairs your phone and lists
+**Devices on this hub**, the machines the hub reaches for phones and agents.
+**Settings → Providers → Codex** chooses whether Codex uses OpenCodex Home.
 
 When the desktop app first finds OpenCodex on its machine, it asks once whether
 Codex there should use your OpenCodex Home or keep its own sign-in, and, on a
@@ -26,7 +33,8 @@ Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys
 
 ## Add, repair, or remove a device
 
-**Add device to hub** joins a machine by its SSH alias; a standalone device in
+In **Settings → Hub → OpenCodex devices**, **Add device to hub** joins a machine
+by its SSH alias; a standalone device in
 the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
 the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
 for that alias, links the device, and checks its parity.
@@ -52,7 +60,7 @@ its link or Hub key on the hub; GOAT asks before it does that.
 
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing
-one that could not be cleaned up. They appear in **Settings → Decision inbox**;
+one that could not be cleaned up. They appear in **Settings → Decision Inbox**;
 answer there, then select **Continue** on the device. Approving needs permission
 to change this hub's settings.
 

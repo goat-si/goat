@@ -50,12 +50,14 @@ export const deviceEntries = {
     toolkit: "device",
     summary: "Open device",
     description:
-      "Boot or attach a simulator or emulator and open it in this thread’s Device panel for the user to watch. Drive it with the returned agent-device command and target flags on every call.",
+      "Boot or attach a simulator or emulator in this thread’s Device panel. Use the returned agent-device command and target flags on every call. Retry with the same clientRequestId to avoid booting or billing another device.",
     guide:
       "Needs agent device access enabled for this environment. Keep the exact returned executable path: login shells can reset PATH. Retain all --config and --session flags so concurrent hosts do not change the target. Remote app installation, builds, and Metro forwarding are separate work. For a cloud EAS session, close with shutdown enabled when finished to stop per-minute billing.",
     effect: "write",
     capability: "none",
     capabilityReason: "Opens a simulator for the calling thread only.",
+    idempotency: "key",
+    reconcile: "device.list",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",
@@ -79,6 +81,8 @@ export const deviceEntries = {
     effect: "destructive",
     capability: "none",
     capabilityReason: "Closes the calling thread's own simulator.",
+    idempotencyReason:
+      "Removes matching sessions from the calling thread before optional shutdown; repeating after removal finds no sessions and performs no further shutdown, including when that shutdown failed.",
     hostRoutable: false,
     requires: "thread",
     dryRun: "unsupported",

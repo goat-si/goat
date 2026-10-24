@@ -84,6 +84,7 @@ export type GoatMcpToolSummaryAction =
   | "browser"
   | "device"
   | "html-preview"
+  | "html-list"
   | "html-render"
   | "channel-message"
   | "channel-reply"
@@ -624,6 +625,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
+  goat_html_list: tool(["List", "Listing", "Listed", "saved HTML pages"], "html-list"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   channel_ingest: tool(
     ["Message", "Messaging", "Messaged", "GOAT's front desk"],

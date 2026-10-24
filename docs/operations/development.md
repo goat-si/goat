@@ -270,6 +270,23 @@ ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the same team
 Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
 session that cannot unlock it (`errSecInternalComponent`).
 
+### Windows computer use helper
+
+On Windows, computer use runs Cua Driver under `GOAT Computer Use.exe`, which checks that the
+session has a usable desktop, runs only the driver files whose SHA-256 it was built with, and
+ends the driver with itself. Build it on Windows (the C# compiler ships with Windows) and point
+the dev app at the folder:
+
+```powershell
+node scripts/build-computer-use-helper-windows.ts --channel dev
+$env:GOAT_CUA_HELPER_PATH = "$PWD\apps\desktop\.computer-use-helper\computer-use-helper"; vp run dev
+```
+
+Start the dev app from the signed-in desktop. A shell reached over SSH or a service runs in
+Session 0, where the helper reports that there is no desktop and the driver refuses to start.
+Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
+executable installed two folders above them and signed by the same publisher.
+
 ### Windows installer prerequisites
 
 Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.

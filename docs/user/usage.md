@@ -243,7 +243,7 @@ agent launches onto an overloaded machine, a delivery to `"off"` to silence that
 
 ## Connect a CLIProxyAPI hub
 
-To see pooled accounts, open **Settings → Providers → Usage providers → Add hub**. Choose the
+To see pooled accounts, open **Settings → Providers → Usage providers → Add CLIProxyAPI hub**. Choose the
 environment that will connect to the hub and enter its URL and management key.
 
 The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an

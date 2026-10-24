@@ -196,8 +196,17 @@ const handlers = {
     invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   ),
   preview_open: McpToolAccess.destructive(
-    McpToolAccess.actsAsCaller((input) =>
-      invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+    McpToolAccess.actsAsCaller(
+      (input) =>
+        Effect.gen(function* () {
+          yield* McpInvocationContext.requireThreadMcpCapability("preview");
+          yield* McpToolAccess.admit(input);
+          return yield* invokeTargeted<PreviewAutomationStatus>(
+            "open",
+            normalizePreviewOpenInput(input),
+          );
+        }),
+      { admission: "handler" },
     ),
   ),
   preview_navigate: McpToolAccess.actsAsCaller((input) =>

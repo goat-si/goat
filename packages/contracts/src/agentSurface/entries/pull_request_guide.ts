@@ -8,7 +8,7 @@ export const pullRequestGuideEntries = {
     toolkit: "pullRequests",
     summary: "Write pull request guides",
     description:
-      "Start writing pull request review guides in the background. Read progress with goat_pull_request_guide_read. A running guide for the same head is reused; a completed guide for that head is generated again.",
+      "Generate review guides for pull requests. Reuse clientRequestId to retry without generating again after the first run ends. Read goat_pull_request_guide_read for the current guide and progress.",
     guide:
       "Accepts up to 20 pull requests. Each guide is a maintainer’s tour shown in the pull request’s Guide tab. Generation reads the change in a temporary checkout and takes minutes; the response returns after runs start. Each target must match a project checkout in this environment. Review guides must be enabled on the server.",
     effect: "write",
@@ -17,6 +17,8 @@ export const pullRequestGuideEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotency: "key",
+    reconcile: "pull_request_guide.read",
     annotations: {
       title: "Write pull request guides",
       idempotentHint: false,

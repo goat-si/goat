@@ -1136,6 +1136,8 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   schedule: ScheduledTaskSchedule,
   nextRunAt: Schema.NullOr(IsoDateTime),
   lastRunStatus: ScheduledTaskRunStatus,
+  runCount: Schema.optional(NonNegativeInt),
+  lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   /** For webhook tasks: the public T3 Connect URL, shown only to a caller that may start the task's runs. */
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
