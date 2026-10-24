@@ -16,7 +16,12 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { vi } from "vite-plus/test";
 
-import { AVAILABLE_CONNECTION_STATE, PrimaryConnectionTarget } from "../connection/model.ts";
+import {
+  AVAILABLE_CONNECTION_STATE,
+  PrimaryConnectionTarget,
+  type SupervisorConnectionState,
+  type PreparedConnection,
+} from "../connection/model.ts";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
@@ -51,6 +56,7 @@ const item: DecisionItem = {
 
 const makeHarness = Effect.fn("DecisionRpcTest.makeHarness")(function* () {
   const calls: { method: string; input: unknown }[] = [];
+  let answered = false;
   const client = {
     [WS_METHODS.decisionGet]: (input: unknown) =>
       Effect.sync(() => {
@@ -60,12 +66,17 @@ const makeHarness = Effect.fn("DecisionRpcTest.makeHarness")(function* () {
     [WS_METHODS.decisionAnswer]: (input: unknown) =>
       Effect.sync(() => {
         calls.push({ method: "answer", input });
+        answered = true;
         return { ...item, status: "answered" as const };
       }),
     [WS_METHODS.decisionList]: (input: unknown) =>
       Effect.sync(() => {
         calls.push({ method: "list", input });
-        return { items: [item], unavailableHosts: [], truncated: false };
+        return {
+          items: [{ ...item, status: answered ? ("answered" as const) : ("open" as const) }],
+          unavailableHosts: [],
+          truncated: false,
+        };
       }),
   } as unknown as WsRpcProtocolClient;
   const session: RpcSession = {
@@ -83,9 +94,12 @@ const makeHarness = Effect.fn("DecisionRpcTest.makeHarness")(function* () {
       httpBaseUrl: "https://origin.example.test",
       wsBaseUrl: "wss://origin.example.test",
     }),
-    state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+    state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+      ...AVAILABLE_CONNECTION_STATE,
+      phase: "connected",
+    }),
     session: yield* SubscriptionRef.make(Option.some(session)),
-    prepared: yield* SubscriptionRef.make(Option.none()),
+    prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
@@ -175,6 +189,36 @@ it.effect("preservation: preserves the destination host when answering through t
       );
       expect(result._tag).toBe("Success");
       expect(calls).toEqual([{ method: "answer", input }]);
+    }),
+  ),
+);
+
+it.effect("refreshes a mounted federated decision query after a successful answer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { atoms, registry, calls } = yield* makeHarness();
+      const query = atoms.decisionItems({ environmentId, input: { hosts: ["worker"] } });
+      yield* AtomRegistry.mount(registry, query);
+      const initial = yield* AtomRegistry.getResult(registry, query, { suspendOnWaiting: true });
+      expect(initial.items[0]?.status).toBe("open");
+      const result = yield* Effect.promise(() =>
+        atoms.answerDecision.run(registry, {
+          environmentId,
+          input: { id: "same-id", host: "worker", optionId: "stage", reason: "Canary first" },
+        }),
+      );
+      expect(result._tag).toBe("Success");
+      const refreshed = yield* AtomRegistry.toStream(registry, query).pipe(
+        Stream.filter(
+          (value) =>
+            AsyncResult.isSuccess(value) &&
+            !value.waiting &&
+            value.value.items[0]?.status === "answered",
+        ),
+        Stream.runHead,
+      );
+      expect(Option.isSome(refreshed)).toBe(true);
+      expect(calls.find((call) => call.method === "list")?.input).toEqual({ hosts: ["worker"] });
     }),
   ),
 );

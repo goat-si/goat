@@ -81,6 +81,15 @@ function EnvironmentDecisions({
             {query.error}
           </Text>
         ) : null}
+        {query.data?.unavailableHosts.map((failure) => (
+          <Text
+            key={failure.host}
+            accessibilityRole="alert"
+            className="text-sm text-danger-foreground"
+          >
+            {failure.host}: {failure.message}
+          </Text>
+        ))}
         {!query.data ? (
           <Text className="text-base text-foreground-muted">
             {query.error ? "Could not load decisions. Try Refresh." : "Loading decisions…"}
@@ -91,7 +100,14 @@ function EnvironmentDecisions({
           </Text>
         ) : (
           query.data.items.map((item) => (
-            <View key={item.id} className="gap-1 border-t border-border-subtle pt-3">
+            <View
+              key={JSON.stringify([
+                item.from.environmentId ?? environmentId,
+                item.from.host,
+                item.id,
+              ])}
+              className="gap-1 border-t border-border-subtle pt-3"
+            >
               <Text className="text-lg font-goat-medium text-foreground">{item.title}</Text>
               <Text className="text-sm text-foreground-muted">{item.context}</Text>
               <Text className="text-sm text-foreground-muted">
@@ -125,7 +141,9 @@ function EnvironmentDecisions({
                 <Text className="text-base text-foreground">
                   Answered:{" "}
                   {item.options.find((option) => option.id === item.answer)?.label ?? item.answer}
-                  {item.answeredBy ? ` · ${item.answeredBy}` : ""}
+                  {(item.answeredByLabel ?? item.answeredBy)
+                    ? ` · ${item.answeredByLabel ?? item.answeredBy}`
+                    : ""}
                 </Text>
               ) : null}
               {item.expiresAt ? (
@@ -136,10 +154,8 @@ function EnvironmentDecisions({
             </View>
           ))
         )}
-        {query.data?.items.length === 100 ? (
-          <Text className="text-sm text-foreground-muted">
-            Showing the most recent 100 decisions.
-          </Text>
+        {query.data?.truncated ? (
+          <Text className="text-sm text-foreground-muted">Some decisions are not shown.</Text>
         ) : null}
       </View>
     </SettingsSection>
