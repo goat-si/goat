@@ -186,6 +186,7 @@ import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts"
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
+import { MuseUsageHome } from "@goat/provider-muse/server";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
@@ -351,6 +352,7 @@ const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       AntigravityUsage.layer,
+      MuseUsageHome.layer,
       CodexUsageHistory.layer,
       CursorUsageAccounts.layer.pipe(
         Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
