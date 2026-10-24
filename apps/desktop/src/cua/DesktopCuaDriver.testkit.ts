@@ -80,6 +80,8 @@ export const fixture = Effect.fn(function* (
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
     helper?: { readonly granted: boolean; readonly detail?: string } | "unusable";
+    /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
+    helperAppsFail?: boolean;
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -220,6 +222,7 @@ export const fixture = Effect.fn(function* (
     },
     helperApps: async (bundle) => {
       helperAppListings.push(bundle.bundleId);
+      if (options.helperAppsFail) throw new Error("driver_untrusted");
       return [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }];
     },
     processId: HOST_PID,

@@ -425,8 +425,14 @@ final class DriverService {
     }
     defer {
       try? input.fileHandleForWriting.close()
+      // Bounded: TERM, a short grace, then KILL, so a stuck driver never holds the service queue.
       if process.isRunning { process.terminate() }
+      let grace = Date().addingTimeInterval(1)
+      while process.isRunning && Date() < grace { usleep(20_000) }
+      if process.isRunning { kill(process.processIdentifier, SIGKILL) }
       process.waitUntilExit()
+      // Closing the read end ends the reader thread even if the driver left a child holding it.
+      try? output.fileHandleForReading.close()
     }
     func send(_ message: [String: Any]) {
       guard var data = try? JSONSerialization.data(withJSONObject: message) else { return }
@@ -464,7 +470,12 @@ final class DriverService {
         let found = replies[id]
         lock.unlock()
         if let found { return found }
-        if !process.isRunning || arrived.wait(timeout: deadline) == .timedOut { return nil }
+        // The deadline is absolute: replies to other ids cannot keep this loop going past it.
+        if !process.isRunning || DispatchTime.now() >= deadline
+          || arrived.wait(timeout: deadline) == .timedOut
+        {
+          return nil
+        }
       }
     }
     send([
@@ -585,4 +596,3 @@ if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
 } else {
   runLauncher()
 }
-
