@@ -5,6 +5,7 @@ import { McpSchema, McpServer } from "effect/ai";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
@@ -115,4 +116,61 @@ it.effect.each(obstacles)(
         ),
       ),
     ),
+);
+
+it.effect("only the caller that prepared a pending upload can discard it", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (
+      name: string,
+      args: Record<string, unknown>,
+      invocation: McpInvocationContext.McpInvocationScope,
+    ) =>
+      server
+        .callTool({ name, arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const prepared = yield* call(
+      "goat_attachment_prepare_upload",
+      { upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 } },
+      scope,
+    );
+    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
+    const otherThread = {
+      ...scope,
+      requestNamespace: "other-session",
+      thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") },
+    };
+
+    const refused = yield* call("goat_attachment_discard", { attachmentId }, otherThread);
+    expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
+
+    yield* TestClock.adjust(24 * 60 * 60 * 1000 + 5 * 60_000);
+    yield* call(
+      "goat_attachment_prepare_upload",
+      { upload: { name: "later.png", mimeType: "image/png", sizeBytes: 4 } },
+      scope,
+    );
+
+    const discarded = yield* call(
+      "goat_attachment_discard",
+      { attachmentId },
+      { ...scope, requestNamespace: "mcp-attachment-session-2" },
+    );
+    expect(discarded.isError).toBe(false);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerAttachmentToolkit.pipe(
+        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+        Layer.provide(Sqlite.layerMemory),
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+  ),
 );

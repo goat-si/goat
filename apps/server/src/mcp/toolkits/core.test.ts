@@ -39,7 +39,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -189,6 +188,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
   }
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual([
     "goat_attachment_discard",
+    "goat_attachment_pending_list",
     "goat_attachment_prepare_upload",
     "goat_cloud_holders",
     "goat_cloud_launch",
@@ -226,6 +226,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "goat_hub_device_repair",
     "goat_hub_device_verify",
     "goat_origin_report",
+    "goat_origin_report_receipt",
     "goat_origin_reports_wait",
     "goat_origin_resolve_binding",
     "goat_pending_request_list",
@@ -321,7 +322,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(177);
+  expect(names.size).toBe(179);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   expect(names.has("t3_thread_start")).toBe(false);
   for (const [tool, questionDelivery] of [
@@ -1178,62 +1179,6 @@ it.effect("discovers workflow stop targets and requires orchestration capability
     ),
   );
 });
-
-it.effect("only the caller that prepared a pending upload can discard it", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const call = (
-      name: string,
-      args: Record<string, unknown>,
-      invocation: McpInvocationContext.McpInvocationScope,
-    ) =>
-      server
-        .callTool({ name, arguments: args })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-    const prepared = yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
-    const otherThread = {
-      ...scope,
-      requestNamespace: "other-session",
-      thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") },
-    };
-
-    const refused = yield* call("goat_attachment_discard", { attachmentId }, otherThread);
-    expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
-
-    yield* TestClock.adjust(24 * 60 * 60 * 1000 + 5 * 60_000);
-    yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "later.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-
-    const discarded = yield* call(
-      "goat_attachment_discard",
-      { attachmentId },
-      { ...scope, requestNamespace: "mcp-core-session-2" },
-    );
-    expect(discarded.isError).toBe(false);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerAttachmentToolkit.pipe(
-        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
-        Layer.provide(ServerSecretStore.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
-        Layer.provide(NodeServices.layer),
-      ),
-    ),
-  ),
-);
 
 it.effect(
   "validates reason, records authenticated responders, and reads resolved questions through registration",
