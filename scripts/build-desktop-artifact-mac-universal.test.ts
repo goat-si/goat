@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Node's glob matcher is the minimatch @electron/universal applies to x64ArchFiles.
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
