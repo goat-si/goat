@@ -42,7 +42,7 @@ const XI_RAW_MOTION = 17;
 const SLAVE_USES = new Set([3, 4, 5]);
 
 /** The first screen's root window from an X connection setup reply (little-endian). */
-export function setupRoot(reply: Uint8Array): number | undefined {
+function setupRoot(reply: Uint8Array): number | undefined {
   if (reply[0] !== 1 || reply.byteLength < 40) return undefined;
   const view = new DataView(reply.buffer, reply.byteOffset, reply.byteLength);
   const vendorLength = view.getUint16(24, true);
@@ -82,7 +82,7 @@ const xiQueryDevice = (major: number) =>
     view.setUint8(1, 48);
   });
 /** Raw key, button and motion events from every device, on the root window. */
-export const xiSelectRawEvents = (major: number, root: number) =>
+const xiSelectRawEvents = (major: number, root: number) =>
   request(20, (view) => {
     view.setUint8(0, major);
     view.setUint8(1, 46);
