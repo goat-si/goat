@@ -90,6 +90,28 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    it.effect("lets web dev accept every cookie a browser keeps for localhost (#1185)", () =>
+      Effect.gen(function* () {
+        const input = {
+          baseEnv: { NODE_OPTIONS: "--enable-source-maps --max-http-header-size=8192" },
+          serverOffset: 0,
+          webOffset: 0,
+          goatHome: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        } as const;
+        const web = yield* createDevRunnerEnv({ ...input, mode: "dev" });
+        const desktop = yield* createDevRunnerEnv({ ...input, mode: "dev:desktop" });
+
+        assert.equal(web.NODE_OPTIONS, "--enable-source-maps --max-http-header-size=262144");
+        assert.equal(desktop.NODE_OPTIONS, input.baseEnv.NODE_OPTIONS);
+      }),
+    );
+
     it.effect("strips inherited service-launcher context", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
