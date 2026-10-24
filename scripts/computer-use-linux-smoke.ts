@@ -159,23 +159,26 @@ try {
     stdio: ["pipe", "pipe", "inherit"],
   });
   started.push(helper);
+  // Listen before anything can throw: a spawn that fails reports through this event, and an
+  // unheard one would end the process before cleanup.
+  let helperGone = false;
+  const waiters: Array<() => void> = [];
+  const gone = () => {
+    helperGone = true;
+    waiters.splice(0).forEach((wake) => wake());
+  };
+  helper.once("exit", gone);
+  helper.once("error", (error) => {
+    log("FAIL helper spawn", { message: error.message });
+    gone();
+  });
   const { stdin: toHelper, stdout: fromHelper, pid: helperPid } = helper;
   if (!toHelper || !fromHelper || helperPid === undefined)
     throw new Error("The helper did not start.");
   const replies = NodeReadline.createInterface({ input: fromHelper });
   const queue: string[] = [];
-  const waiters: Array<() => void> = [];
   replies.on("line", (line) => {
     queue.push(line);
-    waiters.splice(0).forEach((wake) => wake());
-  });
-  let helperGone = false;
-  helper.once("exit", () => {
-    helperGone = true;
-    waiters.splice(0).forEach((wake) => wake());
-  });
-  helper.once("error", () => {
-    helperGone = true;
     waiters.splice(0).forEach((wake) => wake());
   });
   /** The helper's next line; fails if it exits or takes longer than any request may. */
