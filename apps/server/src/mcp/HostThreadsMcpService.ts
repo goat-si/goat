@@ -47,6 +47,7 @@ import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
 import { type LaunchWatch, replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
+import { rearmAfterRetry, rearmAfterSend, watchKeyOf } from "./launchWatchRearm.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
@@ -313,45 +314,6 @@ const make = Effect.gen(function* () {
           ),
         )
       : Effect.succeed(scope.thread.threadId);
-
-  /**
-   * The caller's own watch of a thread: its thread's, or for an outside caller
-   * the launcherless watch its own launch made, never another caller's.
-   */
-  const watchKeyOf = (
-    scope: McpInvocationScope,
-    target: { readonly host: string | undefined; readonly threadId: ThreadId },
-  ): LaunchWatchService.LaunchWatchKey =>
-    scope.thread === undefined
-      ? { launcherThreadId: null, owner: scope.requestNamespace, ...target }
-      : { launcherThreadId: scope.thread.threadId, ...target };
-
-  /**
-   * A send from a watching thread is followed like its launch: the run it
-   * started or joined is reported when it ends. A send from outside any thread
-   * re-arms the launcherless watch its launch made, so the completion webhook
-   * hears about follow-up runs too. Bookkeeping must never fail the send itself.
-   */
-  const rearmAfterSend = (
-    scope: McpInvocationScope,
-    input: OrchestratorMcpThreadSendInput,
-    result: OrchestratorMcpThreadSendResult,
-  ) =>
-    result.delivery === "relayed"
-      ? Effect.void
-      : launchWatches
-          .rearm({
-            ...watchKeyOf(scope, { host: input.host, threadId: input.threadId }),
-            runId: result.runId,
-          })
-          .pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("launch watch: send not followed", {
-                threadId: input.threadId,
-                cause: error,
-              }),
-            ),
-          );
 
   /**
    * A thread started from another machine names hosts as that machine knows them.
@@ -895,7 +857,7 @@ const make = Effect.gen(function* () {
               ? Effect.void
               : admission.settle(exit._tag === "Success").pipe(Effect.ignore),
           ),
-          Effect.tap((result) => rearmAfterSend(scope, input, result)),
+          Effect.tap((result) => rearmAfterSend(launchWatches, scope, input, result)),
           // A send to a remote thread this one launched follows its reports again.
           Effect.tap((result) =>
             host === undefined || result.delivery === "relayed"
@@ -930,7 +892,7 @@ const make = Effect.gen(function* () {
             decodeInterrupt,
           ),
     retryThread: (scope, input) =>
-      input.host === undefined
+      (input.host === undefined
         ? local.retryThread(scope, input)
         : onHost(
             scope,
@@ -941,7 +903,8 @@ const make = Effect.gen(function* () {
               writes: true,
             },
             decodeRetry,
-          ),
+          )
+      ).pipe(Effect.tap((result) => rearmAfterRetry(launchWatches, scope, input, result))),
     readOnHost: (scope, input, decode) => onHost(scope, { ...input, writes: false }, decode),
     reconcileCheckpoint: (scope, input) => replicas.reconcile(input, replicaAuthorization(scope)),
     configureReplication: (scope, input) =>

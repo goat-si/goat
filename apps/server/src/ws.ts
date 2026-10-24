@@ -14,7 +14,7 @@ import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
 import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
 import * as CloudMachineService from "./cloudMachines/CloudMachineService.ts";
 import * as Handoffs from "./handoffs/Handoffs.ts";
-import * as HubNodes from "./hubNodes/HubNodes.ts";
+import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
@@ -228,6 +228,8 @@ import {
   type ShellApplicationEvent,
 } from "./orchestration-v2/ShellStream.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import { type PreparedRunRetryServices, retryPreparedRun } from "./mcp/launchWatchRearm.ts";
 import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
@@ -1330,7 +1332,7 @@ export const layerWsRpc = (
       const threadManagement = yield* ThreadManagementService.ThreadManagementService;
       const intakeContext = yield* Effect.context<
         | ThreadManagementService.ThreadManagementService
-        | ThreadLaunchService.ThreadLaunchService
+        | PreparedRunRetryServices
         | FileSystem.FileSystem
         | ServerConfig.ServerConfig
         | ChannelBotDirectory.ChannelBotDirectory
@@ -2203,9 +2205,8 @@ export const layerWsRpc = (
               enqueuePublicOrchestrationCommand(
                 command,
                 startup,
-                // A retry also restarts the preparation work the launch owns.
                 (command.type === "prepared-run.retry"
-                  ? threadLaunch.retryPreparation(command)
+                  ? retryPreparedRun(command).pipe(Effect.provide(intakeContext))
                   : ThreadMessageIntake.dispatchCommand(
                       ThreadManagementService.withCreationProvenance(command, {
                         createdBy: "user",
@@ -3643,25 +3644,6 @@ export const layerWsRpc = (
     }),
   );
 
-export const makeHubNodesHandlers = Effect.gen(function* () {
-  const hubNodes = yield* HubNodes.HubNodes;
-  return WsHubNodesRpcGroup.middleware(RpcInstrumentation).of({
-    [WS_METHODS.hubNodesList]: () => hubNodes.snapshot,
-    [WS_METHODS.hubNodesSubscribe]: () => hubNodes.changes,
-    [WS_METHODS.hubNodesAdd]: (input) =>
-      Effect.flatMap(DateTime.now, (now) =>
-        hubNodes.add(input, {
-          addedBy: { kind: "user", at: DateTime.formatIso(now) },
-          beforeSave: Effect.void,
-        }),
-      ),
-    [WS_METHODS.hubNodesRemove]: (input) => hubNodes.remove(input),
-    [WS_METHODS.hubNodesCheck]: (input) => hubNodes.check(input),
-    [WS_METHODS.hubNodesImport]: (input) => hubNodes.importProfiles(input),
-    [WS_METHODS.hubNodesDismissNotice]: (input) => hubNodes.dismissNotice(input.id),
-  });
-});
-
 // RpcServer's default sends a socket-level Defect frame instead, and the client
 // ends every pending request on the socket with it.
 export const WS_RPC_SERVER_OPTIONS = {
@@ -3690,6 +3672,7 @@ export const layer = Layer.unwrap(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
+    const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3801,7 +3784,12 @@ export const layer = Layer.unwrap(
                   }),
                 ),
               ),
-              Layer.provide(Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches)),
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(RemoteLaunchCatalog.RemoteLaunchCatalog, remoteLaunches),
+                  Layer.succeed(LaunchWatchService.LaunchWatchService, launchWatches),
+                ),
+              ),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
