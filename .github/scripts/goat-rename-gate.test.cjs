@@ -8,6 +8,17 @@ const path = require("node:path");
 const { execFileSync, spawnSync } = require("node:child_process");
 const root = path.resolve(__dirname, "../..");
 const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+// On Windows, `bash` on PATH can be WSL's launcher, which drops the parent environment and
+// re-expands the script in a Linux shell. The workflow runs on Linux bash; Git for Windows'
+// bash matches it.
+const bash =
+  // oxlint-disable-next-line goat/no-global-process-runtime -- plain node:test script, outside Effect.
+  process.platform === "win32"
+    ? path.resolve(
+        execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim(),
+        "../../../bin/bash.exe",
+      )
+    : "bash";
 
 it("runs the source-name gate before affected-file selection, on the install-free scope path", () => {
   const scope = workflow.split("\n  scope:\n")[1].split("\n  ci:\n")[0];
@@ -22,7 +33,7 @@ it("runs the source-name gate before affected-file selection, on the install-fre
   assert.match(result, /needs: \[scope, ci, screenshot-gate\]/);
   const script = result.split("        run: |\n")[1].replace(/^          /gm, "");
   for (const status of ["success", "failure", "skipped", "cancelled"]) {
-    const run = spawnSync("bash", ["-c", script], {
+    const run = spawnSync(bash, ["-c", script], {
       encoding: "utf8",
       env: { ...process.env, SCOPE: status, CI: "success", SCREENSHOT_GATE: "skipped" },
     });
