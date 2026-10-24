@@ -447,6 +447,133 @@ it.effect("forgets only registered runs, by deleting their thread", () =>
   }),
 );
 
+const cloudRun = (
+  threadId: string,
+  driver: "claudeCloud" | "cursorCloud" | "devinCloud",
+  attach?: "registered",
+) =>
+  storeCloudThread({
+    threadId: ThreadId.make(threadId),
+    title: threadId,
+    driver,
+    nativeId: `native-${threadId}`,
+    cloudTask: {
+      taskId: `task-${threadId}`,
+      status: "running",
+      tracking: "link-only",
+      ...(attach === undefined ? {} : { attach }),
+      source: { repository: "https://github.com/goat-si/goat", branch: "dev" },
+      localChangesExcluded: true,
+      updatedAt: "2026-10-20T00:00:00.000Z",
+    },
+    active: false,
+  }).pipe(Effect.andThen(TestClock.adjust("1 second")));
+
+it.effect("lists a provider's run that sits behind newer runs of another provider", () =>
+  Effect.gen(function* () {
+    yield* run(
+      makeWorld(),
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        yield* cloudRun("thread:claude-old", "claudeCloud");
+        yield* cloudRun("thread:cursor-new", "cursorCloud");
+        yield* cloudRun("thread:cursor-newest", "cursorCloud");
+
+        const claude = yield* service.list({ provider: "claudeCloud", limit: 1 });
+        assert.deepEqual(
+          [claude.runs.map((entry) => entry.threadId), claude.truncated],
+          [["thread:claude-old"], false],
+        );
+        const newest = yield* service.list({ limit: 2 });
+        assert.deepEqual(
+          [newest.runs.map((entry) => entry.threadId), newest.truncated],
+          [["thread:cursor-newest", "thread:cursor-new"], true],
+        );
+        const rest = yield* service.list({ limit: 2, cursor: newest.nextCursor! });
+        assert.deepEqual(
+          [rest.runs.map((entry) => entry.threadId), rest.truncated, rest.nextCursor],
+          [["thread:claude-old"], false, undefined],
+        );
+        const everything = yield* service.list({ limit: 3 });
+        assert.deepEqual([everything.runs.length, everything.truncated], [3, false]);
+        const forged = yield* service.list({ cursor: "not-a-cursor" }).pipe(Effect.flip);
+        assert.equal(forged.code, "invalid_request");
+      }),
+    );
+  }),
+);
+
+it.effect("calls a page truncated only when another run it can return follows", () =>
+  Effect.gen(function* () {
+    yield* run(
+      makeWorld(),
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const sql = yield* SqlClient.SqlClient;
+        yield* cloudRun("thread:claude-oldest", "claudeCloud");
+        yield* cloudRun("thread:cursor-unreadable", "cursorCloud");
+        yield* cloudRun("thread:cursor-newest", "cursorCloud");
+        yield* sql`
+          UPDATE orchestration_v2_projection_provider_threads
+          SET payload_json = json_set(payload_json, '$.cloudTask.status', 'unknown-status')
+          WHERE thread_id = 'thread:cursor-unreadable'
+        `;
+
+        const cursor = yield* service.list({ provider: "cursorCloud", limit: 1 });
+        assert.deepEqual(
+          [cursor.runs.map((entry) => entry.threadId), cursor.truncated],
+          [["thread:cursor-newest"], false],
+        );
+        const first = yield* service.list({ limit: 1 });
+        assert.deepEqual(
+          [first.runs.map((entry) => entry.threadId), first.truncated],
+          [["thread:cursor-newest"], true],
+        );
+        const second = yield* service.list({ limit: 1, cursor: first.nextCursor! });
+        assert.deepEqual(
+          [second.runs.map((entry) => entry.threadId), second.truncated],
+          [["thread:claude-oldest"], false],
+        );
+        const both = yield* service.list({ limit: 2 });
+        assert.deepEqual(
+          [both.runs.map((entry) => entry.threadId), both.truncated],
+          [["thread:cursor-newest", "thread:claude-oldest"], false],
+        );
+      }),
+    );
+  }),
+);
+
+it.effect("forgets a registered run that has more than 200 newer runs ahead of it", () =>
+  Effect.gen(function* () {
+    const world = makeWorld();
+    yield* run(
+      world,
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const old = ThreadId.make("thread:registered-old");
+        yield* cloudRun(old, "devinCloud", "registered");
+        yield* Effect.forEach(
+          Array.from({ length: 201 }, (_, index) => index),
+          (index) => cloudRun(`thread:newer-${index}`, "cursorCloud"),
+        );
+
+        assert.deepEqual(yield* service.forget({ threadId: old }), {
+          threadId: old,
+          forgotten: true,
+        });
+        assert.deepEqual(
+          world.dispatched.map((command) => {
+            const { type, threadId } = command as { type: string; threadId: string };
+            return [type, threadId];
+          }),
+          [["thread.delete", old]],
+        );
+      }),
+    );
+  }),
+);
+
 const mcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
