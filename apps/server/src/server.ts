@@ -834,7 +834,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer,
+      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
       CloudProviderAutoSetup.layer,
     ),
   ),

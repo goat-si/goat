@@ -262,8 +262,10 @@ export async function prepareCuaDriverCapabilityManifest(input: {
   readonly environment: Readonly<Record<string, string>>;
   readonly hostBundleIds: ReadonlyArray<string>;
   readonly path: string;
+  /** Lists apps through a helper that verifies the driver first, instead of running it here. */
+  readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
 }): Promise<string> {
-  const apps = await listCuaDriverApplications(input);
+  const apps = await (input.listApplications?.() ?? listCuaDriverApplications(input));
   return writeCuaDriverCapabilityManifest(
     input.path,
     cuaDriverCapabilityManifest({
