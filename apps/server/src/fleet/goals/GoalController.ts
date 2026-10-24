@@ -150,14 +150,15 @@ const make = Effect.gen(function* () {
       // Every launch claim, from the records that outlive status writes. A claim never sent counts
       // as none, so the launch is claimed and sent again.
       const launchClaims = new Map<string, { claimedAt: number; settled: boolean } | null>();
-      const refusedReschedules = new Set<string>();
+      const unmovedReschedules = new Set<string>();
       for (const launch of launches) {
         if (launch.outcome !== NOT_SENT)
           launchClaims.set(launch.actionId, {
             claimedAt: Date.parse(launch.claimedAt),
             settled: launch.settledAt !== null,
           });
-        if (launch.outcome === "refused") refusedReschedules.add(launch.actionId);
+        if (launch.actionId.endsWith(":reschedule") && launch.outcome !== "rescheduled")
+          unmovedReschedules.add(launch.actionId);
       }
       const wanted = new Set<number>([
         ...goal.spec.targets.flatMap((target) =>
@@ -195,7 +196,7 @@ const make = Effect.gen(function* () {
             : { available: true },
         workers,
         launchClaims,
-        refusedReschedules,
+        unmovedReschedules,
         pullRequests,
         issues,
         turns: yield* store.turns(goal.id),

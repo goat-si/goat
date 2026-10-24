@@ -23,7 +23,7 @@ const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => (
   owner: { available: true },
   workers: new Map(),
   launchClaims: new Map(),
-  refusedReschedules: new Set(),
+  unmovedReschedules: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
   turns: 0,
@@ -578,7 +578,7 @@ describe("planGoal", () => {
     });
     const refused = observe({
       workers: new Map([[0, failed]]),
-      refusedReschedules: new Set(["goal:goal_q:s0:a1:run:1:reschedule"]),
+      unmovedReschedules: new Set(["goal:goal_q:s0:a1:run:1:reschedule"]),
     });
     expect(planGoal(goal, [followedUp], refused).actions).toEqual([
       {

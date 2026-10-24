@@ -210,8 +210,8 @@ export interface GoalObservation {
     string,
     { readonly claimedAt: number; readonly settled: boolean } | null
   >;
-  /** Reschedule action ids the Rescheduler refused. */
-  readonly refusedReschedules: ReadonlySet<string>;
+  /** Reschedules claimed that did not move their slot: refused, never sent, or never settled. */
+  readonly unmovedReschedules: ReadonlySet<string>;
   readonly pullRequests: ReadonlyMap<number, PullRequestObservation>;
   readonly issues: ReadonlyMap<number, "open" | "closed" | "unknown">;
   readonly turns: number;
@@ -410,13 +410,13 @@ export function planGoal(
     };
     const fresh = seen.runId !== null && worker.followedUpRunId !== seen.runId;
     // Each run is recovered once. A row an earlier controller wrote marks a run followed up both
-    // after a same-thread fallback it sent and after a move it was refused; only the refused one
-    // was left without a way forward (#1452).
+    // after a same-thread fallback it sent and after a move that did not happen; only the move
+    // left it without a way forward (#1452).
     const unrecovered =
       seen.runId !== null &&
       worker.recoveredRunId !== seen.runId &&
       (fresh ||
-        observation.refusedReschedules.has(
+        observation.unmovedReschedules.has(
           rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId),
         ));
     const followUp = (message: string): WorkerRecord => {

@@ -290,6 +290,42 @@ const setCount = (id: string, count: number) =>
     );
   });
 
+/**
+ * A slot row as the controller before #1472 wrote it: launched, its run 5 marked followed up, and
+ * one recovery receipt for that run.
+ */
+const legacyRow = (id: string, actionId: string, outcome: string, host: string | null = null) =>
+  Effect.gen(function* () {
+    const store = yield* GoalStore;
+    const sql = yield* SqlClient.SqlClient;
+    yield* insert(testGoal(id));
+    yield* pass(id);
+    const nowIso = "1970-01-01T00:00:00.000Z";
+    yield* store.claim({
+      goalId: FleetGoalId.make(id),
+      generation: 1,
+      actionId,
+      kind: actionId.endsWith(":reschedule") ? "launch" : "fallback",
+      host: null,
+      slot: 0,
+      nowIso,
+    });
+    yield* store.settle(actionId, outcome, nowIso);
+    yield* sql`
+      UPDATE fleet_goal_workers
+      SET host = ${host}, detail_json = json_set(
+        json_remove(detail_json, '$.recoveredRunId'), '$.followedUpRunId', 'run:5'
+      )
+      WHERE goal_id = ${id}
+    `;
+  });
+
+const failedHealth = (): ThreadHealth => ({
+  _tag: "failed",
+  failureClass: "unknown",
+  runId: RunId.make("run:5"),
+});
+
 describe("GoalController", () => {
   it.effect("does nothing while fleet.controllerEnabled is off", () => {
     const fake = makeFake();
@@ -643,44 +679,20 @@ describe("GoalController", () => {
       const fake = makeFake();
       return Effect.gen(function* () {
         const store = yield* GoalStore;
-        const sql = yield* SqlClient.SqlClient;
-        // Rows as the controller before #1472 wrote them: the run is marked followed up after a
-        // refused move, and after a hop whose message waits held behind the failed run.
-        const legacy = (
-          id: string,
-          actionId: string,
-          outcome: string,
-          host: string | null = null,
-        ) =>
-          Effect.gen(function* () {
-            yield* insert(testGoal(id));
-            yield* pass(id);
-            const nowIso = "1970-01-01T00:00:00.000Z";
-            yield* store.claim({
-              goalId: FleetGoalId.make(id),
-              generation: 1,
-              actionId,
-              kind: actionId.endsWith(":reschedule") ? "launch" : "fallback",
-              host: null,
-              slot: 0,
-              nowIso,
-            });
-            yield* store.settle(actionId, outcome, nowIso);
-            yield* sql`
-              UPDATE fleet_goal_workers
-              SET host = ${host}, detail_json = json_set(
-                json_remove(detail_json, '$.recoveredRunId'), '$.followedUpRunId', 'run:5'
-              )
-              WHERE goal_id = ${id}
-            `;
-          });
-        yield* legacy("goal_stranded", "goal:goal_stranded:s0:a1:run:5:reschedule", "refused");
-        yield* legacy("goal_hopped", "goal:goal_hopped:s0:a1:run:5:hub-hop", "switched");
+        // The run is marked followed up after a refused move, and after a hop whose message waits
+        // held behind the failed run.
+        yield* legacyRow("goal_stranded", "goal:goal_stranded:s0:a1:run:5:reschedule", "refused");
+        yield* legacyRow("goal_hopped", "goal:goal_hopped:s0:a1:run:5:hub-hop", "switched");
         // A slot on another host asks the Rescheduler, which refuses again; once is enough.
-        yield* legacy("goal_remote", "goal:goal_remote:s0:a1:run:5:reschedule", "refused", "box");
+        yield* legacyRow(
+          "goal_remote",
+          "goal:goal_remote:s0:a1:run:5:reschedule",
+          "refused",
+          "box",
+        );
         fake.reading = (threadId) =>
           threadId === "thread:worker-4" ? running(threadId, fake) : failedRun("run:5");
-        healthOf = () => ({ _tag: "failed", failureClass: "unknown", runId: RunId.make("run:5") });
+        healthOf = failedHealth;
         for (const id of ["goal_stranded", "goal_hopped", "goal_remote"])
           for (let round = 0; round < 3; round += 1) yield* pass(id);
         healthOf = () => ({ _tag: "healthy" });
@@ -697,6 +709,37 @@ describe("GoalController", () => {
         });
         expect((yield* record("goal_hopped")).workers[0]).toMatchObject({ attempt: 1 });
         const refusals = (yield* store.events(FleetGoalId.make("goal_remote"), 50)).filter(
+          (event) => event.reason === "RescheduleRefused",
+        );
+        expect(refusals).toHaveLength(1);
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
+
+  it.effect(
+    "retries a stranded slot's move after owner authority was lost between its claim and send (#1452)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        const id = "goal:goal_lost:s0:a1:run:5:reschedule";
+        yield* legacyRow("goal_lost", id, "refused", "box");
+        fake.reading = () => failedRun("run:5");
+        healthOf = failedHealth;
+        // Observing and acting see the owner; it is gone right after the move is claimed.
+        fake.owners = [
+          access(),
+          access(),
+          { unavailable: "The owner thread was archived." },
+          access(),
+        ];
+        yield* pass("goal_lost");
+        expect((yield* store.claimOf(id))?.outcome).toBe(NOT_SENT);
+        yield* pass("goal_lost");
+        yield* pass("goal_lost");
+        healthOf = () => ({ _tag: "healthy" });
+        expect((yield* store.claimOf(id))?.outcome).toBe("refused");
+        const refusals = (yield* store.events(FleetGoalId.make("goal_lost"), 50)).filter(
           (event) => event.reason === "RescheduleRefused",
         );
         expect(refusals).toHaveLength(1);
