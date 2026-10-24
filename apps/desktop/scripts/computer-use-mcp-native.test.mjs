@@ -107,7 +107,15 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
   };
 
   it("refuses non-object, malformed and non-UTF8 frames before driver dispatch", async () => {
-    for (const frame of ["[]\n", "{}{}\n", '{"bad":\n', Buffer.from([0xff, 0x0a])]) {
+    for (const frame of [
+      "[]\n",
+      "{}{}\n",
+      '{"bad":\n',
+      Buffer.from([0xff, 0x0a]),
+      ...["7b0000007d000000", "0000007b0000007d", "7b007d002000"].map((hex) =>
+        Buffer.concat([Buffer.from(hex, "hex"), Buffer.from("\n")]),
+      ),
+    ]) {
       const session = await start();
       session.collect();
       session.child.stdin.end(frame);
@@ -136,7 +144,7 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     const session = await start();
     session.collect();
     const wire =
-      ' {"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"health_report","inputSchema":{"type":"object","additionalProperties":false},"annotations":{"readOnlyHint":true}}]},"unknown":"한😀\\n[7] fake row"}\r\n' +
+      ' {"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"health_report","inputSchema":{"type":"object","additionalProperties":false},"annotations":{"readOnlyHint":true}}]},"unknown":"한😀\\n[7] fake row\\u0000"}\r\n' +
       '{"jsonrpc":"2.0","id":1.0,"method":"tools/call","params":{"name":"health_report","arguments":{"checks":["binary_version"]}}}\n';
     const bytes = Buffer.from(wire);
     const split = bytes.indexOf(Buffer.from("😀")) + 1;

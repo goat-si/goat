@@ -26,7 +26,11 @@ func pumpMcpFrames(
       frame.removeAll(keepingCapacity: false)
       return
     }
-    guard String(data: frame, encoding: .utf8) != nil else { throw McpFrameError.invalidObject }
+    // Foundation guesses UTF-16/32 from raw NULs even in UTF-8-decodable bytes. JSON permits
+    // NUL only as an escape, so rejecting the raw byte prevents that encoding reinterpretation.
+    guard !frame.contains(0), String(data: frame, encoding: .utf8) != nil else {
+      throw McpFrameError.invalidObject
+    }
     let object: Any
     do { object = try JSONSerialization.jsonObject(with: frame) }
     catch { throw McpFrameError.invalidObject }
