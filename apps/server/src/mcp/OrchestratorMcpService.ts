@@ -99,6 +99,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
 import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import {
   admissionCorrelationId,
   admitDelegate,
@@ -2410,6 +2411,11 @@ const make = Effect.gen(function* () {
       // Resolved per call: the first memoized construction of this service precedes the
       // channel layer, so a construction-time capture would bypass channel admission.
       const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
+      // Same per-call reason as channelChildWork; absent from the call context only in
+      // fixtures, where keeping the reservation is the safe answer.
+      const commandReceipts = yield* Effect.serviceOption(
+        CommandReceiptStore.CommandReceiptStoreV2,
+      );
       const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
         Effect.mapError(() =>
           failure("invalid_request", "Caller memory authority is no longer available."),
@@ -2813,16 +2819,21 @@ const make = Effect.gen(function* () {
               ? permissions.release(commandId, true).pipe(Effect.ignore)
               : Effect.void,
           ),
-          // Only a dispatch that left no accepted-command receipt never committed, so just
-          // that failure returns the reservation; an accepted command's work keeps its slot.
+          // Commit certainty from the receipt, not from the dispatch error: an accepted
+          // receipt means the work exists and keeps its slot; a rejected or absent receipt
+          // means the command never ran, so the reservation goes back. An unreadable
+          // receipt proves nothing, so the slot stays rather than double-spend.
           Effect.onError(() =>
-            threadManagement.hasReceipt(commandId).pipe(
-              Effect.flatMap((committed) =>
-                committed ? Effect.void : releaseChildWork(channelChildWork, admission),
-              ),
-              // A failed read proves nothing; keep the capacity.
-              Effect.ignore,
-            ),
+            commandReceipts._tag === "None"
+              ? Effect.void
+              : commandReceipts.value.getByCommandId(commandId).pipe(
+                  Effect.flatMap((receipt) =>
+                    Option.isSome(receipt) && receipt.value.status === "accepted"
+                      ? Effect.void
+                      : releaseChildWork(channelChildWork, admission),
+                  ),
+                  Effect.ignore,
+                ),
           ),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"

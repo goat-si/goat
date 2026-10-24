@@ -21,11 +21,13 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -274,28 +276,53 @@ const seedChannelWorkerTask = Effect.gen(function* () {
 
 describe("OrchestratorMcpService delegate child work", () => {
   it.effect(
-    "a dispatch failure returns the reservation only when no command receipt committed",
+    "a dispatch failure returns the reservation only when the receipt read shows no accepted receipt",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const dispatched = yield* Ref.make<ReadonlyArray<string>>([]);
-          const committed = yield* Ref.make<ReadonlyArray<string>>([]);
+          const accepted = yield* Ref.make<Readonly<Record<string, true>>>({});
+          const rejectedReceipts = yield* Ref.make<Readonly<Record<string, true>>>({});
+          const unreadable = yield* Ref.make<Readonly<Record<string, true>>>({});
           const layerDependencies = Layer.mergeAll(
             NodeServices.layer,
             Layer.mock(ThreadManagementService.ThreadManagementService)({
               hasReceipt: (commandId) =>
-                Ref.get(committed).pipe(Effect.map((ids) => ids.includes(String(commandId)))),
+                Effect.all([Ref.get(accepted), Ref.get(rejectedReceipts)]).pipe(
+                  Effect.map(
+                    ([done, refused]) =>
+                      done[String(commandId)] === true || refused[String(commandId)] === true,
+                  ),
+                ),
               getThreadRecords: (threadId) =>
                 Effect.succeed(threadId === callerThreadId ? parentProjection : childProjection),
               isProviderInstanceEnabledForProject: () => Effect.succeed(true),
               assertProviderInstanceEnabled: () => Effect.void,
               dispatch: (command) =>
                 Ref.update(dispatched, (ids) => [...ids, String(command.commandId)]).pipe(
-                  // A command whose task commits leaves its accepted receipt behind, then
-                  // fails afterward; the rest fail before committing anything.
+                  // A committing command leaves an accepted receipt behind before failing; a
+                  // rejected one persists its rejection without committing; "unreadable" makes
+                  // the receipt read fail. The rest fail before committing anything.
                   Effect.andThen(
                     command.type === "delegated_task.request" && command.task.includes("commits")
-                      ? Ref.update(committed, (ids) => [...ids, String(command.commandId)])
+                      ? Ref.update(accepted, (ids) => ({
+                          ...ids,
+                          [String(command.commandId)]: true as const,
+                        }))
+                      : command.type === "delegated_task.request" &&
+                          command.task.includes("rejected")
+                        ? Ref.update(rejectedReceipts, (ids) => ({
+                            ...ids,
+                            [String(command.commandId)]: true as const,
+                          }))
+                        : Effect.void,
+                  ),
+                  Effect.andThen(
+                    command.type === "delegated_task.request" && command.task.includes("unreadable")
+                      ? Ref.update(unreadable, (ids) => ({
+                          ...ids,
+                          [String(command.commandId)]: true as const,
+                        }))
                       : Effect.void,
                   ),
                   Effect.andThen(Effect.fail(new Error("simulated dispatch failure") as never)),
@@ -341,7 +368,34 @@ describe("OrchestratorMcpService delegate child work", () => {
             Layer.provideMerge(Layer.mock(ThreadManagementService.ThreadManagementService)({})),
             Layer.provideMerge(SqlitePersistence.layerMemory),
           );
-          const channelContext = yield* Layer.buildWithScope(channelStack, buildScope);
+          // Per-call resolution in the service reads the ambient call context, which in
+          // production is the whole server runtime; the receipt store rides alongside the
+          // channel services here for the same reason. The service under test only reads
+          // the receipt status, so the accepted fixture carries just that field.
+          const receiptStoreLayer = Layer.mock(CommandReceiptStore.CommandReceiptStoreV2)({
+            getByCommandId: (commandId) =>
+              Ref.get(unreadable).pipe(
+                Effect.flatMap((ids) =>
+                  ids[String(commandId)] === true
+                    ? Effect.fail(
+                        new CommandReceiptStore.CommandReceiptStoreReadError({ commandId }),
+                      )
+                    : Ref.get(accepted).pipe(
+                        Effect.map((done) =>
+                          done[String(commandId)] === true
+                            ? Option.some({
+                                status: "accepted",
+                              } as unknown as CommandReceiptStore.CommandReceiptV2)
+                            : Option.none(),
+                        ),
+                      ),
+                ),
+              ),
+          });
+          const channelContext = yield* Layer.buildWithScope(
+            Layer.mergeAll(channelStack, receiptStoreLayer),
+            buildScope,
+          );
           const taskId = yield* seedChannelWorkerTask.pipe(Effect.provide(channelContext));
           const service = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
             Effect.provide(serviceContext),
@@ -356,23 +410,26 @@ describe("OrchestratorMcpService delegate child work", () => {
               })
               .pipe(Effect.flip, Effect.provide(callContext));
 
-          const preCommit = yield* delegate("alpha rejected");
+          const preCommit = yield* delegate("alpha vanishes");
           const committedOne = yield* delegate("bravo commits");
-          const committedTwo = yield* delegate("charlie commits");
+          const rejectedOne = yield* delegate("charlie rejected");
+          const unreadableOne = yield* delegate("delta commits unreadable");
           assert.equal(preCommit.code, "orchestration_error");
           assert.equal(committedOne.code, "orchestration_error");
-          assert.equal(committedTwo.code, "orchestration_error");
-          // Only the pre-commit failure freed its slot, so the budget is full.
-          const overflow = yield* delegate("delta never runs");
+          assert.equal(rejectedOne.code, "orchestration_error");
+          assert.equal(unreadableOne.code, "orchestration_error");
+          // Only the never-committed and the rejected commands freed their slots, so the
+          // accepted one and the unreadable one fill the budget.
+          const overflow = yield* delegate("epsilon never runs");
           assert.equal(overflow.code, "capacity_exceeded");
-          assert.equal((yield* Ref.get(dispatched)).length, 3);
+          assert.equal((yield* Ref.get(dispatched)).length, 4);
 
           const store = yield* ChannelChildWorkStore.ChannelChildWorkStore.pipe(
             Effect.provide(channelContext),
           );
           const records = yield* store.listForTask(taskId).pipe(Effect.provide(channelContext));
-          assert.equal(records.length, 3);
-          assert.equal(records.filter((record) => record.state === "released").length, 1);
+          assert.equal(records.length, 4);
+          assert.equal(records.filter((record) => record.state === "released").length, 2);
           assert.equal(records.filter((record) => record.state === "launched").length, 2);
         }),
       ),
