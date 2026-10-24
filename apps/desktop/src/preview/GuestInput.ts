@@ -1,3 +1,5 @@
+import { PREVIEW_AGENT_INPUT_HELD_GLOBAL } from "@goat/contracts";
+
 /**
  * Keyboard and text input for a preview tab's page that never lands outside it.
  *
@@ -121,6 +123,8 @@ export const sendPageCommand = async (
   debuggee: Electron.Debugger,
   method: string,
   params: Record<string, unknown>,
+  /** False once the relay that sent this is released, which also lifts the server's hold. */
+  current: () => boolean = () => true,
 ): Promise<unknown> => {
   // Electron's debugger routes Page.reload on a webview to its embedder window.
   if (method === "Page.reload") {
@@ -131,7 +135,14 @@ export const sendPageCommand = async (
   if (!FOCUS_ROUTED_INPUT.has(method) || webContents.focusedFrame) {
     return debuggee.sendCommand(method, params);
   }
-  if ((await evaluate(debuggee, `${FOCUSED_DOCUMENT} !== null`)) !== true) {
+  // One probe for focus and for the server's hold (set after Stop or a secret cut an agent action):
+  // this wait is where a cut can land between the server's gate and the input.
+  const probe = await evaluate(
+    debuggee,
+    `(globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} ?? 0) > Date.now() ? "held" : ${FOCUSED_DOCUMENT} !== null`,
+  );
+  if (probe === "held" || !current()) return {};
+  if (probe !== true) {
     throw new Error(CROSS_SITE_FOCUS_MESSAGE);
   }
   switch (method) {

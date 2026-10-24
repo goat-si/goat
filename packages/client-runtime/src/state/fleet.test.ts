@@ -16,6 +16,7 @@ import {
   createFleetSummaryAtom,
   summarizeFleet,
   type FleetEnvironment,
+  type FleetRemoteSource,
   type FleetShell,
 } from "./fleet.ts";
 
@@ -601,5 +602,199 @@ describe("buildFleet thread order", () => {
       ],
     });
     expect(fleet.threads.map((thread) => thread.title)).toEqual(["alpha", "beta", "Reported"]);
+  });
+});
+
+describe("buildFleet machine identity", () => {
+  // The MacBook's desktop server and the headless server SSH launches keep beside it, plus two
+  // hosts the desktop connects to by its own aliases while the headless server dispatches work to
+  // them under other aliases. After a restart the hosts are still connecting.
+  const mac = EnvironmentId.make("desktop");
+  const headless = EnvironmentId.make("headless");
+  const mini = EnvironmentId.make("mini-env");
+  const lidge = EnvironmentId.make("lidge-env");
+  const provider = () => ({ label: "Codex", driver: ProviderDriverKind.make("codex") });
+  const environments: FleetEnvironment[] = [
+    { ...env(mac, "jun's MacBook Pro"), machineId: "machine-mbp", machineUserId: "jun" },
+    { ...env(headless, "Headless server"), machineId: "machine-mbp", machineUserId: "jun" },
+    { ...env(mini, "MINI", ["mini"]), machineId: "machine-mini", connected: false },
+    { ...env(lidge, "lidge-AI-AI", ["lidge"]), machineId: "machine-lidge", connected: false },
+  ];
+  const dispatchedAt = "2026-10-24T09:32:00.000Z";
+  const headlessReports: FleetRemoteSource = {
+    dispatcherEnvironmentId: headless,
+    launches: [
+      launch({ host: "mini", threadId: ThreadId.make("ws9"), updatedAt: dispatchedAt }),
+      launch({ host: "lidge-ts", threadId: ThreadId.make("ws10"), updatedAt: dispatchedAt }),
+    ],
+    cloudMachines: [],
+  };
+
+  it("draws the desktop's server and its headless server as one machine with both servers' threads", () => {
+    const fleet = buildFleet({
+      environments: environments.slice(0, 2),
+      primaryEnvironmentId: mac,
+      shells: [shell(mac, "here"), ...["h1", "h2", "h3", "h4"].map((id) => shell(headless, id))],
+      remote: [],
+      provider,
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.environmentId])).toEqual([
+      ["jun's MacBook Pro", mac],
+    ]);
+    expect(fleet.machines[0]).toMatchObject({ running: 5, answering: true });
+    expect(fleet.machines[0]!.agents).toEqual([
+      { key: "codex", label: "Codex", driver: "codex", running: 5, attention: 0, reported: 0 },
+    ]);
+    expect(fleet.totals.machines).toBe(1);
+    expect(fleet.threads.find((thread) => thread.title === "h1")?.ref).toEqual({
+      environmentId: headless,
+      threadId: ThreadId.make("h1"),
+    });
+    const summary = summarizeFleet(
+      [shell(mac, "here"), shell(headless, "h1")],
+      environments.slice(0, 2),
+      mac,
+    );
+    expect(summary.machines).toEqual([
+      { environmentId: mac, label: "jun's MacBook Pro", running: 2, attention: 0 },
+    ]);
+  });
+
+  it("puts a host a same-machine server dispatched to on the connection that reaches it", () => {
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: mac,
+      // The desktop saw both remote threads before it restarted, so their shells are cached.
+      shells: [
+        shell(mini, "ws9", { title: "GCU WS9", updatedAt: "2026-10-24T09:00:00.000Z" }),
+        shell(lidge, "ws10", { title: "GCU WS10", updatedAt: "2026-10-24T09:00:00.000Z" }),
+      ],
+      remote: [headlessReports],
+      provider,
+    });
+    expect(fleet.machines.map((machine) => machine.label)).toEqual([
+      "jun's MacBook Pro",
+      "MINI",
+      "lidge-AI-AI",
+    ]);
+    expect(fleet.machines.map((machine) => [machine.label, machine.reported])).toEqual([
+      ["jun's MacBook Pro", 0],
+      ["MINI", 1],
+      ["lidge-AI-AI", 1],
+    ]);
+    // The cached shells name the agent, so no reported work stands in as an unknown one.
+    expect(fleet.machines.flatMap((machine) => machine.agents.map((agent) => agent.label))).toEqual(
+      ["Codex", "Codex"],
+    );
+    expect(fleet.threads.map((thread) => [thread.title, thread.ref, thread.state])).toEqual([
+      ["GCU WS9", null, "reported"],
+      ["GCU WS10", null, "reported"],
+    ]);
+  });
+
+  it("keeps reported work a cached shell shows finished, since only the dispatcher can tell", () => {
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: mac,
+      shells: [
+        // Stamped by lidge's clock after the dispatcher's last word, yet a resumed run is newer.
+        shell(lidge, "ws10", { status: "completed", updatedAt: "2026-10-24T09:40:00.000Z" }),
+      ],
+      remote: [headlessReports],
+      provider,
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.reported])).toEqual([
+      ["jun's MacBook Pro", 0],
+      ["MINI", 1],
+      ["lidge-AI-AI", 1],
+    ]);
+    expect(fleet.machines[2]!.reportedAliases).toEqual([{ via: headless, alias: "lidge-ts" }]);
+  });
+
+  it("reads another OS account's aliases as its own, even on the same machine", () => {
+    const fleet = buildFleet({
+      environments: [
+        environments[0]!,
+        { ...environments[1]!, machineUserId: "someone-else" },
+        ...environments.slice(2),
+      ],
+      primaryEnvironmentId: mac,
+      shells: [],
+      remote: [headlessReports],
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.subtitle])).toEqual([
+      ["jun's MacBook Pro", null],
+      ["MINI", null],
+      ["lidge-AI-AI", null],
+      ["mini", "via jun's MacBook Pro"],
+      ["lidge-ts", "via jun's MacBook Pro"],
+    ]);
+  });
+
+  it("puts an alias one server resolved on that machine for every server reading its SSH config", () => {
+    const fleet = buildFleet({
+      environments,
+      primaryEnvironmentId: mac,
+      shells: [shell(lidge, "ws10", { title: "GCU WS10" })],
+      remote: [
+        // The desktop's own report names lidge-ts with work this client has never loaded.
+        {
+          dispatcherEnvironmentId: mac,
+          launches: [launch({ host: "lidge-ts", title: "Other work" })],
+          cloudMachines: [],
+        },
+        headlessReports,
+      ],
+      provider,
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.reported])).toEqual([
+      ["jun's MacBook Pro", 0],
+      ["MINI", 1],
+      ["lidge-AI-AI", 2],
+    ]);
+    expect(fleet.machines[2]!.reportedAliases).toEqual([
+      { via: mac, alias: "lidge-ts" },
+      { via: headless, alias: "lidge-ts" },
+    ]);
+  });
+
+  it("counts one agent across a machine's servers only when both name the same provider", () => {
+    const work = ProviderInstanceId.make("work");
+    const providers = new Map([
+      [mac, { label: "Codex", driver: ProviderDriverKind.make("codex") }],
+      [headless, { label: "Claude", driver: ProviderDriverKind.make("claudeAgent") }],
+    ]);
+    const fleet = buildFleet({
+      environments: environments.slice(0, 2),
+      primaryEnvironmentId: mac,
+      shells: [
+        { ...shell(mac, "a"), providerInstanceId: work },
+        { ...shell(headless, "b"), providerInstanceId: work },
+      ],
+      remote: [],
+      provider: (environmentId) => providers.get(environmentId) ?? null,
+    });
+    expect(fleet.machines[0]!.agents.map((agent) => [agent.key, agent.label])).toEqual([
+      ["work", "Codex"],
+      [JSON.stringify([headless, "work"]), "Claude"],
+    ]);
+    expect(fleet.threads.map((thread) => thread.agentKey)).toEqual([
+      "work",
+      JSON.stringify([headless, "work"]),
+    ]);
+  });
+
+  it("keeps hosts apart when servers report different machines", () => {
+    const fleet = buildFleet({
+      environments: [
+        { ...env(mac, "Mac"), machineId: "machine-a" },
+        { ...env(headless, "Other"), machineId: "machine-b" },
+        { ...env(remote, "Old server") },
+      ],
+      primaryEnvironmentId: mac,
+      shells: [],
+      remote: [],
+    });
+    expect(fleet.machines.map((machine) => machine.label)).toEqual(["Mac", "Other", "Old server"]);
   });
 });

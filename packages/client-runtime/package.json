@@ -11,6 +11,10 @@
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
     },
+    "./computer-use-linux-setup": {
+      "types": "./src/computerUseLinuxSetup.ts",
+      "default": "./src/computerUseLinuxSetup.ts"
+    },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
       "default": "./src/memoryBrowsing.ts"
@@ -59,6 +63,10 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composerCapabilityItems": {
+      "types": "./src/composerCapabilityItems.ts",
+      "default": "./src/composerCapabilityItems.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"
@@ -66,6 +74,10 @@
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
+    },
+    "./computerUse/readinessSteps": {
+      "types": "./src/computerUse/readinessSteps.ts",
+      "default": "./src/computerUse/readinessSteps.ts"
     },
     "./computerUseGrant": {
       "types": "./src/computerUseGrant.ts",

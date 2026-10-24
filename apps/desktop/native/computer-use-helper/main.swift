@@ -175,6 +175,9 @@ func runLauncher() -> Never {
 
 // MARK: - Service
 
+/// Nanoseconds on a clock that never jumps with wall-clock changes.
+func monotonicNanoseconds() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+
 struct HelperError: Error {
   let code: String
   let message: String
@@ -271,6 +274,7 @@ final class DriverService {
       switch method {
       case "permissions": result = permissions(prompt: params["prompt"] as? Bool == true)
       case "start": result = try start(params)
+      case "listApps": result = try listApps()
       case "stop":
         stop()
         result = [:]
@@ -326,20 +330,7 @@ final class DriverService {
     }
     if params["noOverlay"] as? Bool == true { arguments.append("--no-overlay") }
 
-    var environment: [String: String] = [:]
-    for (name, value) in ProcessInfo.processInfo.environment
-    where inheritedNames.contains(name) || name.hasPrefix("LC_") {
-      environment[name] = value
-    }
-    for entry in params["environment"] as? [[String: Any]] ?? [] {
-      guard let name = entry["name"] as? String, let value = entry["value"] as? String,
-        hostSettableNames.contains(name)
-      else { continue }
-      environment[name] = value
-    }
-    for (name, value) in privacyEnvironment { environment[name] = value }
-    environment["CUA_DRIVER_EMBEDDED"] = "1"
-    environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = String(getpid())
+    let environment = driverEnvironment(params["environment"] as? [[String: Any]] ?? [])
 
     let process = Process()
     let pipe = Pipe()
@@ -389,6 +380,173 @@ final class DriverService {
     stop()
     throw HelperError(
       code: "startup_timeout", message: "Cua Driver did not become ready within 20 seconds.")
+  }
+
+/// What every driver this helper runs inherits: the allowlisted names, the host's tuning
+  /// knobs, privacy switches forced off, and embedded mode under this process.
+  func driverEnvironment(_ settable: [[String: Any]]) -> [String: String] {
+    var environment: [String: String] = [:]
+    for (name, value) in ProcessInfo.processInfo.environment
+    where inheritedNames.contains(name) || name.hasPrefix("LC_") {
+      environment[name] = value
+    }
+    for entry in settable {
+      guard let name = entry["name"] as? String, let value = entry["value"] as? String,
+        hostSettableNames.contains(name)
+      else { continue }
+      environment[name] = value
+    }
+    for (name, value) in privacyEnvironment { environment[name] = value }
+    environment["CUA_DRIVER_EMBEDDED"] = "1"
+    environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = String(getpid())
+    return environment
+  }
+
+  /// The apps the driver can see, for the host's capability manifest. The driver runs only
+  /// after the same seal check as start, as a short-lived socket-free process in this helper's
+  /// responsibility chain (#1241); listing reads LaunchServices and needs no grant.
+  ///
+  /// Spawned and reaped here, not through Process: one thread reads with poll() against an
+  /// absolute deadline, and the child is signalled only while it is still unreaped, so its pid
+  /// cannot have been reused by the time TERM or KILL is sent.
+  func listApps() throws -> [String: Any] {
+    guard let driverPath, FileManager.default.isExecutableFile(atPath: driverPath) else {
+      throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.")
+    }
+    if let refusal = driverRefusal(driverPath) {
+      throw HelperError(code: "driver_untrusted", message: refusal)
+    }
+    var toDriver: [Int32] = [-1, -1]
+    var fromDriver: [Int32] = [-1, -1]
+    guard pipe(&toDriver) == 0 else {
+      throw HelperError(code: "spawn_failed", message: "Could not create a pipe for Cua Driver.")
+    }
+    guard pipe(&fromDriver) == 0 else {
+      close(toDriver[0])
+      close(toDriver[1])
+      throw HelperError(code: "spawn_failed", message: "Could not create a pipe for Cua Driver.")
+    }
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_adddup2(&actions, toDriver[0], 0)
+    posix_spawn_file_actions_adddup2(&actions, fromDriver[1], 1)
+    posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
+    // Only the three descriptors above reach the driver: not this helper's channel to the
+    // desktop, nor a running daemon's liveness pipe.
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+    var environment = driverEnvironment([])
+    environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
+    let argv = [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", bundleId]
+      .map { strdup($0) } + [nil]
+    let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+    var child: pid_t = 0
+    let spawned = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
+    argv.forEach { free($0) }
+    envp.forEach { free($0) }
+    close(toDriver[0])
+    close(fromDriver[1])
+    guard spawned == 0 else {
+      close(toDriver[1])
+      close(fromDriver[0])
+      throw HelperError(code: "spawn_failed", message: "Could not start Cua Driver (\(spawned)).")
+    }
+    defer {
+      close(toDriver[1])
+      var status: Int32 = 0
+      // TERM, a short grace, then KILL, all before this helper reaps the child, so the pid
+      // still names it; then reap it, so it never lingers as a zombie.
+      if waitpid(child, &status, WNOHANG) == 0 {
+        kill(child, SIGTERM)
+        let grace = monotonicNanoseconds() + 1_000_000_000
+        var reaped = false
+        while monotonicNanoseconds() < grace {
+          if waitpid(child, &status, WNOHANG) != 0 {
+            reaped = true
+            break
+          }
+          usleep(20_000)
+        }
+        if !reaped {
+          kill(child, SIGKILL)
+          while waitpid(child, &status, 0) == -1 && errno == EINTR {}
+        }
+      }
+      close(fromDriver[0])
+    }
+    signal(SIGPIPE, SIG_IGN)
+    func send(_ message: [String: Any]) {
+      guard var data = try? JSONSerialization.data(withJSONObject: message) else { return }
+      data.append(0x0A)
+      data.withUnsafeBytes { bytes in
+        var offset = 0
+        while offset < bytes.count {
+          let written = write(toDriver[1], bytes.baseAddress! + offset, bytes.count - offset)
+          if written < 0 && errno == EINTR { continue }
+          if written <= 0 { return }
+          offset += written
+        }
+      }
+    }
+    // Monotonic, so a clock change cannot stretch or cut the wait.
+    let deadline = monotonicNanoseconds() + 15_000_000_000
+    var buffer = Data()
+    var replies: [Int: [String: Any]] = [:]
+    /// Reads until the reply with id arrives, the driver closes its output, or the deadline.
+    func reply(_ id: Int) -> [String: Any]? {
+      var chunk = [UInt8](repeating: 0, count: 65_536)
+      while replies[id] == nil {
+        let now = monotonicNanoseconds()
+        if now >= deadline { return nil }
+        let remainingMs = Int32(min((deadline - now) / 1_000_000, 1000))
+        var descriptor = pollfd(fd: fromDriver[0], events: Int16(POLLIN), revents: 0)
+        let ready = poll(&descriptor, 1, remainingMs)
+        if ready < 0 && errno == EINTR { continue }
+        if ready <= 0 { continue }
+        let count = read(fromDriver[0], &chunk, chunk.count)
+        if count < 0 && errno == EINTR { continue }
+        if count <= 0 { return nil }
+        buffer.append(contentsOf: chunk[0..<count])
+        if buffer.count > maxLineBytes * 4 { return nil }
+        while let newline = buffer.firstIndex(of: 0x0A) {
+          let line = buffer.subdata(in: buffer.startIndex..<newline)
+          buffer.removeSubrange(buffer.startIndex...newline)
+          if let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let messageId = message["id"] as? Int, messageId == 1 || messageId == 2
+          {
+            // Only the two replies this exchange asks for are kept, so memory stays bounded.
+            replies[messageId] = message
+          }
+        }
+      }
+      return replies[id]
+    }
+    send([
+      "jsonrpc": "2.0", "id": 1, "method": "initialize",
+      "params": [
+        "protocolVersion": "2025-06-18", "capabilities": [:] as [String: Any],
+        "clientInfo": ["name": "goat-computer-use", "version": "1"],
+      ],
+    ])
+    guard reply(1) != nil else {
+      throw HelperError(code: "list_failed", message: "Cua Driver did not start listing apps.")
+    }
+    send(["jsonrpc": "2.0", "method": "notifications/initialized"])
+    send([
+      "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+      "params": ["name": "list_apps", "arguments": [:] as [String: Any]],
+    ])
+    guard let answer = reply(2), answer["error"] == nil,
+      let result = answer["result"] as? [String: Any], result["isError"] as? Bool != true,
+      let structured = result["structuredContent"] as? [String: Any],
+      let apps = structured["apps"] as? [Any]
+    else {
+      throw HelperError(code: "list_failed", message: "Cua Driver could not list apps.")
+    }
+    return ["apps": apps]
   }
 
   /// Closing the liveness pipe is the daemon's orderly shutdown signal; a daemon that ignores

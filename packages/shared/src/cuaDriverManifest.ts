@@ -139,7 +139,7 @@ export function cuaDriverCapabilityManifest(input: {
   const q = (value: string) => JSON.stringify(value);
   const tools = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
   return [
-    "# Written by GOAT at each driver start. See ADR-0020.",
+    "# Written by GOAT at each driver start. See ADR-0022.",
     "version: 3",
     "resources:",
     "  desktop:",
@@ -262,8 +262,10 @@ export async function prepareCuaDriverCapabilityManifest(input: {
   readonly environment: Readonly<Record<string, string>>;
   readonly hostBundleIds: ReadonlyArray<string>;
   readonly path: string;
+  /** Lists apps through a helper that verifies the driver first, instead of running it here. */
+  readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
 }): Promise<string> {
-  const apps = await listCuaDriverApplications(input);
+  const apps = await (input.listApplications?.() ?? listCuaDriverApplications(input));
   return writeCuaDriverCapabilityManifest(
     input.path,
     cuaDriverCapabilityManifest({

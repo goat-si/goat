@@ -28,6 +28,7 @@ export const COMPOSER_CONTEXT_KINDS = [
   "mention",
   "skill",
   "thread",
+  "capability",
 ] as const;
 export type KnownComposerContextKind = (typeof COMPOSER_CONTEXT_KINDS)[number];
 
@@ -225,6 +226,22 @@ export const ThreadContextRecord = Schema.Struct({
 });
 export type ThreadContextRecord = typeof ThreadContextRecord.Type;
 
+/**
+ * Something the agent may use for this turn only, chosen with `@computer` or `@browser`.
+ * The server reads the capabilities still referenced in the text when it prepares the turn;
+ * the record carries no grant of its own, so every existing gate still applies.
+ */
+export const TURN_CAPABILITIES = ["computer-use", "browser"] as const;
+export const TurnCapability = Schema.Literals(TURN_CAPABILITIES);
+export type TurnCapability = typeof TurnCapability.Type;
+
+export const CapabilityContextRecord = Schema.Struct({
+  ...recordBase,
+  kind: Schema.Literal("capability"),
+  capability: TurnCapability,
+});
+export type CapabilityContextRecord = typeof CapabilityContextRecord.Type;
+
 const isJson = Schema.is(Schema.Json);
 
 /**
@@ -258,6 +275,7 @@ export const KnownComposerContextRecord = Schema.Union([
   MentionContextRecord,
   SkillContextRecord,
   ThreadContextRecord,
+  CapabilityContextRecord,
 ]);
 export type KnownComposerContextRecord = typeof KnownComposerContextRecord.Type;
 

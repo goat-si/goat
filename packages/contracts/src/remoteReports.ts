@@ -9,6 +9,7 @@ import {
 } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ThreadResultOutcome } from "./threadResult.ts";
+import { TurnCapability } from "./composerContext.ts";
 import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
 
 export const REMOTE_REPORT_SUMMARY_MAX_CHARS = 4000;
@@ -29,6 +30,11 @@ export const RemoteReportBindingInput = Schema.Struct({
    * reach. Only an origin that reads relay reports sets it; an older remote drops it.
    */
   relaySend: Schema.optional(Schema.Boolean),
+  /**
+   * The origin also delivers a relayed send's turn capabilities. Without it a relay that asks
+   * for them is refused instead of losing them on the way.
+   */
+  relayCapabilities: Schema.optional(Schema.Boolean),
 });
 export type RemoteReportBindingInput = typeof RemoteReportBindingInput.Type;
 /** A goat_thread_send the remote thread asked its origin to deliver on its behalf. */
@@ -37,6 +43,8 @@ export const RemoteRelaySend = Schema.Struct({
   threadId: ThreadId,
   message: TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)),
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  /** The turn capabilities the send asked for; an older origin drops them. */
+  capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
 });
 export type RemoteRelaySend = typeof RemoteRelaySend.Type;

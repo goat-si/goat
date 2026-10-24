@@ -1829,6 +1829,7 @@ const sibling = {
   host: "juns-macbook-pro",
   threadId: ThreadId.make("merge-manager"),
   message: "PR #48 is open.",
+  capabilities: ["browser"],
 } as const;
 const relayReport = (sequence: number, relay: RemoteRelaySend): RemoteReport => ({
   ...report(sequence),
@@ -1851,9 +1852,8 @@ it.effect("relays a send as the launcher, within its runtime mode, and re-arms i
         ),
       );
       const send = yield* Queue.take(f.calls);
-      assert.equal(send.call.host, sibling.host);
-      assert.equal(send.call.tool, "goat_thread_send");
-      assert.isTrue(send.call.writes);
+      assert.deepEqual(send.call.arguments.capabilities, ["browser"]);
+      assert.deepInclude(send.call, { host: sibling.host, tool: "goat_thread_send", writes: true });
       assert.equal(send.ceiling, "approval-required");
       assert.equal(send.call.arguments.mode, "auto");
       assert.match(

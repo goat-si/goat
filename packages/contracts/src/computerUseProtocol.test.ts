@@ -7,6 +7,9 @@ import {
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseActionResult,
   ComputerUseCapabilities,
+  ComputerUseElement,
+  ComputerUseEventFrame,
+  ComputerUseWatchRequest,
   ComputerUseActionRequest,
   ComputerUseHelloReply,
   ComputerUseKey,
@@ -14,6 +17,7 @@ import {
   ComputerUseReadiness,
   ComputerUseRequestFrame,
   admitComputerUseReply,
+  admitComputerUseEvent,
   computerUseDeadlineResult,
   computerUseNextStep,
   computerUseImageInfo,
@@ -38,6 +42,7 @@ describe("computer use helper protocol", () => {
       platform: "linux",
       methods: allMethods("unsupported"),
       backgroundDelivery: false,
+      signals: { privateMode: "unsupported", humanInput: "unsupported" },
     };
     expect(decodeCapabilities(complete)._tag).toBe("Success");
     const { drag: _drag, ...missing } = allMethods("supported");
@@ -196,6 +201,7 @@ describe("computer use protocol values", () => {
         platform: "mac",
         methods: allMethods("supported"),
         backgroundDelivery: true,
+        signals: { privateMode: "supported", humanInput: "supported" },
       },
     };
     expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 1024 * 1024 })).toBe(true);
@@ -330,5 +336,144 @@ describe("computer use readiness and reply images", () => {
         png,
       ),
     ).toMatch(/private/);
+  });
+});
+
+describe("computer use safety signals", () => {
+  const decodes = (schema: Schema.Codec<unknown, unknown>, value: unknown) =>
+    Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+  const capabilities = {
+    protocol: 1,
+    platform: "linux",
+    methods: Object.fromEntries(COMPUTER_USE_METHODS.map((method) => [method, "supported"])),
+    backgroundDelivery: true,
+    signals: { privateMode: "supported", humanInput: "unsupported" },
+  };
+
+  it("makes every helper say whether it can raise each safety signal", () => {
+    expect(decodes(ComputerUseCapabilities, capabilities)).toBe(true);
+    const { signals: _signals, ...silent } = capabilities;
+    expect(decodes(ComputerUseCapabilities, silent)).toBe(false);
+    expect(
+      decodes(ComputerUseCapabilities, { ...capabilities, signals: { privateMode: "supported" } }),
+    ).toBe(false);
+  });
+
+  it("accepts events only from the current helper generation and within the frame limit", () => {
+    const frame = Schema.decodeUnknownSync(ComputerUseEventFrame)({
+      generation: "g2",
+      watchId: "w1",
+      event: { type: "privateMode", active: true, target: { pid: 10, windowId: 20 } },
+    });
+    const admit = (generation: string, frameBytes = 120, watchId: string | undefined = "w1") =>
+      admitComputerUseEvent({ frame, frameBytes, maxFrameBytes: 64 * 1024, generation, watchId });
+    expect(admit("g2")).toBe("deliver");
+    expect(admit("g3")).toBe("wrongGeneration");
+    expect(admit("g2", 70 * 1024)).toBe("frameTooLarge");
+    // A later watch in the same helper, or none at all, never sees this watch's events.
+    expect(admit("g2", 120, "w2")).toBe("notWatching");
+    expect(
+      admitComputerUseEvent({
+        frame,
+        frameBytes: 120,
+        maxFrameBytes: 64 * 1024,
+        generation: "g2",
+        watchId: undefined,
+      }),
+    ).toBe("notWatching");
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        watchId: "w1",
+        event: { type: "humanInput", source: "pointer" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        watchId: "w1",
+        event: { type: "humanInput", source: "touch" },
+      }),
+    ).toBe(false);
+    // Events carry no content: a typed-text field does not survive decoding.
+    const typed = Schema.decodeUnknownSync(ComputerUseEventFrame)({
+      generation: "g2",
+      watchId: "w1",
+      event: { type: "humanInput", source: "keyboard", text: "hunter2" },
+    });
+    expect(JSON.stringify(typed)).not.toContain("hunter2");
+  });
+
+  it("watches at least one window, and reports who the helper is to the OS", () => {
+    expect(
+      decodes(ComputerUseWatchRequest, { watchId: "w1", targets: [{ pid: 1, windowId: 2 }] }),
+    ).toBe(true);
+    expect(decodes(ComputerUseWatchRequest, { watchId: "w1", targets: [] })).toBe(false);
+    expect(decodes(ComputerUseWatchRequest, { targets: [{ pid: 1, windowId: 2 }] })).toBe(false);
+    const diagnosed = {
+      grants: { accessibility: "denied", screenCapture: "granted" },
+      helper: "authenticated",
+      capture: "ready",
+      tree: "unavailable",
+      input: "background",
+      blockers: [],
+      reasons: ["Accessibility is off for GOAT Computer Use."],
+      diagnostics: {
+        executable:
+          "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        pid: 4100,
+        responsiblePid: 4100,
+        codeRequirement: 'identifier "si.goat.desktop.computer-use" and anchor apple generic',
+        accessibilityTrusted: false,
+      },
+    };
+    expect(decodes(ComputerUseReadiness, diagnosed)).toBe(true);
+  });
+});
+
+describe("computer use watch ordering", () => {
+  it("delivers the old watch's clearing event and the new watch's initial state across a rewatch", () => {
+    const target = { pid: 10, windowId: 20 };
+    const frame = (watchId: string, active: boolean) =>
+      Schema.decodeUnknownSync(ComputerUseEventFrame)({
+        generation: "g1",
+        watchId,
+        event: { type: "privateMode", active, target },
+      });
+    // The client's watch in force changes only when the helper answers the new watch.
+    let inForce: string | undefined = "w1";
+    const admit = (event: ReturnType<typeof frame>) =>
+      admitComputerUseEvent({
+        frame: event,
+        frameBytes: 120,
+        maxFrameBytes: 64 * 1024,
+        generation: "g1",
+        watchId: inForce,
+      });
+
+    // The client sends watch w2, which drops the target that was private. Before answering, the
+    // helper clears it under w1, and the client, still on w1, receives it.
+    expect(admit(frame("w1", false))).toBe("deliver");
+    // The answer arrives; from now on w2 is in force.
+    inForce = "w2";
+    // The new watch's initial state follows under w2.
+    expect(admit(frame("w2", false))).toBe("deliver");
+    // Anything still in flight from w1 is dropped.
+    expect(admit(frame("w1", true))).toBe("notWatching");
+    // After unwatch is answered nothing is in force.
+    inForce = undefined;
+    expect(admit(frame("w2", false))).toBe("notWatching");
+  });
+});
+
+describe("computer use element state values", () => {
+  it("carries checked, selected, enabled and expanded, with mixed for an indeterminate box", () => {
+    const decode = Schema.decodeUnknownExit(ComputerUseElement);
+    const element = { ref: "l:1", role: "CheckBox", label: "Agree", actions: ["Toggle"] };
+    expect(decode({ ...element, state: { checked: "mixed", enabled: true } })._tag).toBe("Success");
+    expect(
+      decode({ ...element, state: { checked: true, selected: false, expanded: false } })._tag,
+    ).toBe("Success");
+    expect(decode({ ...element, state: { checked: "on" } })._tag).toBe("Failure");
   });
 });
