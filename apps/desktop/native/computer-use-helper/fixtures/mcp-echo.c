@@ -32,7 +32,9 @@ int main(void) {
       fputs("holding\n", stderr);
       for (;;) pause();
     } else if (strstr(line, "fixture/invalid-reply")) {
-      puts("[]");
+      if (strstr(line, "trailing")) puts("{\"value\":[1,]}");
+      else if (strstr(line, "bom")) puts("\xef\xbb\xbf{}");
+      else puts("[]");
       fflush(stdout);
     } else if (strstr(line, "fixture/tail")) {
       fputs("{\"jsonrpc\":\"2.0\",\"id\":\"tail\",\"result\":{\"ok\":true}}", stdout);

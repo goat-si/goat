@@ -178,11 +178,17 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
   });
 
   it("refuses an unreadable driver reply instead of forwarding it", async () => {
-    const session = await start();
-    session.collect();
-    session.child.stdin.end('{"jsonrpc":"2.0","method":"fixture/invalid-reply"}\n');
-    expect((await session.closed).code).toBe(65);
-    expect(session.output()).toBe(ready);
+    for (const method of [
+      "fixture/invalid-reply",
+      "fixture/invalid-reply-trailing",
+      "fixture/invalid-reply-bom",
+    ]) {
+      const session = await start();
+      session.collect();
+      session.child.stdin.end(JSON.stringify({ jsonrpc: "2.0", method }) + "\n");
+      expect((await session.closed).code).toBe(65);
+      expect(session.output()).toBe(ready);
+    }
   });
 
   it("delivers cancellation under output backpressure and stops only its own process group", async () => {
