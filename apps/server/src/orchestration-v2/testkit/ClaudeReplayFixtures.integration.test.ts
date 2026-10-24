@@ -8,6 +8,7 @@ import {
   type ProviderReplayEntry,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -155,6 +156,11 @@ describe("Claude Agent SDK replay fixtures", () => {
               );
             assert.exists(command);
             const streamed = result.commandOutput?.get(command.id);
+            if (HostProcess.Platform.defaultValue() === "win32") {
+              // Claude Code's task files have no known Windows location (#1165).
+              assert.notExists(streamed, "Claude streams no live command output on Windows");
+              return;
+            }
             assert.exists(streamed, "the subagent's command must stream its output");
             assert.include(streamed.output.text, "SUB_DONE_1");
           },
