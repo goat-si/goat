@@ -2,6 +2,7 @@ import * as NodeUtil from "node:util";
 
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -125,13 +126,42 @@ describe("redactLogText", () => {
     },
   );
 
-  it("finds a token by its payload when a long prefix joins a long header", () => {
-    const header = Buffer.from(JSON.stringify({ alg: "HS256", kid: "k".repeat(5_000) })).toString(
-      "base64url",
-    );
+  it("finds a token joined to a long prefix whatever the length of its header", () => {
+    const longHeader = Buffer.from(
+      JSON.stringify({ alg: "HS256", kid: "k".repeat(5_000) }),
+    ).toString("base64url");
     const payload = Buffer.from('{"sub":"canary-joined"}').toString("base64url");
-    const text = redactLogText(`${"x".repeat(300)}${header}.${payload}.c2ln done`);
-    expect(text).toBe("*** done");
+    const jws = redactLogText(`${"x".repeat(300)}${longHeader}.${payload}.c2ln done`);
+    expect(jws).toBe(`${"x".repeat(300)}*** done`);
+    // A JWE has no JSON payload; its five parts are found by the header alone.
+    const jweHeader = Buffer.from(
+      JSON.stringify({ alg: "dir", enc: "A256GCM", kid: "k".repeat(5_000) }),
+    ).toString("base64url");
+    const jwe = redactLogText(`${"x".repeat(300)}${jweHeader}..aXY.Y2FuYXJ5LWNpcGhlcg.dGFn done`);
+    expect(jwe).toBe(`${"x".repeat(300)}*** done`);
+  });
+
+  it("renders span frames by name without running a frame's code", () => {
+    let reads = 0;
+    let calls = 0;
+    const frame = {
+      get name() {
+        reads += 1;
+        return "frame";
+      },
+      stack() {
+        calls += 1;
+        return undefined;
+      },
+      parent: { name: "spanName", stack: () => undefined, parent: undefined },
+    };
+    const reason = Cause.makeDieReason(new Error("original failure")).annotate(
+      Context.make(Cause.StackTrace, frame),
+    );
+    const printed = Cause.pretty(redactCause(Cause.fromReasons([reason])));
+    expect(printed).toContain("original failure");
+    expect(printed).toContain("at spanName");
+    expect([reads, calls]).toEqual([0, 0]);
   });
 
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {

@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as ErrorReporter from "effect/ErrorReporter";
 import type * as Fiber from "effect/Fiber";
 import * as Logger from "effect/Logger";
 import * as Redactable from "effect/Redactable";
@@ -144,33 +145,39 @@ function isJoseHeader(part: string): boolean {
   }
 }
 
-// The first base64url character of a JSON header: "{" or the whitespace that may precede it.
-const HEADER_LEAD = /[eICD]/;
-const MAX_HEADER_OFFSET = 256;
-// A header is at the end of its part, so offsets this close to the end are tried as well.
-const MAX_HEADER_LENGTH = 4_096;
+/**
+ * Whether a JSON object, or the whitespace JSON allows before one, can start decoding at this
+ * offset: "{" encodes as e then one of w-z, 0-9, - or _; space as I then A-P; tab and CR as C or D
+ * then Q-Z or a-f; line feed as C then g-v. Two characters screen an offset without decoding.
+ */
+function mayStartObject(part: string, offset: number): boolean {
+  const lead = part.charAt(offset);
+  const next = part.charAt(offset + 1);
+  if (lead === "e") return /[w-z0-9_-]/.test(next);
+  if (lead === "I") return /[A-P]/.test(next);
+  if (lead === "C") return /[Q-Za-v]/.test(next);
+  if (lead === "D") return /[Q-Za-f]/.test(next);
+  return false;
+}
+
 const MAX_HEADER_CHECKS = 8;
 
 /**
  * Where a JOSE header starts inside a base64url part, if one does. Text joined to the token without
- * a dot (jwt-, id_, a word) shares its first part, so each offset where a header could begin is
- * tried. accepts decides on the decoded rest; a cheap look at its start screens most offsets.
+ * a dot (jwt-, id_, a word) shares its first part, so every offset is tried. A two-character screen
+ * and a short decode keep that linear; a part that keeps looking like a header after a few full
+ * checks is masked from its first candidate rather than checked without end.
  */
 function headerOffset(part: string, accepts: (rest: string) => boolean): number | undefined {
-  const tail = Math.max(MAX_HEADER_OFFSET + 1, part.length - MAX_HEADER_LENGTH);
   let first: number | undefined;
   let checks = 0;
   for (let offset = 0; offset <= part.length - 8; offset++) {
-    if (offset > MAX_HEADER_OFFSET && offset < tail) offset = tail;
-    if (!HEADER_LEAD.test(part.charAt(offset))) continue;
+    if (!mayStartObject(part, offset)) continue;
     const rest = part.slice(offset);
     // Twelve decoded bytes show whether an object starts here. A header led by whitespace is also
     // found from a later offset in that whitespace, four characters apart, closer to its "{".
-    const start = Buffer.from(rest.slice(0, 16), "base64url").toString("utf8");
-    if (!/^\s*\{/.test(start)) continue;
+    if (!/^\s*\{/.test(Buffer.from(rest.slice(0, 16), "base64url").toString("utf8"))) continue;
     first ??= offset;
-    // Each full check decodes the rest of the part; a part that keeps looking like a header is
-    // masked from its first candidate rather than checked without end.
     if (++checks > MAX_HEADER_CHECKS) return first;
     if (accepts(rest)) return withLeadingWhitespace(part, offset);
   }
@@ -228,7 +235,7 @@ function startsJsonObject(part: string): boolean {
 
 /** Whether a whole base64url part decodes to a JSON object: a JWS payload. */
 function isJsonObject(part: string): boolean {
-  if (part.length < 2) return false;
+  if (part.length < 2 || !mayStartObject(part, 0)) return false;
   try {
     const value: unknown = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -336,21 +343,47 @@ const MAX_STACK_CHARS = 8_000;
  * any redaction, so the frames are rendered here instead and redacted with the rest.
  */
 export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> => {
-  // The reasons are read once, through descriptors: neither the cause nor its list can run code
-  // that shows a sink something other than what was redacted here.
-  const listed = guarded(() => Reflect.get(cause, "reasons"), []);
-  const length = guarded(
+  const { reasons, total } = reasonSnapshot(cause);
+  const redacted = reasons.map(redactReason);
+  if (total > reasons.length)
+    redacted.push(Cause.makeDieReason(new Error(`${total - reasons.length} more reasons omitted`)));
+  return Cause.fromReasons(redacted);
+};
+
+/**
+ * Each Die reason of a reported cause as its own redacted cause, skipping defects Effect marks as
+ * ignored (an own ErrorReporter.ignore field set to true). A reason whose kind cannot be read is
+ * reported as an uninspectable defect rather than dropped. Read like {@link redactCause}.
+ */
+export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<unknown>> =>
+  reasonSnapshot(cause).reasons.flatMap((reason) => {
+    const tag = dataProperty(reason, "_tag");
+    return tag === "Fail" ||
+      tag === "Interrupt" ||
+      dataProperty(dataProperty(reason, "defect"), ErrorReporter.ignore) === true
+      ? []
+      : [Cause.fromReasons([redactReason(reason)])];
+  });
+
+/**
+ * A cause's first reasons and their count, read once through descriptors: neither the cause nor
+ * its list can run code that shows a sink something other than what is redacted here.
+ */
+function reasonSnapshot(cause: Cause.Cause<unknown>): {
+  readonly reasons: Array<unknown>;
+  readonly total: number;
+} {
+  const listed = dataProperty(cause, "reasons");
+  const total = guarded(
     () =>
       Array.isArray(listed) ? Number(Object.getOwnPropertyDescriptor(listed, "length")?.value) : 0,
     0,
   );
-  const reasons: Array<Cause.Reason<unknown>> = [];
-  for (let index = 0; index < Math.min(length, MAX_REASONS); index++)
-    reasons.push(redactReason(dataProperty(listed, index)));
-  if (length > MAX_REASONS)
-    reasons.push(Cause.makeDieReason(new Error(`${length - MAX_REASONS} more reasons omitted`)));
-  return Cause.fromReasons(reasons);
-};
+  const reasons: Array<unknown> = [];
+  for (let index = 0; index < Math.min(total, MAX_REASONS); index++)
+    reasons.push(dataProperty(listed, index));
+  return { reasons, total };
+}
 
 /** An own data property's value; a getter, a missing property or a throwing object give nothing. */
 function dataProperty(target: unknown, key: PropertyKey): unknown {
@@ -452,21 +485,23 @@ function inspectError(
   return error;
 }
 
-/** The span frames Effect would print for these annotations, rendered once and redacted. */
+const MAX_FRAMES = 10;
+
+/**
+ * The span names Effect would print as frames for these annotations, read as data: Effect renders
+ * a frame by calling its own stack() and reading getters, which a forged frame could abuse, so only
+ * each frame's name and parent are read, through descriptors.
+ */
 function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
-  try {
-    const placeholder = new Error("frames");
-    placeholder.stack = "Error: frames";
-    const reason = Cause.makeDieReason(placeholder).annotate(
-      // Intrinsic iteration: a Map subclass's own iterator never runs.
-      Context.makeUnsafe(new Map(Map.prototype.entries.call(annotations))),
-    );
-    const rendered = Cause.prettyErrors(Cause.fromReasons([reason]))[0]?.stack ?? "";
-    const firstFrame = rendered.indexOf("\n");
-    return firstFrame === -1 ? "" : redactLogText(rendered.slice(firstFrame));
-  } catch {
-    return "";
+  const lines: Array<string> = [];
+  let frame = guarded(() => Map.prototype.get.call(annotations, Cause.StackTrace.key), undefined);
+  while (frame !== undefined && lines.length < MAX_FRAMES) {
+    const name = dataProperty(frame, "name");
+    if (typeof name === "string")
+      lines.push(`    at ${bounded(redactLogText(name), MAX_NAME_CHARS)}`);
+    frame = dataProperty(frame, "parent");
   }
+  return lines.length === 0 ? "" : `\n${lines.join("\n")}`;
 }
 
 const MAX_DEPTH = 8;

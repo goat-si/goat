@@ -84,6 +84,37 @@ describe("DefectReporter", () => {
     ),
   );
 
+  it.effect(
+    "reads a reported cause without running its list's iterator or a reason's getters",
+    () =>
+      withErrorLogs((logs) =>
+        Effect.gen(function* () {
+          const forged = [Cause.makeDieReason(new Error("original failure"))];
+          Object.defineProperty(forged, Symbol.iterator, {
+            value: () => {
+              throw new Error("iterator must not run");
+            },
+          });
+          const getterReason = Cause.makeDieReason(new Error("second failure"));
+          Object.defineProperty(getterReason, "_tag", {
+            get: () => {
+              throw new Error("getter must not run");
+            },
+          });
+          yield* ErrorReporter.report(Cause.fromReasons(forged)).pipe(
+            Effect.provide(DefectReporter.layer),
+          );
+          yield* ErrorReporter.report(Cause.fromReasons([getterReason])).pipe(
+            Effect.provide(DefectReporter.layer),
+          );
+
+          assert.include(Cause.pretty(yield* Queue.take(logs)), "original failure");
+          // A reason whose kind cannot be read is still reported, as an uninspectable defect.
+          assert.include(Cause.pretty(yield* Queue.take(logs)), "[uninspectable]");
+        }),
+      ),
+  );
+
   it.effect("a dying RPC handler fails alone, and its defect is logged", () =>
     withErrorLogs((logs) =>
       Effect.gen(function* () {
