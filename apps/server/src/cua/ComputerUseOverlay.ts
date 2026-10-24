@@ -23,6 +23,8 @@ import type {
   ComputerUsePauseReason,
 } from "@goat/contracts";
 
+import { targetOf } from "./computerUseTarget.ts";
+
 /** Input the driver delivers to a window, with the argument names that carry its point. */
 const INPUT_POINTS: Readonly<Record<string, readonly [string, string] | null>> = {
   click: ["x", "y"],
@@ -105,19 +107,8 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
     ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 
-const integer = (value: unknown) =>
-  typeof value === "number" && Number.isInteger(value) ? value : undefined;
-
 const finite = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
-
-/** The window a call targets, top level or as an exact window target. */
-function windowOf(args: Readonly<Record<string, unknown>> | undefined) {
-  const target = record(args?.target);
-  const pid = integer(args?.pid) ?? integer(target?.pid);
-  const windowId = integer(args?.window_id) ?? integer(target?.window_id);
-  return pid === undefined || windowId === undefined ? undefined : { pid, windowId };
-}
 
 const clamp = (value: number) => Math.min(1, Math.max(0, value));
 
@@ -175,7 +166,7 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
       // Still recording until the driver says it stopped.
       if (event.name === "stop_recording")
         return { ...state, stopping: new Set(state.stopping).add(event.id) };
-      const window = windowOf(args);
+      const window = targetOf(event.args);
       const capture =
         CAPTURES.has(event.name) &&
         !(event.name === "get_window_state" && args?.include_screenshot === false);
