@@ -5,6 +5,9 @@
   pingdotgg/t3code#21694 at `b8569ac92` and #21695 at `dc307c8a7`. The commit messages do not
   record the alternatives below; they come from the lane plan and research for this program.
 - Related: [ADR-0003](ADR-0003-effect-services.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
+- Amended by: [ADR-0023](ADR-0023-goat-computer-use-app.md). The Electron-owned host and the
+  `si.goat.desktop` identity under "Identity" are superseded by a separate signed helper app; the
+  rest of this record stands.
 
 ## Decision record
 
