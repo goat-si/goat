@@ -51,6 +51,7 @@ import {
 } from "./ComputerUseCallReservations.ts";
 import { makeForegroundApprovals } from "./ComputerUseForeground.ts";
 import { makeAgentInputLog } from "./agentInputLog.ts";
+import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -435,9 +436,8 @@ const make = Effect.gen(function* () {
       next.controlId,
       everyApp === undefined ? handoffId : undefined,
     );
-    yield* kick;
-    // A proxy still holding the previous id hears it was replaced.
-    if (existing !== undefined && existing.ended === undefined) yield* changed;
+    // New controls publish immediately; reusing an existing control above publishes nothing.
+    yield* changed;
     return next as ComputerUseControl;
   });
 
@@ -603,7 +603,8 @@ const make = Effect.gen(function* () {
   // says which it can detect at all; a standalone server and an older helper report nothing, so
   // they detect neither (#1235). Read on every admission from the receiver's accepted report,
   // so a downgrade counts from the moment it arrives.
-  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
+  const linuxFrames = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
+  const fromDesktop: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
     ? desktop.value.cuaReadiness.pipe(
         Effect.map(
           Option.match({
@@ -617,6 +618,13 @@ const make = Effect.gen(function* () {
         ),
       )
     : Effect.succeed({ humanInput: false, privateMode: false, frames: false });
+  // A Linux server that runs the driver itself captures its own frames (#1370).
+  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(linuxFrames)
+    ? Effect.zipWith(fromDesktop, linuxFrames.value.supported, (reported, linux) => ({
+        ...reported,
+        frames: reported.frames || linux,
+      }))
+    : fromDesktop;
   if (Option.isSome(desktop))
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
@@ -642,6 +650,7 @@ const make = Effect.gen(function* () {
       // What the desktop last heard; it starts out not watching. After a failed write it may
       // have heard either value, so the current one goes out until a write succeeds.
       let delivered = false;
+      let deliveredApps: ReadonlyArray<string> = [];
       let unsure = false;
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
@@ -659,20 +668,41 @@ const make = Effect.gen(function* () {
         }
         // Proxies waiting on a pause hear their control ended.
         if (endedAny) yield* PubSub.publish(signals, undefined);
+        // Read approvals independently of pause state: a paused helper must keep watching. A
+        // failed read never holds back whether the desktop watches (secret fields, #1235): the
+        // apps it last heard stand, and the read is tried again.
+        const listed = yield* live().pipe(Effect.option);
+        const grants = Option.getOrElse(listed, () => []);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const expiries = [...controls.values()]
-          .filter(acting)
-          .map((record) => DateTime.toEpochMillis(record.expiresAt))
-          .filter((expiresAt) => expiresAt > now);
-        const active = expiries.length > 0;
+        const current = [...controls.values()].filter(
+          (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
+        );
+        const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
+        const approved = new Set<string>();
+        for (const record of current) {
+          if (record.everyApp !== undefined) continue;
+          const held = grants.filter(
+            (grant) =>
+              grant.threadId === record.threadId &&
+              (record.handoffId === undefined || grant.handoffId === record.handoffId),
+          );
+          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
+          for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
+        }
+        const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
+        const appsChanged =
+          apps.length !== deliveredApps.length ||
+          apps.some((app, index) => app !== deliveredApps[index]);
+        const active = current.length > 0;
         let retry = false;
-        if (active !== delivered || unsure) {
-          const sent = yield* receiver.setCuaWatch(active).pipe(
+        if (active !== delivered || appsChanged || unsure) {
+          const sent = yield* receiver.setCuaWatch(active, apps).pipe(
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
           if (sent) {
             delivered = active;
+            deliveredApps = apps;
             unsure = false;
           } else {
             unsure = true;
@@ -682,7 +712,8 @@ const make = Effect.gen(function* () {
         const waits = [
           ...(active ? [Math.min(...expiries) - now] : []),
           // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
-          ...(retry ? [WATCH_RETRY_MS] : []),
+          // So is a failed approval read.
+          ...(retry || Option.isNone(listed) ? [WATCH_RETRY_MS] : []),
         ];
         const woken = PubSub.take(kicks);
         yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;

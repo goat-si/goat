@@ -56,11 +56,14 @@ describe("searchSettings", () => {
   it.each([
     ["use this device as a hub", "hub-device", "/settings/connections"],
     ["hub devices", "hub-devices", "/settings/hub"],
-    ["devices on this hub", "hub-nodes", "/settings/connections"],
+    ["devices on this hub", "hub-devices", "/settings/hub"],
+    ["devices on this hub", "hub-nodes", "/settings/hub"],
+    ["opencodex devices", "hub-devices", "/settings/hub"],
     ["opencodex home", "hub-enabled", "/settings/hub"],
     ["opencodex home", "providers", "/settings/providers"],
     ["bot home", "goat-bot-home", "/settings/goat-bot"],
     ["archive", "archive", "/settings/archived"],
+    ["device hub", "device-hub", "/settings/integrations"],
   ] as const)("still finds %s after the rename, on %s", (query, id, to) => {
     expect(searchSettings(query).find((item) => item.id === id)?.to).toBe(to);
   });

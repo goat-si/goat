@@ -1,18 +1,26 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
 import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import * as HostProcess from "./HostProcess.ts";
 
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
   cuaDriverCapabilityManifest,
+  cuaDriverManifestApplications,
+  missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
   prepareCuaDriverCapabilityManifest,
+  writeCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
+
+vi.mock("node:fs/promises", { spy: true });
 
 describe("cuaDriverManifest", () => {
   it("keeps every admin, install, file and exfiltration tool out of the allow list", () => {
@@ -136,6 +144,34 @@ describe("cuaDriverManifest", () => {
     );
   });
 
+  it("reads JSON-quoted app ids without confusing tools or escaped characters", () => {
+    const applications = ['com.example."quoted"', "C:\\Apps\\notes.exe", "com.example.\nline"];
+    expect(cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications }))).toEqual(
+      applications,
+    );
+    expect(
+      cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications: [] })),
+    ).toEqual([]);
+    expect(() => cuaDriverManifestApplications("    - bundle_id: invalid")).toThrow();
+  });
+
+  it("finds missing approvals using the same bundle and Windows path identities as admission", () => {
+    const listed = ["com.apple.TextEdit", "C:\\Apps\\notes.exe", "\\\\server\\share\\app.exe"];
+    expect(
+      missingCuaDriverApplications(
+        [
+          "COM.APPLE.TEXTEDIT",
+          "\\\\?\\C:\\Apps\\notes.exe",
+          "c:/apps//NOTES.exe",
+          "\\\\?\\UNC\\server\\share\\APP.exe",
+          "com.example.new",
+          "C:\\Apps\\new.exe",
+        ],
+        listed,
+      ),
+    ).toEqual(["com.example.new", "C:\\Apps\\new.exe"]);
+  });
+
   it("recognizes the driver's startup refusal through wrapped causes", () => {
     const sdk = new Error("embedded cua-driver exited before readiness (code=Some(64))");
     expect(isCuaDriverStartupRefusal(sdk)).toBe(true);
@@ -169,6 +205,58 @@ describe("cuaDriverManifest app listing", () => {
       },
     };
   };
+
+  it("keeps the previous manifest readable until the complete replacement is ready", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const before = cuaDriverCapabilityManifest({ applications: ["com.example.before"] });
+    const after = cuaDriverCapabilityManifest({ applications: ["com.example.after"] });
+    await writeCuaDriverCapabilityManifest(driver.input.path, before);
+    const written = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const { writeFile: original } = await vi.importActual<typeof NodeFSP>("node:fs/promises");
+    using _write = vi
+      .spyOn(NodeFSP, "writeFile")
+      .mockImplementation(async (path, text, options) => {
+        await original(path, text, options);
+        written.resolve();
+        await release.promise;
+      });
+    const replacing = writeCuaDriverCapabilityManifest(driver.input.path, after);
+    try {
+      await written.promise;
+      expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(before);
+    } finally {
+      release.resolve();
+      await replacing;
+    }
+    expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(after);
+    expect(NodeFS.readdirSync(NodePath.dirname(driver.input.path)).sort()).toEqual([
+      "cua-driver",
+      "manifest.yaml",
+    ]);
+    if (HostProcess.Platform.defaultValue() !== "win32")
+      expect(NodeFS.statSync(driver.input.path).mode & 0o777).toBe(0o600);
+  });
+
+  it("preserves the previous manifest and cleans up when replacement is refused", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const before = cuaDriverCapabilityManifest({ applications: ["com.example.before"] });
+    await writeCuaDriverCapabilityManifest(driver.input.path, before);
+    const denied = new Error("rename denied");
+    using _rename = vi.spyOn(NodeFSP, "rename").mockRejectedValueOnce(denied);
+    await expect(writeCuaDriverCapabilityManifest(driver.input.path, "replacement")).rejects.toBe(
+      denied,
+    );
+    expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(before);
+    expect(NodeFS.readdirSync(NodePath.dirname(driver.input.path)).sort()).toEqual([
+      "cua-driver",
+      "manifest.yaml",
+    ]);
+  });
 
   it("lists through the hook and never runs the driver itself", async ({ onTestFinished }) => {
     const driver = trap(onTestFinished);

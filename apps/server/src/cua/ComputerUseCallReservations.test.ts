@@ -58,6 +58,36 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect("rejects invalid window identities before foreground broadens the reservation", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const focus = yield* foregroundGrant(f.a, "handoff:validation-focus");
+      for (const args of [
+        { pid: -1, window_id: 7, delivery_mode: "foreground" },
+        { pid: 42, window_id: 0, foreground: true },
+        { target: { kind: "app", pid: -1 } },
+        { pid: -1, window_id: 7, delivery_mode: "FOREGROUND" },
+        { pid: 42, window_id: 0, delivery_mode: "fOrEgRoUnD" },
+      ]) {
+        assert.deepEqual(
+          yield* f.leases.callReservation(f.a, {
+            action: "reserve",
+            controlId: f.first.controlId,
+            connectionId: "driver:validation",
+            callId: "invalid",
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "type_text",
+            args,
+            foregroundGrantId: focus.handoffId,
+          }),
+          { status: "refused", detail: "invalid_target" },
+        );
+      }
+      assert.equal((yield* f.reserve(f.b)).status, "admitted");
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect(
     "rejects old-turn input when admission arrives after idle and reuse before the stream update",
     () =>

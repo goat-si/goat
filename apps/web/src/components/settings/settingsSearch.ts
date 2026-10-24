@@ -823,10 +823,10 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "device-hub",
-    title: "Device hub",
+    title: "Simulators and emulators",
     to: "/settings/integrations",
     targetId: "devices",
-    searchTerms: ["simulator emulator ios android install start"],
+    searchTerms: ["device hub simulator emulator ios android install start"],
   },
   {
     id: "device-platform-support",
@@ -1113,14 +1113,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     searchTerms: [
       "add device environment pair backend host code ssh config agent tunnel saved goat connect tailscale server",
-    ],
-  },
-  {
-    id: "hub-nodes",
-    title: "Devices on this hub",
-    to: "/settings/connections",
-    searchTerms: [
-      "hub devices nodes machines ssh hosts linked goat servers cloud machines phone check routes",
     ],
   },
   {

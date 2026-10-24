@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { hubDeviceList, type ChildSetup } from "@goat/client-runtime/hub-devices";
 import {
   canRemoveHubNode,
   HUB_NODE_IMPORT_NOTICE,
@@ -8,6 +9,11 @@ import {
   hubNodeStatusLabel,
   isHubNodesUnsupportedError,
 } from "@goat/client-runtime/hub-nodes";
+import {
+  HUB_TRANSPORT_LABEL,
+  hubDeviceFacts,
+  hubSnapshot,
+} from "@goat/client-runtime/state/hub-fleet";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -33,7 +39,7 @@ export function SettingsHubNodesRouteScreen() {
     (target) => selectedIds === null || selectedIds.has(target.environmentId),
   );
   return (
-    <SettingsScreen title="Devices on this hub">
+    <SettingsScreen title="Hub devices">
       <HubNodesSelection
         key={JSON.stringify(selectedIds === null ? null : [...selectedIds].sort())}
         targets={targets}
@@ -92,7 +98,11 @@ function HubNodesSelection({
       ) : null}
       {choice ? <Text className="font-goat-medium text-foreground">Hub: {label}</Text> : null}
       {hub ? (
-        <HubNodesList key={hub.environmentId} environmentId={hub.environmentId} />
+        <HubDevicesList
+          key={hub.environmentId}
+          environmentId={hub.environmentId}
+          label={label ?? hub.label}
+        />
       ) : (
         <Text className="text-foreground-muted">
           {choice
@@ -106,8 +116,42 @@ function HubNodesSelection({
   );
 }
 
-function HubNodesList({ environmentId }: { readonly environmentId: EnvironmentId }) {
+const CHILD_SETUP_TEXT: Record<ChildSetup["tone"], string> = {
+  progress: "text-sm text-foreground-muted",
+  warning: "text-sm text-warning-foreground",
+  destructive: "text-sm text-danger-foreground",
+};
+
+/** Web's host-status period: each read samples CPU and asks every SSH host. */
+const SETUP_REFRESH_MS = 15_000;
+
+/** The hub's machines with their OpenCodex link, as Settings → Hub shows them on desktop and web. */
+function HubDevicesList({
+  environmentId,
+  label,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}) {
   const listed = useEnvironmentQuery(serverEnvironment.hubNodesLive({ environmentId, input: {} }));
+  const status = useEnvironmentQuery(serverEnvironment.hostStatus({ environmentId, input: {} }));
+  const hosts = status.data?.hosts ?? [];
+  const unsupported = isHubNodesUnsupportedError(listed.cause);
+  const rows = hubDeviceList({
+    nodes: listed.data?.nodes ?? null,
+    snapshot: hubSnapshot(
+      hosts.map((entry) => ({ key: entry.host ?? "", label: entry.host ?? label, entry })),
+    ),
+    hosts,
+  });
+  // Host status is a one-shot read; reread it only while a setup is still moving.
+  const settingUp = rows.some((row) => row.childSetup?.state === "running");
+  const refreshStatus = status.refresh;
+  useEffect(() => {
+    if (!settingUp) return;
+    const timer = setInterval(refreshStatus, SETUP_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [settingUp, refreshStatus]);
   const canCheck = useAtomValue(serverEnvironment.checkHubNodes.permissionAtom(environmentId));
   const canRemove = useAtomValue(serverEnvironment.removeHubNode.permissionAtom(environmentId));
   const canDismiss = useAtomValue(
@@ -135,30 +179,40 @@ function HubNodesList({ environmentId }: { readonly environmentId: EnvironmentId
       setError(failure instanceof Error ? failure.message : "The hub request failed.");
     }
   };
-  if (isHubNodesUnsupportedError(listed.cause))
-    return (
-      <Text className="text-foreground-muted">
-        This hub runs an older GOAT without a device list. Update GOAT on the hub to manage its
-        devices here.
-      </Text>
-    );
+  const linkKnown = status.isSuccess;
   return (
     <View className="gap-4">
       <Text className="text-sm text-foreground-muted">
         Add devices from the hub's Settings on desktop or web.
       </Text>
-      <Button
-        label={busy === "check-all" ? "Checking…" : "Check all"}
-        disabled={!canCheck || busy !== null || listed.data === null}
-        onPress={() => void run("check-all", () => check({ environmentId, input: {} }))}
-      />
-      {error || listed.error ? (
+      {unsupported ? (
+        <Text className="text-sm text-foreground-muted">
+          This hub runs an older GOAT without a device list. Update GOAT on the hub to manage its
+          devices here.
+        </Text>
+      ) : (
+        <Button
+          label={busy === "check-all" ? "Checking…" : "Check all"}
+          disabled={!canCheck || busy !== null || listed.data === null}
+          onPress={() => {
+            // Checking reaches each machine, so read its OpenCodex link again too.
+            status.refresh();
+            void run("check-all", () => check({ environmentId, input: {} }));
+          }}
+        />
+      )}
+      {error || (listed.error && !unsupported) ? (
         <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
           {error ?? listed.error}
         </Text>
       ) : null}
-      {listed.data === null && !listed.error ? (
-        <Text className="text-foreground-muted">Loading devices…</Text>
+      {status.error ? (
+        <View className="gap-2">
+          <Text className="text-sm text-foreground-muted">
+            Could not read OpenCodex link state. {status.error}
+          </Text>
+          <Button label="Try again" disabled={status.isPending} onPress={status.refresh} />
+        </View>
       ) : null}
       {listed.data?.notices.map((notice) => (
         <View key={notice.id} className="gap-3 rounded-xl bg-grouped-card p-4">
@@ -172,63 +226,93 @@ function HubNodesList({ environmentId }: { readonly environmentId: EnvironmentId
           />
         </View>
       ))}
-      {listed.data?.nodes.length === 0 ? (
-        <Text className="text-foreground-muted">No devices added yet.</Text>
+      {rows.length === 0 ? (
+        <Text className="text-foreground-muted">
+          {listed.data === null && !listed.error ? "Loading devices…" : "No devices added yet."}
+        </Text>
       ) : null}
-      {listed.data?.nodes.map((node) => (
-        <View key={node.nodeId} className="gap-2 rounded-xl bg-grouped-card p-4">
-          <Text className="font-goat-medium text-foreground">{node.label}</Text>
-          <Text className="text-sm text-foreground-muted">
-            {node.routes.map(hubNodeRouteLabel).join(" · ")}
-          </Text>
-          <View className="flex-row items-center gap-2">
-            <View
-              accessible={false}
-              className={
-                node.status === "online"
-                  ? "size-2 rounded-full bg-primary"
-                  : node.status === "offline"
-                    ? "size-2 rounded-full bg-danger"
-                    : "size-2 rounded-full bg-subtle-strong"
-              }
-            />
-            <Text className="text-sm text-foreground-muted">
-              {hubNodeStatusLabel(node.status)}
-              {node.lastSeenAt ? ` · ${hubNodeLastSeenLabel(node.lastSeenAt, now)}` : ""}
-            </Text>
-          </View>
-          <View className="flex-row flex-wrap gap-2">
-            <Button
-              label={busy === node.nodeId ? "Checking…" : "Check"}
-              accessibilityLabel={`Check ${node.label}`}
-              disabled={!canCheck || busy !== null}
-              onPress={() =>
-                void run(node.nodeId, () =>
-                  check({ environmentId, input: { nodeId: node.nodeId } }),
-                )
-              }
-            />
-            {canRemove && canRemoveHubNode(node) ? (
-              <Button
-                label="Remove"
-                accessibilityLabel={`Remove ${node.label}`}
-                tone="danger"
-                disabled={busy !== null}
-                onPress={() =>
-                  void run(`remove:${node.nodeId}`, () =>
-                    remove({ environmentId, input: hubNodeRemovalInput(node) }),
-                  )
-                }
-              />
+      {rows.map(({ key, label: rowLabel, node, device, childSetup }) => {
+        const link =
+          device !== null
+            ? HUB_TRANSPORT_LABEL[device.transport]
+            : linkKnown
+              ? "Not linked to OpenCodex"
+              : null;
+        return (
+          <View key={key} className="gap-2 rounded-xl bg-grouped-card p-4">
+            <Text className="font-goat-medium text-foreground">{rowLabel}</Text>
+            {link === null ? null : <Text className="text-sm text-foreground-muted">{link}</Text>}
+            {node === null ? null : (
+              <>
+                <Text className="text-sm text-foreground-muted">
+                  {node.routes.map(hubNodeRouteLabel).join(" · ")}
+                </Text>
+                <View className="flex-row items-center gap-2">
+                  <View
+                    accessible={false}
+                    className={
+                      node.status === "online"
+                        ? "size-2 rounded-full bg-primary"
+                        : node.status === "offline"
+                          ? "size-2 rounded-full bg-danger"
+                          : "size-2 rounded-full bg-subtle-strong"
+                    }
+                  />
+                  <Text className="text-sm text-foreground-muted">
+                    {hubNodeStatusLabel(node.status)}
+                    {node.lastSeenAt ? ` · ${hubNodeLastSeenLabel(node.lastSeenAt, now)}` : ""}
+                  </Text>
+                </View>
+              </>
+            )}
+            {device === null ? null : (
+              <Text className="text-sm text-foreground-muted">
+                {hubDeviceFacts(device).join(" · ")}
+              </Text>
+            )}
+            {childSetup === null ? null : (
+              <View className="gap-1">
+                <Text className={CHILD_SETUP_TEXT[childSetup.tone]}>{childSetup.label}</Text>
+                {childSetup.detail === null ? null : (
+                  <Text className="text-sm text-foreground-muted">{childSetup.detail}</Text>
+                )}
+              </View>
+            )}
+            {node === null ? null : (
+              <View className="flex-row flex-wrap gap-2">
+                <Button
+                  label={busy === node.nodeId ? "Checking…" : "Check"}
+                  accessibilityLabel={`Check ${node.label}`}
+                  disabled={!canCheck || busy !== null}
+                  onPress={() =>
+                    void run(node.nodeId, () =>
+                      check({ environmentId, input: { nodeId: node.nodeId } }),
+                    )
+                  }
+                />
+                {canRemove && canRemoveHubNode(node) ? (
+                  <Button
+                    label="Remove"
+                    accessibilityLabel={`Remove ${node.label}`}
+                    tone="danger"
+                    disabled={busy !== null}
+                    onPress={() =>
+                      void run(`remove:${node.nodeId}`, () =>
+                        remove({ environmentId, input: hubNodeRemovalInput(node) }),
+                      )
+                    }
+                  />
+                ) : null}
+              </View>
+            )}
+            {node !== null && !canRemoveHubNode(node) ? (
+              <Text className="text-sm text-foreground-muted">
+                Manage cloud machines from the hub's Settings on desktop or web.
+              </Text>
             ) : null}
           </View>
-          {!canRemoveHubNode(node) ? (
-            <Text className="text-sm text-foreground-muted">
-              Manage cloud machines from the hub's Settings on desktop or web.
-            </Text>
-          ) : null}
-        </View>
-      ))}
+        );
+      })}
     </View>
   );
 }

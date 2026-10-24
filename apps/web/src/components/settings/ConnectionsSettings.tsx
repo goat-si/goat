@@ -123,7 +123,6 @@ import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { HostsSettings } from "./HostsSettings";
 import { HubDeviceCard } from "./HubDeviceCard";
-import { HubNodesSettings } from "./HubNodesSettings";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { WorktreeCheckoutHealthNotice } from "./WorktreeCheckoutHealthNotice";
 import { ensureLocalApi } from "../../localApi";
@@ -1425,9 +1424,6 @@ export function ConnectionsSettings() {
         </SettingsSection>
       ) : null}
       <ConnectionEnvironmentsSection />
-      {primaryEnvironmentId !== null ? (
-        <HubNodesSettings environmentId={primaryEnvironmentId} />
-      ) : null}
       {primarySettings}
       <AdvancedSettingsDisclosure targetIds={ADVANCED_CONNECTION_SETTING_IDS}>
         {primaryEnvironmentId !== null ? (

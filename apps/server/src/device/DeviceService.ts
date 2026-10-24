@@ -331,8 +331,8 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
 
   const agentReadinessIfSupported: DeviceService["Service"]["agentReadinessIfSupported"] =
     Effect.fn("DeviceService.agentReadinessIfSupported")(function* (hostId) {
-      const deviceSettings = yield* readDeviceSettings;
-      if (!deviceSettings.enabled || !deviceSettings.agentAccessEnabled) return null;
+      // Agent consent is per thread and project, so agent callers authorize it themselves.
+      if (!(yield* readDeviceSettings).enabled) return null;
       const host = yield* resolveHost(hostId);
       const summary = yield* host.summary;
       if (summary.kind === "local" && !summary.platforms.some((platform) => platform.available))
@@ -494,10 +494,12 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const retryHost: DeviceService["Service"]["retryHost"] = Effect.fn("DeviceService.retryHost")(
     function* (hostId) {
       yield* resolveHost(hostId);
-      if (!(yield* readDeviceSettings).enabled) return (yield* SynchronizedRef.get(stateRef)).state;
+      const deviceSettings = yield* readDeviceSettings;
+      if (!deviceSettings.enabled) return (yield* SynchronizedRef.get(stateRef)).state;
       yield* Effect.gen(function* () {
         const ready =
-          (yield* agentReadinessIfSupported(hostId)) ?? (yield* readinessIfSupported(hostId));
+          (deviceSettings.agentAccessEnabled ? yield* agentReadinessIfSupported(hostId) : null) ??
+          (yield* readinessIfSupported(hostId));
         if (ready) yield* refresh(ready);
       }).pipe(
         Effect.catch((error) =>
@@ -838,7 +840,7 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
             hostId: host.id,
             hostLabel: host.label,
             reason:
-              "Agent device access needs device support and Agent device access turned on in Settings → Integrations → Devices, and an available simulator platform on this host. Only a person can change those settings; ask the user.",
+              "Agent device tools need device support turned on in Settings → Integrations → Devices and an available simulator platform on this host. Only a person can change those settings; ask the user.",
           });
         const { configPath, agentDeviceId } = yield* lifecycleLock.withPermit(
           Effect.gen(function* () {

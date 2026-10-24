@@ -12,7 +12,8 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
-import { bitmapHasContent, prepareDesktopManifest } from "./DesktopCuaDriver.ts";
+import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
 
 import {
   privacyEnvironment,

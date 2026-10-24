@@ -73,17 +73,17 @@ export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
 
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
-  if (requiresForeground(call)) return "desktop";
-  if (READS.has(call.name)) return "read";
-  if (!WINDOW_MUTATIONS.has(call.name)) return "desktop";
+  const desktop = requiresForeground(call);
+  if (!WINDOW_MUTATIONS.has(call.name))
+    return !desktop && READS.has(call.name) ? "read" : "desktop";
   const args = record(call.args);
   const target = record(args?.target);
   if (target !== undefined && (args?.pid !== undefined || args?.window_id !== undefined))
     return "invalid";
   const exact = target ?? args;
-  if (target !== undefined && target.kind !== "window") return "desktop";
   if (exact?.pid !== undefined && !positive(exact.pid)) return "invalid";
   if (exact?.window_id !== undefined && !positive(exact.window_id)) return "invalid";
+  if (desktop || (target !== undefined && target.kind !== "window")) return "desktop";
   if (positive(exact?.pid) && positive(exact?.window_id))
     return { pid: exact.pid, windowId: exact.window_id };
   return "desktop";

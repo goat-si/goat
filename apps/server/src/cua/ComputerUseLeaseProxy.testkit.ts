@@ -18,7 +18,12 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { NamedWindow } from "./x11WindowPlacement.ts";
-import { LEASE_END_MESSAGES, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import {
+  LEASE_END_MESSAGES,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
+  runLeaseProxy,
+} from "./ComputerUseLeaseProxy.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -78,11 +83,17 @@ export const harness = Effect.fn(function* (
     readonly kill?: Effect.Effect<void> | ((index: number) => Effect.Effect<void>);
     readonly acquire?: (index: number) => Effect.Effect<void>;
     readonly restartFailure?: string;
+    /** Holds every window report until it is done, as a slow server would. */
+    readonly targetGate?: Deferred.Deferred<void>;
     /**
      * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
+    /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
+    readonly manifestStamp?: () => string | undefined;
+    /** Holds the first driver's kill open until done, as a child slow to stop would. */
+    readonly firstKillGate?: Deferred.Deferred<void>;
     readonly acceptHuman?: () => boolean;
   } = {},
 ) {
@@ -98,6 +109,8 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const taken = yield* Queue.unbounded<string>();
+  const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const reservations: Array<ComputerUseCallReservation> = [];
@@ -124,9 +137,13 @@ export const harness = Effect.fn(function* (
       ? {}
       : {
           onTarget: (target: { pid: number; windowId: number }) =>
-            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
+            Queue.offer(targets, target).pipe(
+              Effect.andThen(
+                options.targetGate === undefined ? Effect.void : Deferred.await(options.targetGate),
+              ),
+              Effect.as(options.onTarget?.(target) ?? true),
+            ),
         }),
-    leaseUpdates: options.leaseUpdates ?? Stream.fromQueue(updates),
     ...(options.humanInput
       ? {
           onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
@@ -135,6 +152,11 @@ export const harness = Effect.fn(function* (
             Queue.offer(agentCalls, report.state + " " + report.call),
         }
       : {}),
+    // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
+    leaseUpdates: (options.leaseUpdates ?? Stream.fromQueue(updates)).pipe(
+      Stream.tap((update) => Queue.offer(taken, update.state)),
+    ),
+    onLeaseUpdateApplied: (update) => Queue.offer(applied, update.state).pipe(Effect.asVoid),
     startDriver: Effect.gen(function* () {
       if (drivers.length > 0 && options.restartFailure !== undefined)
         return yield* Effect.fail(options.restartFailure);
@@ -178,6 +200,11 @@ export const harness = Effect.fn(function* (
               ? options.kill(index)
               : (options.kill ?? Effect.void),
           ),
+          Effect.andThen(
+            driver === drivers[0] && options.firstKillGate !== undefined
+              ? Deferred.await(options.firstKillGate)
+              : Effect.void,
+          ),
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
         ...(options.overlay
@@ -212,6 +239,7 @@ export const harness = Effect.fn(function* (
               ),
             ),
         }),
+    ...(options.manifestStamp === undefined ? {} : { manifestStamp: options.manifestStamp }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
         Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
@@ -240,6 +268,19 @@ export const harness = Effect.fn(function* (
     nextDispatch: Queue.take(dispatched).pipe(
       Effect.map(({ index, line }) => ({ index, message: json(line) })),
     ),
+    /** The state of the next lease update the proxy pulled, before acting on it. */
+    taken: Queue.take(taken),
+    /** The state of the next lease update the proxy finished applying. */
+    applied: Queue.take(applied),
+    appliedQueued: Queue.size(applied),
+    /** Driver children started and not killed. */
+    liveDrivers: Effect.suspend(() =>
+      Effect.forEach(drivers, (driver) => Deferred.isDone(driver.killed)).pipe(
+        Effect.map((killed) => killed.filter((done) => !done).length),
+      ),
+    ),
+    /** Driver children started and not yet taken with restarted. */
+    startedQueued: Queue.size(started),
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),
@@ -277,3 +318,30 @@ export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES)
     isError: true,
   },
 });
+
+/** A call the driver already had when the control ended: it may have acted, so no refusal. */
+export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, read = false) => ({
+  jsonrpc: "2.0",
+  id,
+  result: {
+    content: [
+      {
+        type: "text",
+        text: `${read ? READ_CUT_OFF : MAY_HAVE_ACTED} ${LEASE_END_MESSAGES[reason]}`,
+      },
+    ],
+    structuredContent: read
+      ? { code: "interrupted", detail: reason }
+      : { effect: "unverifiable", code: "interrupted", detail: reason },
+    isError: true,
+  },
+});
+
+export interface ToolAnswer {
+  readonly id: unknown;
+  readonly result: {
+    readonly content: ReadonlyArray<{ readonly text: string }>;
+    readonly structuredContent: Record<string, unknown>;
+    readonly isError: boolean;
+  };
+}

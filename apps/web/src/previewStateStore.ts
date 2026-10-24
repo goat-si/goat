@@ -158,6 +158,18 @@ export function useThreadPreviewState(ref: ScopedThreadRef | null | undefined): 
   return useAtomValue(atom);
 }
 
+const agentDrivenTabAtom = Atom.family((key: string) => {
+  const [threadKey = "", tabId = ""] = key.split("\u0000");
+  return Atom.make(
+    (get) => get(previewStateAtom(threadKey)).sessions[tabId]?.automationOwner !== undefined,
+  ).pipe(Atom.withLabel(`preview:agent-tab:${key}`));
+});
+
+/** Whether an agent drives this tab; readers re-render only when that answer changes. */
+export function usePreviewTabAgentDriven(ref: ScopedThreadRef, tabId: string): boolean {
+  return useAtomValue(agentDrivenTabAtom(`${scopedThreadKey(ref)}\u0000${tabId}`));
+}
+
 export function useActivePreviewSessions(): Record<string, ThreadPreviewState> {
   return useAtomValue(activePreviewSessionsAtom);
 }

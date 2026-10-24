@@ -554,6 +554,7 @@ describe("Linux computer use helper conformance", () => {
           shots.push(shot);
           return {
             png: png(shot.width, shot.height, false),
+            rgb: new Uint8Array(shot.width * shot.height * 3),
             width: shot.width,
             height: shot.height,
           };

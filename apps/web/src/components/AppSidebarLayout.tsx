@@ -42,6 +42,7 @@ import LegacyThreadSidebar from "./LegacySidebar";
 import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
+import { SettingsSearchShortcut } from "./settings/SettingsSearchShortcut";
 import {
   SidebarBrandWidthProbe,
   SidebarChromeHeader,
@@ -483,6 +484,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         ) : null}
         <SidebarControl onCollapsedBrandWidthChange={setCollapsedBrandWidth} />
         <NavigationHistoryShortcuts />
+        {isOnSettings ? <SettingsSearchShortcut /> : null}
         {isOnSettings ? null : <ThreadUndoShortcut />}
         <MainAppLocationTracker />
       </SidebarProvider>

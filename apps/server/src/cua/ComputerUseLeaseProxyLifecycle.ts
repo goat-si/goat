@@ -8,6 +8,7 @@ export interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
   readonly connectionId: string;
+  readonly manifest?: string | undefined;
 }
 
 /** Cutoff and acquisition may overlap newer handbacks; only their own revision can publish. */
@@ -15,6 +16,7 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
   E,
 >(options: {
   readonly connectionId: string;
+  readonly manifestStamp?: (() => string | undefined) | undefined;
   readonly startDriver: Effect.Effect<LeaseProxyDriver, E, Scope.Scope>;
   readonly active: () => boolean;
   readonly deadline: () => number;
@@ -41,6 +43,7 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
         Effect.gen(function* () {
           const child = yield* Scope.fork(scope);
           if (token !== revision || !options.active()) return yield* Scope.close(child, Exit.void);
+          const manifest = options.manifestStamp?.();
           const acquired = yield* options.startDriver.pipe(
             Scope.provide(child),
             restore,
@@ -66,6 +69,7 @@ export const makeLeaseProxyLifecycle = Effect.fn("ComputerUseLeaseProxy.makeLife
           }
           const next = {
             driver,
+            manifest,
             scope: child,
             connectionId: `${options.connectionId}:${generation++}`,
           };

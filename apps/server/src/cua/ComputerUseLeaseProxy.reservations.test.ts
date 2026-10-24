@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import {
   active,
@@ -12,6 +13,78 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ kill: Deferred.await(gate) });
+      yield* h.push(active());
+      yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* h.push({ state: "ended", reason: "stopped" });
+      yield* h.killed;
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* h.send(call(99, "get_guide"));
+      assert.equal((yield* h.nextToProvider).id, 99);
+      yield* Deferred.succeed(gate, undefined);
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.close;
+      yield* Fiber.join(h.proxy);
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect.each(["kill", "close"] as const)(
+    "suppresses cancellation while cutoff awaits %s acknowledgement",
+    (wait) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const held = Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+        );
+        const h = yield* harness({
+          kill: wait === "kill" ? held : Effect.void,
+          reservation: (request) =>
+            request.action === "reserve"
+              ? Effect.succeed({ status: "admitted", reservationId: "held" } as const)
+              : (wait === "close" && request.action === "close" ? held : Effect.void).pipe(
+                  Effect.as({ status: "released" } as const),
+                ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.nextReservation;
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        yield* Deferred.await(entered);
+        yield* h.nextToDriver;
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.send(call(99, "get_guide"));
+        assert.equal((yield* h.nextToProvider).id, 99);
+        yield* Deferred.succeed(gate, undefined);
+        assert.equal((yield* h.nextReservation).action, "close");
+        yield* h.push(active());
+        yield* h.restarted;
+        yield* h.send(call(2, "get_guide"));
+        assert.equal((yield* h.nextToDriver).id, 2);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+      }),
+  );
+
   it.effect("ends the control if restarting after foreground expiry fails", () =>
     Effect.gen(function* () {
       const h = yield* harness({ restartFailure: "fixture restart failure" });

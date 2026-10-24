@@ -18,6 +18,9 @@ Each harness also names a fragment its adapter must still contain. When an adapt
 composes the block, the script exits 1 with the fragment it could not find. Update the
 composition then; a guess would report a stale number.
 
+The script also lists the catalog as an outside MCP client that sends `x-goat-tool-listing: core`
+and reports that listing beside the harnesses. `--check` holds it to the same listing budget.
+
 `--db` adds the wake messages the server wrote into threads (monitor and background-task reports,
 delegated completions), grouped by kind. Copy the database and its `-wal` file first and pass the
 copy. The script opens it read-only. Wake sizes depend on what a machine has run, so record the
