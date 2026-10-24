@@ -515,6 +515,7 @@ describe("makeLinuxHelper shutdown", () => {
         windowOpen: async () => undefined,
         input: undefined,
         inputLost: () => undefined,
+        delay: () => new Promise<void>(() => undefined),
         now: () => 0,
         every: () => () => undefined,
         afterReply: () => undefined,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ComputerUseEvent } from "@goat/contracts";
 
 import type { SecureFocus } from "./atspiFocus.ts";
+import type { HumanInput, HumanInputSource } from "./humanInputSource.ts";
 import { connect, NOT_SECURE, X11 } from "./LinuxComputerUseHelper.testkit.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 
@@ -193,17 +194,26 @@ describe("Linux safety signals", () => {
 });
 
 /** A monitor on its own, with the work it defers and the checks it arms in the test's hands. */
-function monitor(options: { readonly windowOpen?: () => Promise<boolean | undefined> } = {}) {
+function monitor(
+  options: {
+    readonly windowOpen?: () => Promise<boolean | undefined>;
+    readonly secureFocus?: (pid: number) => Promise<SecureFocus>;
+    readonly input?: HumanInputSource;
+  } = {},
+) {
+  const limit = Promise.withResolvers<void>();
+  const lostCalls = { count: 0 };
   const focus: { current: SecureFocus } = { current: NOT_SECURE };
   const events: Array<{ watchId: string; event: ComputerUseEvent }> = [];
   const deferred: Array<() => Promise<void>> = [];
   const armed = new Set<() => Promise<void>>();
   const arming = { count: 0 };
   const signals = makeSignalMonitor({
-    secureFocus: async () => focus.current,
+    secureFocus: options.secureFocus ?? (async () => focus.current),
     windowOpen: options.windowOpen ?? (async () => true),
-    input: undefined,
-    inputLost: () => undefined,
+    input: options.input,
+    inputLost: () => void lostCalls.count++,
+    delay: () => limit.promise,
     now: () => 0,
     every: (_ms, task) => {
       arming.count++;
@@ -219,7 +229,18 @@ function monitor(options: { readonly windowOpen?: () => Promise<boolean | undefi
   const tick = async () => {
     for (const task of Array.from(armed)) await task();
   };
-  return { signals, focus, events, runDeferred, tick, armed, arming };
+  return {
+    signals,
+    focus,
+    events,
+    runDeferred,
+    tick,
+    armed,
+    arming,
+    lostCalls,
+    /** Ends every focus probe still waiting, as its time limit would. */
+    expireProbes: () => limit.resolve(),
+  };
 }
 
 describe("makeSignalMonitor", () => {
@@ -248,5 +269,44 @@ describe("makeSignalMonitor", () => {
     await m.runDeferred();
     // One focus check for the live watch; the first watch's deferred start does nothing.
     expect(m.arming.count).toBe(1);
+  });
+
+  it("one window's slow focus probe holds back no other signal", async () => {
+    const a = { pid: 10, windowId: 20 };
+    const b = { pid: 11, windowId: 21 };
+    const input: { latest: HumanInput | undefined; lost: boolean } = {
+      latest: undefined,
+      lost: false,
+    };
+    const m = monitor({
+      // Window b's probe never answers; a's password field has focus.
+      secureFocus: (pid) =>
+        pid === b.pid ? new Promise<SecureFocus>(() => undefined) : Promise.resolve(secure),
+      input: { latest: () => input.latest, lost: () => input.lost, close: () => undefined },
+    });
+    await m.signals.watch("w", [a, b]);
+    // The deferred start waits for b's first report, which never comes; it is not awaited.
+    void m.runDeferred();
+    await m.tick();
+    expect(m.events).toContainEqual({
+      watchId: "w",
+      event: { type: "privateMode", active: true, target: a },
+    });
+    input.latest = { order: 1, source: "keyboard" };
+    await m.tick();
+    expect(m.events).toContainEqual({
+      watchId: "w",
+      event: { type: "humanInput", source: "keyboard" },
+    });
+    input.lost = true;
+    await m.tick();
+    expect(m.lostCalls.count).toBe(1);
+    // When b's probe runs out of time, b counts as private.
+    m.expireProbes();
+    await m.tick();
+    expect(m.events).toContainEqual({
+      watchId: "w",
+      event: { type: "privateMode", active: true, target: b },
+    });
   });
 });

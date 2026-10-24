@@ -311,6 +311,8 @@ export async function connect(
     afterReply: (task) => void afterReply.push(task),
     emit: (watchId, event) => write(JSON.stringify({ generation: "g1", watchId, event }) + "\n"),
     inputLost: () => void personInput.lostCalls++,
+    // Focus probes in this fixture answer at once; the limit never comes into play.
+    delay: () => new Promise<void>(() => undefined),
   });
   const capabilities = linuxCapabilities(session, hasPersonInput);
   const helper = makeLinuxHelper({

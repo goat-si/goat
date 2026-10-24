@@ -22,6 +22,9 @@ import type { HumanInputSource } from "./humanInputSource.ts";
 
 const PRIVATE_MODE_EVERY_MS = 500;
 const HUMAN_INPUT_EVERY_MS = 250;
+/** A focus probe slower than this counts as unreadable, which is private. */
+const FOCUS_PROBE_LIMIT_MS = 3_000;
+const UNREADABLE: SecureFocus = { known: false, secure: false, windows: 0 };
 /** At most one human input event per this long; the server pauses on the first anyway. */
 const HUMAN_INPUT_QUIET_MS = 1_000;
 
@@ -37,6 +40,8 @@ export interface SignalMonitorDependencies {
   readonly now: () => number;
   /** Runs task every ms until the returned function is called. */
   readonly every: (ms: number, task: () => Promise<void>) => () => void;
+  /** Resolves after ms; bounds a focus probe that does not answer. */
+  readonly delay: (ms: number) => Promise<void>;
   /** Runs task after the current reply has been written. */
   readonly afterReply: (task: () => Promise<void>) => void;
   readonly emit: (watchId: string, event: ComputerUseEvent) => void;
@@ -66,7 +71,8 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   let lastInputOrder = 0;
   let lostReported = false;
   let lastEventAt = -Infinity;
-  let busy = { focus: false };
+  /** Targets whose focus check is running; each target is checked on its own. */
+  const checking = new Set<string>();
 
   /** Reports a target inactive if it was active, and forgets it. */
   const release = (id: string, target: ComputerUseWindowTarget) => {
@@ -81,7 +87,10 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     target: ComputerUseWindowTarget,
     report: boolean,
   ) => {
-    const focus = await deps.secureFocus(target.pid);
+    const focus = await Promise.race([
+      deps.secureFocus(target.pid),
+      deps.delay(FOCUS_PROBE_LIMIT_MS).then(() => UNREADABLE),
+    ]);
     // The watch may have changed while AT-SPI answered.
     if (incarnation !== mine || !targets.includes(target)) return;
     const now = focus.secure || !focus.known;
@@ -91,26 +100,42 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     deps.emit(id, { type: "privateMode", active: now, target });
   };
 
-  const checkFocus = async () => {
-    const id = watchId;
-    const mine = incarnation;
-    if (id === undefined || busy.focus) return;
-    busy.focus = true;
+  /**
+   * One target's check: first its initial report, then changes. Targets run independently, so
+   * one slow probe never holds back another window's private mode or human input.
+   */
+  const checkTarget = async (
+    id: string,
+    mine: number,
+    target: ComputerUseWindowTarget,
+    initial: boolean,
+  ) => {
+    const key = keyOf(target);
+    if (checking.has(key)) return;
+    checking.add(key);
     try {
-      for (const target of targets) {
+      if (!initial) {
         const open = await deps.windowOpen(target);
         if (incarnation !== mine) return;
         // Only a list that lacks the window proves it closed; an error proves nothing.
         if (open === false) {
           release(id, target);
           targets = targets.filter((entry) => entry !== target);
-          continue;
+          return;
         }
-        await readFocus(id, mine, target, false);
       }
+      await readFocus(id, mine, target, initial);
     } finally {
-      busy.focus = false;
+      checking.delete(key);
     }
+  };
+
+  const checkFocus = async () => {
+    const id = watchId;
+    const mine = incarnation;
+    if (id === undefined) return;
+    // A target still being checked is skipped at once, so a stuck probe holds only itself.
+    await Promise.all(targets.map((target) => checkTarget(id, mine, target, false)));
   };
 
   const checkInput = async () => {
@@ -155,15 +180,18 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       // Input from before this watch is not its concern.
       lastInputOrder = deps.input?.latest()?.order ?? 0;
       lastEventAt = -Infinity;
-      busy = { focus: false };
+      checking.clear();
       deps.afterReply(async () => {
         if (incarnation !== mine) return;
-        await Promise.all(targets.map((target) => readFocus(id, mine, target, true)));
-        if (incarnation !== mine) return;
+        // Each target's first report starts now and marks it as being checked, so the timer
+        // never reports a change before it; human input is watched from the same moment, not
+        // after the slowest first report.
+        const initial = targets.map((target) => checkTarget(id, mine, target, true));
         stops = [
           deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
           ...(deps.input ? [deps.every(HUMAN_INPUT_EVERY_MS, checkInput)] : []),
         ];
+        await Promise.all(initial);
       });
     },
     unwatch: async () => {
