@@ -244,6 +244,34 @@ export function driverCallFor(
 }
 
 /** Driver refusal codes and what each means to the agent. Unlisted codes are targetRefused. */
+/**
+ * Codes the pinned macOS driver emits only before any input leaves: snapshot and frame
+ * admission, window lookup, argument and session checks (located in its source by review).
+ * foreground_unavailable is not here: a foreground click can post mouse-down and then fail on
+ * mouse-up. background_unavailable is not here either: a drag reports it after starting. With no
+ * explicit refused effect those stay unverifiable.
+ */
+const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
+  "stale_element_token",
+  "screenshot_context_missing",
+  "px_frame_mismatch",
+  "px_window_not_found",
+  "window_id_not_found",
+  "window_owner_pid_mismatch",
+  "window_target_not_found",
+  "window_target_resolution_failed",
+  "permission_denied",
+  "invalid_arguments",
+  "invalid_action_target",
+  "select_menu_would_raise_window",
+  "window_id_required",
+  "session_required",
+  "session_not_started",
+  "session_ended",
+  "session_unavailable",
+  "transport_lease_required",
+]);
+
 const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {
   stale_element_token: "staleElement",
   point_outside_window: "staleElement",
@@ -300,10 +328,11 @@ export function actionResultFromDriver(
     typeof code === "string" && Object.hasOwn(REFUSAL_CODES, code)
       ? REFUSAL_CODES[code]
       : undefined;
+  const beforeInput = typeof code === "string" && PRE_DISPATCH_CODES.has(code);
   // A refusal says nothing was sent, so it needs the driver's word for it: an explicit refused
   // effect, or an error code that only fires before input leaves. Any other error, such as
   // delivery_failed after a key went down, may have landed and stays unverifiable.
-  if (effect === "refused" || (known !== undefined && effect === undefined && result.isError)) {
+  if (effect === "refused" || (beforeInput && effect === undefined && result.isError)) {
     return refusal(
       known ?? "targetRefused",
       detail ??
