@@ -109,7 +109,7 @@ const PREFER_EFFECT_FN_BACKLOG: Array<string> = [
   "apps/server/src/orchestration-v2/QuestionEscalationService.ts",
   "apps/server/src/orchestration-v2/RunExecutionService.ts",
   "apps/server/src/orchestration-v2/ThreadManagementService.ts",
-  "apps/server/src/persistence/Migrations/077_MemoryHubSync.ts",
+  "apps/server/src/persistence/Migrations/078_MemoryHubSync.ts",
   "apps/server/src/project/ManagedProjectFolders.ts",
   "apps/server/src/provider/CodexHomeRequests.ts",
   "apps/server/src/provider/CodexRouteService.ts",

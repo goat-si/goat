@@ -5,11 +5,11 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { runMigrations } from "../Migrations.ts";
-import reportMigration from "./082_MemoryReportLifecycle.ts";
+import reportMigration from "./083_MemoryReportLifecycle.ts";
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 it.effect("077 DDL and accounting rollback together then ledger restart preserves rows", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 81 });
+    yield* runMigrations({ toMigrationInclusive: 82 });
     const sql = yield* SqlClient.SqlClient;
     yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolving_environment_id,outcome,state,created_at) VALUES ('legacy','space','memory','op','owner','failed','pending',0)`;
     const before =
@@ -27,26 +27,26 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
       before,
     );
     assert.deepStrictEqual(yield* runMigrations(), [
-      [82, "MemoryReportLifecycle"],
-      [83, "MemoryUsageCounters"],
-      [84, "MemoryRevertResults"],
-      [85, "HandoffLookupIndex"],
-      [86, "MemoryLastReadySpace"],
-      [87, "MemoryHubAdministered"],
-      [88, "MemoryCheckpointLifecycle"],
-      [89, "FleetGoals"],
-      [90, "FleetHealth"],
-      [91, "ThreadRunObservedChecks"],
-      [92, "RemoteDispatchObservation"],
-      [93, "MemoryRevisionCheckpointSize"],
-      [94, "HubNodes"],
-      [95, "MemorySummaryWorkThreadIndex"],
-      [96, "ThreadHistoryArchives"],
-      [97, "PermissionProfiles"],
-      [98, "DecisionInbox"],
-      [99, "HumanStepRecords"],
-      [100, "McpRequestReservations"],
-      [101, "RemoteReportInboxRunId"],
+      [83, "MemoryReportLifecycle"],
+      [84, "MemoryUsageCounters"],
+      [85, "MemoryRevertResults"],
+      [86, "HandoffLookupIndex"],
+      [87, "MemoryLastReadySpace"],
+      [88, "MemoryHubAdministered"],
+      [89, "MemoryCheckpointLifecycle"],
+      [90, "FleetGoals"],
+      [91, "FleetHealth"],
+      [92, "ThreadRunObservedChecks"],
+      [93, "RemoteDispatchObservation"],
+      [94, "MemoryRevisionCheckpointSize"],
+      [95, "HubNodes"],
+      [96, "MemorySummaryWorkThreadIndex"],
+      [97, "ThreadHistoryArchives"],
+      [98, "PermissionProfiles"],
+      [99, "DecisionInbox"],
+      [100, "HumanStepRecords"],
+      [101, "McpRequestReservations"],
+      [102, "RemoteReportInboxRunId"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT automatic_attempts,report_kind,report_approved FROM memory_report_outbox`,
@@ -83,7 +83,7 @@ const encodeCompact = Schema.encodeEffect(Schema.fromJsonString(M.MemoryCompactR
 const encodeReceipt = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubReceipt));
 it.effect("077 classifies only matching durable guards and leaves legacy attempts unknown", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 81 });
+    yield* runMigrations({ toMigrationInclusive: 82 });
     const sql = yield* SqlClient.SqlClient;
     const space = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
     const memory = M.MemoryId.make("00000000-0000-4000-8000-000000000002");

@@ -15,6 +15,7 @@ import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as Factory from "../../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as Environment from "../../environment/ServerEnvironment.ts";
+import * as TokenBroker from "../CodexManagedTokenBroker.ts";
 import * as Secrets from "../../auth/ServerSecretStore.ts";
 import * as Installation from "../CodexInstallation.ts";
 import * as Host from "../ProviderHostLive.ts";
@@ -41,6 +42,12 @@ const dependencies = Config.layerTest(process.cwd(), { prefix: "codex-home-drive
   ),
   Layer.provideMerge(Layer.mock(Installation.CodexInstallation)({ managedDirectory: "unused" })),
   Layer.provideMerge(Layer.mock(Secrets.ServerSecretStore)({})),
+  Layer.provideMerge(
+    Layer.mock(TokenBroker.CodexManagedTokenBroker)({
+      endpoint: Effect.succeed("unused-private-pipe"),
+      awaitIdle: Effect.void,
+    }),
+  ),
   Layer.provideMerge(
     Layer.succeed(Environment.ServerEnvironmentIdentity, {
       getEnvironmentId: Effect.succeed(EnvironmentId.make("test-home")),

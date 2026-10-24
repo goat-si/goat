@@ -60,9 +60,9 @@ wait follows it into the joined run, and the follower reports that run under its
 
 `RemoteDispatchCoordinator` in `apps/server/src/remoteReports/RemoteDispatchCoordinator.ts` inserts
 a row in `remote_dispatches` and then calls `SshRemoteDispatch.launchThread`. Migration
-`apps/server/src/persistence/Migrations/070_RemoteDispatches.ts` creates that table. Reports use
-`apps/server/src/persistence/Migrations/069_RemoteReports.ts` and `RemoteReportService`.
-`apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts` adds
+`apps/server/src/persistence/Migrations/071_RemoteDispatches.ts` creates that table. Reports use
+`apps/server/src/persistence/Migrations/070_RemoteReports.ts` and `RemoteReportService`.
+`apps/server/src/persistence/Migrations/073_RemoteDispatchQuestions.ts` adds
 `pending_request_ids`, a JSON array of the launched run's open question ids. The coordinator
 writes that column from the host's observed `pendingRequestIds` before it announces questions.
 When delivery is `wake` and the remote thread id is set, it dispatches one notice per question
@@ -93,7 +93,7 @@ launch. The coordinator declares it for `kind: "thread"` dispatches only, so del
 older origins, which never declare it, keep the error that names the origin and suggests
 `goat_origin_report`. Every other host tool keeps that error too. The remote caller must still be
 a live thread in default interaction mode. Migration
-`apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts` stores the flag on the binding
+`apps/server/src/persistence/Migrations/075_RemoteReportRelay.ts` stores the flag on the binding
 and the send on its report row, which travels as `RemoteReport.relay` and answers the agent with
 `delivery: "relayed"`. A retry with the same `clientRequestId` returns the same report, even
 after the origin collected it. Report retention never prunes a relay the origin has not collected;
@@ -137,7 +137,7 @@ intersect the inherited launch snapshot and the caller's runtime ceiling; changi
 does not reassign a child. Unknown stored profile ids refuse actions. Disabled policy keeps the
 existing paths.
 
-`apps/server/src/persistence/Migrations/097_PermissionProfiles.ts` stores bindings and lane
+`apps/server/src/persistence/Migrations/098_PermissionProfiles.ts` stores bindings and lane
 reservations outside the orchestration event log. Admission commits before launch; pending and
 uncertain reservations retain capacity across restart. Local run projections and durable remote
 dispatches determine completion, so removing a launch watch grants no capacity. An SSH launch requires
@@ -180,7 +180,7 @@ requests alongside projections of pending provider questions. Projections retain
 path and its dispatch-time mode guard; approvals and questions above an agent's ceiling remain human-only.
 A client's owner override requires authenticated settings-write and orchestration-operate scopes.
 
-`apps/server/src/persistence/Migrations/098_DecisionInbox.ts` keeps decision state and append-only audit
+`apps/server/src/persistence/Migrations/099_DecisionInbox.ts` keeps decision state and append-only audit
 metadata outside the orchestration log. Answer delivery commits to an outbox before sending a stable
 thread message; the shared Scheduler retries each delivery independently. Projected answers keep an
 audit intent before dispatch and reconcile it from the committed command receipt, so restart cannot

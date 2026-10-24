@@ -29,12 +29,12 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import migration from "../persistence/Migrations/069_RemoteReports.ts";
-import dispatchMigration from "../persistence/Migrations/070_RemoteDispatches.ts";
-import threadRunResultsMigration from "../persistence/Migrations/073_ThreadRunResults.ts";
-import relayMigration from "../persistence/Migrations/074_RemoteReportRelay.ts";
-import observedChecksMigration from "../persistence/Migrations/091_ThreadRunObservedChecks.ts";
-import inboxRunIdMigration from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
+import migration from "../persistence/Migrations/070_RemoteReports.ts";
+import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
+import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunResults.ts";
+import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
+import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
+import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");

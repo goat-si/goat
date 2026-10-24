@@ -1,4 +1,5 @@
 import {
+  SourceControlProviderKind,
   type PullRequestCheck,
   type PullRequestComment,
   PullRequestWatchPolicy,
@@ -41,6 +42,7 @@ const check = (name: string, status: PullRequestCheck["status"]): PullRequestChe
 type Detail = Parameters<typeof evaluatePullRequestWatch>[1];
 
 const detail = (overrides: Partial<Detail> = {}): Detail => ({
+  provider: SourceControlProviderKind.make("github"),
   headSha: "aaaaaaaaaa",
   checks: [check("lint", "success"), check("test", "pending")],
   mergeability: "mergeable",
@@ -265,6 +267,39 @@ describe("evaluatePullRequestWatch", () => {
     assert.isFalse(pushed.exhausted);
     assert.equal(pushed.next.wakes, 1);
   });
+
+  const anHourLater = (
+    first: ThreadPullRequestWatch,
+    read: Detail,
+  ): ReadonlyArray<ReadonlyArray<string>> => {
+    const kinds: Array<ReadonlyArray<string>> = [];
+    let current = first;
+    for (let minute = 0; minute <= 60; minute += 10) {
+      const { changes, next } = evaluate(current, read, noRemarks, {
+        ...context(),
+        now: minute * 60_000,
+      });
+      kinds.push(changes.map((change) => change.kind));
+      current = next;
+    }
+    return kinds;
+  };
+
+  it("does not tell a watch saved before the no-checks clock that its seen head has none", () => {
+    // Such a watch may have seen this head's checks pending, which records nothing.
+    const legacy = watch({ headSha: "aaaaaaaaaa" });
+    assert.isTrue(anHourLater(legacy, detail({ checks: [] })).every((kinds) => kinds.length === 0));
+    const pushed = anHourLater(legacy, detail({ headSha: "bbbbbbbbbb", checks: [] }));
+    assert.deepEqual(pushed.flat(), ["no-checks"]);
+  });
+
+  it("never reports missing checks on a host whose checks it cannot read", () => {
+    const azure = detail({
+      provider: SourceControlProviderKind.make("azure-devops"),
+      checks: [],
+    });
+    assert.isTrue(anHourLater(watch(), azure).every((kinds) => kinds.length === 0));
+  });
 });
 
 describe("pull request watch policy", () => {
@@ -370,6 +405,15 @@ describe("pull request watch policy", () => {
     assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["lint", "test"] }), both);
   });
 
+  it("keeps a held no-checks note until checks report or the head moves", () => {
+    const note = ["no checks reported on aaaaaaa after 15 minutes"];
+    const state = { conflicting: false, failedChecks: [], passed: false, headMoved: false };
+    assert.deepEqual(settleHeldContext(note, state), note);
+    assert.deepEqual(settleHeldContext(note, { ...state, headMoved: true }), []);
+    assert.deepEqual(settleHeldContext(note, { ...state, passed: true }), []);
+    assert.deepEqual(settleHeldContext(note, { ...state, failedChecks: ["lint"] }), []);
+  });
+
   it("restates kept failures from every check failing after the pass", () => {
     const state = { conflicting: false, passed: false, headMoved: false };
     const six = ["checks failed on aaaaaaa: a, b, c, d, e and 1 more"];
@@ -433,6 +477,25 @@ describe("pull request watch policy", () => {
     assert.equal(outcome(noRemarks)?.checksOn, "aaaaaaaaaa");
     // A comment stays news after a push, so a wake that carries one is kept.
     assert.isUndefined(outcome([remark("reviewer", "2026-10-02T12:10:00Z")])?.checksOn);
+  });
+
+  it("names the head of a no-checks wake, so a push drops it", () => {
+    const awaited = watch({ headSha: "aaaaaaaaaa", checksAwaitedSince: STARTED });
+    const report = evaluate(awaited, detail({ checks: [] }), noRemarks, {
+      ...context(),
+      now: Date.parse(STARTED) + 20 * 60_000,
+    });
+    assert.deepEqual(
+      report.changes.map((change) => change.kind),
+      ["no-checks"],
+    );
+    const wake = pullRequestWatchOutcome({
+      number: 7,
+      url: "https://github.com/o/r/pull/7",
+      baseBranch: "main",
+      report,
+    }).wake;
+    assert.equal(wake?.checksOn, "aaaaaaaaaa");
   });
 
   it("drops ignored changes but records them", () => {

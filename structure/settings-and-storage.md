@@ -65,11 +65,11 @@ base directory, which selects `userdata` rather than `dev`.
 `statev2.sqlite` is missing and a sibling `state.sqlite` exists, it copies the V1 file into the V2
 path once, using a read-only snapshot. If the V2 file already exists, the V1 file is left alone.
 
-Orchestration v2 tables, the channel ledger (`apps/server/src/persistence/Migrations/071_ChannelLedger.ts`),
-and remote dispatch (`apps/server/src/persistence/Migrations/070_RemoteDispatches.ts`,
-`apps/server/src/persistence/Migrations/069_RemoteReports.ts`,
-`apps/server/src/persistence/Migrations/072_RemoteDispatchQuestions.ts`,
-`apps/server/src/persistence/Migrations/074_RemoteReportRelay.ts`) are migrations on this database.
+Orchestration v2 tables, the channel ledger (`apps/server/src/persistence/Migrations/072_ChannelLedger.ts`),
+and remote dispatch (`apps/server/src/persistence/Migrations/071_RemoteDispatches.ts`,
+`apps/server/src/persistence/Migrations/070_RemoteReports.ts`,
+`apps/server/src/persistence/Migrations/073_RemoteDispatchQuestions.ts`,
+`apps/server/src/persistence/Migrations/075_RemoteReportRelay.ts`) are migrations on this database.
 Launch watches are the exception that is not a table: they are JSON at
 `<stateDir>/thread-launch-watches.json`. See [`launch-and-remote-dispatch.md`](launch-and-remote-dispatch.md).
 

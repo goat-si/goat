@@ -4,12 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./086_MemoryLastReadySpace.ts";
+import migration from "./087_MemoryLastReadySpace.ts";
 
 it.effect("081 rolls DDL back and preserves the retained destination across ledger reruns", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 85 });
+    yield* runMigrations({ toMigrationInclusive: 86 });
     const space = "00000000-0000-4000-8000-000000000001";
     yield* sql`INSERT INTO memory_sync_cursors(space,hub_environment_id,after_sequence,bootstrap_state) VALUES (${space},'fixture',0,'ready')`;
     const rollback = yield* sql
@@ -18,22 +18,22 @@ it.effect("081 rolls DDL back and preserves the retained destination across ledg
     assert.deepStrictEqual(rollback, Exit.fail("rollback"));
     assert.isEmpty(yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`);
     assert.deepStrictEqual(yield* runMigrations(), [
-      [86, "MemoryLastReadySpace"],
-      [87, "MemoryHubAdministered"],
-      [88, "MemoryCheckpointLifecycle"],
-      [89, "FleetGoals"],
-      [90, "FleetHealth"],
-      [91, "ThreadRunObservedChecks"],
-      [92, "RemoteDispatchObservation"],
-      [93, "MemoryRevisionCheckpointSize"],
-      [94, "HubNodes"],
-      [95, "MemorySummaryWorkThreadIndex"],
-      [96, "ThreadHistoryArchives"],
-      [97, "PermissionProfiles"],
-      [98, "DecisionInbox"],
-      [99, "HumanStepRecords"],
-      [100, "McpRequestReservations"],
-      [101, "RemoteReportInboxRunId"],
+      [87, "MemoryLastReadySpace"],
+      [88, "MemoryHubAdministered"],
+      [89, "MemoryCheckpointLifecycle"],
+      [90, "FleetGoals"],
+      [91, "FleetHealth"],
+      [92, "ThreadRunObservedChecks"],
+      [93, "RemoteDispatchObservation"],
+      [94, "MemoryRevisionCheckpointSize"],
+      [95, "HubNodes"],
+      [96, "MemorySummaryWorkThreadIndex"],
+      [97, "ThreadHistoryArchives"],
+      [98, "PermissionProfiles"],
+      [99, "DecisionInbox"],
+      [100, "HumanStepRecords"],
+      [101, "McpRequestReservations"],
+      [102, "RemoteReportInboxRunId"],
     ]);
     yield* sql`INSERT INTO memory_last_ready_space(singleton,space) VALUES (1,${space})`;
     assert.deepStrictEqual(yield* runMigrations(), []);
