@@ -40,7 +40,7 @@ namespace Goat.ComputerUse
             bool truncated = false;
             bool done = WindowsFacts.RunBounded(delegate
             {
-                try { truncated = Walk(window, elements); }
+                try { truncated = Walk(window, processId, elements); }
                 finally { Interlocked.Exchange(ref walking, 0); }
                 return true;
             }, TimeoutMs, false);
@@ -51,8 +51,13 @@ namespace Goat.ComputerUse
             return result;
         }
 
-        /// <summary>Depth-first over the control view; true when it stopped before the end.</summary>
-        static bool Walk(IntPtr window, List<object> elements)
+        /// <summary>
+        /// Depth-first over the control view, one UI Automation call at a time, each counted
+        /// against one budget before it is made; true when the budget stopped it. Like the
+        /// driver, a CoreWindow app (Calculator, Settings) whose window element is an empty
+        /// wrapper is read from the desktop root's elements of the same process instead.
+        /// </summary>
+        static bool Walk(IntPtr window, int processId, List<object> elements)
         {
             var cache = new CacheRequest { TreeScope = TreeScope.Element };
             foreach (AutomationProperty property in new[]
@@ -64,27 +69,78 @@ namespace Goat.ComputerUse
                 ExpandCollapsePattern.ExpandCollapseStateProperty,
             })
                 cache.Add(property);
-            var walker = TreeWalker.ControlViewWalker;
-            var clock = Stopwatch.StartNew();
-            int visited = 0;
-            var stack = new Stack<AutomationElement>();
+            cache.Add(AutomationElement.ProcessIdProperty);
+            var budget = new Budget(elements);
             using (cache.Activate())
             {
                 AutomationElement root = AutomationElement.FromHandle(window);
-                for (AutomationElement child = walker.GetFirstChild(root, cache); child != null; child = walker.GetNextSibling(child, cache))
-                    stack.Push(child);
-                while (stack.Count > 0)
+                if (Subtree(root, cache, elements, budget)) return true;
+                if (elements.Count > 0 || IsSal(window)) return false;
+                // The empty-wrapper case: walk this process's top-level elements instead.
+                var walker = TreeWalker.ControlViewWalker;
+                for (AutomationElement top = budget.Call() ? walker.GetFirstChild(AutomationElement.RootElement, cache) : null;
+                     top != null; top = budget.Call() ? walker.GetNextSibling(top, cache) : null)
                 {
-                    if (++visited > MaxVisited || clock.ElapsedMilliseconds > BudgetMs || elements.Count == MaxElements) return true;
-                    AutomationElement element = stack.Pop();
-                    var entry = Entry(element);
+                    if ((int)top.GetCachedPropertyValue(AutomationElement.ProcessIdProperty) != processId) continue;
+                    var entry = Entry(top);
                     if (entry != null) elements.Add(entry);
-                    for (AutomationElement child = walker.GetFirstChild(element, cache); child != null; child = walker.GetNextSibling(child, cache))
-                        stack.Push(child);
+                    if (Subtree(top, cache, elements, budget)) return true;
+                }
+                return budget.Spent;
+            }
+        }
+
+        /// <summary>Every descendant of root, lazily; true when the budget stopped it.</summary>
+        static bool Subtree(AutomationElement root, CacheRequest cache, List<object> elements, Budget budget)
+        {
+            var walker = TreeWalker.ControlViewWalker;
+            var ancestors = new Stack<AutomationElement>();
+            AutomationElement node = budget.Call() ? walker.GetFirstChild(root, cache) : null;
+            while (node != null)
+            {
+                var entry = Entry(node);
+                if (entry != null) elements.Add(entry);
+                if (!budget.Call()) return true;
+                AutomationElement child = walker.GetFirstChild(node, cache);
+                if (child != null) { ancestors.Push(node); node = child; continue; }
+                while (true)
+                {
+                    if (!budget.Call()) return true;
+                    AutomationElement sibling = walker.GetNextSibling(node, cache);
+                    if (sibling != null) { node = sibling; break; }
+                    if (ancestors.Count == 0) return budget.Spent;
+                    node = ancestors.Pop();
                 }
             }
-            return false;
+            return budget.Spent;
         }
+
+        /// <summary>One node and time budget shared by a whole read, checked before every call.</summary>
+        sealed class Budget
+        {
+            readonly Stopwatch clock = Stopwatch.StartNew();
+            readonly List<object> elements;
+            int calls;
+            public bool Spent;
+
+            public Budget(List<object> elements) { this.elements = elements; }
+
+            public bool Call()
+            {
+                if (++calls > MaxVisited || clock.ElapsedMilliseconds > BudgetMs || elements.Count >= MaxElements) Spent = true;
+                return !Spent;
+            }
+        }
+
+        /// <summary>LibreOffice's SAL windows hang on the root walk; the driver skips it for them too.</summary>
+        static bool IsSal(IntPtr window)
+        {
+            var name = new System.Text.StringBuilder(64);
+            return GetClassNameW(window, name, name.Capacity) > 0 && name.ToString().StartsWith("SAL", StringComparison.Ordinal);
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern int GetClassNameW(IntPtr window, System.Text.StringBuilder name, int max);
 
         static Dictionary<string, object> Entry(AutomationElement element)
         {

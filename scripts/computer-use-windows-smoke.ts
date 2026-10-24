@@ -172,6 +172,11 @@ async function main(
       const states = read
         ? decodeStates(await helper.call("elementStates", { pid, windowId }))
         : undefined;
+      if (states)
+        record("element states " + label, {
+          count: states.elements.length,
+          truncated: states.truncated,
+        });
       const image = read?.images[0];
       if (image)
         NodeFS.writeFileSync(
