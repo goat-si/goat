@@ -23,7 +23,7 @@ run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && format('goat-ci {0} on {1}', inputs.lane, github.ref_name) || github.event.pull_request.title }}
 on:
   pull_request:
-    branches: [main, dev, preview, "goat/**"]
+    branches: [dev, "goat/**"]
     # labeled lets a ci:* label start its run without a re-run; ready_for_review gives a draft its
     # full scope when it leaves draft.
     types: [opened, synchronize, reopened, ready_for_review, labeled]

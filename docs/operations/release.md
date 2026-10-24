@@ -5,7 +5,7 @@
 GOAT releases use [the GOAT release channels](../internals/release-channels.md) and
 `.github/workflows/goat-nightly.yml`, publishing archives and checksums to
 [goat-si/goat-releases](https://github.com/goat-si/goat-releases/releases).
-Nightly builds `dev`; stable builds promoted `main`. The workflow's publication gates
+Nightly builds `dev`; stable rebuilds a nightly that has soaked for 24 hours. The workflow's publication gates
 must be enabled before it publishes. Install and update GOAT from those archives
 or with `goat update <version>`.
 
