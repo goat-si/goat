@@ -7,9 +7,17 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import { isWindowsRenameLock } from "@goat/shared/atomicWrite";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+
+// Windows refuses to replace a secret while another handle holds it open without
+// delete sharing (a concurrent reader, the search indexer, a virus scanner). About
+// 2 seconds, so a denial that never clears still surfaces to the caller.
+const lockedRenameRetry = Schedule.spaced("100 millis").pipe(Schedule.upTo({ times: 20 }));
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -156,6 +164,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const platform = yield* HostProcess.Platform;
 
   yield* fileSystem.makeDirectory(serverConfig.secretsDir, { recursive: true });
   yield* fileSystem.chmod(serverConfig.secretsDir, 0o700).pipe(
@@ -201,7 +210,10 @@ export const make = Effect.gen(function* () {
         return Effect.gen(function* () {
           yield* fileSystem.writeFile(tempPath, value);
           yield* fileSystem.chmod(tempPath, 0o600);
-          yield* fileSystem.rename(tempPath, secretPath);
+          const rename = fileSystem.rename(tempPath, secretPath);
+          yield* platform === "win32"
+            ? rename.pipe(Effect.retry({ schedule: lockedRenameRetry, while: isWindowsRenameLock }))
+            : rename;
           yield* fileSystem.chmod(secretPath, 0o600);
         }).pipe(
           Effect.catch((cause) =>
