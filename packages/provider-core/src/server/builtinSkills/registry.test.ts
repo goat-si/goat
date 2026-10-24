@@ -109,13 +109,18 @@ describe("computer use skill against what agents receive today", () => {
     expect(codeSpans.filter((span) => helperOnly.has(span))).toEqual([]);
   });
 
-  it("treats an error as unsent only for codes the driver checks before input leaves", () => {
-    // delivery_failed can follow a key that already went down; resending it could submit twice.
+  it("treats input as unsent only for an explicit refusal or a pre-send code without an effect", () => {
+    // delivery_failed can follow a key that already went down, and background_unavailable can
+    // come with an unverifiable or partial effect; resending either could submit twice.
     const results = builtInSkillSections(["computer-use"], "linux")[0] ?? "";
     const line = (code: string) =>
       results.split("\n").find((entry) => entry.includes(`\`${code}\``));
-    expect(line("delivery_failed")).toContain("may have landed");
     expect(line("stale_element_token")).toContain("Nothing was sent");
+    expect(line("stale_element_token")).toContain("always outranks");
+    expect(line("unverifiable")).toContain("may have landed");
+    expect(line("partial")).toContain("may have landed");
+    expect(line("background_unavailable")).toBeUndefined();
+    expect(COMPUTER_USE_PLATFORM_NOTES.linux).toMatch(/`background_unavailable`, observe first/);
   });
 
   it("names no driver tool GOAT withholds from agents", () => {
