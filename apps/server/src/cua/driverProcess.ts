@@ -20,6 +20,9 @@ export function spawnDriverProcess(
   });
   child.on("error", () => undefined);
   child.stdin.on("error", () => undefined);
+  // A leader that dies alone (a helper launcher crash) leaves its service and driver behind with
+  // no watcher; the group is this connection's, so it ends with its leader.
+  child.once("exit", () => killDriverGroup(platform, child, "SIGKILL"));
   return child;
 }
 

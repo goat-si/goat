@@ -9,7 +9,7 @@ const platform = HostProcess.Platform.defaultValue();
 
 // A shell and its own child both hold the pipe: it closes only when neither is left.
 const pairLike = () =>
-  spawnDriverProcess(platform, "/bin/sh", ["-c", "sleep 60 & echo started; wait"], {
+  spawnDriverProcess(platform, "/bin/sh", ["-c", "sleep 600 & echo started; wait"], {
     PATH: "/bin:/usr/bin",
   });
 // Ready once the shell has started its own child, so there is a grandchild to end.
@@ -31,6 +31,16 @@ describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
       assert.isNull(other.signalCode);
       killDriverGroup(platform, other, "SIGKILL");
       yield* closed(other);
+    }),
+  );
+
+  it.live("a connection whose leader dies alone does not leave its grandchild running", () =>
+    Effect.gen(function* () {
+      const leaderOnly = pairLike();
+      yield* started(leaderOnly);
+      // Only the leader: as if the helper's launcher crashed under its service and driver.
+      if (leaderOnly.pid !== undefined) process.kill(leaderOnly.pid, "SIGKILL");
+      yield* closed(leaderOnly);
     }),
   );
 });

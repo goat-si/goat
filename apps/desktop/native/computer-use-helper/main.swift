@@ -65,8 +65,7 @@ func signingTeam(_ code: SecStaticCode) -> String? {
 /// exits after the check, which no longer matters. The stronger check, asking the kernel who
 /// holds the other end of stdin, is not available: macOS reports peer credentials only for
 /// Unix sockets (LOCAL_PEERTOKEN), not pipes.
-func parentCode() -> SecCode? {
-  let parent = getppid()
+func parentCode(_ parent: pid_t = getppid()) -> SecCode? {
   // launchd: the launcher is already orphaned, or was started by launchd itself.
   guard parent > 1 else { return nil }
   var task: mach_port_name_t = 0
@@ -106,7 +105,7 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 ///
 /// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
 /// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
-func parentRefusal() -> String? {
+func parentRefusal(_ parent: pid_t) -> String? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
   }
@@ -118,7 +117,7 @@ func parentRefusal() -> String? {
     return "This helper's bundle identifier does not name its GOAT app."
   }
   let appId = String(ownId.dropLast(suffix.count))
-  guard let parent = parentCode(),
+  guard let parent = parentCode(parent),
     satisfies(
       parent,
       "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
@@ -159,8 +158,7 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
 /// a driver mid-action reads stdin's end only between calls, so it must not outlive the proxy
 /// that enforces its lease. This launcher leads the connection's process group (the proxy
 /// starts it detached), so the whole group goes: service and driver too.
-func endWithParent(service: pid_t) {
-  let parent = getppid()
+func endWithParent(_ parent: pid_t, service: pid_t) {
   // Only a group this launcher leads is safe to end whole; otherwise end what it started.
   let end = {
     if getpgrp() == getpid() { killpg(getpid(), SIGKILL) } else { kill(service, SIGKILL) }
@@ -170,12 +168,19 @@ func endWithParent(service: pid_t) {
   source.setEventHandler(handler: end)
   source.resume()
   retained.append(source)
-  // The proxy may already be gone, before the source was watching it.
+  // The proxy may have gone at any point since this launcher started: then this process has
+  // been re-parented, so getppid() no longer names the parent it was started by.
   if getppid() != parent { end() }
 }
 
 func runLauncher() -> Never {
-  if let refusal = parentRefusal() { refuse("untrusted_parent", refusal, 77) }
+  // The parent this launcher was started by, captured once: every later check compares with it,
+  // so a parent that dies before the watch below starts is still noticed.
+  let parent = getppid()
+  if CommandLine.arguments.contains("--mcp") && parent <= 1 {
+    refuse("untrusted_parent", "The process that started this connection is gone.", 77)
+  }
+  if let refusal = parentRefusal(parent) { refuse("untrusted_parent", refusal, 77) }
   // RTLD_DEFAULT; the symbol is private libsystem API, so a missing one is a typed refusal.
   guard
     let symbol = dlsym(
@@ -215,7 +220,7 @@ func runLauncher() -> Never {
     source.resume()
     retained.append(source)
   }
-  if CommandLine.arguments.contains("--mcp") { endWithParent(service: child) }
+  if CommandLine.arguments.contains("--mcp") { endWithParent(parent, service: child) }
   DispatchQueue.global().async {
     var waitStatus: Int32 = 0
     while waitpid(child, &waitStatus, 0) == -1 && errno == EINTR {}
