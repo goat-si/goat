@@ -58,6 +58,16 @@ Trap: Node's `child_process` cannot set the disclaim spawn attribute, which is w
 disclaims itself instead of being spawned disclaimed. Launching it with `open` would disclaim too
 but loses the stdio pipes, and the driver would no longer be a child of a process GOAT holds.
 
+The Codex app's computer use helper has the same shape at the identity level: a separately signed
+background app with its own designated requirement and its own updater, refreshed into a per-user
+location, reached over a per-user socket and started through LaunchServices when it is not
+running. GOAT keeps a spawned helper with stdio, because a spawned child gives the host its
+lifetime and pipes for free and needs no listener. The disclaim interface it relies on is private.
+If a macOS release breaks it, the fallback is the Codex arrangement: launch the helper through
+LaunchServices, which makes it its own responsible process with public API, and connect over a
+per-user socket that verifies the peer from its audit token against the helper's designated
+requirement, never from a pid or path alone. The driver stays the helper's child either way.
+
 ## Channel
 
 - Spawned helpers speak NDJSON on stdin/stdout, one JSON record per line, with request ids,
@@ -67,9 +77,14 @@ but loses the stdio pipes, and the driver would no longer be a child of a proces
   (team id and bundle id) before it spawns, then sends a per-launch random token as the first
   frame. The token never goes in argv or the environment, which other processes of the same user
   can read. The helper answers with its protocol version, helper version, driver version, bundle
-  id and pid; a version mismatch refuses the session rather than degrading it.
-- If a later phase needs a socket (for example a helper that outlives its launcher), it uses a
-  0700 directory, the same token, and a peer pid plus code-signature check on every accept.
+  id, executable path and pid. Each side states the API version it speaks; an incompatible pair
+  ends the handshake with `incompatible_client_version` rather than degrading.
+- Every request carries a deadline and the session's helper generation. A response is accepted
+  only from the executable, pid and generation the handshake bound; results that arrive after a
+  Stop or a generation change are quarantined and never reach the agent.
+- A socket, in the fallback above or for a helper that outlives its launcher, uses a 0700
+  directory, the same token, and a peer check on every accept: audit token to code signature to
+  the designated requirement.
 - The driver's own daemon socket lives in the helper's private state directory. It has no secret
   (ADR-0022 "Limits"); the helper narrows which path agents get, not what the OS user can reach.
 - Liveness runs both ways: the helper exits when stdin closes or its launcher pid disappears, and
@@ -115,10 +130,12 @@ but loses the stdio pipes, and the driver would no longer be a child of a proces
   before deciding.
 - Refusal reasons are typed and say what happened: `not_admitted`, `lease_expired`,
   `app_not_approved`, `private_mode`, `human_control`, `input_collision`, `stale_element`,
-  `target_gone`, `target_refused` (a policy refusal, with the policy named), `permission_missing`,
-  `unsupported` and `stopped`. `stopped` is used only when a person pressed Stop or stop all. A
-  vendor helper that reports a policy refusal as "stopped by the user" makes agents end their turn
-  (#1146); GOAT's helper does not.
+  `target_gone`, `target_refused` (a policy refusal, with the policy named), `blocked_url`,
+  `permissions_not_granted`, `permissions_pending`, `screen_locked`, `user_intervened`,
+  `incompatible_client_version`, `unsupported` and `user_stopped`. `user_stopped` is used only
+  when a person pressed Stop or stop all, and `user_intervened` only when the helper saw a
+  person's input. A vendor helper that reports a policy refusal as "stopped by the user" makes
+  agents end their turn (#1146); GOAT's helper does not.
 
 ## Transcript fidelity
 
@@ -137,8 +154,10 @@ The rule: the screenshot the model saw is the screenshot the person sees.
 - Contract fixtures cover image-only, structured-only, mixed and error results for each provider
   harness GOAT ships.
 - A screenshot carries the request id, helper generation, thread and environment it was taken
-  for, and stays within a size and format check. A late result from before a Stop or owner change,
-  or one addressed to another session, is discarded instead of attached (#1163).
+  for. Before it is attached, its source, size and format are checked; the helper never hands
+  over a file path the server would read. A late result from before a Stop or owner change, or
+  one addressed to another session, is discarded instead of attached (#1163).
+- Raw screenshots and accessibility text never go into telemetry or logs.
 
 ## Preview session protocol
 
@@ -187,10 +206,12 @@ PreviewSession {
   `settings:write` in an authenticated client session. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
-  An approval binds the app's canonical identity (bundle id or executable path) at approval time,
-  and the action runs on that frozen target, so a request cannot be approved for one app and
-  executed against another. "Always" approvals are listed in Settings, where a person removes them;
-  a removed app asks again.
+  The approval card names the app and machine, warns when the app is high risk, explains on first
+  use that screenshots of its windows reach the model, and offers "Allow this conversation",
+  "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
+  executable path) at approval time, and the action runs on that frozen target, so a request
+  cannot be approved for one app and executed against another. "Always" approvals are listed in
+  Settings, where a person removes them; a removed app asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.
@@ -242,8 +263,8 @@ PreviewSession {
   existing probe). Wayland needs the portal consent for screen cast and remote desktop, kept with
   a restore token, and reports `partial` until the person grants it.
 - Readiness is four separate answers, shown separately: the OS grant, an authenticated helper,
-  a real capture and tree, and the tools attached for this turn. Pending, denied and abandoned
-  prompts are distinct states; a closed prompt never reads as granted.
+  a real capture and tree, and the tools available to the model this turn. Pending, denied,
+  abandoned and intervened are distinct states; a closed prompt never reads as granted.
 - The same `permission-needed` status and chip appear on every client. Remote clients show which
   machine needs the grant; it can only be granted at that machine.
 
@@ -264,10 +285,11 @@ PreviewSession {
   in a GOAT-owned directory, one directory per generation. A helper update is its own signed and
   notarized artifact. Before a switch, the host checks the new copy against the helper's
   designated requirement and the protocol version range the host supports, and it never installs
-  over a generation that is running. Active sessions end through the normal Stop path with their
-  cleanup report, the host switches to the new generation in one step, and the new helper must
-  pass readiness before agents get it; a failed readiness check switches back to the previous
-  generation. A GOAT update that carries a newer seed goes through the same switch. TCC keys
+  over a generation that is running. Leases are drained or revoked and active sessions end
+  through the normal Stop path with their cleanup report; the host then switches to the new
+  generation in one step, keeps the previous one for rollback, and rechecks all four readiness
+  answers before agents get the new helper; a failed check switches back. A GOAT update that
+  carries a newer seed goes through the same switch. TCC keys
   grants to the designated requirement, not the path, so grants should survive a switch; that,
   and a revoked grant being noticed, are negative qualification cases (#1162).
 - Windows and Linux helpers are signed with the existing platform signing paths and staged beside

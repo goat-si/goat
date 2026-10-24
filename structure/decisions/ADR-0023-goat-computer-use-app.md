@@ -53,6 +53,10 @@
     already absorbed, and it brings Cua browser tools GOAT does not ship.
   - Reuse a vendor helper (the Codex or Aside computer use service). They are proprietary, signed
     by their vendor, and keep the grant under the vendor's name.
+  - Launch the helper through LaunchServices and connect over a per-user socket, as the Codex app
+    does. It avoids the private disclaim interface but needs a listener, peer verification on
+    every connect and its own lifetime management. It is kept as the fallback if a macOS release
+    breaks the disclaim interface.
 - **Decision.**
   - **Helper app per OS.** GOAT Computer Use is a separate signed native helper with its own
     identity, signing, notarization and version. On macOS it is "GOAT Computer Use.app",
@@ -69,8 +73,12 @@
     in small, separate driver patches with recorded provenance, never in a rewritten driver.
   - **Channel.** The helper talks to its launcher over an authenticated local channel: NDJSON over
     stdio pipes when spawned, a per-launch random token plus peer process and code-signature checks
-    for any socket. Agents reach the helper only through GOAT's MCP surface. Every MCP result puts
-    screenshots in `content` image blocks; `structuredContent` never carries image payloads.
+    for any socket. The handshake negotiates the API version, every request has a deadline, and
+    results are bound to the helper's executable, pid and generation, so late results after a
+    Stop are dropped. Agents reach the helper only through GOAT's MCP surface. Every MCP result
+    puts screenshots in `content` image blocks; `structuredContent` never carries image payloads,
+    and screenshots keep their request, generation and destination thread through to the
+    transcript.
   - **Observation.** Window-scoped screenshot plus accessibility tree. The first observation is
     full; later ones are diffs keyed by stable element ids. A target is PID, window id and
     Space/display epoch; a new epoch invalidates ids, and a stale id is a typed `stale_element`
@@ -79,7 +87,13 @@
     exact PID and window, background delivery first, foreground only under a lease that allows it.
     Results are typed `confirmed`, `partial`, `unverifiable`, `suspected_noop` or
     `refused(reason)`; partial and unverifiable results are never replayed automatically, and a
-    refusal never claims the user stopped it (#1146).
+    refusal never claims the user stopped it (#1146). Stops and refusals name their cause: the
+    user stopped, the user intervened, the screen locked, a missing or pending permission, an app
+    not approved, a blocked URL, an incompatible client, or a named policy.
+  - **Readiness and approvals.** Readiness is four answers shown separately: OS grant, an
+    authenticated helper, a real capture and tree, and tools available to the model. Apps are
+    approved for a conversation or always from a card, the approved target is frozen before the
+    action runs, and always-allowed apps can be removed in Settings.
   - **One preview surface.** Native computer use and built-in browser use share one preview session
     contract (owner `agent`, `human` or `private`; status; target; lease; last frame) with the same
     controls (take over, hand back, request handoff, stop, stop all), status chips and private mode
