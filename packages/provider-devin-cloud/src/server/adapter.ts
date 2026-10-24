@@ -309,8 +309,10 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
           );
         current = { ...acceptedThread, cloudTask: accepted };
         yield* observer.bind({ ...input, providerThread: current }, false);
-        if (needsNewSession) {
-          // Configure version, platform and repository before the first prompt.
+        // Configure version, platform and repository before the first prompt. A saved session that
+        // never received one (its setup was refused, say before repository access was granted)
+        // configures again rather than staying stuck.
+        if (needsNewSession || (!repositoryConfirmed && ordinal === 0)) {
           yield* relay
             .configureSource(id, savedSource, { model, platform })
             .pipe(
@@ -320,6 +322,7 @@ export const makeAdapter = Effect.fn("DevinCloud.makeAdapter")(function* (
                   .pipe(Effect.andThen(Effect.fail(fail(cause.message, cause)))),
               ),
             );
+          repositoryConfirmed = true;
         }
         if (!repositoryConfirmed) {
           const reason =

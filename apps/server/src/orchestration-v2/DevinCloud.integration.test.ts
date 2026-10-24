@@ -74,7 +74,10 @@ const metadata = (title: string) => ({
 });
 
 /** The fake is the external CLI process; ACP encoding, relay and adapter remain real. */
-const makePeer = Effect.fnUntraced(function* (offered = "example/project") {
+const makePeer = Effect.fnUntraced(function* (initiallyOffered = "example/project") {
+  // The Devin organization's repository list; a test can grant access mid-thread.
+  let offered = initiallyOffered;
+  let selected = offered === "example/project" ? "example/project" : "";
   const output = yield* Queue.unbounded<Uint8Array>();
   const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
   const prompted = yield* Deferred.make<void>();
@@ -116,7 +119,8 @@ const makePeer = Effect.fnUntraced(function* (offered = "example/project") {
           yield* reply({ sessionId: NATIVE_ID, configOptions: repos("", offered) });
         } else if (rpc.method === "session/set_config_option") {
           assert.equal(rpc.params?.value, "example/project");
-          yield* reply({ configOptions: repos("example/project") });
+          selected = "example/project";
+          yield* reply({ configOptions: repos(selected, offered) });
         } else if (rpc.method === "session/prompt") {
           assert.equal(rpc.params?.sessionId, NATIVE_ID);
           promptId = rpc.id;
@@ -138,7 +142,7 @@ const makePeer = Effect.fnUntraced(function* (offered = "example/project") {
             },
           });
           yield* reply({
-            configOptions: repos("example/project"),
+            configOptions: repos(selected, offered),
             _meta: metadata("Loaded session"),
           });
           yield* Deferred.succeed(loaded, undefined);
@@ -188,6 +192,10 @@ const makePeer = Effect.fnUntraced(function* (offered = "example/project") {
     prompted,
     loaded,
     notify,
+    grant: () =>
+      Effect.sync(() => {
+        offered = "example/project";
+      }),
     finish: () =>
       Effect.gen(function* () {
         assert.isDefined(promptId);
@@ -487,7 +495,7 @@ it.effect("persists real Devin relay results and late metadata through manager a
 );
 
 it.effect(
-  "a repository Devin does not offer fails the run with its reason instead of an unknown task",
+  "a repository Devin does not offer fails each run with its reason, and the thread works once access is granted",
   () =>
     Effect.gen(function* () {
       const { peer, runtime, projectId } = yield* makeFixture(
@@ -512,47 +520,67 @@ it.effect(
           createdBy: "user",
           creationSource: "web",
         });
-        const failed = yield* orchestrator
-          .streamStoredEventsFrom({ threadId, eventType: "run.updated" })
-          .pipe(
-            Stream.filter(
-              (stored) =>
-                stored.event.type === "run.updated" && stored.event.payload.status === "failed",
-            ),
-            Stream.take(1),
-            Stream.runDrain,
-            Effect.forkChild,
-          );
-        yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("command:devin-unoffered-start"),
-          threadId,
-          messageId: MessageId.make("message:devin-unoffered-start"),
-          text: "Read the published source",
-          attachments: [],
-          createdBy: "user",
-          creationSource: "web",
-          dispatchMode: { type: "start_immediately" },
+        const send = Effect.fnUntraced(function* (ordinal: number, status: "failed" | "completed") {
+          const settled = yield* orchestrator
+            .streamStoredEventsFrom({ threadId, eventType: "run.updated" })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "run.updated" &&
+                  stored.event.payload.ordinal === ordinal &&
+                  stored.event.payload.status === status,
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkChild,
+            );
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make(`command:devin-unoffered-${ordinal}`),
+            threadId,
+            messageId: MessageId.make(`message:devin-unoffered-${ordinal}`),
+            text: "Read the published source",
+            attachments: [],
+            createdBy: "user",
+            creationSource: "web",
+            dispatchMode: { type: "start_immediately" },
+          });
+          yield* worker.drain();
+          return settled;
         });
-        yield* worker.drain();
-        yield* Fiber.join(failed);
+        const expectRefused = Effect.fnUntraced(function* (ordinal: number) {
+          yield* Fiber.join(yield* send(ordinal, "failed"));
+          yield* worker.drain();
+          const projection = yield* orchestrator.getThreadProjection(threadId);
+          const run = projection.runs.find((candidate) => candidate.ordinal === ordinal)!;
+          const task = projection.providerThreads[0]!.cloudTask!;
+          // Nothing reached Devin, so the task is definitely failed: no "remote work may continue".
+          assert.equal(run.status, "failed");
+          assert.equal(task.status, "failed");
+          assert.equal(task.taskId, NATIVE_ID);
+          assert.include(task.error, "not offered by this Devin organization");
+          const result = projection.messages.find(
+            (message) => message.id === `message:cloud-result:${run.id}`,
+          );
+          assert.include(result?.text, "not offered by this Devin organization");
+          assert.include(result?.text, "before any prompt was sent");
+          assert.notInclude(result?.text, "Cloud task unknown");
+        });
+        yield* expectRefused(1);
+        // A second message before access is granted is refused the same way, never "unknown".
+        yield* expectRefused(2);
+        assert.equal(peer.methods.filter((method) => method === "session/prompt").length, 0);
+        yield* peer.grant();
+        const completed = yield* send(3, "completed");
+        yield* Deferred.await(peer.prompted);
+        yield* peer.finish();
+        yield* Fiber.join(completed);
         yield* worker.drain();
         const settled = yield* orchestrator.getThreadProjection(threadId);
-        const run = settled.runs[0]!;
-        const task = settled.providerThreads[0]!.cloudTask!;
-        // Nothing reached Devin, so the task is definitely failed: no "remote work may continue".
-        assert.equal(run.status, "failed");
-        assert.equal(task.status, "failed");
-        assert.equal(task.taskId, NATIVE_ID);
-        assert.include(task.error, "not offered by this Devin organization");
-        const result = settled.messages.find(
-          (message) => message.id === `message:cloud-result:${run.id}`,
-        );
-        assert.include(result?.text, "not offered by this Devin organization");
-        assert.include(result?.text, "before any prompt was sent");
-        assert.notInclude(result?.text, "Cloud task unknown");
+        assert.equal(settled.providerThreads[0]!.cloudTask?.status, "succeeded");
+        assert.equal(settled.providerThreads[0]!.nativeThreadRef?.ordinal, 1);
         assert.equal(peer.methods.filter((method) => method === "session/new").length, 1);
-        assert.equal(peer.methods.filter((method) => method === "session/prompt").length, 0);
+        assert.equal(peer.methods.filter((method) => method === "session/prompt").length, 1);
       }).pipe(Effect.provide(runtime));
     }).pipe(Effect.provide(Layer.merge(ServerSettings.layerTest(), NodeServices.layer))),
 );

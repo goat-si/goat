@@ -223,7 +223,11 @@ const make = Effect.gen(function* () {
           }),
         attach: (sessionId) =>
           capabilities.loadSession
-            ? wrap(client.agent.loadSession({ sessionId, cwd: launch.cwd, mcpServers: [] }))
+            ? wrap(client.agent.loadSession({ sessionId, cwd: launch.cwd, mcpServers: [] })).pipe(
+                Effect.tap((reply) =>
+                  Effect.sync(() => setups.set(sessionId, reply.configOptions ?? [])),
+                ),
+              )
             : Effect.fail(
                 new DevinCloudCliError({
                   stage: "relay",

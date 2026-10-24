@@ -492,8 +492,8 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
                 ),
               );
           }
-          yield* onUncertain(detail);
-          // startTurn returns the error; base owns its start-failure terminal.
+          // Nothing reached Devin, so the session stays usable; startTurn returns the error and
+          // the base owns its start-failure terminal.
         }),
       ),
     run: Effect.fn("DevinCloud.observePrompt")(function* (relay: CloudRelay, prompt: string) {
