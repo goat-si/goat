@@ -561,11 +561,16 @@ export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
  * (D7). watchId names this watch; every event it raises carries it, so events from an earlier
  * watch in the same helper process never reach the next one.
  *
- * Private mode has a lifecycle the server can rely on, since it pauses agents until it clears:
- * right after watch, the helper reports the current state of every target, active or not;
- * before a target leaves the watch (its window closes, a new watch drops it, or unwatch), the
- * helper reports active:false for it if it was active, and only then answers unwatch. A helper
- * that exits clears every target of its generation.
+ * Private mode has a lifecycle the server can rely on, since it pauses agents until it clears.
+ * Ordering, so no clearing event is ever dropped:
+ * - When a target leaves the watch (its window closes, a new watch drops it, or unwatch) while
+ *   active, the helper sends active:false for it under the old watchId, before it answers the
+ *   request. The old watch stays in force until that answer.
+ * - A new watch's initial state for every target, active or not, goes out after its answer,
+ *   under the new watchId.
+ * - The client switches to the new watchId when the answer arrives, never when it sends the
+ *   request (admitComputerUseEvent takes the watch in force).
+ * A helper that exits clears every target of its generation.
  */
 export const ComputerUseWatchRequest = Schema.Struct({
   watchId: TrimmedNonEmptyString,

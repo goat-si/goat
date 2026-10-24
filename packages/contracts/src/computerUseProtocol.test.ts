@@ -429,3 +429,38 @@ describe("computer use safety signals", () => {
     expect(decodes(ComputerUseReadiness, diagnosed)).toBe(true);
   });
 });
+
+describe("computer use watch ordering", () => {
+  it("delivers the old watch's clearing event and the new watch's initial state across a rewatch", () => {
+    const target = { pid: 10, windowId: 20 };
+    const frame = (watchId: string, active: boolean) =>
+      Schema.decodeUnknownSync(ComputerUseEventFrame)({
+        generation: "g1",
+        watchId,
+        event: { type: "privateMode", active, target },
+      });
+    // The client's watch in force changes only when the helper answers the new watch.
+    let inForce: string | undefined = "w1";
+    const admit = (event: ReturnType<typeof frame>) =>
+      admitComputerUseEvent({
+        frame: event,
+        frameBytes: 120,
+        maxFrameBytes: 64 * 1024,
+        generation: "g1",
+        watchId: inForce,
+      });
+
+    // The client sends watch w2, which drops the target that was private. Before answering, the
+    // helper clears it under w1, and the client, still on w1, receives it.
+    expect(admit(frame("w1", false))).toBe("deliver");
+    // The answer arrives; from now on w2 is in force.
+    inForce = "w2";
+    // The new watch's initial state follows under w2.
+    expect(admit(frame("w2", false))).toBe("deliver");
+    // Anything still in flight from w1 is dropped.
+    expect(admit(frame("w1", true))).toBe("notWatching");
+    // After unwatch is answered nothing is in force.
+    inForce = undefined;
+    expect(admit(frame("w2", false))).toBe("notWatching");
+  });
+});
