@@ -1,7 +1,10 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
-import { type ComputerUseRefusalReason } from "./computerUseProtocol.ts";
+import {
+  ComputerUseHumanInputSource,
+  type ComputerUseRefusalReason,
+} from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -198,8 +201,8 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  /** unknown: the helper saw a person's input but not which device sent it. */
-  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+  /** The same sources the helper's own humanInput event carries (computerUseProtocol.ts). */
+  source: ComputerUseHumanInputSource,
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
