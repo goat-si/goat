@@ -148,6 +148,99 @@ describe("LaunchWatchService", () => {
     }),
   );
 
+  it.effect("follows a retry that lands while the follower re-reads an end it reported", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      runEndedAt(world, 1_000, "failed");
+      const retried = { host: null, threadId: target, runId: run1 };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchLocal(service, run1);
+          yield* Queue.offer(world.waits, finished(run1, "failed"));
+          yield* Queue.take(world.delivered);
+          // A repeated request re-arms the run, and the follower reads the reported end again.
+          yield* service.rearmRetried(retried);
+          expect(yield* Queue.take(world.waitStarted)).toBe(run1);
+          // A real retry lands before that read is applied.
+          yield* service.rearmRetried(retried);
+          yield* Queue.takeAll(world.launcherReads);
+          yield* Queue.offer(world.waits, finished(run1, "failed"));
+          yield* Queue.take(world.launcherReads);
+          expect(yield* pendingRuns(service)).toEqual([run1]);
+          runEndedAt(world, 2_000, "completed");
+          yield* Queue.offer(world.waits, finished(run1));
+          const completed = yield* Queue.take(world.delivered);
+          expect(completed.text).toContain("finished run run-1 with status completed");
+        }),
+      );
+      expect(world.deliveredLog).toHaveLength(2);
+    }),
+  );
+
+  it.effect("reports a remote retried run's end that completed before the failure was read", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const completedAt = "2026-10-24T00:00:02.000Z";
+      let waits = 0;
+      world.hostCall = (call) => {
+        switch (call.tool) {
+          case "goat_thread_wait":
+            waits += 1;
+            return Effect.succeed({
+              threadId: target,
+              runId: run1,
+              status: waits === 1 ? "failed" : "completed",
+              timedOut: false,
+            });
+          case "goat_thread_read":
+            // Read after the first wait, by which time a retry already completed the run.
+            return Effect.succeed(
+              remoteRead({
+                itemCount: 1,
+                recentRuns: [
+                  {
+                    runId: run1,
+                    ordinal: 1,
+                    status: "completed",
+                    providerInstanceId: "codex",
+                    model: "gpt-5",
+                    requestedAt: "2026-10-24T00:00:00.000Z",
+                    startedAt: null,
+                    completedAt,
+                  },
+                ],
+              }),
+            );
+          case "goat_thread_status":
+            return Effect.succeed({
+              threadId: target,
+              title: "Remote fix",
+              phase: "completed",
+              terminal: true,
+              run: { runId: run1, status: "completed" },
+              lastError: null,
+              lastErrorClass: null,
+            });
+          default:
+            return Effect.die(new Error("unexpected " + call.tool));
+        }
+      };
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          const failure = yield* Queue.take(world.delivered);
+          expect(failure.text).toContain("finished run run-1 with status failed");
+          yield* service.rearmRetried({ host: "box", threadId: target, runId: run1 });
+          const completed = yield* Queue.take(world.delivered);
+          expect(completed.text).toContain("finished run run-1 with status completed");
+          expect(completed.commandId).not.toBe(failure.commandId);
+        }),
+      );
+    }),
+  );
+
   it.effect("resumes a pending run after a restart without a wake from the shutdown", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
@@ -1520,6 +1613,7 @@ const remoteRead = (input: {
   readonly itemCount: number;
   readonly items?: ReadonlyArray<unknown>;
   readonly nextPosition?: number;
+  readonly recentRuns?: ReadonlyArray<unknown>;
 }) => ({
   thread: {
     threadId: target,
@@ -1551,7 +1645,7 @@ const remoteRead = (input: {
     createdAt: "2026-10-12T00:00:00.000Z",
     updatedAt: "2026-10-12T00:00:00.000Z",
   },
-  recentRuns: [],
+  recentRuns: input.recentRuns ?? [],
   items: input.items ?? [],
   nextPosition: input.nextPosition ?? null,
   hasMore: input.nextPosition !== undefined,

@@ -354,14 +354,16 @@ export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): 
     ...watch,
     pendingRuns: [...watch.pendingRuns, runId],
     reportedRuns: watch.reportedRuns.filter((reported) => reported !== runId),
+    // A run reported before ends were recorded (by an earlier server) has used its first ids.
+    reportedEnds: { ...watch.reportedEnds, [runId]: watch.reportedEnds[runId] ?? "reported" },
     armedAt: now,
     updatedAt: now,
   };
 }
 
-/** Whether this end of a run is the one the watch already reported. */
+/** Whether this end of a run is the one the watch already reported; an unread end matches one. */
 export const endReported = (watch: LaunchWatch, runId: RunId, end: string | null) =>
-  end !== null && watch.reportedEnds[runId] === end;
+  watch.reportedEnds[runId] === (end ?? "unknown");
 
 /**
  * Settles a run whose end was just reported, remembering that end. A run retried while it was

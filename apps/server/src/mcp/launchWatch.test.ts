@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
+  endReported,
   finishedWake,
   LaunchWatchDocument,
   launchWatchId,
@@ -12,8 +13,10 @@ import {
   normalizeHost,
   outageWake,
   questionWake,
+  rearmRetriedRun,
   recordContact,
   recordFailure,
+  settleEnd,
   settleRun,
 } from "./launchWatch.ts";
 
@@ -36,6 +39,43 @@ it("reads watches saved before completion webhooks with the webhook off", () => 
     watches: [saved],
   });
   expect(document.watches[0]?.notifyWebhook).toBe(false);
+});
+
+it("gives a retried run's end new ids when an earlier server reported its first end (#978)", () => {
+  const run = RunId.make("run-1");
+  const {
+    reportedEnds: _added,
+    followAgain: _alsoAdded,
+    ...saved
+  } = settleRun(addPendingRun(makeWatch(), run, 0), run, 0);
+  const [upgraded] = Schema.decodeUnknownSync(LaunchWatchDocument)({
+    version: 1,
+    watches: [saved],
+  }).watches;
+  const wake = (watch: typeof upgraded) =>
+    finishedWake({
+      watch: watch!,
+      runId: run,
+      status: "completed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: "2026-10-24T00:00:00.000Z",
+    });
+  const reported = wake(upgraded);
+  const retried = wake(rearmRetriedRun(upgraded!, run, 1));
+  expect(retried.commandId).not.toBe(reported.commandId);
+  expect(retried.messageId).not.toBe(reported.messageId);
+});
+
+it("treats an end that could not be read as reported once it was", () => {
+  const run = RunId.make("run-1");
+  const owed = rearmRetriedRun(addPendingRun(makeWatch(), run, 0), run, 0);
+  const once = settleEnd(owed, run, null, 0);
+  expect(once.pendingRuns).toEqual([run]);
+  expect(endReported(once, run, null)).toBe(true);
+  expect(endReported(once, run, "2026-10-24T00:00:00.000Z")).toBe(false);
 });
 
 it.effect("notifies once on the third failure and caps contact backoff at fifteen minutes", () =>

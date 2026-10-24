@@ -698,6 +698,7 @@ export const make = Effect.gen(function* () {
           REMOTE_READ_TIMEOUT_MS,
         ).pipe(Effect.flatMap(decodeRead));
       const head = yield* read({ view: "messages", limit: 1, runLimit: 1 });
+      const ended = head.recentRuns.find((run) => run.runId === runId);
       const start = head.thread.itemCount - TAIL_WINDOW - 1;
       let afterPosition: number | undefined = start < 0 ? undefined : start;
       const texts: Array<string | null> = [];
@@ -746,7 +747,8 @@ export const make = Effect.gen(function* () {
         // Registered runs live on their holder, whose own watch reads them locally.
         linkOnlyRegistration: false,
         failure,
-        end: head.recentRuns.find((run) => run.runId === runId)?.completedAt ?? null,
+        // Read after the wait, so it names the observed end only while the status still matches.
+        end: ended?.status === status ? ended.completedAt : null,
       } satisfies LaunchWatchRunDetails;
     });
 
@@ -920,7 +922,13 @@ export const make = Effect.gen(function* () {
                 (endedRunId !== runId && watch.reportedRuns.includes(endedRunId)) ||
                 endReported(watch, endedRunId, end)
               ) {
-                yield* keep(settleRun(recordContact(watch, now), runId, now));
+                const contacted = recordContact(watch, now);
+                // A retry that arrived meanwhile still has the run followed once more.
+                yield* keep(
+                  endedRunId === runId
+                    ? settleEnd(contacted, runId, end, now)
+                    : settleRun(contacted, runId, now),
+                );
                 return 0;
               }
               const title = details.title ?? watch.title;
