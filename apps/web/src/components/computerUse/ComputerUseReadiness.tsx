@@ -29,8 +29,12 @@ const statePresentation = {
 
 export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUseReadinessProps) {
   const result = computerUseReadinessSteps(input);
+  // Steps that share a cause, such as a helper that has not reported, say it once.
+  const said = new Set<string>();
+  const once = (lines: ReadonlyArray<string>) =>
+    lines.filter((line) => !said.has(line) && said.add(line));
   return (
-    <section aria-label="Computer use readiness" className="space-y-3 px-1 py-3">
+    <section aria-label="Computer use readiness" className="space-y-3 px-4 pt-1 pb-4">
       <p role="status" className="text-sm font-medium">
         {result.ready
           ? "Computer use is ready on this host."
@@ -47,7 +51,7 @@ export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUs
                 {statePresentation[step.state].label}
               </Badge>
             </div>
-            {[...new Set(step.detail)].map((line) => (
+            {once(step.detail).map((line) => (
               <p key={line} className="text-xs text-muted-foreground">
                 {line}
               </p>
@@ -63,7 +67,7 @@ export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUs
                     </Badge>
                     {slot?.action}
                   </div>
-                  {[...new Set(row.detail)].map((line) => (
+                  {once(row.detail).map((line) => (
                     <p key={line} className="text-xs text-muted-foreground">
                       {line}
                     </p>

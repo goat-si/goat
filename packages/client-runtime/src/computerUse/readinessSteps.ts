@@ -298,5 +298,10 @@ const protocolMethods = {
 export const COMPUTER_USE_PLATFORM_PARITY = {
   darwin: protocolMethods,
   win32: protocolMethods,
-  linux: protocolMethods,
+  linux: {
+    ...protocolMethods,
+    // The Linux helper does not watch for the safety signals yet (#1235).
+    watch: { unsupported: "The Linux helper does not watch for safety signals yet." },
+    unwatch: { unsupported: "The Linux helper does not watch for safety signals yet." },
+  },
 } as const satisfies Record<"darwin" | "win32" | "linux", PlatformMethods>;
