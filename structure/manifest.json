@@ -502,6 +502,14 @@
           "anchor": "state-roots"
         },
         "dependents": ["overview.md", "server.md", "desktop.md", "ssh.md"]
+      },
+      {
+        "id": "computer-use",
+        "owner": {
+          "document": "server.md",
+          "anchor": "computer-use"
+        },
+        "dependents": ["desktop.md", "shared.md"]
       }
     ]
   },

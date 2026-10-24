@@ -88,6 +88,14 @@ tool on Windows. The SDK's native libraries come from `@trycua/cua-driver` and a
 `app.asar`; `patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. The license
 notices are vendored in `apps/desktop/src/cua/notices/`.
 
+Proposed (not implemented): a separate signed helper, "GOAT Computer Use.app", replaces this
+Electron-owned host. It holds the macOS grants under its own bundle id, runs the driver as its
+embedded child, and talks to its launcher over an authenticated stdio channel; Windows and Linux
+get helpers behind the same protocol. Design and traps:
+`docs/internals/computer-use.md`.
+
+> Decision record: [ADR-0023](decisions/ADR-0023-goat-computer-use-app.md)
+
 ## Shell
 
 The bundled server entry is `backendEntryPath` in `apps/desktop/src/app/DesktopEnvironment.ts`:
