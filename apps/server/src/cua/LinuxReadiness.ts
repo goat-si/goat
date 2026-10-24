@@ -65,7 +65,7 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
       const capture = captureRoute({
         session,
         driverEnvironment: {},
-        captureX11: (windowId) => captureX11Window(sessionEnvironment, windowId),
+        captureX11: (windowId, shot) => captureX11Window(sessionEnvironment, windowId, shot),
       });
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");

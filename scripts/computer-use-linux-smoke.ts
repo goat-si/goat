@@ -385,6 +385,29 @@ try {
     keys.result,
   );
 
+  // A point in the helper's own screenshot: the driver still has the scale of the screenshot it
+  // took for that read, so the point reaches input delivery instead of a missing context.
+  const button = (first.result.elements as Array<any>).find(
+    (element) => element.label === "Increment",
+  );
+  const pointClick = await request("click", {
+    action: "click",
+    target: latest.target,
+    observationId: set.result.observation.observationId,
+    delivery: "background",
+    at: {
+      x: button.frame.x + button.frame.width / 2,
+      y: button.frame.y + button.frame.height / 2,
+    },
+  });
+  check(
+    "a point in the window's own screenshot reaches the driver's pointer input",
+    !JSON.stringify(pointClick.result).includes("screenshot_context") &&
+      (pointClick.result.outcome !== "refused" ||
+        pointClick.result.reason === "backgroundUnavailable"),
+    pointClick.result,
+  );
+
   // Another app's window over the fixture: what the screen shows there must not reach the
   // fixture's screenshot (#1328). Pure red marks the other app.
   const cover = start(
@@ -415,11 +438,24 @@ try {
         "gi.require_version('Gdk', '3.0')",
         "from gi.repository import Gdk",
         "root = Gdk.get_default_root_window()",
-        "Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360).savev(sys.argv[1], 'png', [], [])",
+        "shot = Gdk.pixbuf_get_from_window(root, 0, 0, 480, 360)",
+        "shot.savev(sys.argv[1], 'png', [], [])",
+        // Pure red pixels the screen shows where the fixture is (no window manager: its corner is 0,0).
+        "data, stride, step = shot.get_pixels(), shot.get_rowstride(), shot.get_n_channels()",
+        "print(sum(1 for y in range(320) for x in range(420) if tuple(data[y * stride + x * step:y * stride + x * step + 3]) == (255, 0, 0)))",
       ].join("\n"),
       NodePath.join(evidence, "4-screen-with-other-app.png"),
     ],
-    { env, timeout: 5000 },
+    { env, timeout: 5000, encoding: "utf8" },
+  );
+  const onScreen = Number(screen.stdout.trim());
+  check(
+    "the other app's window really covers the fixture on screen",
+    cover.exitCode === null && onScreen > 1000,
+    {
+      redOnScreen: onScreen,
+      screenCapture: screen.status,
+    },
   );
   const covered = await request("observe", { target, screenshot: true });
   const red = covered.image ? redPixels(Buffer.from(covered.image.data, "base64")) : -1;
@@ -428,7 +464,6 @@ try {
     covered.result.kind === "full" && red === 0,
     {
       redPixels: red,
-      screenCapture: screen.status,
       file: await saveImage("5-fixture-under-other-app.png", covered.image),
     },
   );

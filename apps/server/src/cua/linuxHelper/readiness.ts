@@ -9,7 +9,7 @@ import {
   type LinuxSession,
   type ReadinessFacts,
 } from "./linuxSession.ts";
-import type { CaptureRoute } from "./windowCapture.ts";
+import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 
 const Permissions = Schema.Struct({
   x11: Schema.Boolean,
@@ -111,7 +111,17 @@ async function readinessCapture(
   window: { readonly pid: number; readonly window_id: number },
 ): Promise<"varied" | "uniform" | "failed" | { readonly refused: string }> {
   if (deps.capture.route === "own") {
-    const own = await deps.capture.capture(window.window_id);
+    // At most 256 pixels on a side, as the driver's readiness capture below.
+    const geometry = await call("get_window_state", {
+      pid: window.pid,
+      window_id: window.window_id,
+      include_accessibility_tree: false,
+      display_only: true,
+      max_image_dimension: 256,
+    });
+    const shot = driverShot(geometry?.structured);
+    if (!shot) return "failed";
+    const own = await deps.capture.capture(window.window_id, shot);
     return "refused" in own ? own : (pngColors(own.png) ?? "failed");
   }
   // display_only preserves the snapshot the agent's element tokens belong to.

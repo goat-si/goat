@@ -26,7 +26,7 @@ import {
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
 import { CROPPED_CAPTURE } from "./windowCapture.ts";
-import { UNREDIRECTED_CAPTURE } from "./x11WindowCapture.ts";
+import { UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -514,19 +514,32 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
-  it("on X11 the screenshot is the window's own capture, and element frames are placed in it", async () => {
-    const own = png(42, 32, true);
+  it("on X11 the screenshot is the window's own capture, at the size the driver's points are in", async () => {
+    const shots: DriverShot[] = [];
     const helper = await connect({
       capture: {
         route: "own",
-        capture: async () => ({ png: own, width: 42, height: 32, origin: { x: 100, y: 50 } }),
+        capture: async (_windowId, shot) => {
+          shots.push(shot);
+          return {
+            png: png(shot.width, shot.height, false),
+            width: shot.width,
+            height: shot.height,
+          };
+        },
       },
     });
     const first = await helper.observe();
-    expect(first.observation.screenshot).toEqual({ mimeType: "image/png", width: 42, height: 32 });
-    expect(first.image?.data).toBe(own.toString("base64"));
-    // The driver captured nothing; the frame is its screen rectangle moved to the window's corner.
-    expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(false);
+    // The driver still took its screenshot, so its pointer scale is current; its image is not sent.
+    expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(true);
+    expect(shots).toEqual([{ width: 420, height: 320, windowWidth: 420, windowHeight: 320 }]);
+    expect(first.image?.data).not.toBe(SHOT);
+    expect(first.image?.data).toBe(png(420, 320, false).toString("base64"));
+    expect(first.observation.screenshot).toEqual({
+      mimeType: "image/png",
+      width: 420,
+      height: 320,
+    });
     const increment =
       first.observation.kind === "full"
         ? first.observation.elements.find((element) => element.label === "Increment")

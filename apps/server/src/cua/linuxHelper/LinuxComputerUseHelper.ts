@@ -28,7 +28,7 @@ import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
 import type { LinuxSession } from "./linuxSession.ts";
-import type { CaptureRoute } from "./windowCapture.ts";
+import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -245,7 +245,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         pid: input.pid,
         window_id: input.windowId,
         tree_format: "elements",
-        include_screenshot: route?.route === "driver",
+        include_screenshot: route !== undefined,
         ...(input.query === undefined ? {} : { query: input.query }),
         ...(input.maxElements === undefined ? {} : { max_elements: input.maxElements }),
       },
@@ -267,15 +267,18 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     }
-    // The window's own capture is taken after its tree, as the driver's is; its element frames
-    // are their screen rectangles moved to the window's corner, one pixel to one pixel.
+    // On X11 the driver's own image is never sent; the window's own capture replaces it at the
+    // driver's screenshot size, which the driver's frames and its pointer scale are in.
     let offered: DriverImage | undefined;
-    let origin: { readonly x: number; readonly y: number } | undefined;
     if (route?.route === "own") {
-      const own = await route.capture(input.windowId);
+      const shot = driverShot(answer.structured);
+      if (!shot)
+        return refuseShot(
+          answer.text.split("\n", 1)[0] || "Cua Driver could not capture this window.",
+        );
+      const own = await route.capture(input.windowId, shot);
       if ("refused" in own) return refuseShot(own.refused);
       offered = { mimeType: "image/png", data: Buffer.from(own.png).toString("base64") };
-      origin = own.origin;
     } else if (route?.route === "driver") offered = answer.images[0];
     // The screenshot is declared from its own bytes, so the size the agent points in is the
     // size of the image it sees; an image those bytes do not describe is not declared at all.
@@ -298,25 +301,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     const privateMode = await privateFor(input.pid);
     // A password field's value never leaves, even when it does not have focus.
     const elements = (state.elements ?? []).map((element) => {
-      const { frame, screenshot_frame: driverFrame, ...placed } = element;
-      const located =
-        origin === undefined
-          ? { ...placed, ...(driverFrame === undefined ? {} : { screenshot_frame: driverFrame }) }
-          : {
-              ...placed,
-              ...(frame === undefined
-                ? {}
-                : {
-                    screenshot_frame: {
-                      x: frame.x - origin.x,
-                      y: frame.y - origin.y,
-                      w: frame.w,
-                      h: frame.h,
-                    },
-                  }),
-            };
-      if (located.role !== SECURE_ROLE || located.value === undefined) return located;
-      const { value: _value, ...rest } = located;
+      if (element.role !== SECURE_ROLE || element.value === undefined) return element;
+      const { value: _value, ...rest } = element;
       return rest;
     });
     const observation = observations.observe({

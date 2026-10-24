@@ -1,7 +1,22 @@
+// @effect-diagnostics nodeBuiltinImport:off -- A scripted X server on a Unix socket stands in for Xorg.
+import * as NodeFS from "node:fs";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { describe, expect, it } from "vite-plus/test";
 
 import { pngColors } from "./linuxSession.ts";
-import { parseSetup, zpixmapToPng } from "./x11WindowCapture.ts";
+import {
+  captureX11Window,
+  parseSetup,
+  RESIZED_CAPTURE,
+  rgbToPng,
+  SHARED_CAPTURE,
+  shrinkRgb,
+  UNREDIRECTED_CAPTURE,
+  zpixmapToRgb,
+} from "./x11WindowCapture.ts";
 
 /** A setup reply: one pixmap format (depth 24 at 32 bpp), one screen, one TrueColor visual. */
 function setupReply(options: { readonly lsb: boolean }) {
@@ -54,13 +69,224 @@ describe("X11 window capture", () => {
     // One red pixel among dark ones, in BGRX order as an LSB server sends them.
     for (let index = 0; index < width * height; index++) view.setUint32(index * 4, 0x101010, true);
     view.setUint32(0, 0xff0000, true);
-    const png = zpixmapToPng(data, width, height, width * 4, {
+    const rgb = zpixmapToRgb(data, width, height, width * 4, {
       red: 0xff0000,
       green: 0x00ff00,
       blue: 0x0000ff,
     });
+    expect([...rgb.subarray(0, 6)]).toEqual([255, 0, 0, 16, 16, 16]);
+    const png = rgbToPng(rgb, width, height);
     expect(pngColors(png)).toBe("varied");
     const header = new DataView(png.buffer, png.byteOffset + 16, 8);
     expect([header.getUint32(0), header.getUint32(4)]).toEqual([width, height]);
+  });
+
+  it("shrinks to the driver's screenshot size by averaging, never past the source", () => {
+    // Four pixels, two black and two white, become one mid grey.
+    const rgb = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0]);
+    expect([...shrinkRgb(rgb, 2, 2, 1, 1)]).toEqual([128, 128, 128]);
+    expect(shrinkRgb(rgb, 2, 2, 2, 2)).toBe(rgb);
+  });
+});
+
+interface FakeWindow {
+  readonly parent: number;
+  readonly children: ReadonlyArray<number>;
+  /** Position on the root. */
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly viewable?: boolean;
+  readonly inputOnly?: boolean;
+}
+
+const ROOT = 0x2b;
+const COMPOSITE = 140;
+
+/**
+ * An X server holding these windows: it answers the requests a capture makes, names the pixmap
+ * only of a redirected window, and fills images with one gray. closeOnGeometry drops the
+ * connection on that GetGeometry (counted from 1).
+ */
+async function scriptedServer(
+  windows: Readonly<Record<number, FakeWindow>>,
+  options: { readonly redirected: ReadonlyArray<number>; readonly closeOnGeometry?: number },
+) {
+  const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
+  const path = NodePath.join(dir, "X0");
+  const setup = Buffer.from(setupReply({ lsb: true }));
+  setup.writeUInt32LE(0x1fffff, 16);
+  const server = NodeNet.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    let started = false;
+    let geometries = 0;
+    let named: number | undefined;
+    const reply = (extra: Buffer, data = 0) => {
+      const head = Buffer.alloc(32);
+      head[0] = 1;
+      head[1] = data;
+      head.writeUInt32LE(Math.max(0, extra.length - 24) / 4, 4);
+      extra.copy(head, 8, 0, Math.min(24, extra.length));
+      socket.write(extra.length > 24 ? Buffer.concat([head, extra.subarray(24)]) : head);
+    };
+    const error = () => {
+      const bytes = Buffer.alloc(32);
+      bytes[1] = 8;
+      socket.write(bytes);
+    };
+    socket.on("data", (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (!started) {
+        if (buffer.length < 12) return;
+        started = true;
+        buffer = buffer.subarray(12);
+        socket.write(setup);
+      }
+      while (buffer.length >= 4) {
+        const length = buffer.readUInt16LE(2) * 4;
+        if (buffer.length < length) return;
+        const op = buffer[0];
+        const minor = buffer[1];
+        const body = buffer.subarray(0, length);
+        buffer = buffer.subarray(length);
+        const window = (at: number) => windows[body.readUInt32LE(at)];
+        const payload = (size: number) => Buffer.alloc(size);
+        if (op === 98) {
+          const extra = payload(24);
+          extra[0] = 1;
+          extra[1] = COMPOSITE;
+          reply(extra);
+        } else if (op === COMPOSITE && minor === 0) {
+          const extra = payload(24);
+          extra.writeUInt32LE(0, 0);
+          extra.writeUInt32LE(4, 4);
+          reply(extra);
+        } else if (op === COMPOSITE && minor === 6) {
+          const target = body.readUInt32LE(4);
+          if (options.redirected.includes(target)) named = body.readUInt32LE(8);
+          else error();
+        } else if (op === 14) {
+          geometries++;
+          if (geometries === options.closeOnGeometry) return void socket.destroy();
+          const found = window(4);
+          if (!found) return error();
+          const parent = windows[found.parent];
+          const extra = payload(24);
+          extra.writeUInt32LE(ROOT, 0);
+          extra.writeInt16LE(found.x - (parent?.x ?? 0), 4);
+          extra.writeInt16LE(found.y - (parent?.y ?? 0), 6);
+          extra.writeUInt16LE(found.width, 8);
+          extra.writeUInt16LE(found.height, 10);
+          reply(extra, 24);
+        } else if (op === 15) {
+          const found = window(4);
+          if (!found) return error();
+          const extra = payload(24 + found.children.length * 4);
+          extra.writeUInt32LE(ROOT, 0);
+          extra.writeUInt32LE(found.parent, 4);
+          extra.writeUInt16LE(found.children.length, 8);
+          found.children.forEach((child, index) => extra.writeUInt32LE(child, 24 + index * 4));
+          reply(extra);
+        } else if (op === 40) {
+          const from = window(4);
+          const to = body.readUInt32LE(8) === ROOT ? { x: 0, y: 0 } : window(8);
+          if (!from || !to) return error();
+          const extra = payload(24);
+          extra.writeInt16LE(from.x - to.x, 4);
+          extra.writeInt16LE(from.y - to.y, 6);
+          reply(extra, 1);
+        } else if (op === 3) {
+          const found = window(4);
+          if (!found) return error();
+          const extra = payload(36);
+          extra.writeUInt32LE(0x21, 0);
+          extra.writeUInt16LE(found.inputOnly ? 2 : 1, 4);
+          extra[18] = found.viewable === false ? 0 : 2;
+          reply(extra);
+        } else if (op === 73) {
+          if (body.readUInt32LE(4) !== named) return error();
+          const width = body.readUInt16LE(12);
+          const height = body.readUInt16LE(14);
+          const extra = payload(24 + width * height * 4);
+          extra.writeUInt32LE(0x21, 0);
+          for (let pixel = 0; pixel < width * height; pixel++)
+            extra.writeUInt32LE(0x808080, 24 + pixel * 4);
+          reply(extra, 24);
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(path, resolve));
+  return {
+    path,
+    [Symbol.asyncDispose]: async () => {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
+
+const environment = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
+const shot = { width: 100, height: 80, windowWidth: 100, windowHeight: 80 };
+// A window manager's frame (client 0x400000) holding the app's window (client 0x200000).
+const FRAMED: Record<number, FakeWindow> = {
+  [ROOT]: { parent: 0, children: [0x400001], x: 0, y: 0, width: 800, height: 600 },
+  0x400001: { parent: ROOT, children: [0x200001], x: 10, y: 10, width: 100, height: 100 },
+  0x200001: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
+};
+
+describe("X11 window capture against a scripted server", () => {
+  it("captures a window inside its redirected frame, at the driver's size", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+    const capture = await captureX11Window(environment, 0x200001, shot, server.path);
+    expect(capture).toMatchObject({ width: 100, height: 80 });
+  });
+
+  it("refuses a window whose frame nothing redirects", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [] });
+    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+      refused: UNREDIRECTED_CAPTURE,
+    });
+  });
+
+  it("refuses when another client's window is drawn over it inside the same frame", async () => {
+    const shared: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x600001] },
+      0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+    };
+    await using server = await scriptedServer(shared, { redirected: [0x400001] });
+    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+      refused: SHARED_CAPTURE,
+    });
+    // The same window unmapped, input-only, or off to the side draws nothing over it.
+    for (const other of [{ viewable: false }, { inputOnly: true }, { x: 400, y: 400 }]) {
+      await using clear = await scriptedServer(
+        { ...shared, 0x600001: { ...shared[0x600001]!, ...other } },
+        { redirected: [0x400001] },
+      );
+      expect(await captureX11Window(environment, 0x200001, shot, clear.path)).toMatchObject({
+        width: 100,
+      });
+    }
+  });
+
+  it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+    expect(
+      await captureX11Window(environment, 0x200001, { ...shot, windowWidth: 90 }, server.path),
+    ).toEqual({ refused: RESIZED_CAPTURE });
+  });
+
+  it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {
+    // The second GetGeometry is the frame's, asked after the window's own.
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      closeOnGeometry: 2,
+    });
+    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+      refused: UNREDIRECTED_CAPTURE,
+    });
   });
 });

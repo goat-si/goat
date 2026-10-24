@@ -1,5 +1,5 @@
 import type { LinuxSession } from "./linuxSession.ts";
-import type { X11WindowCapture } from "./x11WindowCapture.ts";
+import type { DriverShot, X11WindowCapture } from "./x11WindowCapture.ts";
 
 /**
  * Where an agent's window screenshot comes from, so it holds only that window's pixels (#1328).
@@ -7,7 +7,9 @@ import type { X11WindowCapture } from "./x11WindowCapture.ts";
  * - X11 and XWayland: the helper captures the window itself from its composite pixmap
  *   (x11WindowCapture.ts), which proves the pixels are the window's own or refuses. Pinned Cua
  *   Driver 0.37.0's own X11 capture reads the window's drawable, which shows whatever covers it
- *   when nothing redirects the window, and takes the screen region under a popup.
+ *   when nothing redirects the window, and takes the screen region under a popup. The driver
+ *   still takes its screenshot, and only its size is kept: its pointer tools need the scale of
+ *   the last screenshot they read the window by.
  * - Wayland on Hyprland: the driver exports the toplevel itself, and errs rather than crop
  *   (wayland/hyprland.rs). It decides Hyprland from the environment it runs with, so this reads
  *   that same environment with the driver's own test.
@@ -16,7 +18,10 @@ import type { X11WindowCapture } from "./x11WindowCapture.ts";
  *   (wayland/mod.rs:1047, :1103). Nothing outside the driver can tell which route a capture took.
  */
 export type CaptureRoute =
-  | { readonly route: "own"; readonly capture: (windowId: number) => Promise<X11WindowCapture> }
+  | {
+      readonly route: "own";
+      readonly capture: (windowId: number, shot: DriverShot) => Promise<X11WindowCapture>;
+    }
   | { readonly route: "driver" }
   | { readonly route: "refused"; readonly reason: string };
 
@@ -27,7 +32,7 @@ export function captureRoute(deps: {
   readonly session: LinuxSession;
   /** Exactly the environment the driver runs with. */
   readonly driverEnvironment: Readonly<Record<string, string | undefined>>;
-  readonly captureX11: (windowId: number) => Promise<X11WindowCapture>;
+  readonly captureX11: (windowId: number, shot: DriverShot) => Promise<X11WindowCapture>;
 }): CaptureRoute {
   const { displayServer } = deps.session;
   if (displayServer === "x11" || displayServer === "xwayland")
@@ -42,3 +47,23 @@ export function captureRoute(deps: {
     !present("CUA_INJECT_SOCKET");
   return hyprland ? { route: "driver" } : { route: "refused", reason: CROPPED_CAPTURE };
 }
+
+/** The size of the driver's screenshot of a window, and of the window it was taken from. */
+export const driverShot = (structured: unknown): DriverShot | undefined => {
+  const read = (key: string): unknown =>
+    typeof structured === "object" && structured !== null
+      ? (structured as Record<string, unknown>)[key]
+      : undefined;
+  const width = read("screenshot_width");
+  const height = read("screenshot_height");
+  const original = read("screenshot_original_width") ?? width;
+  if (typeof width !== "number" || typeof height !== "number" || typeof original !== "number")
+    return undefined;
+  if (width <= 0 || height <= 0 || original <= 0) return undefined;
+  return {
+    width,
+    height,
+    windowWidth: original,
+    windowHeight: Math.round((height * original) / width),
+  };
+};

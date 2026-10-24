@@ -145,7 +145,8 @@ export function fixtureDriver() {
     if (tool === "get_window_state") {
       state.reads.push(args);
       if (args.include_accessibility_tree === false)
-        return ok({}, "", [
+        // The readiness images are 8 by 4.
+        return ok({ screenshot_width: 8, screenshot_height: 4 }, "", [
           {
             mimeType: "image/png",
             data: state.readinessImages.get(Number(args.pid)) ?? state.readinessImage,
@@ -170,8 +171,6 @@ export function fixtureDriver() {
           label: "Increment",
           actions: ["click"],
           screenshot_frame: { x: 12, y: 54, w: 396, h: 34 },
-          // On the screen the fixture window's corner is at (100, 50).
-          frame: { x: 112, y: 104, w: 396, h: 34 },
         },
         {
           element_index: 2,

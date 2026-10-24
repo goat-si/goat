@@ -11,33 +11,40 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
 /**
  * One X11 window's own pixels (#1328). Cua Driver captures an X11 window with XGetImage on the
  * window itself, and nothing outside the driver can prove those pixels were not whatever
- * covered the window. So the helper captures it here instead: it names the composite pixmap of
- * the window's top-level frame (CompositeNameWindowPixmap) and reads the window's part of it.
- * Naming succeeds only while a compositing manager or Xwayland redirects that frame, and the
- * pixmap holds only that window's rendering, so a capture that succeeds is the window's own;
- * an unredirected window (no compositor, a fullscreen unredirect, rootful Xwayland) is refused.
+ * covered the window. So the helper captures it here: it names the composite pixmap of the
+ * window's top-level ancestor (CompositeNameWindowPixmap) and reads the window's part of it.
+ * Naming succeeds only while that ancestor is redirected, and the pixmap then holds only what
+ * is drawn inside the ancestor. Another client's window can still be drawn there, over the
+ * target (a shared frame, a virtual root), so every window painted after the target inside the
+ * ancestor is checked, and one from another client that overlaps it refuses the capture.
+ * An unredirected window (no compositor, a fullscreen unredirect, rootful Xwayland) is refused.
  */
 export type X11WindowCapture =
   | {
       readonly png: Uint8Array;
       readonly width: number;
       readonly height: number;
-      /** Where the window's top-left corner is on the root window, in screen pixels. */
-      readonly origin: { readonly x: number; readonly y: number };
     }
   | { readonly refused: string };
 
 export const UNREDIRECTED_CAPTURE =
   "This X display does not render the window by itself (no compositing manager, or it stopped redirecting windows), so a capture could show whatever covers it, other apps included. Screenshots are off here; app controls still work. A desktop with a compositor (GNOME, KDE, or picom on other window managers) can show GOAT a single window.";
+export const SHARED_CAPTURE =
+  "Another app's window is drawn over this one inside the same frame, so its screenshot would show that app. Observe it without a screenshot, or move the other window away.";
 const UNREADABLE = "The window's pixels could not be read in a format GOAT understands.";
+export const RESIZED_CAPTURE =
+  "The window changed size while it was read, so its screenshot would not match its controls. Observe it again.";
 
 const EXCHANGE_TIMEOUT_MS = 3_000;
 const MAX_WINDOW_PIXELS = 16_000_000;
+/** Windows checked for drawing over the target before the capture gives up and refuses. */
+const MAX_CHECKED_WINDOWS = 256;
 
 const pad4 = (length: number) => (4 - (length % 4)) % 4;
 
 interface Setup {
   readonly idBase: number;
+  readonly idMask: number;
   readonly root: number;
   readonly lsbImages: boolean;
   readonly bitsPerPixel: ReadonlyMap<number, { readonly bpp: number; readonly pad: number }>;
@@ -91,6 +98,7 @@ export function parseSetup(reply: Uint8Array, screen: number): Setup | undefined
   if (root === undefined) return undefined;
   return {
     idBase: view.getUint32(12, true),
+    idMask: view.getUint32(16, true),
     root,
     lsbImages: reply[30] === 0,
     bitsPerPixel,
@@ -114,8 +122,8 @@ const shiftOf = (mask: number) => {
   return shift;
 };
 
-/** A ZPixmap of 32 bits per pixel, as an RGB PNG. */
-export function zpixmapToPng(
+/** A ZPixmap of 32 bits per pixel as packed RGB, by the visual's masks. */
+export function zpixmapToRgb(
   data: Uint8Array,
   width: number,
   height: number,
@@ -123,21 +131,57 @@ export function zpixmapToPng(
   masks: { readonly red: number; readonly green: number; readonly blue: number },
 ): Uint8Array {
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  const raw = new Uint8Array((width * 3 + 1) * height);
+  const rgb = new Uint8Array(width * height * 3);
   const channel = (pixel: number, mask: number) => {
     const shift = shiftOf(mask);
     const top = mask >>> shift;
     return top === 0 ? 0 : Math.round((((pixel & mask) >>> shift) * 255) / top);
   };
-  for (let row = 0; row < height; row++) {
-    const out = row * (width * 3 + 1) + 1;
+  for (let row = 0; row < height; row++)
     for (let x = 0; x < width; x++) {
       const pixel = view.getUint32(row * stride + x * 4, true);
-      raw[out + x * 3] = channel(pixel, masks.red);
-      raw[out + x * 3 + 1] = channel(pixel, masks.green);
-      raw[out + x * 3 + 2] = channel(pixel, masks.blue);
+      const at = (row * width + x) * 3;
+      rgb[at] = channel(pixel, masks.red);
+      rgb[at + 1] = channel(pixel, masks.green);
+      rgb[at + 2] = channel(pixel, masks.blue);
+    }
+  return rgb;
+}
+
+/** Packed RGB scaled down by averaging each target pixel's area; never scaled up. */
+export function shrinkRgb(
+  rgb: Uint8Array,
+  width: number,
+  height: number,
+  toWidth: number,
+  toHeight: number,
+): Uint8Array {
+  if (toWidth === width && toHeight === height) return rgb;
+  const out = new Uint8Array(toWidth * toHeight * 3);
+  for (let y = 0; y < toHeight; y++) {
+    const top = Math.floor((y * height) / toHeight);
+    const bottom = Math.max(top + 1, Math.floor(((y + 1) * height) / toHeight));
+    for (let x = 0; x < toWidth; x++) {
+      const left = Math.floor((x * width) / toWidth);
+      const right = Math.max(left + 1, Math.floor(((x + 1) * width) / toWidth));
+      const sum = [0, 0, 0];
+      for (let row = top; row < bottom; row++)
+        for (let column = left; column < right; column++)
+          for (let channel = 0; channel < 3; channel++)
+            sum[channel] = (sum[channel] ?? 0) + (rgb[(row * width + column) * 3 + channel] ?? 0);
+      const count = (bottom - top) * (right - left);
+      for (let channel = 0; channel < 3; channel++)
+        out[(y * toWidth + x) * 3 + channel] = Math.round((sum[channel] ?? 0) / count);
     }
   }
+  return out;
+}
+
+/** Packed RGB as a PNG, every row unfiltered. */
+export function rgbToPng(rgb: Uint8Array, width: number, height: number): Uint8Array {
+  const raw = new Uint8Array((width * 3 + 1) * height);
+  for (let row = 0; row < height; row++)
+    raw.set(rgb.subarray(row * width * 3, (row + 1) * width * 3), row * (width * 3 + 1) + 1);
   const chunk = (type: string, body: Uint8Array) => {
     const head = new Uint8Array(8);
     new DataView(head.buffer).setUint32(0, body.length);
@@ -160,12 +204,18 @@ export function zpixmapToPng(
   ]);
 }
 
-/** Talks to one X server in order: each ask resolves with its reply, or undefined on an error. */
+/**
+ * Talks to one X server in order: each ask resolves with its reply, or undefined once anything
+ * failed. After a failure every later ask resolves undefined at once, so nothing waits on a
+ * connection that is gone.
+ */
 function connection(socket: NodeNet.Socket) {
   let buffer = new Uint8Array(0);
+  let closed = false;
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
   const waiting: Array<(reply: Uint8Array | undefined) => void> = [];
   const fail = () => {
+    closed = true;
     setup?.(undefined);
     setup = undefined;
     for (const wake of waiting.splice(0)) wake(undefined);
@@ -202,21 +252,40 @@ function connection(socket: NodeNet.Socket) {
   return {
     start: (bytes: Uint8Array) =>
       new Promise<Uint8Array | undefined>((resolve) => {
+        if (closed) return resolve(undefined);
         setup = resolve;
         socket.write(bytes);
       }),
-    send: (bytes: Uint8Array) => void socket.write(bytes),
+    send: (bytes: Uint8Array) => {
+      if (!closed) socket.write(bytes);
+    },
     ask: (bytes: Uint8Array) =>
       new Promise<Uint8Array | undefined>((resolve) => {
+        if (closed) return resolve(undefined);
         waiting.push(resolve);
         socket.write(bytes);
       }),
+    close: fail,
   };
+}
+
+type Connection = ReturnType<typeof connection>;
+
+export interface DriverShot {
+  readonly width: number;
+  readonly height: number;
+  readonly windowWidth: number;
+  readonly windowHeight: number;
 }
 
 export async function captureX11Window(
   environment: { readonly DISPLAY?: string | undefined; readonly XAUTHORITY?: string | undefined },
   windowId: number,
+  /**
+   * The driver's screenshot of this window, which its points and frames are in: the size to
+   * deliver, and the window size it was taken at.
+   */
+  size: DriverShot,
   /** For tests: a scripted server's socket. */
   socketPath?: string,
 ): Promise<X11WindowCapture> {
@@ -229,24 +298,107 @@ export async function captureX11Window(
     () => null,
   );
   const socket = NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + display);
-  const timer = setTimeout(() => socket.destroy(), EXCHANGE_TIMEOUT_MS);
+  const x = connection(socket);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      x.close();
+      resolve(undefined);
+    }, EXCHANGE_TIMEOUT_MS);
+  });
   try {
-    return (
-      (await exchange(connection(socket), cookie, screen, windowId)) ?? {
-        refused: UNREDIRECTED_CAPTURE,
-      }
-    );
+    const answer = await Promise.race([exchange(x, cookie, screen, windowId, size), expired]);
+    return answer ?? { refused: UNREDIRECTED_CAPTURE };
   } finally {
     clearTimeout(timer);
     socket.destroy();
   }
 }
 
+const u16 = (reply: Uint8Array, at: number) => new DataView(reply.buffer).getUint16(at, true);
+const i16 = (reply: Uint8Array, at: number) => new DataView(reply.buffer).getInt16(at, true);
+const u32 = (reply: Uint8Array, at: number) => new DataView(reply.buffer).getUint32(at, true);
+
+const queryTree = (x: Connection, window: number) =>
+  x.ask(request(15, 0, 2, (view) => view.setUint32(4, window, true)));
+const getGeometry = (x: Connection, window: number) =>
+  x.ask(request(14, 0, 2, (view) => view.setUint32(4, window, true)));
+const getAttributes = (x: Connection, window: number) =>
+  x.ask(request(3, 0, 2, (view) => view.setUint32(4, window, true)));
+const translate = (x: Connection, window: number, destination: number) =>
+  x.ask(
+    request(40, 0, 4, (view) => {
+      view.setUint32(4, window, true);
+      view.setUint32(8, destination, true);
+    }),
+  );
+const childrenOf = (tree: Uint8Array) =>
+  Array.from({ length: u16(tree, 16) }, (_, index) => u32(tree, 32 + index * 4));
+
+interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+const overlaps = (a: Rect, b: Rect) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/**
+ * Whether a window another client drew is painted over the target inside its top-level
+ * ancestor: every window stacked after the target or one of its ancestors, with all it holds.
+ * Undefined when that cannot be read.
+ */
+async function drawnOver(
+  x: Connection,
+  setup: Setup,
+  chain: ReadonlyArray<number>,
+  target: Rect,
+): Promise<boolean | undefined> {
+  const client = (window: number) => window & ~setup.idMask;
+  const owner = client(chain[0] ?? 0);
+  const pending: number[] = [];
+  for (let level = 0; level + 1 < chain.length; level++) {
+    const tree = await queryTree(x, chain[level + 1] ?? 0);
+    if (!tree) return undefined;
+    const children = childrenOf(tree);
+    const at = children.indexOf(chain[level] ?? 0);
+    if (at < 0) return undefined;
+    pending.push(...children.slice(at + 1));
+  }
+  let checked = 0;
+  while (pending.length > 0) {
+    if (++checked > MAX_CHECKED_WINDOWS) return undefined;
+    const window = pending.pop() ?? 0;
+    const attributes = await getAttributes(x, window);
+    if (!attributes) return undefined;
+    // Only a viewable window draws, and an input-only one draws nothing.
+    if (attributes[26] !== 2 || u16(attributes, 12) === 2) continue;
+    const geometry = await getGeometry(x, window);
+    const origin = await translate(x, window, setup.root);
+    if (!geometry || !origin) return undefined;
+    const border = u16(geometry, 20);
+    const rect = {
+      x: i16(origin, 12) - border,
+      y: i16(origin, 14) - border,
+      width: u16(geometry, 16) + 2 * border,
+      height: u16(geometry, 18) + 2 * border,
+    };
+    if (!overlaps(rect, target)) continue;
+    if (client(window) !== owner) return true;
+    const tree = await queryTree(x, window);
+    if (!tree) return undefined;
+    pending.push(...childrenOf(tree));
+  }
+  return false;
+}
+
 async function exchange(
-  x: ReturnType<typeof connection>,
+  x: Connection,
   cookie: Uint8Array | null,
   screen: number,
   windowId: number,
+  size: DriverShot,
 ): Promise<X11WindowCapture | undefined> {
   const setupReply = await x.start(x11SetupRequest(cookie));
   const setup = setupReply && parseSetup(setupReply, screen);
@@ -267,48 +419,40 @@ async function exchange(
       view.setUint32(8, 4, true);
     }),
   );
-  if (!version) return undefined;
-  const versionView = new DataView(version.buffer);
-  if (versionView.getUint32(8, true) === 0 && versionView.getUint32(12, true) < 2) return undefined;
-  const geometry = await x.ask(request(14, 0, 2, (view) => view.setUint32(4, windowId, true)));
+  if (!version || (u32(version, 8) === 0 && u32(version, 12) < 2)) return undefined;
+  const geometry = await getGeometry(x, windowId);
   if (!geometry) return undefined;
-  const geometryView = new DataView(geometry.buffer);
-  const width = geometryView.getUint16(16, true);
-  const height = geometryView.getUint16(18, true);
+  const width = u16(geometry, 16);
+  const height = u16(geometry, 18);
   if (width === 0 || height === 0 || width * height > MAX_WINDOW_PIXELS)
     return { refused: UNREADABLE };
-  // The redirected window is the top-level one: the window itself or its frame's child of root.
-  let topLevel = windowId;
+  if (width !== size.windowWidth || Math.abs(height - size.windowHeight) > 1)
+    return { refused: RESIZED_CAPTURE };
+  // The redirected window is the top-level one: the window itself or its ancestor under root.
+  const chain = [windowId];
   for (let hops = 0; hops < 32; hops++) {
-    const tree = await x.ask(request(15, 0, 2, (view) => view.setUint32(4, topLevel, true)));
+    const tree = await queryTree(x, chain.at(-1) ?? windowId);
     if (!tree) return undefined;
-    const parent = new DataView(tree.buffer).getUint32(12, true);
+    const parent = u32(tree, 12);
     if (parent === setup.root || parent === 0) break;
-    topLevel = parent;
+    chain.push(parent);
   }
-  const translate = (destination: number) =>
-    x.ask(
-      request(40, 0, 4, (view) => {
-        view.setUint32(4, windowId, true);
-        view.setUint32(8, destination, true);
-      }),
-    );
-  const inFrame = await translate(topLevel);
-  const onScreen = await translate(setup.root);
+  const topLevel = chain.at(-1) ?? windowId;
+  const inFrame = await translate(x, windowId, topLevel);
+  const onScreen = await translate(x, windowId, setup.root);
   if (!inFrame || !onScreen) return undefined;
-  const offset = (reply: Uint8Array) => {
-    const view = new DataView(reply.buffer);
-    return { x: view.getInt16(12, true), y: view.getInt16(14, true) };
-  };
+  const target = { x: i16(onScreen, 12), y: i16(onScreen, 14), width, height };
+  const shared = await drawnOver(x, setup, chain, target);
+  if (shared === undefined) return undefined;
+  if (shared) return { refused: SHARED_CAPTURE };
   // The named pixmap holds the top-level window with its border, and its pixels are in that
   // window's visual: a pixmap read answers with no visual of its own.
-  const frameGeometry = await x.ask(request(14, 0, 2, (view) => view.setUint32(4, topLevel, true)));
-  const attributes = await x.ask(request(3, 0, 2, (view) => view.setUint32(4, topLevel, true)));
+  const frameGeometry = await getGeometry(x, topLevel);
+  const attributes = await getAttributes(x, topLevel);
   if (!frameGeometry || !attributes) return undefined;
-  const border = new DataView(frameGeometry.buffer).getUint16(20, true);
-  const inside = offset(inFrame);
-  const at = { x: inside.x + border, y: inside.y + border };
-  const visualId = new DataView(attributes.buffer).getUint32(8, true);
+  const border = u16(frameGeometry, 20);
+  const at = { x: i16(inFrame, 12) + border, y: i16(inFrame, 14) + border };
+  const visual = setup.visuals.get(u32(attributes, 8));
   const pixmap = setup.idBase | 1;
   // No reply; if the frame is not redirected it errs, and the read below never answers.
   x.send(
@@ -329,17 +473,20 @@ async function exchange(
   );
   x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
   if (!image) return undefined;
-  const depth = image[1] ?? 0;
-  const visual = setup.visuals.get(visualId);
-  const format = setup.bitsPerPixel.get(depth);
+  const format = setup.bitsPerPixel.get(image[1] ?? 0);
   if (!setup.lsbImages || !visual?.trueColor || format?.bpp !== 32) return { refused: UNREADABLE };
   const stride = Math.ceil((width * format.bpp) / format.pad) * (format.pad / 8);
   const data = image.subarray(32);
   if (data.length < stride * height) return { refused: UNREADABLE };
-  return {
-    png: zpixmapToPng(data, width, height, stride, visual),
+  // Delivered at the driver's screenshot size, so its points and frames are this image's.
+  const toWidth = Math.min(width, size.width);
+  const toHeight = Math.min(height, size.height);
+  const rgb = shrinkRgb(
+    zpixmapToRgb(data, width, height, stride, visual),
     width,
     height,
-    origin: offset(onScreen),
-  };
+    toWidth,
+    toHeight,
+  );
+  return { png: rgbToPng(rgb, toWidth, toHeight), width: toWidth, height: toHeight };
 }

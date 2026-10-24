@@ -93,7 +93,7 @@ const secureFocus = makeSecureFocusProbe(gdbus);
 const capture = captureRoute({
   session,
   driverEnvironment,
-  captureX11: (windowId) => captureX11Window(environment, windowId),
+  captureX11: (windowId, shot) => captureX11Window(environment, windowId, shot),
 });
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
   undefined;
