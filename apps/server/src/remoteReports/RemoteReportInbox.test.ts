@@ -29,7 +29,7 @@ const setup = Effect.gen(function* () {
 });
 // Each report's text starts with its number, so a turn can be checked report by report.
 const numbers = (texts: ReadonlyArray<string>) =>
-  texts.flatMap((text) => text.split("\n\n").map((part) => part.split(":")[0]));
+  texts.flatMap((text) => text.split("\n\n").map((part) => part.slice(0, part.indexOf(":"))));
 
 it.effect(
   "folds a lane's progress only while it stays deliverable, and a question ends the run",
