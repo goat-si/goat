@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { type WindowsReadiness, windowsReadinessFailure } from "./ComputerUseHelperWindows.ts";
+import {
+  type WindowsReadiness,
+  windowsReadinessBlocker,
+  windowsReadinessFailure,
+} from "./ComputerUseHelperWindows.ts";
 
 // The helper's answer from a signed-in console session on mini.
 const READY: WindowsReadiness = {
@@ -43,5 +47,21 @@ describe("Windows computer use readiness", () => {
     assert.equal(new Set(reasons).size, states.length);
     assert.match(reasons[0] ?? "", /Session 0/);
     assert.match(reasons[3] ?? "", /locked/);
+    // The typed cause names the same failure as the reason, and only where one fits.
+    assert.deepEqual(
+      states.map((state) => windowsReadinessBlocker({ ...READY, ...state })),
+      [
+        "noInteractiveDesktop",
+        undefined,
+        "noInteractiveDesktop",
+        "screenLocked",
+        undefined,
+        undefined,
+      ],
+    );
+    assert.isUndefined(
+      windowsReadinessBlocker({ ...READY, helperElevated: true, connectState: "disconnected" }),
+    );
+    assert.isUndefined(windowsReadinessBlocker(READY));
   });
 });

@@ -74,6 +74,34 @@ describe("computer use on the wire", () => {
     expect(status).toEqual({ platform: "linux", running: false });
   });
 
+  it("keeps host status when the helper's readiness carries a step this client does not know", () => {
+    const decode = Schema.decodeUnknownSync(CuaHostStatus);
+    const readiness = {
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      helper: "authenticated",
+      capture: "pending",
+      tree: "unavailable",
+      input: "unavailable",
+      blockers: [],
+      reasons: ["Screen Recording is waiting for an answer."],
+    };
+    const signals = { privateMode: "supported", humanInput: "unsupported" };
+    expect(decode({ platform: "darwin", running: true, readiness, signals })).toEqual({
+      platform: "darwin",
+      running: true,
+      readiness,
+      signals,
+    });
+    expect(
+      decode({
+        platform: "darwin",
+        running: true,
+        readiness: { ...readiness, blockers: ["remoteSessionActive"] },
+        signals,
+      }),
+    ).toEqual({ platform: "darwin", running: true, signals });
+  });
+
   it("keeps host status decoding for older and newer hosts", () => {
     const decode = Schema.decodeUnknownSync(HostStatusEntry);
     const older = decode({ host: "cursor-2", reachability: "ok", metrics });
