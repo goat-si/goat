@@ -27,6 +27,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { makeHubConsent } from "./HubConsent.ts";
 import * as HubParity from "./HubParity.ts";
 import { HubOcx, HubOcxError, SAFE_ALIAS, type OcxOutput } from "./HubOcx.ts";
+import { makeProvisionedLinks, type ProvisionedLinkReleases } from "./HubProvisionedLinks.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 // OpenCodex's own enrollment deadline is 360 seconds; leave room for its cleanup.
@@ -149,7 +150,7 @@ export class HubMembership extends Context.Service<
       scope: McpInvocationScope,
       alias: string,
     ) => Effect.Effect<HubDeviceMcpResult, OrchestratorMcpFailure>;
-  }
+  } & ProvisionedLinkReleases
 >()("goat/hub/HubMembership") {}
 
 const make = Effect.gen(function* () {
@@ -158,6 +159,7 @@ const make = Effect.gen(function* () {
   const consent = yield* makeHubConsent;
   const profiles = yield* Profiles.PermissionProfiles;
   const sql = yield* SqlClient.SqlClient;
+  const provisioned = yield* makeProvisionedLinks;
   // One hub, one link store: membership changes never interleave.
   const permit = yield* Semaphore.make(1);
 
@@ -321,18 +323,24 @@ const make = Effect.gen(function* () {
   /** Link add, verification and steps 1-3: the shared tail of join and re-link. */
   const link = Effect.fn("HubMembership.link")(function* (
     scope: McpInvocationScope,
-    caller: { readonly actor: string; readonly profile: string },
+    caller: Pick<Caller, "actor" | "profile" | "provisioning">,
     action: Action,
     alias: string,
     fingerprint: string,
     decisionId: string | undefined,
     steps: HubDeviceStep[],
   ) {
+    if (caller.provisioning && !(yield* provisioned.beginAdd(alias))) {
+      const detail = `${alias} is being removed, so GOAT does not link it.`;
+      steps.push({ step: "link_add", outcome: "failed", detail });
+      return result(action, alias, "failed", detail, steps, { transport: "remote-link" });
+    }
     const added = yield* ocx.home(
       ["link", "add", alias, "--expect-fingerprint", fingerprint, "--json"],
       LINK_ADD_TIMEOUT_MS,
     );
     const linkId = added.code === 0 ? decodeJson(Added, added.stdout)?.linkId : undefined;
+    if (caller.provisioning) yield* provisioned.finishAdd(alias, linkId, homeLinks());
     if (linkId === undefined) {
       steps.push({ step: "link_add", outcome: "failed", detail: phaseMessage(added.phase) });
       yield* audit(caller, `hub.${action}`, alias, "failed", decisionId);
@@ -582,6 +590,7 @@ const make = Effect.gen(function* () {
     return yield* Effect.gen(function* () {
       const status = yield* homeLinks();
       if (status === undefined) return homeUnavailable("join", alias, steps);
+      yield* provisioned.settle(alias, status);
       if (status.role === "child")
         return result(
           "join",
@@ -940,6 +949,13 @@ const make = Effect.gen(function* () {
             ),
           )
         : Effect.fail(invalid("Only a cloud machine GOAT created joins without a person.")),
+    ...provisioned.releases({
+      permit,
+      audit,
+      homeLinks: homeLinks(),
+      revokeOnHome,
+      homeTunnels: ocx.homeTunnels,
+    }),
   });
 });
 

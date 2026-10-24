@@ -42,7 +42,7 @@ it.effect(
       const before = yield* columns("scheduled_tasks");
       assert.notInclude(before, "webhook_secret_ref");
       assert.deepStrictEqual(
-        (yield* runMigrations()).map(([id]) => id),
+        (yield* runMigrations({ toMigrationInclusive: 105 })).map(([id]) => id),
         [103, 104, 105],
       );
       const inbox = yield* sql<{ readonly text: string }>`SELECT text FROM remote_report_inbox`;
