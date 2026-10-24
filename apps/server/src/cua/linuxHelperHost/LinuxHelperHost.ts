@@ -149,6 +149,12 @@ interface Running {
   signals?: DesktopCuaReadinessReport["signals"];
   readinessAt: number;
   watched: string;
+  /**
+   * The windows the watch being asked for keeps, until its answer (empty for unwatch). The
+   * helper clears every other target it drops before answering; that only ends the watch on
+   * it, and is no sign the secret is gone.
+   */
+  changing: ReadonlySet<string> | undefined;
   /** The process exited on its own. */
   ended: boolean;
   /** The host let it go: stopped, its reports withdrawn. */
@@ -199,13 +205,14 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
         publish({ version: 1, type: "cuaPrivateMode", active: true, target: event.target });
       // This launch holds it now; an earlier one's hold on the same window is superseded.
       release((held, at) => held !== launch && at === window);
-    } else release((_held, at) => at === window);
+    } else if (!current.changing || current.changing.has(window))
+      release((_held, at) => at === window);
   };
 
-  /** A later helper's accepted view of the screen releases earlier holds on windows now gone. */
+  /** An accepted view of the whole screen releases holds on windows no longer on it. */
   const observed = (launch: number, targets: ReadonlyArray<ComputerUseWindowTarget>) => {
     const seen = new Set(targets.map(windowKey));
-    release((held, at) => held !== launch && !seen.has(at));
+    release((_held, at) => !seen.has(at));
   };
 
   const backoff = () => RESTART_MS[Math.min(failures++, RESTART_MS.length - 1)] ?? 60_000;
@@ -251,6 +258,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       watched: "",
       ended: false,
       retired: false,
+      changing: undefined,
     };
     current = entry;
     process.onLine(client.line);
@@ -310,10 +318,16 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (readiness._tag === "Some") failures = 0;
   });
 
+  const unwatch = (entry: Running) =>
+    Effect.sync(() => (entry.changing = new Set())).pipe(
+      Effect.andThen(Effect.promise(() => entry.client.unwatch(WATCH_MS))),
+      Effect.ensuring(Effect.sync(() => (entry.changing = undefined))),
+    );
+
   /** Watches every window on screen while agents control the host; nothing otherwise. */
   const reconcileWatch = Effect.fnUntraced(function* (entry: Running) {
     if (!watchWanted) {
-      if (entry.client.watching()) yield* Effect.promise(() => entry.client.unwatch(WATCH_MS));
+      if (entry.client.watching()) yield* unwatch(entry);
       entry.watched = "";
       return;
     }
@@ -329,7 +343,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       .join(",");
     if (key === entry.watched && entry.client.watching()) return;
     if (targets.length === 0) {
-      if (entry.client.watching()) yield* Effect.promise(() => entry.client.unwatch(WATCH_MS));
+      if (entry.client.watching()) yield* unwatch(entry);
       entry.watched = "";
       // A successful listing of no windows at all: no earlier secret can still be focused.
       observed(entry.launch, []);
@@ -337,7 +351,10 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     }
     // A watch that was refused or not answered in time leaves the helper's watch unknown, so
     // the next tick asks again rather than trusting the windows it last watched.
-    const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS));
+    entry.changing = new Set(targets.map(windowKey));
+    const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS)).pipe(
+      Effect.ensuring(Effect.sync(() => (entry.changing = undefined))),
+    );
     entry.watched = accepted ? key : "";
     if (accepted) observed(entry.launch, targets);
   });

@@ -380,4 +380,45 @@ describe("LinuxHelperHost (#1223)", () => {
         yield* t.nextRequest("watch");
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "the clearing a helper sends as a watch ends is no proof: private mode holds until the next watch sees the field (#1494 r5)",
+    () =>
+      Effect.gen(function* () {
+        let watchId = "";
+        let send: ((frame: unknown) => void) | undefined;
+        const target = { pid: 7, windowId: 70 };
+        const t = yield* hostWith([target], {
+          onRequest: (request) => {
+            if (request.method === "watch")
+              watchId = (request.params as { watchId: string }).watchId;
+            // As the helper does, an active target leaving the watch is cleared before the answer.
+            if (request.method === "unwatch")
+              send?.({
+                generation: "gen-1",
+                watchId,
+                event: { type: "privateMode", active: false, target },
+              });
+          },
+          afterAnswer: (request, reply) => {
+            send = reply;
+            initialStates(request, reply);
+          },
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        t.spawned[0]?.helper.event(watchId, { type: "privateMode", active: true, target });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        yield* t.host.setWatch(false);
+        yield* t.nextRequest("unwatch");
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+        // The next watch's initial state is a fresh look at the field: clear now.
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
+      }).pipe(Effect.scoped),
+  );
 });
