@@ -130,6 +130,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   // A routed call may have reached the remote before it stopped answering.
   host_unavailable: c("unavailable"),
   host_pressure: before("resource_exhausted"),
+  // A channel workstream's descendant budget is full; admission refused before any launch.
+  capacity_exceeded: before("resource_exhausted"),
   invalid_request: before("invalid_request"),
   target_required: before("invalid_request"),
   orchestration_error: c("internal"),
