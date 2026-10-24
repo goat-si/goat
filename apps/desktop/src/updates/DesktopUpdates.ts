@@ -489,7 +489,10 @@ export const make = Effect.gen(function* () {
     reason: string,
     actionReservation: "acquire" | "held" = "acquire",
   ) {
-    yield* Effect.annotateCurrentSpan({ reason });
+    yield* Effect.annotateCurrentSpan({
+      reason,
+      channel: (yield* Ref.get(updateStateRef)).channel,
+    });
     if (yield* Ref.get(desktopState.quitting)) return false;
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
 

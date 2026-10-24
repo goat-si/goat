@@ -53,6 +53,10 @@ Important fields common to both record types:
 `effect-span` records also contain `exit` with `Success`, `Failure`, or `Interrupted`. `otlp-span`
 records instead carry OTLP resource, scope, and optional status fields.
 
+Stable and nightly desktop apps can run at once and append to the same `desktop.trace.ndjson`, so
+each desktop `effect-span` record carries `resourceAttributes["service.version"]`, the version of
+the app that wrote it. Update check spans also record the update `channel` they used.
+
 The `TraceRecord`, `EffectTraceRecord`, and `OtlpTraceRecord` schemas live in
 `packages/shared/src/observability.ts`.
 

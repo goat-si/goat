@@ -1,5 +1,10 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/contracts";
-import { makeLocalFileTracer, makeTraceSink, type SignalExport } from "@goat/shared/observability";
+import {
+  makeLocalFileTracer,
+  makeTraceSink,
+  type SignalExport,
+  type TraceSink,
+} from "@goat/shared/observability";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as SharedObservability from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
@@ -587,6 +592,19 @@ const layerBackendOutputLogFactory = Layer.effect(
   }),
 );
 
+// Stable and nightly apps can run at once and append to the same desktop.trace.ndjson, so
+// each local span record names the app that wrote it, as an OTLP resource would.
+function withTraceResource(
+  sink: TraceSink,
+  resourceAttributes: Readonly<Record<string, string>>,
+): TraceSink {
+  return {
+    ...sink,
+    push: (record) =>
+      sink.push(record.type === "effect-span" ? { ...record, resourceAttributes } : record),
+  };
+}
+
 const layerTelemetry = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -661,7 +679,7 @@ const layerTelemetry = Layer.unwrap(
           maxBytes: DESKTOP_LOG_FILE_MAX_BYTES,
           maxFiles: DESKTOP_LOG_FILE_MAX_FILES,
           batchWindowMs: DESKTOP_TRACE_BATCH_WINDOW_MS,
-          sink,
+          sink: withTraceResource(sink, { "service.version": environment.appVersion }),
           ...(delegate ? { delegate } : {}),
         });
 
