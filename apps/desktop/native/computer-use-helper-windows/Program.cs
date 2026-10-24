@@ -170,7 +170,10 @@ namespace Goat.ComputerUse
                         reply["result"] = new Dictionary<string, object>();
                         signals.Unwatch(reply);
                         return;
-                    case "frames": reply["result"] = frames.Frames(parameters); break;
+                    // The frames queue writes the answer behind the old request's last frame.
+                    case "frames":
+                        frames.Frames(parameters, reply);
+                        return;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
                     case "start": reply["result"] = service.Start(parameters); break;

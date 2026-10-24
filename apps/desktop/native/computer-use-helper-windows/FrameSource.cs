@@ -60,6 +60,16 @@ namespace Goat.ComputerUse
         long framesId = -1;
         List<Target> targets = new List<Target>();
         bool ended;
+        /// <summary>
+        /// Lines waiting for the writer, in order. Entries go in under gate, so a replaced
+        /// request's frames always sit before its replacement's answer; the writer writes them
+        /// with no lock held, so a reader that stops reading stalls only the writer.
+        /// </summary>
+        readonly LinkedList<Dictionary<string, object>> outgoing = new LinkedList<Dictionary<string, object>>();
+        /// <summary>A backed-up reader gets the newest frames; answers and reasons are never dropped.</summary>
+        const int MaxQueuedFrames = 4;
+        /// <summary>Guarded by outgoing; the writer never takes gate (gate is taken before outgoing).</summary>
+        bool stopped;
 
         public FrameSource(DriverService service, Action<Dictionary<string, object>> emit)
         {
@@ -72,13 +82,16 @@ namespace Goat.ComputerUse
             var worker = new Thread(Run);
             worker.IsBackground = true;
             worker.Start();
+            var writer = new Thread(Write);
+            writer.IsBackground = true;
+            writer.Start();
         }
 
         /// <summary>
-        /// Replaces the windows captured. A frame of the old request is never written once this
-        /// returns: the worker checks and writes under the same lock.
+        /// Replaces the windows captured and queues the answer (reply) behind every frame of the
+        /// old request, so none of those is written after it.
         /// </summary>
-        public Dictionary<string, object> Frames(Dictionary<string, object> parameters)
+        public void Frames(Dictionary<string, object> parameters, Dictionary<string, object> reply)
         {
             object rawId, rawTargets;
             if (!parameters.TryGetValue("framesId", out rawId) || !(rawId is int || rawId is long) ||
@@ -87,18 +100,19 @@ namespace Goat.ComputerUse
             var next = new List<Target>();
             foreach (object raw in (object[])rawTargets)
                 next.Add(Parse(raw as Dictionary<string, object>) ?? Bad());
+            var answer = new Dictionary<string, object>();
+            answer["framesId"] = rawId;
+            reply["result"] = answer;
             lock (gate)
             {
                 framesId = Convert.ToInt64(rawId);
                 targets = next;
                 Monitor.PulseAll(gate);
+                Enqueue(reply, false);
             }
-            var answer = new Dictionary<string, object>();
-            answer["framesId"] = rawId;
-            return answer;
         }
 
-        /// <summary>Stops every capture for good.</summary>
+        /// <summary>Stops every capture for good; nothing more is written, and nothing waits on output.</summary>
         public void Shutdown()
         {
             lock (gate)
@@ -106,6 +120,50 @@ namespace Goat.ComputerUse
                 ended = true;
                 targets = new List<Target>();
                 Monitor.PulseAll(gate);
+            }
+            lock (outgoing)
+            {
+                stopped = true;
+                outgoing.Clear();
+                Monitor.PulseAll(outgoing);
+            }
+        }
+
+        void Enqueue(Dictionary<string, object> message, bool isFrame)
+        {
+            lock (outgoing)
+            {
+                if (stopped) return;
+                if (isFrame && outgoing.Count(queued => IsFrame(queued)) >= MaxQueuedFrames)
+                    outgoing.Remove(outgoing.First(queued => IsFrame(queued)));
+                outgoing.AddLast(message);
+                Monitor.PulseAll(outgoing);
+            }
+        }
+
+        static bool IsFrame(Dictionary<string, object> message)
+        {
+            object type;
+            return message.TryGetValue("type", out type) && (type as string) == "frame";
+        }
+
+        void Write()
+        {
+            while (true)
+            {
+                Dictionary<string, object> next;
+                lock (outgoing)
+                {
+                    while (outgoing.Count == 0)
+                    {
+                        if (stopped) return;
+                        Monitor.Wait(outgoing);
+                    }
+                    if (stopped) return;
+                    next = outgoing.First.Value;
+                    outgoing.RemoveFirst();
+                }
+                emit(next);
             }
         }
 
@@ -185,7 +243,7 @@ namespace Goat.ComputerUse
                     }
                     answer["framesId"] = forId;
                     answer["key"] = target.Key;
-                    emit(answer);
+                    Enqueue(answer, (string)answer["type"] == "frame");
                 }
             }
         }
@@ -207,6 +265,11 @@ namespace Goat.ComputerUse
             // Unknown counts as private: no answer from UI Automation is no proof of a clear field.
             if ((string)facts["focus"] != "clear") return Unavailable("private");
 
+            // App approval can take seconds: read the desktop and focus again right before the
+            // capture, and once more after it, so a lock screen, UAC prompt or secret field that
+            // arrived meanwhile drops the picture.
+            string blocked = Admission(pid);
+            if (blocked != null) return Unavailable(blocked);
             byte[] jpeg;
             int width, height;
             using (Bitmap native = CaptureGuard.CaptureNative(window))
@@ -217,8 +280,8 @@ namespace Goat.ComputerUse
                 jpeg = Jpeg(native, width, height);
             }
             if (jpeg == null) return Unavailable("captureFailed");
-            // Focus can reach a password field while the window draws.
-            if (WindowsFacts.FocusedSecure(pid) != "clear") return Unavailable("private");
+            blocked = Admission(pid);
+            if (blocked != null) return Unavailable(blocked);
             var frame = new Dictionary<string, object>();
             frame["width"] = width;
             frame["height"] = height;
@@ -231,6 +294,17 @@ namespace Goat.ComputerUse
             var answer = new Dictionary<string, object>();
             answer["unavailable"] = reason;
             return answer;
+        }
+
+        /// <summary>
+        /// Why the window may not be pictured now, read fresh: paused when another desktop has
+        /// input (or it cannot be read), private when a password field of the process has focus
+        /// or focus cannot be read.
+        /// </summary>
+        static string Admission(int pid)
+        {
+            if (WindowsFacts.InputDesktop() != "Default") return "paused";
+            return WindowsFacts.FocusedSecure(pid) == "clear" ? null : "private";
         }
 
         /// <summary>The window scaled to width x height, lowering quality once before giving up.</summary>

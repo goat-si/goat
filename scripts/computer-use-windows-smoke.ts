@@ -238,47 +238,52 @@ async function main(
       });
       const params = { key: label, intervalMs: 500, ...target };
       await helper.call("frames", { framesId: id, targets: [params] });
-      const wanted = expected === "frame" ? 2 : 1;
-      for (let attempt = 0; attempt < 60 && seen.length < wanted; attempt++) await sleep(250);
+      const frames = () => seen.filter(({ message }) => message.type === "frame");
+      const enough = () => (expected === "frame" ? frames().length >= 2 : seen.length >= 1);
+      for (let attempt = 0; attempt < 60 && !enough(); attempt++) await sleep(250);
       // A reason is told once, however many intervals pass.
       if (expected !== "frame") await sleep(1_200);
       await helper.call("frames", { framesId: ++framesId, targets: [] });
       const cleared = seen.length;
       await sleep(1_200);
       unsubscribe();
-      const first = seen[0]?.message ?? fail("No frames answer for " + label + ".");
+      if (seen.length === 0) fail("No frames answer for " + label + ".");
       if (seen.length !== cleared) fail("Frames for " + label + " kept coming after the clear.");
-      if (first.type === "frameUnavailable") {
-        record("frame " + label, first);
-        if (first.reason !== expected || seen.length !== 1)
+      if (expected !== "frame") {
+        record("frame " + label, seen[0]?.message);
+        if (seen.length !== 1 || seen[0]?.message.reason !== expected)
           fail("frames " + label + " should be " + expected + " once, got " + JSON.stringify(seen));
         return;
       }
-      const data = String(first.data);
-      const bytes = Buffer.from(data, "base64");
-      const info = computerUseImageInfo(data);
-      const gap = (seen[1]?.at ?? Infinity) - (seen[0]?.at ?? 0);
-      record("frame " + label, {
-        width: first.width,
-        height: first.height,
-        bytes: bytes.length,
-        gap,
+      // Only frames, each a JPEG of exactly its reported size within the limits, each about
+      // one interval after the last.
+      if (seen.some(({ message }) => message.type !== "frame") || seen.length < 2)
+        fail("frames " + label + " should be frames only, got " + JSON.stringify(seen));
+      seen.forEach(({ at, message }, index) => {
+        const data = String(message.data);
+        const bytes = Buffer.from(data, "base64");
+        const info = computerUseImageInfo(data);
+        const gap = index === 0 ? undefined : at - (seen[index - 1]?.at ?? 0);
+        record("frame " + label + " #" + (index + 1), {
+          width: message.width,
+          height: message.height,
+          bytes: bytes.length,
+          gap,
+        });
+        if (index === 0) NodeFS.writeFileSync(NodePath.join(out, "frame-" + label + ".jpg"), bytes);
+        if (
+          message.key !== label ||
+          info?.mimeType !== "image/jpeg" ||
+          info.width !== message.width ||
+          info.height !== message.height ||
+          info.width > Math.min(PREVIEW_SESSION_FRAME_LIMITS.maxWidth, params.maxWidth) ||
+          bytes.length > PREVIEW_SESSION_FRAME_LIMITS.maxBytes ||
+          (gap !== undefined && !(gap >= 450 && gap < 5_000))
+        )
+          fail(
+            "frames " + label + " #" + (index + 1) + " is wrong: " + JSON.stringify({ info, gap }),
+          );
       });
-      NodeFS.writeFileSync(NodePath.join(out, "frame-" + label + ".jpg"), bytes);
-      if (
-        expected !== "frame" ||
-        first.key !== label ||
-        info?.mimeType !== "image/jpeg" ||
-        info.width !== first.width ||
-        info.height !== first.height ||
-        info.width > Math.min(PREVIEW_SESSION_FRAME_LIMITS.maxWidth, params.maxWidth) ||
-        bytes.length > PREVIEW_SESSION_FRAME_LIMITS.maxBytes ||
-        // Two frames, at least about one interval apart.
-        !(gap >= 450 && gap < 5_000)
-      )
-        fail(
-          "frames " + label + " should be " + expected + ", got " + JSON.stringify({ info, gap }),
-        );
     };
     /** One element action through a tracker ref. A refusal is returned and nothing is sent. */
     const act = async (
