@@ -29,9 +29,9 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import { AgentScope, AgentScopeThreadId, RAISE_OOM_SCORE_LINE } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
-
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import { appendAcpStderrTail, sanitizeAcpStderrExcerpt } from "./stderr.ts";
+import { forkRuntimeScope } from "./runtimeScope.ts";
 import {
   collectSessionConfigOptionValues,
   decideToolCallUpdateEmission,
@@ -1268,7 +1268,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 > {
   const crypto = yield* Crypto.Crypto;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const runtimeScope = yield* Scope.fork(yield* Scope.Scope);
+  const runtimeScope = yield* forkRuntimeScope();
   const eventQueue = yield* Queue.unbounded<AcpSessionRuntimeEvent>();
   const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
   const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallTrackedState>());
