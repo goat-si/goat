@@ -69,9 +69,13 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
       }),
   );
 
-  it.effect(
-    "an approval narrowed while a refresh stops the old child refuses a call for the revoked app",
-    () =>
+  it.effect.each([
+    ["right after the refresh began", []],
+    ["behind an unchanged approval", [["com.example.a", "com.example.b"]]],
+    ["behind a widened approval", [["com.example.a", "com.example.b", "com.example.c"]]],
+  ] as const)(
+    "an approval narrowed %s while a refresh stops the old child refuses a call for the revoked app",
+    ([, before]) =>
       Effect.gen(function* () {
         let manifest = "v1";
         const gate = yield* Deferred.make<void>();
@@ -99,7 +103,11 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
           .send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
           .pipe(Effect.forkChild);
         yield* h.killed;
-        // While the old child stops, the person narrows the approval to app B only.
+        // While the old child stops, updates arrive; the last narrows the approval to app B.
+        for (const approved of before) {
+          yield* h.push(active(undefined, approved));
+          assert.equal(yield* h.taken, "active");
+        }
         yield* h.push(active(undefined, ["com.example.b"]));
         assert.equal(yield* h.taken, "active");
         yield* Deferred.succeed(gate, undefined);

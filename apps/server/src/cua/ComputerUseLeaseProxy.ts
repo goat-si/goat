@@ -37,6 +37,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -212,8 +213,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * replaces a child the other just started or stopped.
    */
   const lifecycle = yield* Semaphore.make(1);
-  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
-  let stopping: Stopping | undefined;
+  /**
+   * What the updates taken from the lease stream but not applied yet hold back, oldest first.
+   * Updates are taken as soon as they arrive, even while an earlier one waits for the lifecycle
+   * lock, so no call passes a pause, end or narrowed approval that is already known.
+   */
+  const fences: Array<Stopping> = [];
+  /** The strongest pending fence: an end, then a pause, an idle turn, a narrowed approval. */
+  const pendingStop = (): Stopping | undefined =>
+    fences.find((fence) => "end" in fence) ??
+    fences.find((fence) => "pause" in fence) ??
+    fences.find((fence) => "idle" in fence) ??
+    fences.find((fence) => "narrowed" in fence);
+  /** The apps of the latest active update taken, applied or not; undefined allows every app. */
+  let takenApps: ReadonlySet<string> | undefined;
+  let takenActive = false;
   let ownRequests = 0;
   let driverGeneration = 0;
   let interruptionsSeen: number | undefined;
@@ -523,15 +537,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
 
-  /** Whether an active update drops an app the control allows now. */
-  const narrows = Effect.fn("ComputerUseLeaseProxy.narrows")(function* (
-    update: ComputerUseLeaseUpdate,
-  ) {
-    if (update.state !== "active" || !(yield* Deferred.isDone(confirmed))) return false;
-    const next = approvedApps(update.apps);
-    return next !== undefined && (apps === undefined || [...apps].some((app) => !next.has(app)));
-  });
-
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
@@ -541,7 +546,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const next = approvedApps(update.apps);
     // Fewer apps than before: work already running may be in one of them, so it ends now and
     // anything it still answers is dropped with the old child.
-    const narrowed = yield* narrows(update);
+    const narrowed =
+      (yield* Deferred.isDone(confirmed)) &&
+      next !== undefined &&
+      (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
@@ -582,29 +590,32 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
 
-  // The server is the authority: the first word for this control confirms it, anything else ends.
-  yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) => {
-      return Effect.gen(function* () {
-        const stop: Stopping | undefined =
-          update.state !== "ended" && update.controlId !== options.controlId
-            ? { end: "lost" }
-            : update.state === "paused"
-              ? { pause: update.reason }
-              : update.state === "ended"
-                ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
-                : update.state === "idle"
-                  ? { idle: true }
-                  : (yield* narrows(update))
-                    ? { narrowed: true }
-                    : undefined;
-        // Known before waiting for a manifest refresh: no call may pass a pending stop.
-        stopping = stop;
-        yield* lifecycle.withPermits(1)(
-          (stop !== undefined && "end" in stop
-            ? end(stop.end)
-            : stop !== undefined && "pause" in stop
-              ? pause(stop.pause)
+  /** What an update holds back from the moment it is taken until it has been applied. */
+  const fenceOf = (update: ComputerUseLeaseUpdate): Stopping | undefined => {
+    if (update.state !== "ended" && update.controlId !== options.controlId) return { end: "lost" };
+    if (update.state === "paused") return { pause: update.reason };
+    if (update.state === "ended")
+      return { end: update.reason === "unauthorized" ? "lost" : update.reason };
+    if (update.state === "idle") return { idle: true };
+    // An approval that drops an app the control allows now, or that the latest update taken
+    // allows, holds every call until it applies (#1416).
+    const next = approvedApps(update.apps);
+    const drops = (from: ReadonlySet<string> | undefined) =>
+      next !== undefined && (from === undefined || [...from].some((app) => !next.has(app)));
+    const narrowed = takenActive && (drops(apps) || drops(takenApps));
+    takenApps = next;
+    takenActive = true;
+    return narrowed ? { narrowed: true } : undefined;
+  };
+  const apply = (update: ComputerUseLeaseUpdate | undefined, fence: Stopping | undefined) =>
+    lifecycle
+      .withPermits(1)(
+        (update === undefined
+          ? end("lost")
+          : fence !== undefined && "end" in fence
+            ? end(fence.end)
+            : fence !== undefined && "pause" in fence
+              ? pause(fence.pause)
               : update.state === "idle"
                 ? Effect.sync(() => {
                     idle = true;
@@ -619,12 +630,44 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
                   )
                 : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
-          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
-        );
-      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
-    }),
+        ).pipe(
+          Effect.andThen(
+            update === undefined
+              ? Effect.void
+              : (options.onLeaseUpdateApplied?.(update) ?? Effect.void),
+          ),
+        ),
+      )
+      .pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            const at = fence === undefined ? -1 : fences.indexOf(fence);
+            if (at >= 0) fences.splice(at, 1);
+          }),
+        ),
+      );
+  // The server is the authority: the first word for this control confirms it, anything else
+  // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
+  // update never keeps a later one's fence from going up. The stream ending applies as lost.
+  const applying = yield* Queue.unbounded<{
+    readonly update: ComputerUseLeaseUpdate | undefined;
+    readonly fence: Stopping | undefined;
+  }>();
+  yield* Queue.take(applying).pipe(
+    Effect.flatMap(({ update, fence }) => apply(update, fence)),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+  const take = (update: ComputerUseLeaseUpdate | undefined) =>
+    Effect.suspend(() => {
+      const fence = update === undefined ? ({ end: "lost" } as const) : fenceOf(update);
+      if (fence !== undefined) fences.push(fence);
+      return Queue.offer(applying, { update, fence });
+    });
+  yield* options.leaseUpdates.pipe(
+    Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
-    Effect.andThen(end("lost")),
+    Effect.andThen(take(undefined)),
     Effect.forkScoped,
   );
 
@@ -867,22 +910,23 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     const notSent = (requestId: JsonRpcId) => {
+      const pending = pendingStop();
       const ending =
-        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+        finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
       const pausing =
-        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+        paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
       return ending !== undefined
         ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
         : pausing !== undefined
           ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
-          : idle || (stopping !== undefined && "idle" in stopping)
+          : idle || (pending !== undefined && "idle" in pending)
             ? refusal(
                 requestId,
                 message?.method,
                 "control_idle",
                 "This thread's turn has ended. Computer use is idle until its next turn.",
               )
-            : stopping !== undefined && "narrowed" in stopping
+            : pending !== undefined && "narrowed" in pending
               ? refusal(
                   requestId,
                   message?.method,
@@ -901,7 +945,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused === undefined &&
       !idle &&
       finished === undefined &&
-      stopping === undefined;
+      fences.length === 0;
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
