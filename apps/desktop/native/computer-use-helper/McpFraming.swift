@@ -10,6 +10,40 @@ enum McpFrameError: Error {
   case invalidObject
 }
 
+/// Foundation also accepts BOMs and trailing commas. Native routing must not interpret a frame
+/// the proxy's JSON parser would reject, so exclude those extensions before decoding the object.
+func decodeMcpObject(_ frame: Data) throws -> [String: Any] {
+  guard String(data: frame, encoding: .utf8) != nil else { throw McpFrameError.invalidObject }
+  var quoted = false
+  var escaped = false
+  var previous: UInt8?
+  for byte in frame {
+    // A BOM-less UTF-16/32 object has raw NULs; escaped Unicode NUL remains valid JSON.
+    guard byte != 0 else { throw McpFrameError.invalidObject }
+    if quoted {
+      if escaped { escaped = false }
+      else if byte == 0x5c { escaped = true }
+      else if byte == 0x22 { quoted = false }
+      continue
+    }
+    if byte == 0x20 || byte == 0x09 || byte == 0x0d { continue }
+    guard previous != nil || byte == 0x7b else { throw McpFrameError.invalidObject }
+    if (byte == 0x7d || byte == 0x5d) && previous == 0x2c {
+      throw McpFrameError.invalidObject
+    }
+    if byte == 0x22 { quoted = true }
+    previous = byte
+  }
+  do {
+    guard let object = try JSONSerialization.jsonObject(with: frame) as? [String: Any] else {
+      throw McpFrameError.invalidObject
+    }
+    return object
+  } catch {
+    throw McpFrameError.invalidObject
+  }
+}
+
 /// Validate before forwarding any part of a frame. Keeping its bytes preserves unknown fields,
 /// numeric id spellings and schemas; application text remains data, including escaped newlines.
 func pumpMcpFrames(
@@ -26,15 +60,7 @@ func pumpMcpFrames(
       frame.removeAll(keepingCapacity: false)
       return
     }
-    // Foundation guesses UTF-16/32 from raw NULs even in UTF-8-decodable bytes. JSON permits
-    // NUL only as an escape, so rejecting the raw byte prevents that encoding reinterpretation.
-    guard !frame.contains(0), String(data: frame, encoding: .utf8) != nil else {
-      throw McpFrameError.invalidObject
-    }
-    let object: Any
-    do { object = try JSONSerialization.jsonObject(with: frame) }
-    catch { throw McpFrameError.invalidObject }
-    guard object is [String: Any] else { throw McpFrameError.invalidObject }
+    _ = try decodeMcpObject(frame)
     frame.append(0x0a)
     try destination.write(contentsOf: frame)
     frame.removeAll(keepingCapacity: false)

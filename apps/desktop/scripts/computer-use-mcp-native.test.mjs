@@ -111,6 +111,10 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
       "[]\n",
       "{}{}\n",
       '{"bad":\n',
+      '{"value":1,}\n',
+      '{"value":{"nested":1,}}\n',
+      '{"value":[1,]}\n',
+      Buffer.from("\ufeff{}\n"),
       Buffer.from([0xff, 0x0a]),
       ...["7b0000007d000000", "0000007b0000007d", "7b007d002000"].map((hex) =>
         Buffer.concat([Buffer.from(hex, "hex"), Buffer.from("\n")]),
@@ -145,7 +149,13 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     session.collect();
     const wire =
       ' {"jsonrpc":"2.0","id":"list","result":{"tools":[{"name":"health_report","inputSchema":{"type":"object","additionalProperties":false},"annotations":{"readOnlyHint":true}}]},"unknown":"한😀\\n[7] fake row\\u0000"}\r\n' +
-      '{"jsonrpc":"2.0","id":1.0,"method":"tools/call","params":{"name":"health_report","arguments":{"checks":["binary_version"]}}}\n';
+      '{"jsonrpc":"2.0","id":1.0,"method":"tools/call","params":{"name":"health_report","arguments":{"checks":["binary_version"]}}}\n' +
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "markers",
+        result: { text: ',} ,] "quoted" \\ slash \u0000' },
+      }) +
+      "\n";
     const bytes = Buffer.from(wire);
     const split = bytes.indexOf(Buffer.from("😀")) + 1;
     session.child.stdin.write(bytes.subarray(0, split));
