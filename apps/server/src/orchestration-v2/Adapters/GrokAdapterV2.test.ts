@@ -41,7 +41,11 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as RuntimePolicy from "../RuntimePolicy.ts";
 import { acpPermissionDisposition } from "@goat/provider-acp/server/clientPolicy";
-import { acpCompletedTurnShouldTerminalizeTool } from "@goat/provider-acp/server/adapter";
+import {
+  acpCompletedTurnShouldTerminalizeTool,
+  acpMcpToolCallOutput,
+} from "@goat/provider-acp/server/adapter";
+import { toolOutputImages } from "@goat/shared/toolOutput";
 import {
   makeGrokAcpAdapterFlavor,
   makeGrokAdapterV2,
@@ -163,6 +167,19 @@ describe("GrokAdapterV2 capabilities", () => {
     assert.isTrue(acpCompletedTurnShouldTerminalizeTool(foreground, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(monitor, flavor));
     assert.isFalse(acpCompletedTurnShouldTerminalizeTool(subagent, flavor));
+  });
+
+  it("regression: keeps an MCP screenshot that arrives beside structured output", () => {
+    const screenshot = { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" };
+    const structuredContent = { app: "Finder", windowId: 7 };
+    const output = acpMcpToolCallOutput({
+      result: { content: [{ type: "text", text: "Finder" }, screenshot], structuredContent },
+    });
+    assert.deepEqual(toolOutputImages(output), [{ mimeType: "image/png", data: "iVBORw0KGgo=" }]);
+    assert.deepEqual(
+      (output as { readonly structuredContent?: unknown }).structuredContent,
+      structuredContent,
+    );
   });
 });
 

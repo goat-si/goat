@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   compactDynamicToolOutput,
   htmlRenderFromToolItem,
+  imageBlockFromDataUrl,
   MAX_TOOL_OUTPUT_IMAGES,
+  mcpToolResultOutput,
+  omitToolOutputImageData,
   toolOutputImages,
   toolOutputIndicatesFailure,
 } from "./toolOutput.ts";
@@ -227,5 +230,42 @@ describe("toolOutputImages", () => {
   it("stops after the first few images", () => {
     const images = toolOutputImages(Array.from({ length: 10_000 }, () => mcpImage));
     expect(images).toHaveLength(MAX_TOOL_OUTPUT_IMAGES);
+  });
+});
+
+describe("mcpToolResultOutput", () => {
+  const screenshot = { type: "image", mimeType: "image/png", data: "AAAA" };
+  const structuredContent = { threadId: "thread-1", app: "Finder" };
+
+  it("keeps a screenshot that only content carries, and readers still find the structured data", () => {
+    const output = mcpToolResultOutput({
+      content: [{ type: "text", text: "Finder" }, screenshot],
+      structuredContent,
+    });
+    expect(toolOutputImages(output)).toEqual([{ mimeType: "image/png", data: "AAAA" }]);
+    expect(compactDynamicToolOutput(output)).toEqual({ threadId: "thread-1" });
+    expect(JSON.stringify(omitToolOutputImageData(output))).not.toContain("AAAA");
+  });
+
+  it("stores only the structured output when content has no image", () => {
+    expect(
+      mcpToolResultOutput({ content: [{ type: "text", text: "{}" }], structuredContent }),
+    ).toBe(structuredContent);
+    expect(mcpToolResultOutput({ content: [screenshot], structuredContent: null })).toEqual([
+      screenshot,
+    ]);
+  });
+});
+
+describe("imageBlockFromDataUrl", () => {
+  it("reads base64 raster data URLs and refuses everything else", () => {
+    expect(imageBlockFromDataUrl("data:image/png;base64,AAAA")).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: "AAAA",
+    });
+    expect(imageBlockFromDataUrl("data:image/svg+xml;base64,AAAA")).toBeUndefined();
+    expect(imageBlockFromDataUrl("data:image/png,raw")).toBeUndefined();
+    expect(imageBlockFromDataUrl("https://example.com/a.png")).toBeUndefined();
   });
 });
