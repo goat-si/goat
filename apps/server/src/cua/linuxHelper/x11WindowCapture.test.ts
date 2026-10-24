@@ -129,8 +129,8 @@ async function scriptedServer(
     readonly managed?: ReadonlyArray<number>;
     /** How the app redraws when asked: all of it (default), half of it, or not at all. */
     readonly redraw?: "whole" | "half" | "none";
-    /** After the redraw, another client's window is mapped inside the target. */
-    readonly afterRedraw?: { readonly mapForeign: number };
+    /** Structure events the server sends right after the redraw: [code, watched, window]. */
+    readonly afterRedraw?: ReadonlyArray<readonly [number, number, number]>;
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -219,13 +219,13 @@ async function scriptedServer(
               found.width,
               redraw === "half" ? Math.floor(found.height / 2) : found.height,
             );
-          if (damage && options.afterRedraw) {
-            const mapped = Buffer.alloc(32);
-            mapped[0] = 19;
-            mapped.writeUInt16LE(requests.length & 0xffff, 2);
-            mapped.writeUInt32LE(damage.drawable, 4);
-            mapped.writeUInt32LE(options.afterRedraw.mapForeign, 8);
-            socket.write(mapped);
+          for (const [code, watched, changed] of damage ? (options.afterRedraw ?? []) : []) {
+            const event = Buffer.alloc(32);
+            event[0] = code;
+            event.writeUInt16LE(requests.length & 0xffff, 2);
+            event.writeUInt32LE(watched, 4);
+            event.writeUInt32LE(changed, 8);
+            socket.write(event);
           }
         } else if (op === COMPOSITE && minor === 0) {
           const extra = payload(24);
@@ -470,15 +470,46 @@ describe("X11 window capture against a scripted server", () => {
     expect(covered([{ x: -10, y: -10, w: 200, h: 200 }])).toBe(true);
   });
 
-  it("refuses when another app's window is mapped inside the target after it was redrawn", async () => {
-    // Its pixels would stay in the pixmap after it went away (#1390 review).
-    await using server = await scriptedServer(FRAMED, {
+  it("refuses when the window tree read through changes between the redraw and the read", async () => {
+    // Each leaves pixels in the pixmap that the app's redraw never covered (#1390 review).
+    const MAP = 19;
+    const UNMAP = 18;
+    const CREATE = 16;
+    for (const afterRedraw of [
+      // Another app's window mapped inside the target.
+      [[MAP, 0x200001, 0x600001]],
+      // The app adds a child, which is not watched, so anything inside it would go unseen.
+      [[CREATE, 0x200001, 0x200009]],
+      // The target unmapped and mapped again gets a new pixmap, filled from behind it.
+      [
+        [UNMAP, 0x200001, 0x200001],
+        [MAP, 0x200001, 0x200001],
+      ],
+      // Another app's window mapped beside the target, inside its frame.
+      [[MAP, 0x400001, 0x600001]],
+    ] as const) {
+      await using server = await scriptedServer(FRAMED, { redirected: [0x400001], afterRedraw });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: STILL_DRAWING, transient: true });
+    }
+    // The frame's own windows coming and going beside the target do not spoil it.
+    await using frame = await scriptedServer(FRAMED, {
       redirected: [0x400001],
-      afterRedraw: { mapForeign: 0x600001 },
+      afterRedraw: [[19, 0x400001, 0x400005]],
     });
     expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: STILL_DRAWING, transient: true });
+      await captureX11Window(environment, 0x200001, shot, { socketPath: frame.path }),
+    ).toMatchObject({ width: 100 });
+  });
+
+  it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
+    const drawn = coverage(3840, 2160);
+    let accepted = true;
+    for (let stripe = 0; stripe < 1_000 && accepted; stripe++)
+      accepted = drawn.add({ x: stripe * 3, y: 0, w: 1, h: 2160 });
+    expect(accepted).toBe(false);
+    expect(drawn.whole()).toBe(false);
   });
 
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {

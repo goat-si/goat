@@ -514,14 +514,24 @@ async function drawnOver(
 export function coverage(width: number, height: number) {
   const rows: Array<Array<[number, number]>> = Array.from({ length: height }, () => []);
   let full = 0;
+  let work = 0;
+  let exhausted = false;
   return {
+    /** Adds drawing; false once the bookkeeping passed its budget and the answer is no. */
     add(rect: { readonly x: number; readonly y: number; readonly w: number; readonly h: number }) {
       const left = Math.max(0, rect.x);
       const right = Math.min(width, rect.x + rect.w);
-      if (right <= left) return;
+      if (exhausted) return false;
+      if (right <= left) return true;
       for (let y = Math.max(0, rect.y); y < Math.min(height, rect.y + rect.h); y++) {
         const spans = rows[y] ?? [];
         if (spans.length === 1 && spans[0]?.[0] === 0 && spans[0][1] === width) continue;
+        work += spans.length + 1;
+        // Drawing in many disjoint slivers is not a whole redraw worth waiting for.
+        if (spans.length > MAX_ROW_SPANS || work > MAX_COVERAGE_WORK) {
+          exhausted = true;
+          return false;
+        }
         const merged: Array<[number, number]> = [];
         let next: [number, number] = [left, right];
         for (const span of spans) {
@@ -535,13 +545,16 @@ export function coverage(width: number, height: number) {
         rows[y] = merged;
         if (merged.length === 1 && merged[0]?.[0] === 0 && merged[0][1] === width) full++;
       }
+      return true;
     },
     whole: () => full === height,
   };
 }
 
-/** Reports past this many, the window counts as not redrawn: the wait stays bounded. */
+/** Past these, the window counts as not redrawn, so the wait stays bounded in work and time. */
 const MAX_DRAW_REPORTS = 4_096;
+const MAX_ROW_SPANS = 64;
+const MAX_COVERAGE_WORK = 4_000_000;
 
 /**
  * Asks the app to redraw the window and watches it until the pixels are read (#1381).
@@ -564,7 +577,8 @@ const MAX_DRAW_REPORTS = 4_096;
 async function watchRedraw(
   x: Connection,
   setup: Setup,
-  windowId: number,
+  /** The target, then each ancestor up to its top-level window, whose pixmap is read. */
+  chain: ReadonlyArray<number>,
   width: number,
   height: number,
 ): Promise<{ readonly redrawn: boolean; readonly undisturbed: () => boolean } | undefined> {
@@ -586,7 +600,17 @@ async function watchRedraw(
     }),
   );
   if (!version) return undefined;
-  const own = windowId & ~setup.idMask;
+  const windowId = chain[0] ?? 0;
+  const client = (window: number) => window & ~setup.idMask;
+  const own = client(windowId);
+  const frameOwner = client(chain.at(-1) ?? windowId);
+  // Sizes of the windows read through: a new size replaces the top-level's pixmap.
+  const sizes = new Map<number, string>();
+  for (const window of chain) {
+    const geometry = await getGeometry(x, window);
+    if (!geometry) return undefined;
+    sizes.set(window, u16(geometry, 16) + "x" + u16(geometry, 18));
+  }
   // The target's own subtree, where another app's window would draw into the pixels read.
   const subtree = [windowId];
   for (let index = 0; index < subtree.length; index++) {
@@ -595,34 +619,62 @@ async function watchRedraw(
     if (!tree) return undefined;
     subtree.push(...childrenOf(tree).filter((child) => (child & ~setup.idMask) === own));
   }
+  const inSubtree = new Set(subtree);
+  const inChain = new Set(chain);
   let disturbed = false;
   const drawn = coverage(width, height);
   let reports = 0;
   let asked: number | undefined;
   const id = setup.idBase | 2;
+  const deadline = performance.now() + REDRAW_LIMIT_MS;
   const done = Promise.withResolvers<boolean>();
   x.listen((event) => {
     const code = (event[0] ?? 0) & 0x7f;
-    // CreateNotify, MapNotify, ReparentNotify of a window that is not the app's own.
-    if (code === 16 || code === 19 || code === 21) {
-      if ((u32(event, 8) & ~setup.idMask) !== own) disturbed = true;
+    // Structure events: [4] the window watched (or the new window's parent), [8] the window.
+    if (code >= 16 && code <= 22 && code !== 20) {
+      const watched = u32(event, 4);
+      const window = u32(event, 8);
+      // A window read through that is destroyed, unmapped, mapped, reparented or resized gets a
+      // new pixmap, filled from what is behind it.
+      if (inChain.has(window) && watched === window) {
+        if (code !== 22 || sizes.get(window) !== u16(event, 20) + "x" + u16(event, 22))
+          disturbed = true;
+        return;
+      }
+      // Anything in the target's own subtree changing: windows added there are not watched.
+      if (inSubtree.has(watched) && code !== 22) disturbed = true;
+      // Another app's window coming or going beside the target or one of its ancestors.
+      else if (
+        inChain.has(watched) &&
+        (code === 16 || code === 18 || code === 19 || code === 21) &&
+        client(window) !== own &&
+        client(window) !== frameOwner
+      )
+        disturbed = true;
       return;
     }
     if (code !== notify || asked === undefined || u32(event, 8) !== id) return;
     // Drawing reported before the Expose was sent, creating the Damage object's own report
     // included, is not the redraw.
     if (((u16(event, 2) - asked) & 0xffff) >= 0x8000) return;
-    if (++reports > MAX_DRAW_REPORTS) return done.resolve(false);
-    drawn.add({ x: i16(event, 16), y: i16(event, 18), w: u16(event, 20), h: u16(event, 22) });
-    if (drawn.whole()) done.resolve(true);
+    if (++reports > MAX_DRAW_REPORTS || performance.now() > deadline) return done.resolve(false);
+    const added = drawn.add({
+      x: i16(event, 16),
+      y: i16(event, 18),
+      w: u16(event, 20),
+      h: u16(event, 22),
+    });
+    if (!added) done.resolve(false);
+    else if (drawn.whole()) done.resolve(true);
   });
-  // ChangeWindowAttributes with SubstructureNotify, for this connection only.
-  for (const window of subtree)
+  // ChangeWindowAttributes for this connection only: StructureNotify on every window read
+  // through, SubstructureNotify on those and on the target's own descendants.
+  for (const window of new Set([...chain, ...subtree]))
     x.send(
       request(2, 0, 4, (view) => {
         view.setUint32(4, window, true);
         view.setUint32(8, 1 << 11, true);
-        view.setUint32(12, 1 << 19, true);
+        view.setUint32(12, inChain.has(window) ? (1 << 17) | (1 << 19) : 1 << 19, true);
       }),
     );
   // DamageCreate at the raw-rectangles level: every drawing operation is reported.
@@ -645,7 +697,7 @@ async function watchRedraw(
     }),
   );
   asked = x.sequence();
-  const timer = setTimeout(() => done.resolve(false), REDRAW_LIMIT_MS);
+  const timer = setTimeout(() => done.resolve(false), Math.max(0, deadline - performance.now()));
   // A lost connection never redraws; the exchange then ends on its own.
   const redrawn = await done.promise;
   clearTimeout(timer);
@@ -700,7 +752,7 @@ async function exchange(
   const attributes = await getAttributes(x, topLevel);
   if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
-  const redraw = await watchRedraw(x, setup, windowId, u16(first, 16), u16(first, 18));
+  const redraw = await watchRedraw(x, setup, chain, u16(first, 16), u16(first, 18));
   if (redraw === undefined) return undefined;
   if (!redraw.redrawn || !redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true };
   // Held: nothing else may map, move or draw a window between the check and the read. The hold
