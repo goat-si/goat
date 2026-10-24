@@ -134,7 +134,12 @@ const session = (overrides: Partial<PreviewSession> = {}): PreviewSession => ({
   target: { kind: "browser", tabId: "tab", title: "Example", url: "https://example.test/path" },
   owner: "agent",
   status: "acting",
-  capabilities: { controls: ["takeover", "stop"], frames: true, privateMode: true },
+  capabilities: {
+    controls: ["takeover", "stop"],
+    frames: true,
+    privateMode: true,
+    humanInput: true,
+  },
   ...overrides,
 });
 function setup(sessions: PreviewSession[]) {
@@ -220,7 +225,12 @@ it("opens takeover in the session's full browser route, then sends stopped Hand 
   h.sessions = [
     session({
       status: "stopped",
-      capabilities: { controls: ["handBack", "stop"], frames: false, privateMode: true },
+      capabilities: {
+        controls: ["handBack", "stop"],
+        frames: false,
+        privateMode: true,
+        humanInput: true,
+      },
     }),
   ];
   screen.render();
