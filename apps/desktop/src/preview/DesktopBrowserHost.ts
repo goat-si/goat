@@ -72,6 +72,11 @@ export class DesktopBrowserHost extends Context.Service<
       readonly x: number;
       readonly y: number;
     }>;
+    /** Each relayed screenshot as it starts and as it settles. */
+    readonly captures: Stream.Stream<{
+      readonly key: DesktopBrowserTabKey;
+      readonly capturing: boolean;
+    }>;
   }
 >()("@goat/desktop/preview/DesktopBrowserHost") {}
 
@@ -83,6 +88,10 @@ export const make = Effect.gen(function* () {
     readonly x: number;
     readonly y: number;
   }>(16);
+  const captures = yield* PubSub.unbounded<{
+    readonly key: DesktopBrowserTabKey;
+    readonly capturing: boolean;
+  }>();
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const tabs = new Map<string, AttachedTab>();
   const emit = (event: DesktopBrowserEventType) => runFork(PubSub.publish(outbox, event));
@@ -133,9 +142,17 @@ export const make = Effect.gen(function* () {
         else webContents.reload();
         return {};
       }
-      return sessionId === undefined
-        ? sendPageCommand(webContents, debuggee, method, params)
-        : debuggee.sendCommand(method, params, sessionId);
+      if (sessionId !== undefined) return debuggee.sendCommand(method, params, sessionId);
+      if (method !== "Page.captureScreenshot")
+        return sendPageCommand(webContents, debuggee, method, params);
+      // Chromium answers with the guest's next frame, and a guest parked outside the window
+      // composites none, so the app window keeps it painting until this settles.
+      runFork(PubSub.publish(captures, { key: tab.key, capturing: true }));
+      try {
+        return await sendPageCommand(webContents, debuggee, method, params);
+      } finally {
+        runFork(PubSub.publish(captures, { key: tab.key, capturing: false }));
+      }
     };
     const relay: CdpRelayConnection = createCdpRelayConnection(
       {
@@ -258,6 +275,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopBrowserHost.of({
     pointers: Stream.fromPubSub(pointers),
+    captures: Stream.fromPubSub(captures),
     // Subscribes before announcing, so no attach falls between the two.
     events: Stream.unwrap(
       Effect.gen(function* () {

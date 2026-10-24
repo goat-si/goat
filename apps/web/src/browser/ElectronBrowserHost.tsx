@@ -20,6 +20,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { readPreviewAnnotationTheme } from "./annotationTheme";
 import { useBrowserDefaults } from "./browserDefaults";
 import { useBrowserPointerStore } from "./browserPointerStore";
+import { acquireBrowserSurfaceActivity } from "./browserSurfaceStore";
 import { HostedBrowserWebview } from "./HostedBrowserWebview";
 import { openUrlInPreview } from "./openFileInPreview";
 import { rendersServerTabNatively } from "./previewRuntime";
@@ -93,6 +94,45 @@ export function ElectronBrowserHost() {
     return preview.onPointerEvent((event) => {
       useBrowserPointerStore.getState().apply(event);
     });
+  }, []);
+
+  // An agent's screenshot of a server tab waits for a frame that a guest parked outside the window
+  // never composites. Keep the guest painting, behind the app, while any capture is in flight.
+  const runtimeTabIdOf = useEffectEvent((threadId: string, tabId: string) => {
+    const session = sessions.find(
+      ({ threadRef, snapshot }) =>
+        snapshot.runtime === "server" &&
+        threadRef.threadId === threadId &&
+        snapshot.tabId === tabId,
+    );
+    return session?.runtimeTabId;
+  });
+  useEffect(() => {
+    const preview = window.desktopBridge?.preview;
+    if (!preview) return;
+    const holds = new Map<string, { count: number; release: () => void }>();
+    const unsubscribe = preview.onServerTabCapture(({ threadId, tabId, capturing }) => {
+      const key = `${threadId}\u0000${tabId}`;
+      const hold = holds.get(key);
+      if (!capturing) {
+        if (hold && --hold.count === 0) {
+          holds.delete(key);
+          hold.release();
+        }
+        return;
+      }
+      if (hold) {
+        hold.count += 1;
+        return;
+      }
+      const runtimeTabId = runtimeTabIdOf(threadId, tabId);
+      if (runtimeTabId === undefined) return;
+      holds.set(key, { count: 1, release: acquireBrowserSurfaceActivity(runtimeTabId) });
+    });
+    return () => {
+      unsubscribe();
+      for (const hold of holds.values()) hold.release();
+    };
   }, []);
 
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: true });

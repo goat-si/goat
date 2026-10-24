@@ -236,6 +236,35 @@ describe("DesktopBrowserHost", () => {
     }),
   );
 
+  it.effect("holds a guest's painting from a relayed screenshot until Chromium answers it", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      host.attach(key, debuggee.tab);
+      const captures = yield* Queue.unbounded<{ readonly key: typeof key; capturing: boolean }>();
+      yield* host.captures.pipe(
+        Stream.runForEach((event) => Queue.offer(captures, event)),
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      const command = (id: number, method: string) =>
+        host.handleCommandLine(
+          encodeJson({
+            type: "cdp",
+            ...key,
+            message: encodeJson({ id, method, sessionId: "goat-preview-page" }),
+          }),
+        );
+      yield* command(1, "DOM.enable");
+      yield* command(2, "Page.captureScreenshot");
+      expect(yield* Queue.take(captures)).toEqual({ key, capturing: true });
+      yield* Effect.yieldNow;
+      expect(yield* Queue.size(captures)).toBe(0);
+      debuggee.release();
+      expect(yield* Queue.take(captures)).toEqual({ key, capturing: false });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("saves a server tab's download under its CDP guid where the server asked", () =>
     Effect.gen(function* () {
       const host = yield* DesktopBrowserHost.make;
