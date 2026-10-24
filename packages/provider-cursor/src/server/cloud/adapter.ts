@@ -175,10 +175,16 @@ export function resultTask(task: Task, result: RunResult): Task {
           : "Cursor Cloud failed. Open the agent for details."),
     ...(output?.branch ? { branch: output.branch } : {}),
     ...(prUrl ? { prUrl } : {}),
-    ...(result.status === "error"
-      ? { error: "Cursor's agent hit an unexpected error before it finished." }
-      : {}),
+    ...(result.status === "error" ? { error: runErrorText(result.error?.message) } : {}),
   };
+}
+
+// Cursor's own reason (no credits, no access) tells the person what to fix; keep it to one line.
+function runErrorText(message: string | undefined) {
+  const reason = message?.replace(/\s+/g, " ").trim();
+  return reason
+    ? `Cursor stopped this run: ${reason}`.slice(0, 300)
+    : "Cursor's agent hit an unexpected error before it finished.";
 }
 
 const toolProgressLabels = new Map<string, readonly [string, string]>([
