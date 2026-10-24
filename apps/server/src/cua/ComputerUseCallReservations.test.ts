@@ -130,17 +130,46 @@ describe("server computer-use call reservations", () => {
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
+  it.effect.each([
+    ["FOREGROUND", false],
+    ["FOREGROUND", true],
+    ["fOrEgRoUnD", false],
+    ["fOrEgRoUnD", true],
+  ] as const)(
+    "excludes other windows for delivery_mode %s with foreground first=%s",
+    ([mode, foregroundFirst]) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const foreground = { pid: 42, window_id: 7, delivery_mode: mode };
+        const background = { pid: 99, window_id: 8 };
+        assert.equal(
+          (yield* f.reserve(f.a, foregroundFirst ? foreground : background)).status,
+          "admitted",
+        );
+        assert.deepEqual(yield* f.reserve(f.b, foregroundFirst ? background : foreground), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect(
     "rejects contradictory or invalid window identities before they acquire authority",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture();
         for (const args of [
+          { pid: -1, window_id: 7, delivery_mode: "foreground" },
+          { pid: 42, window_id: 0, foreground: true },
+          { target: { kind: "app", pid: -1 } },
           { pid: 42, target: { kind: "window", window_id: 7 } },
           { pid: -1, window_id: 7 },
           { pid: 42, window_id: 0 },
           { pid: 42, window_id: Number.MAX_SAFE_INTEGER + 1 },
           { pid: "42", window_id: 7 },
+          { pid: -1, window_id: 7, delivery_mode: "FOREGROUND" },
+          { pid: 42, window_id: 0, delivery_mode: "fOrEgRoUnD" },
         ])
           assert.deepEqual(yield* f.reserve(f.a, args), {
             status: "refused",

@@ -45,6 +45,12 @@ export interface GoatclawRoleTemplate {
    * never starts a role whose brief asks for something its profile cannot do.
    */
   readonly requires: ReadonlyArray<PermissionCapability>;
+  /**
+   * Capabilities of the role's own profile it keeps when only the caller's stored profile lacks
+   * them. Each must gate nothing but role launches, so keeping it only lets the role start the
+   * lanes it delegates to. A ceiling that narrowed the caller still removes it.
+   */
+  readonly keeps: ReadonlyArray<PermissionCapability>;
   readonly preamble: string;
 }
 
@@ -85,16 +91,20 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     supervisor: {
       title: "goatclaw supervisor",
       requires: [],
+      // pr.merge gates only merge-manager launches; merging itself runs in a terminal (#858).
+      keeps: ["pr.merge"],
       preamble: [
         "You are the goatclaw supervisor. You read, plan, and ask; the managers you launch do the writing.",
         READ_ONLY,
         GOATCLAW_SUPERVISOR_DELEGATION,
+        "When your own profile allows merging, you can start a merge manager even if the thread that launched you cannot merge; a ceiling that narrowed that thread, such as one forwarded from another machine, still takes that away.",
         GOATCLAW_SUPERVISOR_ASKS,
       ].join("\n"),
     },
     "domain-manager": {
       title: "goatclaw domain manager",
       requires: ["pr.open"],
+      keeps: [],
       preamble: [
         "You are a goatclaw domain manager. You own one goal and see it through.",
         `Plan the goal into lanes and run them with ${goatCallText("task.create")}, ${goatCallText("thread.launch")}, or ${goatCallText("ssh.thread_launch")} on a host with room (${goatCallText("host.status")} with placement). Stay within your profile's lane limit and queue the rest. Keep each lane to one problem and one pull request, and read each lane's result with ${goatCallText("thread.read")} instead of parsing chat.`,
@@ -104,6 +114,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     "merge-manager": {
       title: "goatclaw merge manager",
       requires: ["pr.merge"],
+      keeps: [],
       preamble: [
         "You are the goatclaw merge manager. Merge one pull request at a time.",
         "Merge a pull request only when goat-ci-result is SUCCESS on its exact current head, it is not CONFLICTING, and no review requests changes. Re-read the head and checks right before merging. Skip anything else and say why.",
@@ -115,6 +126,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     "issue-sweeper": {
       title: "goatclaw issue sweeper",
       requires: ["pr.open"],
+      keeps: [],
       preamble: [
         "You are the goatclaw issue sweeper. Triage open issues and fix the small ones.",
         "For each issue: confirm it against dev, then label it, ask for what is missing, close it as a duplicate or already fixed with a comment naming the evidence, or fix it. A fix is one problem in one pull request to dev with a focused test. Leave anything that needs a product decision or a large change to the supervisor through the decision inbox.",

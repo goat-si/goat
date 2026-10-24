@@ -12,11 +12,10 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-import { isTerminalPhase } from "../../mcp/threadStatus.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import { FleetRescheduleClaims } from "./FleetHostStates.ts";
-import { probeRemoteStatus, readLocalStatus, type FleetThreadRef } from "./Health.ts";
+import { isStopped, probeRemoteStatus, readLocalStatus, type FleetThreadRef } from "./Health.ts";
 import { HostHealthMonitor } from "./HostHealthMonitor.ts";
 import { Placement } from "../resources/Placement.ts";
 import {
@@ -260,11 +259,7 @@ const make = Effect.gen(function* () {
       if (status === null) {
         return refused("host_still_answers", "Could not read the attempt on " + where + ".");
       }
-      const stopped =
-        (isTerminalPhase(status.phase) || status.phase === "idle") &&
-        status.queuedRunId === null &&
-        status.pendingRequest === null;
-      if (stopped) return null;
+      if (isStopped(status)) return null;
       if (request.reason === "drain") {
         // Drain never interrupts a turn; the controller asks again between runs.
         return refused(
@@ -492,7 +487,8 @@ const make = Effect.gen(function* () {
           const blocked = yield* gate(request);
           if (blocked !== null) return blocked;
           if (resumedFrom === "replica") {
-            // Replica import at the destination lands with replica capture for goal attempts (#525).
+            // Goal attempts on this machine recover from their replicas in GoalRecovery; importing a
+            // replica on another host waits for remote goal workers (#576).
             return refused(
               "no_resume_point",
               "Resuming from a replica is not supported yet; push the branch or resume from base.",

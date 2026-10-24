@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { createPreviewStreamClient, type PreviewStreamControl } from "./serverBrowserStream.ts";
+import {
+  createPreviewFramePainter,
+  createPreviewStreamClient,
+  type PreviewStreamControl,
+} from "./serverBrowserStream.ts";
 
 class FakeSocket extends EventTarget {
   static readonly OPEN = 1;
@@ -164,5 +168,65 @@ describe("preview stream agent pointer", () => {
       y: 50,
       sequence: 2,
     });
+  });
+});
+
+describe("preview frame painter privacy", () => {
+  /** Decodes that finish only when the test says so, to order them against private mode. */
+  function setup() {
+    const decodes: Array<(bitmap: ImageBitmap) => void> = [];
+    vi.stubGlobal(
+      "createImageBitmap",
+      () => new Promise<ImageBitmap>((resolve) => void decodes.push(resolve)),
+    );
+    const drawn: Array<number> = [];
+    const canvas = {
+      width: 1,
+      height: 1,
+      getContext: () => ({ drawImage: (bitmap: { id: number }) => void drawn.push(bitmap.id) }),
+    } as unknown as HTMLCanvasElement;
+    const finish = async (index: number, id: number) => {
+      decodes[index]?.({
+        id,
+        width: 1,
+        height: 1,
+        close: () => undefined,
+      } as unknown as ImageBitmap);
+      // The painter draws in the decode's continuation.
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+    return {
+      painter: createPreviewFramePainter(canvas),
+      drawn,
+      decodes,
+      finish,
+      [Symbol.dispose]: () => vi.unstubAllGlobals(),
+    };
+  }
+  const frame = () => new ArrayBuffer(4);
+
+  it("never paints a frame decoded across the start of private mode", async () => {
+    using fixture = setup();
+    fixture.painter.paint(frame());
+    fixture.painter.setSuppressed(true);
+    await fixture.finish(0, 1);
+    // Frames sent meanwhile are dropped without decoding.
+    fixture.painter.paint(frame());
+    expect(fixture.decodes).toHaveLength(1);
+    expect(fixture.drawn).toEqual([]);
+  });
+
+  it("never paints a pre-private frame that finishes decoding after private mode ended", async () => {
+    using fixture = setup();
+    fixture.painter.paint(frame());
+    fixture.painter.setSuppressed(true);
+    fixture.painter.setSuppressed(false);
+    await fixture.finish(0, 1);
+    expect(fixture.drawn).toEqual([]);
+    // The next frame after private mode paints.
+    fixture.painter.paint(frame());
+    await fixture.finish(1, 2);
+    expect(fixture.drawn).toEqual([2]);
   });
 });

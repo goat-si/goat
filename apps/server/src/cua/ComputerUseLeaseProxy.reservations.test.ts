@@ -6,6 +6,95 @@ import * as TestClock from "effect/testing/TestClock";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect("suppresses a cancelled call when its driver is later cut off", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "run_script", { code: "opaque" }));
+      yield* h.nextToDriver;
+      const acquired = yield* h.nextReservation;
+      assert.equal(yield* h.agentCall, "start 1");
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* h.nextToDriver;
+      assert.deepEqual(h.reservations, [acquired]);
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      assert.equal((yield* h.nextReservation).action, "close");
+      assert.equal(yield* h.agentCall, "end 1");
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* h.send(call(2, "get_guide"));
+      yield* h.nextToDriver;
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 2);
+    }),
+  );
+
+  it.effect("waits for the target report before reserving or posting input", () =>
+    Effect.gen(function* () {
+      const targetGate = yield* Deferred.make<void>();
+      const h = yield* harness({ onTarget: () => true, targetGate, humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.reported;
+      assert.deepEqual(h.reservations, []);
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.agentCallsQueued, 0);
+      yield* h.push({ state: "idle", controlId: CONTROL });
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.push({ ...active(), idleEpoch: 1 });
+      yield* h.restarted;
+      yield* Deferred.succeed(targetGate, undefined);
+      const answer = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepEqual(answer.structuredContent, {
+        refused: "targetRefused",
+        detail: "control_idle",
+      });
+      assert.isFalse(h.reservations.some((request) => request.action === "reserve"));
+      assert.equal(yield* h.driverQueued, 0);
+      assert.equal(yield* h.agentCallsQueued, 0);
+    }),
+  );
+
+  it.effect("releases a late admission without dispatching across a driver replacement", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({
+        reservation: (request) =>
+          request.action === "reserve"
+            ? Deferred.await(gate).pipe(
+                Effect.as({ status: "admitted", reservationId: "late" } as const),
+              )
+            : Effect.succeed({ status: "released" } as const),
+      });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const acquired = yield* h.nextReservation;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      assert.equal((yield* h.nextReservation).action, "close");
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* Deferred.succeed(gate, undefined);
+      assert.deepEqual(yield* h.nextReservation, {
+        action: "release",
+        controlId: CONTROL,
+        connectionId: acquired.connectionId,
+        reservationId: "late",
+      });
+      const answer = (yield* h.nextToProvider).result as { structuredContent: object };
+      assert.deepEqual(answer.structuredContent, {
+        refused: "userIntervened",
+        detail: "waiting_for_human",
+      });
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+  );
+
   it.effect(
     "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
     () =>

@@ -53,9 +53,12 @@ const foreground = (value: unknown, depth = 0): boolean => {
   if (Array.isArray(value)) return value.some((item) => foreground(item, depth + 1));
   const object = record(value);
   if (object === undefined) return false;
+  // Raw MCP arguments bypass the enum; the driver parses mode strings case-insensitively.
   return Object.entries(object).some(
     ([key, child]) =>
-      ((key === "delivery_mode" || key === "dispatch") && child === "foreground") ||
+      ((key === "delivery_mode" || key === "dispatch") &&
+        typeof child === "string" &&
+        child.toLowerCase() === "foreground") ||
       (key.includes("foreground") && child === true) ||
       foreground(child, depth + 1),
   );
@@ -63,24 +66,22 @@ const foreground = (value: unknown, depth = 0): boolean => {
 
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
-  if (
+  const desktop =
     call.name === "run_steps" ||
     call.name === "run_script" ||
     call.name === "bring_to_front" ||
     call.name === "launch_app" ||
-    foreground(call.args)
-  )
-    return "desktop";
-  if (READS.has(call.name)) return "read";
-  if (!WINDOW_MUTATIONS.has(call.name)) return "desktop";
+    foreground(call.args);
+  if (!WINDOW_MUTATIONS.has(call.name))
+    return !desktop && READS.has(call.name) ? "read" : "desktop";
   const args = record(call.args);
   const target = record(args?.target);
   if (target !== undefined && (args?.pid !== undefined || args?.window_id !== undefined))
     return "invalid";
   const exact = target ?? args;
-  if (target !== undefined && target.kind !== "window") return "desktop";
   if (exact?.pid !== undefined && !positive(exact.pid)) return "invalid";
   if (exact?.window_id !== undefined && !positive(exact.window_id)) return "invalid";
+  if (desktop || (target !== undefined && target.kind !== "window")) return "desktop";
   if (positive(exact?.pid) && positive(exact?.window_id))
     return { pid: exact.pid, windowId: exact.window_id };
   return "desktop";

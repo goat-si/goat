@@ -10,7 +10,7 @@ export const deviceEntries = {
     description:
       "Capture the screen of a device open in this thread as a PNG. Drive taps and text with the agent-device CLI returned by goat_device_open.",
     guide:
-      "With no target, captures the most recently opened matching device. Needs agent device access enabled for this environment.",
+      "With no target, captures the most recently opened matching device. Needs agent device access for this thread's project, and device support turned on.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -31,7 +31,7 @@ export const deviceEntries = {
     description:
       "List simulators and emulators on this environment’s device hosts, host platform support, and devices open in this thread.",
     guide:
-      "Call goat_device_list before goat_device_open when the target device is unknown. Needs agent device access enabled for this environment.",
+      "Call goat_device_list before goat_device_open when the target device is unknown. Needs agent device access for this thread's project, and device support turned on.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",
@@ -52,7 +52,7 @@ export const deviceEntries = {
     description:
       "Boot or attach a simulator or emulator in this thread’s Device panel. Use the returned agent-device command and target flags on every call. Retry with the same clientRequestId to avoid booting or billing another device.",
     guide:
-      "Needs agent device access enabled for this environment. Keep the exact returned executable path: login shells can reset PATH. Retain all --config and --session flags so concurrent hosts do not change the target. Remote app installation, builds, and Metro forwarding are separate work. For a cloud EAS session, close with shutdown enabled when finished to stop per-minute billing.",
+      "Needs agent device access for this thread's project, and device support turned on. Keep the exact returned executable path: login shells can reset PATH. Retain all --config and --session flags so concurrent hosts do not change the target. Remote app installation, builds, and Metro forwarding are separate work. For a cloud EAS session, close with shutdown enabled when finished to stop per-minute billing.",
     effect: "write",
     capability: "none",
     capabilityReason: "Opens a simulator for the calling thread only.",

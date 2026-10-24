@@ -482,6 +482,52 @@ export const writesEnvironment = <P, A, E, R>(
 
 type CheckServices = Effect.Services<typeof orchestratingCaller>;
 
+const setsUpProjectsRequired =
+  "Creating or cloning a project needs a live full-access/default caller, or, with goatclaw on, a live calling thread in default interaction mode whose profile allows worktree.create and lets it run at auto or above.";
+
+/**
+ * goatclaw's worker and manager agents set up the projects they work in (#858), and the worker
+ * profile caps them at auto. So when goatclaw governs the calling thread, its profile decides,
+ * full access included: it must allow worktree.create, and the thread's mode after the profile's
+ * ceiling must be auto or above. Outside clients, goatclaw off, or no profile service to ask
+ * keep the full-access/default requirement `writesEnvironment` has.
+ */
+const assertSetsUpProjects = Effect.fn("McpToolAccess.assertSetsUpProjects")(function* (
+  caller: Caller,
+) {
+  const { runtimeMode, interactionMode } = caller.limits;
+  const fullAccess = interactionMode === "default" && runtimeMode === "full-access";
+  const ungoverned = fullAccess ? Effect.void : capabilityRefused(setsUpProjectsRequired);
+  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
+  if (caller.scope.thread === undefined || Option.isNone(permissions)) return yield* ungoverned;
+  const result = yield* permissions.value.check(caller.scope, "worktree.create", { runtimeMode });
+  if (!result.ok) return yield* capabilityRefused(`${setsUpProjectsRequired} ${result.reason}`);
+  if (!result.effective.enabled) return yield* ungoverned;
+  const effectiveMode = result.effective.runtimeMode;
+  if (
+    interactionMode !== "default" ||
+    (effectiveMode !== "auto" && effectiveMode !== "full-access")
+  )
+    return yield* capabilityRefused(
+      `${setsUpProjectsRequired} This thread runs at ${effectiveMode} under profile ${result.effective.profile.id}.`,
+    );
+});
+
+const projectSetupCaller = orchestratingCaller.pipe(Effect.tap(assertSetsUpProjects));
+
+/**
+ * Creates or clones a project: `writesEnvironment`, except as `assertSetsUpProjects` allows.
+ * Admission can wait on a concurrent duplicate, so the caller is checked again after it.
+ */
+export const setsUpProjects = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+  declare("write", (params: P) =>
+    projectSetupCaller.pipe(
+      Effect.flatMap((caller) =>
+        admitted(params, caller.limits, Effect.andThen(projectSetupCaller, handle(params))),
+      ),
+    ),
+  );
+
 const removesCheckoutsRequired =
   "Removing worktrees needs a live full-access/default calling thread or a full-access client.";
 
