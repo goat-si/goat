@@ -97,6 +97,8 @@ export const fixture = Effect.fn(function* (
     failFirstStart?: boolean;
     hold?: "start" | "stop" | "monitor";
     tools?: Record<string, ToolResult>;
+    /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
+    withdrawIdentityAfter?: string;
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
@@ -168,6 +170,7 @@ export const fixture = Effect.fn(function* (
     direct: boolean;
     verify: boolean;
   }> = [];
+  let identityWithdrawn = false;
   const createClient = (): Awaited<ReturnType<DesktopCuaDriverDependencies["connect"]>> => {
     clientsOpen++;
     return {
@@ -175,6 +178,7 @@ export const fixture = Effect.fn(function* (
         toolCalls.push({ name, input: JSON.parse(input) });
         const result = (options.tools ?? healthyTools())[name];
         if (!result) throw new Error(`unexpected tool ${name}`);
+        if (name === options.withdrawIdentityAfter) identityWithdrawn = true;
         return result;
       },
       uniffiDestroy: () => {
@@ -249,7 +253,7 @@ export const fixture = Effect.fn(function* (
         },
       };
       return {
-        servicePid: () => (running ? HELPER_PID : undefined),
+        servicePid: () => (running && !identityWithdrawn ? HELPER_PID : undefined),
         readinessPeer: () => readinessClient,
         session: () => (running ? session : undefined),
         start: async () => {

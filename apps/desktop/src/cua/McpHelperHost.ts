@@ -145,6 +145,8 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
           // replacing it.
           if (session.pid !== undefined || helloSeen) {
             session.conflicted = true;
+            // Nothing this pair answers from now on can be trusted.
+            session.peer.close();
             return;
           }
           helloSeen = true;

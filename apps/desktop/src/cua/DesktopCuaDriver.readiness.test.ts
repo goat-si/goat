@@ -166,6 +166,26 @@ describe("macOS readiness transport", () => {
     ),
   );
 
+  it.effect(
+    "refuses readiness when the helper's identity is withdrawn after the identity check",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            withdrawIdentityAfter: "get_window_state",
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          const result = yield* test.verify;
+          assert.isFalse(result.verified);
+          assert.equal(result.steps.at(-1)?.id, "identity");
+          assert.isFalse(result.steps.at(-1)?.ok);
+          assert.notEqual(test.readiness.at(-1)?.readiness.helper, "authenticated");
+        }),
+      ),
+  );
+
   it.effect("refuses authenticated readiness when the driver is not the MCP service's child", () =>
     Effect.scoped(
       Effect.gen(function* () {

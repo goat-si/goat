@@ -119,6 +119,9 @@ describe("macOS readiness MCP helper host", () => {
       test.process.stderr.write(JSON.stringify({ ...greeting, pid: 4242 }) + "\n");
       await read;
       expect(test.host.servicePid()).toBeUndefined();
+      await expect(
+        test.host.readinessPeer()?.callTool("health_report", "{}"),
+      ).rejects.toMatchObject({ code: "closed" });
     } finally {
       await test.host.stop();
     }

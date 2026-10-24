@@ -537,6 +537,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         return done();
     }
 
+    // The helper's identity as the check above proved it; the proof below needs it unchanged.
+    const provenService = selected.kind === "helper" ? checkServicePid() : undefined;
+    // Recorded only when it fails: a passing check already recorded its identity step.
+    const identityHolds = () =>
+      selected.kind !== "helper" ||
+      checkServicePid() === provenService ||
+      record(
+        "identity",
+        `${COMPUTER_USE_HELPER_NAME} could not prove it still runs the driver. Try again.`,
+      );
+
     const windows = yield* call("list_windows", { pid: native.processId, on_screen_only: true });
     const windowId = Option.flatMap(windows, ({ structured }) =>
       Option.fromNullishOr(readNumber(readArray(structured, "windows")[0], "window_id")),
@@ -589,6 +600,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ? undefined
         : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
     record("accessibility", treeFailure);
+    if (!identityHolds()) return done();
     yield* noteChecked((current) =>
       withProof(current, {
         capture: "ready",
