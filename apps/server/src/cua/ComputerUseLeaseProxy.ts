@@ -38,7 +38,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -47,7 +46,8 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
-import { inputKinds, type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
+import { inputKinds } from "./agentInputLog.ts";
+import { type AgentInputReport, makeAgentInputReports } from "./agentInputReports.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
@@ -202,12 +202,7 @@ export interface LeaseProxyOptions<EU, ED> {
    * person. Reports go one at a time in order; a call reaches the driver only after its start
    * report has answered, so the server knows the call before any helper can see its events.
    */
-  readonly onAgentInput?: (report: {
-    readonly call: string;
-    readonly state: "start" | "end";
-    readonly at: number;
-    readonly kinds?: ReadonlyArray<InputKind>;
-  }) => Effect.Effect<unknown>;
+  readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
 }
 
 const WRONG_DISPLAY =
@@ -477,50 +472,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let reported: ComputerUseCallTarget | undefined;
   let overlay = initialOverlayState;
   /** When the agent's own input calls were on their way, to tell a person's input apart. */
-  const agentInput = makeAgentInputLog();
-  /**
-   * Input reports go to the server one at a time, in the order they were made, so an end never
-   * overtakes its start. Only a start is waited for; an end, as when Stop kills the driver, is
-   * queued and never holds anything up.
-   */
-  const agentReports = yield* Queue.unbounded<{
-    readonly report: Parameters<NonNullable<typeof options.onAgentInput>>[0];
-    readonly sent?: Deferred.Deferred<void>;
-  }>();
-  if (options.onAgentInput !== undefined) {
-    const send = options.onAgentInput;
-    yield* Queue.take(agentReports).pipe(
-      Effect.flatMap(({ report, sent }) =>
-        send(report).pipe(
-          Effect.ignoreCause,
-          Effect.andThen(sent === undefined ? Effect.void : Deferred.succeed(sent, undefined)),
-        ),
-      ),
-      Effect.forever,
-      Effect.forkIn(scope),
-    );
-  }
-  const tellAgentInput = (call: string, state: "start" | "end", at: number) =>
-    options.onAgentInput === undefined
-      ? Effect.void
-      : Queue.offer(agentReports, { report: { call, state, at } }).pipe(Effect.asVoid);
-  const inputStarted = Effect.fn("ComputerUseLeaseProxy.inputStarted")(function* (
-    key: string,
-    kinds: ReadonlyArray<InputKind>,
-  ) {
-    const at = yield* Clock.currentTimeMillis;
-    agentInput.prune(at);
-    agentInput.started(key, at, kinds);
-    if (options.onAgentInput === undefined) return;
-    const sent = yield* Deferred.make<void>();
-    yield* Queue.offer(agentReports, { report: { call: key, state: "start", at, kinds }, sent });
-    // A failed report answers too: then another agent's helper may pause everyone for this
-    // call's events, which errs toward the person. The control ending stops the wait.
-    yield* Effect.raceFirst(Deferred.await(sent), Deferred.await(ended).pipe(Effect.asVoid));
-  });
-  const inputEnded = Effect.fn("ComputerUseLeaseProxy.inputEnded")(function* (key: string) {
-    const at = yield* Clock.currentTimeMillis;
-    if (agentInput.ended(key, at)) yield* tellAgentInput(key, "end", at);
+  const agentInput = yield* makeAgentInputReports({
+    send: options.onAgentInput,
+    ended: Deferred.await(ended),
   });
 
   /** Updates what the overlay shows and waits until the helper has drawn it. */
@@ -546,8 +500,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     running = undefined;
     const pending = [...outstanding.values()];
     outstanding.clear();
-    const cutAt = yield* Clock.currentTimeMillis;
-    for (const key of agentInput.endAll(cutAt)) yield* tellAgentInput(key, "end", cutAt);
+    yield* agentInput.endAll();
     if (current !== undefined) {
       for (const request of pending)
         yield* current.driver.send(
@@ -601,7 +554,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
-            yield* inputEnded(key);
+            yield* agentInput.ended(key);
             const session = message.result?.structuredContent?.session;
             if (request.method === "tools/call" && typeof session === "string")
               sessions.add(session);
@@ -978,7 +931,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) {
       outstanding.delete(cancelled);
-      yield* inputEnded(cancelled);
+      yield* agentInput.ended(cancelled);
     }
     const kinds =
       isRequest && message?.method === "tools/call"
@@ -988,11 +941,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           )
         : [];
     if (isRequest && kinds.length > 0) {
-      yield* inputStarted(JSON.stringify(id), kinds);
+      yield* agentInput.started(JSON.stringify(id), kinds);
       // The start report waits on the server; a pause or end meanwhile must not let the call
       // reach the child that replaced the one it was admitted under.
       if (!stillCurrent()) {
-        yield* inputEnded(JSON.stringify(id));
+        yield* agentInput.ended(JSON.stringify(id));
         return yield* options.output(notSent(id));
       }
     }
