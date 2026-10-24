@@ -14,15 +14,27 @@ import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUseStatusChanges from "./ComputerUseStatusChanges.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
-/** The kill switch: ends every control, then every approved admission, so no later turn picks the screen up. */
+/**
+ * The kill switch: ends every control, then every approved admission, so no later turn picks the
+ * screen up with them. failed counts admissions it could not end, or a failure to read them, so
+ * callers say so instead of reporting a stop that did not happen.
+ */
 export const stopAllComputerUse = Effect.fn("ComputerUse.stopAll")(function* (
   leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>,
   handoffs: Handoffs.Handoffs["Service"],
   sessionId: AuthSessionId,
 ) {
-  if (Option.isNone(leases)) return { stopped: 0 };
+  if (Option.isNone(leases)) return { stopped: 0, failed: 0 };
   const stopped = new Set(yield* leases.value.stopAll);
-  const grants = yield* leases.value.grants.pipe(Effect.orElseSucceed(() => []));
+  let failed = 0;
+  const grants = yield* leases.value.grants.pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("Kill switch could not read computer use admissions", { cause }).pipe(
+        Effect.andThen(Effect.sync(() => void (failed += 1))),
+        Effect.as([]),
+      ),
+    ),
+  );
   for (const grant of grants) {
     yield* handoffs
       .respond(
@@ -35,11 +47,11 @@ export const stopAllComputerUse = Effect.fn("ComputerUse.stopAll")(function* (
           Effect.logWarning("Kill switch could not end a computer use admission", {
             handoffId: grant.handoffId,
             cause,
-          }),
+          }).pipe(Effect.andThen(Effect.sync(() => void (failed += 1)))),
         ),
       );
   }
-  return { stopped: stopped.size };
+  return { stopped: stopped.size, failed };
 });
 
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
@@ -64,7 +76,9 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
         ? Effect.succeed({ stopped: false })
         : leases.value.stop(input.threadId).pipe(Effect.map((stopped) => ({ stopped }))),
     [WS_METHODS.computerUseStopAll]: (_input: {}) =>
-      stopAllComputerUse(leases, handoffs, sessionId),
+      stopAllComputerUse(leases, handoffs, sessionId).pipe(
+        Effect.map(({ stopped }) => ({ stopped })),
+      ),
     [WS_METHODS.computerUseResume]: (_input: {}) =>
       Option.isNone(leases) ? Effect.succeed({}) : leases.value.resume.pipe(Effect.as({})),
   } as const;

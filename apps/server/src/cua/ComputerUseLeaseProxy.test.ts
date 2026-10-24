@@ -602,6 +602,67 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect(
+    "reports a person's input once, and never the agent's own input during or just after its call",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ humanInput: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        // The click's own events, while it runs and as they surface after its answer.
+        yield* h.hid("pointer");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.nextToProvider;
+        yield* h.hid("pointer");
+        yield* TestClock.adjust(1_000);
+        // Reported a second late, but from the click's moment.
+        yield* h.hid("pointer", 800);
+        // A person's key well after the click: the first thing that reaches the server.
+        yield* h.hid("keyboard");
+        assert.equal(yield* h.person, "keyboard");
+      }),
+  );
+
+  it.effect("a report the server did not take is offered again with the next event", () =>
+    Effect.gen(function* () {
+      let accepted = false;
+      const h = yield* harness({ humanInput: true, acceptHuman: () => accepted });
+      yield* h.push(active());
+      yield* h.hid("keyboard");
+      assert.equal(yield* h.person, "keyboard");
+      accepted = true;
+      yield* h.hid("pointer");
+      assert.equal(yield* h.person, "pointer");
+    }),
+  );
+
+  it.effect("tells the server when each call that can post input starts and ends", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      yield* h.nextToDriver;
+      yield* h.send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      assert.equal(yield* h.agentCall, "start 2");
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      yield* h.nextToProvider;
+      assert.equal(yield* h.agentCall, "end 2");
+    }),
+  );
+
+  it.effect("a call that only reads never hides a person's input", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ humanInput: true });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.hid("pointer");
+      assert.equal(yield* h.person, "pointer");
+    }),
+  );
+
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
     Effect.gen(function* () {
       const h = yield* harness();
