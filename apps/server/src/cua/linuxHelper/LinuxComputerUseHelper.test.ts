@@ -362,7 +362,14 @@ describe("Linux computer use helper conformance", () => {
   it("a focused password field pauses everything: no tree, no screenshot, actions refused", async () => {
     const helper = await connect({ focus: { known: true, secure: true } });
     const seen = await helper.observe();
-    expect(seen.observation).toMatchObject({ privateMode: true, kind: "full", elements: [] });
+    expect(seen.observation).toMatchObject({
+      privateMode: true,
+      kind: "full",
+      complete: false,
+      elements: [],
+    });
+    expect(seen.observation).not.toHaveProperty("focused");
+    expect(seen.observation).not.toHaveProperty("screenshot");
     expect(seen.image).toBeUndefined();
     const result = await helper.act({ action: "pressKey", key: "a" }, seen.observation);
     expect(result).toMatchObject({ outcome: "refused", reason: "privateMode" });
@@ -401,6 +408,16 @@ describe("Linux computer use helper conformance", () => {
     );
     expect(result).toMatchObject({ outcome: "refused", reason: "backgroundUnavailable" });
     expect(isActionResult(result)).toBe(true);
+    await helper.close();
+  });
+
+  it("a printable key outside the BMP reaches the driver as one key", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    const result = await helper.act({ action: "pressKey", key: "😀" }, first.observation);
+    // The fixture driver has no keyboard device, so the key is refused after reaching it.
+    expect(result).toMatchObject({ outcome: "refused", reason: "backgroundUnavailable" });
+    expect(helper.driver.state.sent).toEqual(["press_key"]);
     await helper.close();
   });
 

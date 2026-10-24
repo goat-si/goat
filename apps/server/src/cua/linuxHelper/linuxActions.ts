@@ -71,7 +71,8 @@ const NAMED_KEYS: Readonly<Record<string, string>> = {
 };
 
 const driverKeyName = (key: ComputerUseKey): string | undefined =>
-  key.length === 1 ? key : NAMED_KEYS[key];
+  // A printable key is one code point, which may be two UTF-16 units outside the BMP.
+  [...key].length === 1 ? key : NAMED_KEYS[key];
 
 const isSecureRole = (role: string | undefined) => role === "password text";
 
