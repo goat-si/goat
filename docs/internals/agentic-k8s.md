@@ -71,7 +71,7 @@ type FleetGoal = {
     // Who applied the goal. Actions run with this principal's authority, never more.
     kind: "thread" | "mcp_client";
     threadId: ThreadId | null;
-    mcpOwner: string | null; // MCP request namespace, as LaunchWatch.owner
+    mcpOwner: string | null; // "client:<auth session id>" for an outside MCP client owner
     runtimeModeCeiling: RuntimeMode; // captured at apply, lowered on update, never raised by the controller
   };
   spec: {
@@ -346,12 +346,22 @@ differences a maintainer would otherwise trip on:
   paused goal does not resume.
 - An attempt replaced after `LAUNCH_GRACE_MS` is not kept as its own record, so a late thread from
   it is not found or interrupted by the goal. Fencing of stale attempts arrives with self-healing.
-- Owner authority is re-read right before each action, but not inside the claim transaction, so a
-  mode change in that short window is honoured from the next action on.
+- Owner authority and the stored goal are re-read after each action's claim and once more as the
+  last step before its command is handed to the orchestrator (`fleet/goals/GoalAuthority.ts`); a
+  launch asks right before the thread is created and right before its first message
+  (`orchestration-v2/goat/LaunchConfirm.ts`). No check shares SessionStore's lock, so a revocation
+  or mode change that lands during that one dispatch call is honoured from the next action on. A
+  launch whose first message is refused after its thread exists ends that attempt: the thread got no
+  worktree, which preparation creates only after the first message.
 - `limits.maxTokens` is refused unless null; nothing counts tokens yet.
-- Only thread owners are accepted; `owner.kind: "mcp_client"` is in the contract but refused
-  (#493). Owners in plan mode are refused because the remote and dispatch paths carry no plan
-  ceiling.
+- An outside MCP client owns its goal by its auth session id alone (#493): the goal keeps no token
+  and no request, and `auth/McpClientAuthority.ts` reads the session's live grant from SessionStore
+  every time the goal acts, so a restart rebuilds it and a revoked, expired, unknown or
+  under-scoped (no `orchestration:operate`) session stops the goal. Its runtime ceiling lives only
+  in the signed token and never changes for a session id, so the goal keeps the ceiling captured at
+  apply; the client's current goatclaw profile can still lower it. Outside clients reach only their
+  own goals, whatever their access. Owners in plan mode are refused because the remote and dispatch
+  paths carry no plan ceiling.
 
 ## Self-healing
 

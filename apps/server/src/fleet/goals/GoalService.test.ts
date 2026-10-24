@@ -2,6 +2,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerSettings from "../../serverSettings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  AuthSessionId,
   EnvironmentId,
   type FleetGoalSpec,
   type GoatGoalApplyInput,
@@ -15,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
+import * as McpClientAuthority from "../../auth/McpClientAuthority.ts";
 import * as ServerConfig from "../../config.ts";
 import type { McpInvocationScope } from "../../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
@@ -37,8 +39,25 @@ const modes = new Map<
   ["thread:admin", { runtimeMode: "full-access", interactionMode: "default" }],
 ]);
 
+/** Client sessions that are live and control threads; any other id reads as revoked. */
+const liveClients = new Set(["client", "client:second"]);
+
 const servicesFor = (profile?: string) =>
   goalServiceLayer.pipe(
+    Layer.provide(
+      Layer.succeed(McpClientAuthority.McpClientAuthority, {
+        load: (sessionId) =>
+          Effect.succeed(
+            liveClients.has(sessionId)
+              ? {
+                  sessionId: AuthSessionId.make(sessionId),
+                  grantedScopes: ["orchestration:operate" as const],
+                  reauthorize: () => Effect.void,
+                }
+              : { unavailable: "The MCP client session was revoked or has expired." },
+          ),
+      }),
+    ),
     Layer.provide(
       ServerSettings.layerTest({
         goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
@@ -86,6 +105,15 @@ const scopeOf = (threadId: string | null): McpInvocationScope => ({
     threadId === null ? { sessionId: "client", label: "bot", access: "full-access" } : undefined,
 });
 
+const clientScope = (
+  sessionId: string,
+  access: "read-only" | RuntimeMode = "full-access",
+): McpInvocationScope => ({
+  ...scopeOf(null),
+  requestNamespace: "client:" + sessionId,
+  client: { sessionId, label: "bot", access },
+});
+
 const input = (
   overrides: Partial<GoatGoalApplyInput> = {},
   spec: Partial<FleetGoalSpec> = {},
@@ -97,6 +125,8 @@ const input = (
 
 const apply = (threadId: string | null, value: GoatGoalApplyInput) =>
   GoalService.pipe(Effect.flatMap((goals) => goals.apply(scopeOf(threadId), value)));
+const applyAs = (scope: McpInvocationScope, value: GoatGoalApplyInput) =>
+  GoalService.pipe(Effect.flatMap((goals) => goals.apply(scope, value)));
 const codeOf = <A, R>(effect: Effect.Effect<A, { readonly code: string }, R>) =>
   effect.pipe(
     Effect.flip,
@@ -144,7 +174,10 @@ describe("GoalService", () => {
 
   it.effect("never lets a goal act above the thread that declares it", () =>
     Effect.gen(function* () {
-      expect(yield* codeOf(apply(null, input()))).toBe("thread_credential_required");
+      // An in-process call with neither a thread nor a client has no one for the goal to act as.
+      expect(yield* codeOf(applyAs({ ...scopeOf(null), client: undefined }, input()))).toBe(
+        "thread_credential_required",
+      );
       expect(yield* codeOf(apply("thread:planner", input()))).toBe(
         "interaction_mode_escalation_denied",
       );
@@ -243,6 +276,76 @@ describe("GoalService", () => {
         expect(yield* sql`SELECT owner_key FROM fleet_replicas`).toEqual([]);
         expect(yield* codeOf(goals.get(scopeOf("thread:owner"), mine.goal.id))).toBe("not_found");
       }).pipe(Effect.provide(services)),
+  );
+});
+
+describe("GoalService with an outside client owner (#493)", () => {
+  it.effect("records the client session as owner and keeps its goals to that client", () =>
+    Effect.gen(function* () {
+      const goals = yield* GoalService;
+      const bot = clientScope("client");
+      const created = yield* applyAs(bot, input({ clientRequestId: "r1" }));
+      expect(created.goal.owner).toEqual({
+        kind: "mcp_client",
+        threadId: null,
+        mcpOwner: "client:client",
+        runtimeModeCeiling: "full-access",
+      });
+      const id = created.goal.id;
+      // A retried create returns the same goal; a request key is the client's own.
+      expect((yield* applyAs(bot, input({ clientRequestId: "r1" }))).goal.id).toBe(id);
+      expect(
+        (yield* applyAs(clientScope("client:second"), input({ clientRequestId: "r1" }))).goal.id,
+      ).not.toBe(id);
+      expect(yield* applyAs(bot, input({ id, title: "Ship v2" }))).toMatchObject({
+        changed: true,
+        goal: { generation: 2 },
+      });
+      expect((yield* goals.get(bot, id)).goal.title).toBe("Ship v2");
+      expect((yield* goals.list(bot, {})).goals.map((goal) => goal.id)).toEqual([id]);
+      expect(yield* goals.setPaused(bot, id, true)).toMatchObject({ spec: { paused: true } });
+      expect(yield* goals.setPaused(bot, id, false)).toMatchObject({ spec: { paused: false } });
+
+      // Another client, with full access too, reaches none of it; the goal reads as missing.
+      const other = clientScope("client:second");
+      expect(yield* codeOf(goals.get(other, id))).toBe("not_found");
+      expect((yield* goals.list(other, {})).goals.map((goal) => goal.id)).not.toContain(id);
+      expect(yield* codeOf(goals.setPaused(other, id, true))).toBe("not_found");
+      expect(yield* codeOf(goals.remove(other, { id, force: true }))).toBe("not_found");
+      expect(yield* codeOf(applyAs(other, input({ id, title: "Mine now" })))).toBe("not_found");
+      // Nor does the client reach a thread's goal.
+      const threads = yield* apply("thread:owner", input());
+      expect(yield* codeOf(goals.get(bot, threads.goal.id))).toBe("not_found");
+      expect(yield* codeOf(goals.setPaused(bot, threads.goal.id, true))).toBe("not_found");
+      expect((yield* goals.list(bot, {})).goals.map((goal) => goal.id)).toEqual([id]);
+      // A thread without full access may not manage the client's goal; a full-access one may.
+      expect(yield* codeOf(goals.setPaused(scopeOf("thread:careful"), id, true))).toBe(
+        "capability_denied",
+      );
+      expect(yield* goals.setPaused(scopeOf("thread:admin"), id, true)).toMatchObject({
+        spec: { paused: true },
+      });
+      expect(yield* goals.remove(bot, { id })).toMatchObject({ deleted: false });
+      expect(yield* goals.remove(bot, { id, force: true })).toMatchObject({ deleted: true });
+      expect(yield* codeOf(goals.get(bot, id))).toBe("not_found");
+    }).pipe(Effect.provide(services)),
+  );
+
+  it.effect("caps the goal at the client's approved access and refuses a lapsed session", () =>
+    Effect.gen(function* () {
+      const careful = clientScope("client", "auto-accept-edits");
+      const created = yield* applyAs(careful, input());
+      expect(created.goal.owner.runtimeModeCeiling).toBe("auto-accept-edits");
+      expect(
+        yield* codeOf(
+          applyAs(careful, input({}, { workers: { ...testSpec().workers, runtimeMode: "auto" } })),
+        ),
+      ).toBe("runtime_mode_escalation_denied");
+      // The goal is checked later by its session id alone, so that session must be live now.
+      expect(yield* codeOf(applyAs(clientScope("client:revoked"), input()))).toBe(
+        "capability_denied",
+      );
+    }).pipe(Effect.provide(services)),
   );
 });
 

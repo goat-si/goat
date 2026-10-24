@@ -1,10 +1,12 @@
 /**
- * How the goal controller touches threads: as the goal's owner thread, through the services
- * goat_thread_launch, goat_ssh_thread_launch, goat_thread_status and goat_thread_read use, or
- * through the same orchestration commands those tools dispatch. Nothing here grants anything the
- * owner lacks: each action is capped by the goal's runtime-mode ceiling and by the owner's current
- * mode, whichever is lower, needs the owner in default interaction mode, and checks the target
- * thread's modes again under the orchestrator's lock (DispatchModeLimit).
+ * How the goal controller touches threads: as the goal's owner (its GOAT thread, or the outside
+ * MCP client session that declared it), through the services goat_thread_launch,
+ * goat_ssh_thread_launch, goat_thread_status and goat_thread_read use, or through the same
+ * orchestration commands those tools dispatch. Nothing here grants anything the owner lacks: each
+ * action is capped by the goal's runtime-mode ceiling and by the owner's current mode, whichever is
+ * lower, needs the owner in default interaction mode, and checks the target thread's modes again
+ * under the orchestrator's lock (DispatchModeLimit). Each action also runs the caller's `confirm`
+ * as its last step before a command is handed to the orchestrator.
  */
 import {
   CommandId,
@@ -20,8 +22,12 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as McpClientAuthority from "../../auth/McpClientAuthority.ts";
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostThreadsMcpService from "../../mcp/HostThreadsMcpService.ts";
 import * as LaunchWatchService from "../../mcp/LaunchWatchService.ts";
@@ -35,6 +41,22 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
 import type { PullRequestObservation } from "./goalPlan.ts";
 import type { WorkerRecord } from "./GoalStore.ts";
+
+/**
+ * The owner may no longer take this action: its authority, mode or the goal changed after the
+ * action was planned. Nothing was handed to the orchestrator for the step that was refused.
+ */
+export class GoalOwnerAuthorityLost extends Schema.TaggedError<GoalOwnerAuthorityLost>()(
+  "GoalOwnerAuthorityLost",
+  {
+    message: Schema.String,
+    /** The goal itself moved on (a new generation or a deletion): replan, nothing is blocked. */
+    goalChanged: Schema.Boolean,
+  },
+) {}
+
+/** The controller's last check before an action's command is handed to the orchestrator. */
+export type ActionConfirm = Effect.Effect<void, GoalOwnerAuthorityLost>;
 
 export interface OwnerAccess {
   readonly scope: McpInvocationScope;
@@ -111,7 +133,8 @@ export class GoalWorkerRuntime extends Context.Service<
     readonly launch: (
       access: OwnerAccess,
       request: LaunchRequest,
-    ) => Effect.Effect<Launched, OrchestratorMcpFailure>;
+      confirm: ActionConfirm,
+    ) => Effect.Effect<Launched, OrchestratorMcpFailure | GoalOwnerAuthorityLost>;
     /** Queues a message; with a model selection, the run continues on that model. */
     readonly followUp: (
       access: OwnerAccess,
@@ -119,13 +142,15 @@ export class GoalWorkerRuntime extends Context.Service<
       worker: WorkerRecord,
       message: string,
       actionId: string,
+      confirm: ActionConfirm,
       modelSelection?: ModelSelection,
-    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    ) => Effect.Effect<void, OrchestratorMcpFailure | GoalOwnerAuthorityLost>;
     readonly interrupt: (
       access: OwnerAccess,
       worker: WorkerRecord,
       actionId: string,
-    ) => Effect.Effect<void, OrchestratorMcpFailure>;
+      confirm: ActionConfirm,
+    ) => Effect.Effect<void, OrchestratorMcpFailure | GoalOwnerAuthorityLost>;
   }
 >()("goat/fleet/goals/GoalWorkerRuntime") {}
 
@@ -146,6 +171,10 @@ const RANK: Record<RuntimeMode, number> = {
   auto: 2,
   "full-access": 3,
 };
+/** Whether `mode` allows at least what `planned` does. */
+export const runtimeModeCovers = (mode: RuntimeMode, planned: RuntimeMode) =>
+  RANK[mode] >= RANK[planned];
+
 /**
  * The mode a worker action may use: the lowest of the goal's worker mode, the goal's stored
  * ceiling and the owner's current mode (the last two are already folded into access).
@@ -188,13 +217,54 @@ const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const clients = yield* McpClientAuthority.McpClientAuthority;
+  const permissions = yield* Profiles.PermissionProfiles;
+
+  /**
+   * An outside client's goal acts as that client: its session id is all that is stored, and its
+   * live grant and current goatclaw profile are read again here every time.
+   */
+  const clientOwner = (goal: FleetGoal) =>
+    Effect.gen(function* () {
+      const mcpOwner = goal.owner.mcpOwner ?? "";
+      const grant = yield* clients.load(
+        mcpOwner.startsWith("client:") ? mcpOwner.slice("client:".length) : "",
+      );
+      if ("unavailable" in grant) return { unavailable: grant.unavailable };
+      const descriptor = yield* environment.getDescriptor;
+      const client = {
+        sessionId: grant.sessionId,
+        label: "Fleet goal " + goal.id,
+        access: goal.owner.runtimeModeCeiling,
+        approvals: false,
+      };
+      const unresolved: McpInvocationScope = {
+        environmentId: descriptor.environmentId,
+        capabilities: new Set(["orchestration"] as const),
+        issuedAt: yield* Clock.currentTimeMillis,
+        requestNamespace: mcpOwner,
+        grantedScopes: grant.grantedScopes,
+        reauthorize: grant.reauthorize,
+        thread: undefined,
+        client,
+      };
+      // goatclaw can lower an outside client's mode after the goal was applied.
+      const profiled = yield* permissions
+        .resolve(unresolved, goal.owner.runtimeModeCeiling)
+        .pipe(Effect.result);
+      if (profiled._tag === "Failure") return { unavailable: profiled.failure.message };
+      const runtimeMode = profiled.success.runtimeMode;
+      return {
+        scope: { ...unresolved, client: { ...client, access: runtimeMode } },
+        runtimeMode,
+        canReachHosts: runtimeMode === "full-access",
+      } satisfies OwnerAccess;
+    });
 
   const owner: GoalWorkerRuntime["Service"]["owner"] = (goal) =>
     Effect.gen(function* () {
-      if (goal.owner.kind !== "thread" || goal.owner.threadId === null)
-        return {
-          unavailable: "Goals owned by an outside MCP client are not supported yet (#493).",
-        };
+      if (goal.owner.kind === "mcp_client") return yield* clientOwner(goal);
+      if (goal.owner.threadId === null) return { unavailable: "The goal names no owner thread." };
       const shell = yield* threads
         .getThreadShell(goal.owner.threadId)
         .pipe(Effect.orElseSucceed(() => undefined));
@@ -228,6 +298,10 @@ const make = Effect.gen(function* () {
       } satisfies OwnerAccess;
     });
 
+  /** A thread owner sends as itself; an outside client has no thread to send as. */
+  const senderOf = (access: OwnerAccess) =>
+    access.scope.thread === undefined ? {} : { senderThreadId: access.scope.thread.threadId };
+
   const asOwner = <A, E, R>(access: OwnerAccess, effect: Effect.Effect<A, E, R>) =>
     effect.pipe(Effect.provideService(McpInvocationContext.McpInvocationContext, access.scope));
 
@@ -248,7 +322,7 @@ const make = Effect.gen(function* () {
       yield* threads
         .assertReviewTaskSendAllowed({
           threadId,
-          senderThreadId: access.scope.thread!.threadId,
+          ...senderOf(access),
           createdBy: "agent",
         })
         .pipe(Effect.mapError(() => notSendable("This review task does not take messages.")));
@@ -411,7 +485,10 @@ const make = Effect.gen(function* () {
           ),
         );
       // A remote launch has no id of ours on the remote, so the watch it registered is the record.
-      return watches.list(access.scope.thread!.threadId).pipe(
+      // Only a thread launches remotely; an outside client's goal never had remote workers.
+      const launcher = access.scope.thread;
+      if (launcher === undefined) return remoteDisabled();
+      return watches.list(launcher.threadId).pipe(
         Effect.mapError(
           () =>
             new OrchestratorMcpFailure({
@@ -428,7 +505,7 @@ const make = Effect.gen(function* () {
         }),
       );
     },
-    launch: (access, request) =>
+    launch: (access, request, confirm) =>
       Effect.gen(function* () {
         const { goal } = request;
         const runtimeMode = effectiveRuntimeMode(access, goal);
@@ -440,6 +517,13 @@ const make = Effect.gen(function* () {
               code: "invalid_request",
               message: "Set spec.project.projectId to launch workers on this machine.",
             });
+          // ThreadLaunchService asks this right before it creates the thread and right before the
+          // first message; a refusal there is remembered so it reads as lost authority here.
+          const refused = yield* Ref.make<GoalOwnerAuthorityLost | undefined>(undefined);
+          const stillAllowed = confirm.pipe(
+            Effect.as(true),
+            Effect.catch((lost) => Ref.set(refused, lost).pipe(Effect.as(false))),
+          );
           const launched = yield* asOwner(
             access,
             launches.launch(
@@ -461,7 +545,13 @@ const make = Effect.gen(function* () {
                 notifyOnCompletion: false,
               },
               { runtimeMode, interactionMode: "default" },
-              { threadId: workerThreadId(request.actionId) },
+              { threadId: workerThreadId(request.actionId), confirm: stillAllowed },
+            ),
+          ).pipe(
+            Effect.catch((failure) =>
+              Effect.flatMap(Ref.get(refused), (lost) =>
+                Effect.fail<OrchestratorMcpFailure | GoalOwnerAuthorityLost>(lost ?? failure),
+              ),
             ),
           );
           return { host: null, threadId: launched.threadId, runId: launched.runId };
@@ -471,13 +561,14 @@ const make = Effect.gen(function* () {
         // remote launch has no durable action→thread record yet.
         return yield* remoteDisabled();
       }),
-    followUp: (access, goal, worker, message, actionId, modelSelection) => {
+    followUp: (access, goal, worker, message, actionId, confirm, modelSelection) => {
       if (worker.threadId === null) return Effect.void;
       const runtimeMode = effectiveRuntimeMode(access, goal);
       if (worker.host !== null) return remoteDisabled();
       // The goal acts after its owner's turn ends, when goat_thread_send would refuse an idle
       // caller. The action id is the command id, so a repeated pass delivers once.
       return localTarget(access, worker, runtimeMode).pipe(
+        Effect.andThen(confirm),
         Effect.andThen(
           underLimit(
             runtimeMode,
@@ -488,7 +579,7 @@ const make = Effect.gen(function* () {
               messageId: MessageId.make(actionId),
               text: message,
               attachments: [],
-              senderThreadId: access.scope.thread!.threadId,
+              ...senderOf(access),
               dispatchMode: { type: "queue_after_active" },
               ...(modelSelection === undefined ? {} : { modelSelection }),
               createdBy: "agent",
@@ -499,7 +590,7 @@ const make = Effect.gen(function* () {
         Effect.asVoid,
       );
     },
-    interrupt: (access, worker, actionId) =>
+    interrupt: (access, worker, actionId, confirm) =>
       worker.threadId === null
         ? Effect.void
         : worker.host === null
@@ -508,25 +599,31 @@ const make = Effect.gen(function* () {
               Effect.flatMap((shell) =>
                 shell.activeRunId === null
                   ? Effect.void
-                  : underLimit(
-                      access.runtimeMode,
-                      threads.dispatch({
-                        type: "run.interrupt",
-                        commandId: CommandId.make(actionId),
-                        threadId: shell.id,
-                        runId: shell.activeRunId,
-                        reason: "The fleet goal no longer needs this worker.",
-                      }),
+                  : Effect.andThen(
+                      confirm,
+                      underLimit(
+                        access.runtimeMode,
+                        threads.dispatch({
+                          type: "run.interrupt",
+                          commandId: CommandId.make(actionId),
+                          threadId: shell.id,
+                          runId: shell.activeRunId,
+                          reason: "The fleet goal no longer needs this worker.",
+                        }),
+                      ),
                     ),
               ),
               Effect.asVoid,
             )
-          : asOwner(
-              access,
-              hostThreads.interruptThread(access.scope, {
-                threadId: worker.threadId,
-                host: worker.host,
-              }),
+          : Effect.andThen(
+              confirm,
+              asOwner(
+                access,
+                hostThreads.interruptThread(access.scope, {
+                  threadId: worker.threadId,
+                  host: worker.host,
+                }),
+              ),
             ).pipe(Effect.asVoid),
   });
 });
