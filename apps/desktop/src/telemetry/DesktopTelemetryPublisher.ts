@@ -3,6 +3,8 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
+  type DesktopCuaFrame,
+  type DesktopCuaFrames,
   type DesktopCuaReadinessReport,
   type DesktopCuaHumanInputReport,
   type DesktopCuaPrivateModeReport,
@@ -77,6 +79,13 @@ export class DesktopTelemetryPublisher extends Context.Service<
      * then each change. Losing that server reads as false.
      */
     readonly cuaWatch: Stream.Stream<boolean>;
+    /**
+     * The windows this host's own server wants captured (#1370): the current request, then each
+     * newer one. Losing that server reads as a request for none.
+     */
+    readonly cuaFrames: Stream.Stream<DesktopCuaFrames>;
+    /** A frame or a no-picture answer, for this host's own server only; never replayed. */
+    readonly publishCuaFrame: (frame: DesktopCuaFrame) => Effect.Effect<void>;
     readonly publishCuaReport: (report: DesktopCuaDriverReport) => Effect.Effect<void>;
     /**
      * The helper's readiness, for this host's own server only. The latest report goes to every
@@ -226,6 +235,16 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       ),
       Effect.asVoid,
     );
+  const noFrames: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
+  const cuaFramesRequest = yield* Ref.make(noFrames);
+  const cuaFramesChanges = yield* PubSub.sliding<DesktopCuaFrames>(1);
+  const setCuaFrames = (request: DesktopCuaFrames) =>
+    Ref.set(cuaFramesRequest, request).pipe(
+      Effect.andThen(PubSub.publish(cuaFramesChanges, request)),
+      Effect.asVoid,
+    );
+  // Only the newest frame matters; a server that falls behind skips older ones.
+  const cuaFramesOut = yield* PubSub.sliding<DesktopCuaFrame>(4);
   const detachCuaSource = Effect.fn("DesktopTelemetryPublisher.detachCuaSource")(function* (
     source: CuaSource,
   ) {
@@ -233,6 +252,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     cuaSource = undefined;
     // No server, no agent controlling this host through it.
     yield* setCuaWatching(false);
+    // No server, nobody watching a window either.
+    yield* setCuaFrames(noFrames);
     if (source.requestId)
       yield* Queue.offer(cuaRequestQueue, {
         version: 1,
@@ -388,9 +409,6 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     message,
   ) => {
     switch (message.type) {
-      // This desktop never reports frames in its readiness, so the server's gate asks it for none.
-      case "cuaFrames":
-        return Effect.void;
       case "cuaDriverRequest":
         return Effect.suspend(() => {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
@@ -432,6 +450,16 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           if (source.watchSeq !== undefined && message.seq < source.watchSeq) return Effect.void;
           source.watchSeq = message.seq;
           return setCuaWatching(message.active);
+        });
+      case "cuaFrames":
+        return Effect.suspend(() => {
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
+          return Ref.get(cuaFramesRequest).pipe(
+            // A request older than the one in force arrived late.
+            Effect.flatMap((current) =>
+              message.seq < current.seq ? Effect.void : setCuaFrames(message),
+            ),
+          );
         });
     }
   };
@@ -531,7 +559,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           }),
           Stream.fromSubscription(safetySubscription),
         ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
-        return Stream.mergeAll([encoded, privateReports, readiness, safety], {
+        const framesSubscription = yield* PubSub.subscribe(cuaFramesOut);
+        const frames = Stream.fromSubscription(framesSubscription).pipe(
+          Stream.filter(() => cuaSource === source),
+          Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
+        );
+        return Stream.mergeAll([encoded, privateReports, readiness, safety, frames], {
           concurrency: "unbounded",
         });
       }),
@@ -553,6 +586,16 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         );
       }),
     ),
+    cuaFrames: Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(cuaFramesChanges);
+        return Stream.concat(
+          Stream.make(yield* Ref.get(cuaFramesRequest)),
+          Stream.fromSubscription(subscription),
+        );
+      }),
+    ),
+    publishCuaFrame: (frame) => PubSub.publish(cuaFramesOut, frame).pipe(Effect.asVoid),
     publishCuaReport: (report) =>
       Effect.suspend(() =>
         cuaSource && cuaSource.requestId === report.requestId
