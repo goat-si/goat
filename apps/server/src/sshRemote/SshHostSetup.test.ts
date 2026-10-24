@@ -2,6 +2,8 @@ import * as PermissionSettings from "../serverSettings.ts";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- expected paths mirror the host's native join.
+import * as NodePath from "node:path";
 import { expect, it, vi } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
@@ -59,6 +61,10 @@ import {
   preparePolicy,
 } from "./testkit/SshHostPrepareFixture.ts";
 const encodeSshPreflightReport = Schema.encodeEffect(SshPreflightReport);
+// Setup writes and compares the host's native paths, and Windows OpenSSH's `ssh -G` echoes them
+// unchanged, so expected paths and canned `ssh -G` output use the same join.
+const managedSshFile = (home: string, file: string) =>
+  NodePath.join(home, ".ssh", "goat-hosts", file);
 
 it.effect.each([undefined, "when_idle"] as const)(
   "defaults to when_idle after live authorization (mode=%s)",
@@ -425,7 +431,7 @@ it.effect.each(
       const operation = { operationId: "prepare-one", generation: 1, stage: "runtime" as const };
       const pin = "box ssh-ed25519 AAAA\n";
       const config = "Host box\n HostName box\n User deploy\n Port 2222\n";
-      const resolved = `hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile ${home}/.ssh/goat-hosts/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`;
+      const resolved = `hostname box\nuser deploy\nport 2222\nhostkeyalias box\nuserknownhostsfile ${managedSshFile(home, "box.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`;
       const key = vi
         .spyOn(HostKey, "probeHostKey")
         .mockReturnValue(
@@ -925,8 +931,8 @@ it.effect(
       yield* Deferred.await(fenced);
       expect(yield* Deferred.isDone(upload)).toBe(false);
       expect(removed).toEqual([
-        "/fixture-forget/.ssh/goat-hosts/box.conf",
-        "/fixture-forget/.ssh/goat-hosts/box.known_hosts",
+        managedSshFile("/fixture-forget", "box.conf"),
+        managedSshFile("/fixture-forget", "box.known_hosts"),
       ]);
       latePhase?.({ target, phase: "starting" });
       yield* Deferred.succeed(upload, undefined);
@@ -1067,7 +1073,7 @@ it.effect.each([
                       )!;
                       const file = destination.slice('UserKnownHostsFile="'.length, -1);
                       paths.push(file);
-                      expect(file).not.toBe(`${home}/.ssh/known_hosts`);
+                      expect(file).not.toBe(NodePath.join(home, ".ssh", "known_hosts"));
                       return processOutput("", stderr, 255);
                     }),
                 }),
@@ -1152,7 +1158,7 @@ it.effect(
               run: () =>
                 Effect.succeed(
                   processOutput(
-                    `hostname box\nuser root\nport 2222\nhostkeyalias box\nuserknownhostsfile ${directory}/box.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
+                    `hostname box\nuser root\nport 2222\nhostkeyalias box\nuserknownhostsfile ${managedSshFile(home, "box.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\n`,
                   ),
                 ),
             }),
@@ -1335,7 +1341,7 @@ it.effect.each(["pinned", "key_changed", "expired", "authorization_revoked"] as 
               run: () =>
                 Effect.succeed(
                   processOutput(
-                    `hostname build.example\nuser deploy\nport 22\nhostkeyalias build\nuserknownhostsfile ${home}/.ssh/goat-hosts/build.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
+                    `hostname build.example\nuser deploy\nport 22\nhostkeyalias build\nuserknownhostsfile ${managedSshFile(home, "build.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
                   ),
                 ),
             }),
@@ -1521,7 +1527,7 @@ it.effect("preflight normalizes typed destinations and rejects configured alias 
             .pipe(Effect.flip),
         ).toMatchObject({
           reason: "invalid_request",
-          message: expect.stringContaining(`${home}/.ssh/config`),
+          message: expect.stringContaining(NodePath.join(home, ".ssh", "config")),
         });
       }
     }).pipe(Effect.ensuring(Effect.sync(() => discover.mockRestore())));
@@ -1695,7 +1701,7 @@ it.effect.each([true, false])(
                 Effect.succeed(
                   args?.includes("-G")
                     ? processOutput(
-                        `hostname cursor-2\nuser ubuntu\nport 22\nhostkeyalias goat-cursor-2-e25449c9\nuserknownhostsfile ${home}/.ssh/goat-hosts/goat-cursor-2-e25449c9.known_hosts\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
+                        `hostname cursor-2\nuser ubuntu\nport 22\nhostkeyalias goat-cursor-2-e25449c9\nuserknownhostsfile ${managedSshFile(home, "goat-cursor-2-e25449c9.known_hosts")}\nglobalknownhostsfile /dev/null\nstricthostkeychecking yes\nupdatehostkeys no\nhostkeyalgorithms ssh-ed25519\nidentityfile /fixture/key\nidentitiesonly yes\n`,
                       )
                     : processOutput("", stderr, 255),
                 ),
