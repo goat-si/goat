@@ -114,6 +114,8 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       ...(block === undefined ? {} : { "computerUse.missing": block.missing.join(",") }),
     });
     if (block === undefined) return none("unavailable", unattended);
+    // The session list shows the turn as waiting for the grant while it runs.
+    yield* leases.value.blocked(input.threadId, block);
     return { ...none("not-granted", unattended), block };
   }
   const x11Display =

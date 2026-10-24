@@ -115,16 +115,17 @@ export const CuaAgentBlock = Schema.Struct({
 });
 export type CuaAgentBlock = typeof CuaAgentBlock.Type;
 
-/** The sentence every surface shows for a block, naming the System Settings lists to use. */
-export const cuaAgentBlockMessage = (block: CuaAgentBlock): string => {
-  const lists = block.missing
+/** The System Settings lists a block names, as macOS titles them. */
+export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
+  block.missing
     .map((grant) =>
       grant === "accessibility" ? "Accessibility" : "Screen & System Audio Recording",
     )
     .join(" and ");
-  const app = block.holder === "helper" ? "GOAT Computer Use" : "GOAT";
-  return `Computer use cannot start: macOS has not allowed ${app} in ${lists}. A person turns it on in System Settings > Privacy & Security.`;
-};
+
+/** The sentence every surface shows for a block. */
+export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
+  `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({

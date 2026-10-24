@@ -40,6 +40,7 @@ const fakeLeases = (input: {
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
 }) => {
   const minted: Array<Option.Option<ComputerUseLeases.ComputerUseLease>> = [];
+  const blocked: Array<{ readonly threadId: string; readonly block: unknown }> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.die("unused"),
@@ -74,8 +75,10 @@ const fakeLeases = (input: {
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
     proxy: "proxy" in input ? input.proxy : proxy,
+    blocked: (threadId, block) => Effect.sync(() => void blocked.push({ threadId, block })),
+    blockedTurns: Effect.die("unused"),
   });
-  return { leases: Option.some(service), minted };
+  return { leases: Option.some(service), minted, blocked };
 };
 const interactiveControl = {
   controlId: "control:interactive",
@@ -312,12 +315,15 @@ describe("computerUseAttachment", () => {
             block,
           }),
         });
-        assert.deepEqual(yield* decide(driver), {
+        const leases = fakeLeases({});
+        assert.deepEqual(yield* decide(driver, { leases: leases.leases }), {
           _tag: "none",
           reason: "not-granted",
           block,
           blockUserConfig: false,
         });
+        // The session list shows the turn as waiting for the grant.
+        assert.deepEqual(leases.blocked, [{ threadId: "thread-cua", block }]);
       }),
   );
 

@@ -166,6 +166,37 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
+  it.effect(
+    "lists a turn the desktop blocked while it runs, until a driver starts for it or the turn ends (#1399)",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const sql = yield* SqlClient.SqlClient;
+        const blocked = ThreadId.make("thread-blocked");
+        yield* run(blocked, "run-blocked-1", 1, "running");
+        yield* leases.blocked(blocked, block);
+        assert.deepEqual(yield* leases.blockedTurns, [{ threadId: blocked, block }]);
+        // Still running: the turn stays listed.
+        yield* leases.settle;
+        assert.lengthOf(yield* leases.blockedTurns, 1);
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run-blocked-1'`;
+        yield* leases.settle;
+        assert.deepEqual(yield* leases.blockedTurns, []);
+
+        // A later turn that gets a driver is no longer blocked.
+        const granted = ThreadId.make("thread-granted");
+        yield* leases.blocked(granted, block);
+        yield* leases.control(granted, Option.none());
+        assert.deepEqual(yield* leases.blockedTurns, []);
+      }),
+  );
+
   it.effect("ends every control when computer use is turned off", () =>
     Effect.gen(function* () {
       yield* runMigrations();
