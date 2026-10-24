@@ -19,6 +19,7 @@ describe("redactGoatCredentials", () => {
       JSON.stringify(JSON.stringify({ GOAT_ACP_MCP_AUTHORIZATION: `Bearer ${TOKEN}` })),
       `curl -H 'Authorization: Bearer ${TOKEN}' http://127.0.0.1:1234/mcp`,
       `GOAT_ACP_MCP_AUTHORIZATION=${TOKEN.slice(8)}`,
+      `GOAT_MCP_BEARER_TOKEN=${TOKEN}`,
     ];
     expect(TOKEN).toHaveLength(51);
     for (const dump of dumps) {

@@ -1,3 +1,5 @@
+import { legacyEnvName } from "@goat/contracts/legacyT3Names";
+
 /**
  * GOAT gives each agent a thread-scoped MCP bearer token in its shell environment
  * (GOAT_ACP_MCP_AUTHORIZATION, read by the goat CLI, the ACP bridge and the Computer Use lease
@@ -12,7 +14,14 @@ const TOKEN_CHAR = "[A-Za-z0-9_-]";
 // McpSessionRegistry mints an 8 character run tag plus a 43 character secret; older builds
 // minted the bare secret.
 const REGISTRY_TOKEN = String.raw`${TOKEN_CHAR}{43}(?:${TOKEN_CHAR}{8})?(?!${TOKEN_CHAR})`;
-const CREDENTIAL_NAME = "(?:GOAT|T3)_(?:ACP_MCP|CUA_LEASE)_AUTHORIZATION";
+// Every variable GOAT puts a thread's MCP credential in, with the spelling older builds read.
+const CREDENTIAL_NAMES: ReadonlyArray<string> = [
+  "GOAT_ACP_MCP_AUTHORIZATION",
+  "GOAT_MCP_AUTHORIZATION",
+  "GOAT_MCP_BEARER_TOKEN",
+  "GOAT_CUA_LEASE_AUTHORIZATION",
+].flatMap((name) => [name, legacyEnvName(name) ?? name]);
+const CREDENTIAL_NAME = `(?:${CREDENTIAL_NAMES.join("|")})`;
 // An env, export or JSON dump: the name, an optional quote (JSON-escaped too), = or :.
 const ASSIGNMENT = String.raw`\\?["']?[ \t]*[=:][ \t]*\\?["']?`;
 
@@ -21,7 +30,7 @@ const NAMED_VALUE = new RegExp(
   "g",
 );
 const BEARER_VALUE = new RegExp(String.raw`(?<![A-Za-z0-9])(Bearer\s+)${REGISTRY_TOKEN}`, "gi");
-const MAY_HOLD_CREDENTIAL = /bearer|_AUTHORIZATION/i;
+const MAY_HOLD_CREDENTIAL = /bearer|_AUTHORIZATION|_BEARER_TOKEN/i;
 
 /** Text with every GOAT MCP credential replaced by {@link REDACTED_CREDENTIAL}. */
 export function redactGoatCredentials(text: string): string {
@@ -65,17 +74,24 @@ function redactValue(value: unknown, depth: number): unknown {
   return next ?? value;
 }
 
-// A chunk boundary can split a credential: a prefix of a credential name or of "Bearer <token>",
-// or a complete name still waiting for its value.
-const PARTIAL_CREDENTIAL = new RegExp(
-  [
-    "(?:G(?:O(?:A(?:T)?)?)?|T3?)(?:_[A-Z_]*)?",
-    String.raw`B(?:e(?:a(?:r(?:e(?:r(?:\s+${TOKEN_CHAR}{0,50})?)?)?)?)?)?`,
-    `${CREDENTIAL_NAME}${ASSIGNMENT}`,
-  ]
-    .map((alternative) => `(?:${alternative})$`)
-    .join("|"),
+// A chunk boundary can split a credential: "Bearer " with part of a token, a complete name still
+// waiting for its value, or (below) a word that may grow into a name or "Bearer".
+const PARTIAL_VALUE = new RegExp(
+  String.raw`(?:(?<![A-Za-z0-9])Bearer\s+${TOKEN_CHAR}{0,50}|${CREDENTIAL_NAME}${ASSIGNMENT}(?:Bearer[ \t]*)?)$`,
+  "i",
 );
+const TRAILING_WORD = /[A-Za-z0-9_]+$/;
+
+function heldLength(text: string): number {
+  const value = PARTIAL_VALUE.exec(text);
+  if (value !== null) return value[0].length;
+  const word = TRAILING_WORD.exec(text)?.[0];
+  if (word === undefined) return 0;
+  const growsIntoCredential =
+    "bearer".startsWith(word.toLowerCase()) ||
+    CREDENTIAL_NAMES.some((name) => name.startsWith(word));
+  return growsIntoCredential ? word.length : 0;
+}
 
 /**
  * Redacts streamed output. emit is safe to show now; carry is held back and prefixed to the next
@@ -86,7 +102,7 @@ export function redactGoatCredentialChunk(
   chunk: string,
 ): { readonly emit: string; readonly carry: string } {
   const text = carry + chunk;
-  const held = PARTIAL_CREDENTIAL.exec(text)?.[0] ?? "";
+  const held = text.slice(text.length - heldLength(text));
   return {
     emit: redactGoatCredentials(text.slice(0, text.length - held.length)),
     carry: held,
