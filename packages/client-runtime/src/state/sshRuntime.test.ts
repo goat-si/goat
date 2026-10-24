@@ -87,7 +87,7 @@ describe("Desktop SSH runtime state", () => {
     );
   });
   it.each([
-    [undefined, "Installing GOAT runtime — first setup can take a few minutes"],
+    [undefined, "Installing GOAT runtime. First setup can take a few minutes"],
     [{ sentBytes: 0, totalBytes: 70 * 1024 * 1024 }, "Uploading GOAT runtime: 0 of 70 MB"],
     [
       { sentBytes: 23 * 1024 * 1024 + 512, totalBytes: 70 * 1024 * 1024 },
@@ -440,7 +440,7 @@ it.each(
 it.each([
   ["connecting", "Connecting to SSH host"],
   ["checking", "Checking GOAT runtime"],
-  ["uploading", "Installing GOAT runtime — first setup can take a few minutes"],
+  ["uploading", "Installing GOAT runtime. First setup can take a few minutes"],
   ["starting", "Starting GOAT"],
 ] as const)("uses honest source-neutral phase copy for %s", (phase, text) => {
   expect(sshRuntimePhaseText(phase)).toBe(text);

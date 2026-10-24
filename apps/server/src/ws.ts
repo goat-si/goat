@@ -104,6 +104,7 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationV2Command,
   type OrchestrationV2ShellSnapshot,
+  type ApplicationStoredEvent,
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
@@ -223,6 +224,8 @@ import {
   shellStreamItemFromThreadShell,
   shellStreamItemsFromInitialSnapshot,
   shellStreamItemsFromResumeSnapshot,
+  shouldPublishShellApplicationEvent,
+  subagentShellState,
   skipUnchangedThreadShells,
   toShellApplicationEvent,
   type ShellApplicationEvent,
@@ -1098,6 +1101,9 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const projects = yield* ProjectStore.ProjectStoreV2;
     const projectService = yield* ProjectService.ProjectService;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
+    let subagents = subagentShellState([], 0);
+    const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
+      shouldPublishShellApplicationEvent(stored, subagents.ids, subagents);
 
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
@@ -1124,6 +1130,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           latestSequence: applicationEvents.latestApplicationSequence,
         }),
       );
+      subagents = subagentShellState(base.threads, base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: { ...base, projects: enriched.projects } as OrchestrationV2ShellSnapshot,
@@ -1186,6 +1193,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
           applicationEvents.streamProjectedApplicationEvents({
             afterSequence,
             project: toShellApplicationEvent,
+            filter: filterSubagentTranscript,
           }),
         ),
       );
@@ -1276,16 +1284,21 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
         });
       }
 
+      const currentShell = yield* threadManagement.getShellSnapshot({ location: "active" });
+      subagents = subagentShellState(currentShell.threads, highWater);
+
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
       const replay = toShellStream(
-        applicationEvents.readApplicationEvents({
-          afterSequence: input.afterSequence,
-          throughSequence: highWater,
-          // A row a newer build wrote (e.g. after a downgrade) must not fail
-          // every shell resubscribe. The live tail below resumes from
-          // highWater, so a dropped row never hides later events.
-          skipUnknownEventTypes: true,
-        }),
+        applicationEvents
+          .readApplicationEvents({
+            afterSequence: input.afterSequence,
+            throughSequence: highWater,
+            // A row a newer build wrote (e.g. after a downgrade) must not fail
+            // every shell resubscribe. The live tail below resumes from
+            // highWater, so a dropped row never hides later events.
+            skipUnknownEventTypes: true,
+          })
+          .pipe(Stream.filter(filterSubagentTranscript)),
       );
       return composeShellStreamWithEnrichment({
         initial: initialEnrichmentItems(loaded),

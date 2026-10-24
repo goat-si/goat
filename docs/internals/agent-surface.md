@@ -781,7 +781,10 @@ and policy once describe ships.
 
 **Now.** The desktop app writes a launcher to `<GOAT home>/bin/goat` (`goat.cmd`
 on Windows) at start and rewrites it on update
-([DesktopCliShim.ts](../../apps/desktop/src/app/DesktopCliShim.ts)). **Settings →
+([DesktopCliShim.ts](../../apps/desktop/src/app/DesktopCliShim.ts)). Nightly writes
+`<GOAT home>/bin/nightly/goat` instead: both channels share the GOAT home, and the
+launcher is each thread's `GOAT_CLI_PATH`, so one shared file would hand every thread
+whichever app started last. **Settings →
 General → About → Install** links it into the first writable folder among
 `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`, and `~/bin` on macOS
 (`~/.local/bin` and `~/bin` on Linux), or adds its folder to the user `PATH` on

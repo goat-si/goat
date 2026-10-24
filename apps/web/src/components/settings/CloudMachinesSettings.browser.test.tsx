@@ -145,7 +145,7 @@ it.effect(
     Effect.gen(function* () {
       yield* mountAndConnect();
       expect(container.textContent).toContain(
-        "Installing GOAT runtime — first setup can take a few minutes",
+        "Installing GOAT runtime. First setup can take a few minutes",
       );
       yield* actEffect(report({ ...progress, phase: null, outcome: "superseded" }));
       expect(container.textContent).not.toContain("Installing GOAT");
