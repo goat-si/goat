@@ -270,6 +270,8 @@ export const ComputerUseRefusalReason = Schema.Literals([
   "privateMode",
   "leaseRequired",
   "foregroundNotAllowed",
+  /** Background input cannot reach this window; foreground delivery is the caller's choice. */
+  "backgroundUnavailable",
   // The channel itself.
   "unsupported",
   "invalidRequest",
