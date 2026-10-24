@@ -326,22 +326,30 @@ export function settleHeldContext(
         if (state.headMoved) return [];
         if (!fragment.startsWith("checks failed")) return state.passed ? [fragment] : [];
         if (state.failedChecks.length === 0) return [];
-        const split = fragment.indexOf(": ");
-        if (split === -1) return [fragment];
-        const named = fragment
-          .slice(split + 2)
-          .replace(/ and \d+ more$/, "")
-          .split(", ")
-          .map((entry) => entry.split(" ")[0] ?? entry);
-        // A check that passed since must not stay listed as failing.
-        return named.every((name) => state.failedChecks.includes(name))
-          ? [fragment]
-          : [fragment.slice(0, split + 2) + checkNames(state.failedChecks)];
+        // Restated from every check failing now: one that passed since leaves the list, and one
+        // that failed earlier stays when a newer failure replaces the fragment.
+        const head = /^checks failed[^:]*/.exec(fragment)?.[0] ?? "checks failed";
+        return [`${head}: ${checkNames(state.failedChecks)}`];
       }
       default:
         return [fragment];
     }
   });
+}
+
+/**
+ * What a watch keeps once a pass is recorded: the stored fragments settle against the pass's
+ * state, the pass's own fragments merge in, and failures are restated from the full failing set.
+ */
+export function keptAfterPass(
+  stored: ReadonlyArray<string> | undefined,
+  kept: ReadonlyArray<string> | undefined,
+  state: Pick<ThreadPullRequestWatch, "conflicting" | "failedChecks" | "passed"> & {
+    readonly headMoved: boolean;
+  },
+): ReadonlyArray<string> {
+  const merged = mergeHeldContext(settleHeldContext(stored, state), kept);
+  return settleHeldContext(merged, { ...state, headMoved: false });
 }
 
 /** The one line a digest carries for a pull request's kept context. */

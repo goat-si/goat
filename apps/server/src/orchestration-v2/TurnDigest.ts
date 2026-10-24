@@ -62,7 +62,8 @@ const threadLane = (host: string | null, threadId: string) => `thread:${host ?? 
 const runEndRunId = (id: string) => {
   if (!id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)) return null;
   const event = segments(id, LAUNCH_WATCH_MESSAGE_PREFIX).slice(3).join(":");
-  return event.startsWith("run:") ? event.slice("run:".length) : null;
+  // A later end of a run retried in place is `run:<runId>:end:<when>`; run ids never hold ":end:".
+  return event.startsWith("run:") ? event.slice("run:".length).replace(/:end:.*$/, "") : null;
 };
 
 const OPEN = "<notice id=";

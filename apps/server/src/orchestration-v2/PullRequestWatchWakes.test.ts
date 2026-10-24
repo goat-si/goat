@@ -737,7 +737,7 @@ describe("pull request updates kept as context (#1055)", () => {
         threadId,
         ...key,
         startedAt: watch.startedAt,
-        watch: { ...watch, heldContext: ["all 3 checks passed on aaaaaaa"] },
+        watch: { ...watch, passed: true, heldContext: ["all 3 checks passed on aaaaaaa"] },
         note: { source: { kind: "monitor" }, outcome: "updated", summary: "#7: kept as context" },
       });
       const { runs } = yield* orchestrator.getThreadRecords(threadId, ["runs"]);

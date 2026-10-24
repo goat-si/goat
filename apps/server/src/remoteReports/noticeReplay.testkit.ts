@@ -5,6 +5,7 @@ import {
   RunId,
   ThreadId,
   type ThreadPullRequestLink,
+  type ThreadPullRequestWatch,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
@@ -389,7 +390,7 @@ export function replayPullRequestDigest(
       const kind = event.id.startsWith(HOST_PRESSURE_MESSAGE_PREFIX) ? "monitor" : "task";
       return enqueue(kind, { id: event.id, text: event.text }, index);
     }
-    const report = pullRequestReport(event);
+    const report = pullRequestReport(event, links.get(event.number)?.watch);
     const outcome = pullRequestWatchOutcome({
       number: event.number,
       url: event.url,
@@ -425,10 +426,21 @@ export function replayPullRequestDigest(
   };
 }
 
-/** A watch report carrying one change, sorted the way the stream's policy sorts it. */
+/**
+ * A watch report carrying one change, sorted the way the stream's policy sorts it, with the
+ * check state the change leaves on the watch.
+ */
 function pullRequestReport(
   event: Extract<PullRequestStreamEvent, { readonly kind: "pull-request" }>,
+  previous: ThreadPullRequestWatch | undefined,
 ) {
+  const { change } = event;
+  const checks =
+    change.kind === "checks-failed"
+      ? { failedChecks: change.failed.map((check) => check.name), passed: false }
+      : change.kind === "checks-passed"
+        ? { failedChecks: [], passed: true }
+        : { failedChecks: previous?.failedChecks ?? [], passed: previous?.passed ?? false };
   return {
     changes: event.mode === "react" ? [event.change] : [],
     held: event.mode === "react" ? [] : [event.change],
@@ -436,13 +448,12 @@ function pullRequestReport(
     next: {
       startedAt: "2026-10-23T00:00:00.000Z",
       headSha: event.headSha,
-      failedChecks: [],
-      passed: false,
       passedChecks: [],
       remarksThrough: "2026-10-23T00:00:00.000Z",
       remarkIds: [],
       conflicting: false,
       wakes: 0,
+      ...checks,
     },
   };
 }

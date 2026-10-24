@@ -48,6 +48,35 @@ const report = (
 });
 
 describe("turnText", () => {
+  it("delivers a retried run's later end once when its terminal report is in the turn", () => {
+    const watch = newLaunchWatch({
+      launcherThreadId: ThreadId.make("thread:supervisor"),
+      host: "box-a",
+      threadId: ThreadId.make("thread:lane-a"),
+      projectId: null,
+      title: "lane-a",
+      incarnation: "test",
+      notifyWebhook: false,
+      now: 0,
+    });
+    // The run already reported one end, so this one is named by when it ended.
+    const retried = finishedWake({
+      watch: { ...watch, reportedEnds: { "run:lane-a": "2026-10-24T01:00:00.000Z" } },
+      runId: RunId.make("run:lane-a"),
+      status: "completed",
+      title: "lane-a",
+      branch: null,
+      worktreePath: null,
+      excerpt: "lane-a merged its pull request and the checks passed.",
+      end: "2026-10-24T02:00:00.000Z",
+    });
+    expect(retried.messageId).toContain(":end:");
+    const text = turnText({ messageId: retried.messageId, text: retried.text }, [
+      report("lane-a", "box-a", "completed"),
+    ]);
+    expect(text.match(/merged its pull request and the checks passed/g)).toBeNull();
+  });
+
   it("delivers a lane's run end once when its terminal report is in the same turn", () => {
     const a = runEnd("lane-a", "box-a");
     const b = runEnd("lane-b", null);

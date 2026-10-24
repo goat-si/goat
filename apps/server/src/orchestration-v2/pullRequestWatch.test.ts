@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema";
 import {
   PULL_REQUEST_WATCH_WAKE_LIMIT,
   evaluatePullRequestWatch,
+  keptAfterPass,
   mergeHeldContext,
   settleHeldContext,
   pullRequestWatchOutcome,
@@ -366,7 +367,25 @@ describe("pull request watch policy", () => {
     assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["test"] }), [
       "checks failed on aaaaaaa: test",
     ]);
-    assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["test", "lint"] }), both);
+    assert.deepEqual(settleHeldContext(both, { ...state, failedChecks: ["lint", "test"] }), both);
+  });
+
+  it("restates kept failures from every check failing after the pass", () => {
+    const state = { conflicting: false, passed: false, headMoved: false };
+    const six = ["checks failed on aaaaaaa: a, b, c, d, e and 1 more"];
+    // The unnamed sixth check recovered; the line no longer counts it.
+    assert.deepEqual(
+      keptAfterPass(six, [], { ...state, failedChecks: ["a", "b", "c", "d", "e"] }),
+      ["checks failed on aaaaaaa: a, b, c, d, e"],
+    );
+    // A newer failure replaces the fragment, but lint, still failing, stays listed.
+    assert.deepEqual(
+      keptAfterPass(["checks failed on aaaaaaa: lint"], ["checks failed on aaaaaaa: test"], {
+        ...state,
+        failedChecks: ["lint", "test"],
+      }),
+      ["checks failed on aaaaaaa: lint, test"],
+    );
   });
 
   it("hands what a pass kept to the write that ends the watch on its comment limit", () => {

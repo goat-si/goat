@@ -29,8 +29,8 @@ import * as Effect from "effect/Effect";
 
 import {
   heldContextLine,
+  keptAfterPass,
   mergeHeldContext,
-  settleHeldContext,
   withHeldContext,
 } from "../pullRequestWatch.ts";
 import { foldNotice, isNoticeMessage, parseNotices, renderDigest } from "../TurnDigest.ts";
@@ -239,11 +239,8 @@ export const endingWakeText = (
     text,
     ended === undefined
       ? mergeHeldContext(watch.heldContext)
-      : mergeHeldContext(
-          settleHeldContext(watch.heldContext, {
-            ...ended,
-            headMoved: ended.headSha !== watch.headSha,
-          }),
-          ended.heldContext,
-        ),
+      : keptAfterPass(watch.heldContext, ended.heldContext, {
+          ...ended,
+          headMoved: ended.headSha !== watch.headSha,
+        }),
   );

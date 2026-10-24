@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect";
 
 import type { OrchestratorDispatchError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
-import { mergeHeldContext, settleHeldContext } from "../pullRequestWatch.ts";
+import { keptAfterPass } from "../pullRequestWatch.ts";
 
 /** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
 export function newPullRequestWatch(
@@ -61,11 +61,10 @@ export function syncedPullRequestWatch(
   observed: ThreadPullRequestWatch,
 ): ThreadPullRequestWatch {
   const { heldContext: kept, ...progress } = explicitPullRequestWatch(observed);
-  const settled = settleHeldContext(current.heldContext, {
+  const heldContext = keptAfterPass(current.heldContext, kept, {
     ...progress,
     headMoved: progress.headSha !== current.headSha,
   });
-  const heldContext = mergeHeldContext(settled, kept);
   return {
     ...progress,
     ...(heldContext.length === 0 ? {} : { heldContext }),
