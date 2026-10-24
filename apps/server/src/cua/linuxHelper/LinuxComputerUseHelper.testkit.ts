@@ -17,7 +17,6 @@ import {
   type ComputerUseWindowTarget,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { expect } from "vite-plus/test";
 
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverToolResult } from "./CuaDriverMcp.ts";
@@ -26,8 +25,8 @@ import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { detectLinuxSession, linuxCapabilities, type LinuxSessionFacts } from "./linuxSession.ts";
 
-export const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
-export const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
+const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
+const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
 export const decodeHello = Schema.decodeUnknownSync(ComputerUseHelloReply);
 export const decodeReadiness = Schema.decodeUnknownSync(ComputerUseReadiness);
 export const isActionResult = Schema.is(ComputerUseActionResult);
