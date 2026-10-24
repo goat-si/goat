@@ -1,4 +1,4 @@
-import type { ComposerContextRecord } from "@goat/contracts";
+import type { ComposerContextRecord, EnvironmentId, ThreadId } from "@goat/contracts";
 import {
   composerChipSizeSuffix,
   contextChipIcon,
@@ -8,7 +8,17 @@ import {
   UNAVAILABLE_CONTEXT_CHIP_PRESENTATION,
 } from "./composerChipPresentation";
 import type { SelectableMarkdownSkill } from "../native/SelectableMarkdownText.types";
-import { parseComposerContextHref } from "@goat/shared/composerContextReferences";
+import {
+  formatComposerContextHref,
+  parseComposerContextHref,
+} from "@goat/shared/composerContextReferences";
+import { THREAD_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
+import { hasThreadLinks, parseThreadLinkHref } from "@goat/shared/threadLinks";
+
+const THREAD_LINK_HREF_IN_MARKDOWN = new RegExp(
+  String.raw`\]\(((?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/[^\s)]+)\)`,
+  "g",
+);
 
 export function enrichedContextLinkPresentation(
   href: string,
@@ -27,6 +37,49 @@ export function enrichedContextLinkPresentation(
     icon: contextChipIcon(presentation, contextRecordFileName(record)),
     ...(record && size ? { label: `${record.label} · ${size}` } : {}),
   };
+}
+
+export function enrichedThreadLinkPresentation(
+  href: string,
+): { accent?: string; icon: ContextChipIconRef } | undefined {
+  if (!parseThreadLinkHref(href)) return undefined;
+  const presentation = contextChipPresentation("thread");
+  return {
+    ...(presentation.accent ? { accent: presentation.accent } : {}),
+    icon: contextChipIcon(presentation, ""),
+  };
+}
+
+export interface ThreadChipTarget {
+  readonly href: string;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly link: boolean;
+}
+
+export function threadChipTargets(
+  environmentId: EnvironmentId,
+  markdown: string,
+  records?: ReadonlyArray<ComposerContextRecord>,
+): ReadonlyArray<ThreadChipTarget> {
+  const targets = new Map<string, ThreadChipTarget>();
+  if (hasThreadLinks(markdown)) {
+    for (const [, href = ""] of markdown.matchAll(THREAD_LINK_HREF_IN_MARKDOWN)) {
+      const threadId = parseThreadLinkHref(href);
+      if (threadId) targets.set(href, { href, environmentId, threadId, link: true });
+    }
+  }
+  for (const record of records ?? []) {
+    if (record.kind !== "thread" || !("threadId" in record)) continue;
+    const href = formatComposerContextHref("thread", record.contextId);
+    targets.set(href, {
+      href,
+      environmentId: record.environmentId,
+      threadId: record.threadId,
+      link: false,
+    });
+  }
+  return [...targets.values()];
 }
 
 export function enrichedLinkVariantPattern(url: string) {

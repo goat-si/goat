@@ -92,7 +92,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   keep(
     "upstream-native-dependency-provenance",
     ["apps/mobile/deps/README.md", "docs/operations/mobile-screens-fork.md"],
-    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.36|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
+    /feat\/t3chat-markdown-parity-v2|fork\/t3-mobile|t3-fork\.json|pack-t3\.mjs|\/path\/to\/t3code\/|\/absolute\/path\/to\/t3code\/|T3 Screens fork|t3-v5\.0\.0-t3\.37|\/tmp\/t3-screens-fork|pack:t3|t3\/main|5\.0\.0-t3\.N|t3Fork\.upstreamCommit|t3-v<version>/g,
     "D12/D18: dependency repository branches, pack commands and provenance metadata belong to the vendor.",
   ),
   keep(
