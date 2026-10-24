@@ -7,6 +7,44 @@ import * as TestClock from "effect/testing/TestClock";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect(
+    "settles the acting overlay when a cancelled call receives its terminal reply (#1490)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ overlay: true });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            method: "notifications/cancelled",
+            params: { requestId: 1 },
+          }),
+        );
+        yield* h.nextToDriver;
+        const shown = { op: "show", pid: 4, windowId: 9 };
+        assert.deepEqual(
+          [...h.log],
+          ["draw " + JSON.stringify({ ...shown, phase: "acting" }), "send click"],
+        );
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        assert.equal(yield* h.providerQueued, 0);
+        assert.deepEqual(
+          [...h.log],
+          [
+            "draw " + JSON.stringify({ ...shown, phase: "acting" }),
+            "send click",
+            "draw " + JSON.stringify({ ...shown, phase: "resting" }),
+          ],
+        );
+      }),
+  );
+
   it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();

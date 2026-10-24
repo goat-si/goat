@@ -286,6 +286,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (request === undefined) return;
             yield* agentInput.ended(key);
             if (request.cancelled) {
+              yield* drawOverlay({ type: "reply", id: key, failed: true });
               yield* release(request);
               if (
                 finished !== undefined ||
