@@ -606,16 +606,9 @@ async function watchRedraw(
   // is created, destroyed, mapped, unmapped, reparented, moved, resized or restacked can leave
   // pixels the app's redraw never covered. A new window is reported through its parent, which is
   // already watched, so nothing joins unseen.
-  const tree = [topLevel];
-  for (let index = 0; index < tree.length; index++) {
-    if (tree.length > MAX_CHECKED_WINDOWS) return undefined;
-    const answer = await queryTree(x, tree[index] ?? 0);
-    if (!answer) return undefined;
-    tree.push(...childrenOf(answer));
-  }
-  const watched = new Set(tree);
   const topSize = await getGeometry(x, topLevel);
   if (!topSize) return undefined;
+  const watched = new Set<number>();
   let disturbed = false;
   const drawn = coverage(width, height);
   let reports = 0;
@@ -655,9 +648,14 @@ async function watchRedraw(
     if (!added) done.resolve(false);
     else if (drawn.whole()) done.resolve(true);
   });
-  // ChangeWindowAttributes for this connection only: SubstructureNotify on every window in the
-  // top-level, StructureNotify on the top-level too, whose parent (the root) is not watched.
-  for (const window of tree)
+  // Each window is watched before its children are listed (ChangeWindowAttributes, for this
+  // connection only: SubstructureNotify, and StructureNotify on the top-level, whose parent is
+  // the root), so a window added while the tree is walked is reported, never missed.
+  const tree = [topLevel];
+  for (let index = 0; index < tree.length; index++) {
+    if (tree.length > MAX_CHECKED_WINDOWS) return undefined;
+    const window = tree[index] ?? 0;
+    watched.add(window);
     x.send(
       request(2, 0, 4, (view) => {
         view.setUint32(4, window, true);
@@ -665,6 +663,10 @@ async function watchRedraw(
         view.setUint32(12, window === topLevel ? (1 << 17) | (1 << 19) : 1 << 19, true);
       }),
     );
+    const answer = await queryTree(x, window);
+    if (!answer) return undefined;
+    tree.push(...childrenOf(answer));
+  }
   // DamageCreate at the raw-rectangles level: every drawing operation is reported.
   x.send(
     request(damage, 1, 4, (view) => {
@@ -740,6 +742,29 @@ async function exchange(
   const attributes = await getAttributes(x, topLevel);
   if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
+  // A compositor that stops and starts redirecting the window replaces its backing pixmap with
+  // one filled from what is behind it, and no event says so (#1400). A window stays redirected
+  // while any client redirects it, and its pixmap is replaced only when that changes, so this
+  // connection redirects the top-level itself (automatic: the screen looks the same) before
+  // asking for the redraw. Whatever the compositor does meanwhile, the redraw goes into the
+  // pixmap read under the hold; the redirect ends with this connection. Only a window that is
+  // already redirected is pinned, so one with no compositor is still refused, unchanged.
+  const probe = setup.idBase | 3;
+  x.send(
+    request(composite, 6, 3, (view) => {
+      view.setUint32(4, topLevel, true);
+      view.setUint32(8, probe, true);
+    }),
+  );
+  // An unredirected top-level has no pixmap to name: the error ends the exchange as unredirected.
+  if (!(await x.ask(request(14, 0, 2, (view) => view.setUint32(4, probe, true))))) return undefined;
+  x.send(request(54, 0, 2, (view) => view.setUint32(4, probe, true)));
+  x.send(
+    request(composite, 1, 3, (view) => {
+      view.setUint32(4, topLevel, true);
+      view.setUint8(8, 0);
+    }),
+  );
   const redraw = await watchRedraw(x, setup, chain, u16(first, 16), u16(first, 18));
   if (redraw === undefined) return undefined;
   if (!redraw.redrawn || !redraw.undisturbed()) return { refused: STILL_DRAWING, transient: true };
@@ -775,16 +800,18 @@ async function exchange(
         view.setUint32(8, pixmap, true);
       }),
     );
-    const image = await x.ask(
-      request(73, 2, 5, (view) => {
-        view.setUint32(4, pixmap, true);
-        view.setInt16(8, i16(inFrame, 12) + border, true);
-        view.setInt16(10, i16(inFrame, 14) + border, true);
-        view.setUint16(12, width, true);
-        view.setUint16(14, height, true);
-        view.setUint32(16, 0xffffffff, true);
-      }),
-    );
+    const readPixmap = (from: number) =>
+      x.ask(
+        request(73, 2, 5, (view) => {
+          view.setUint32(4, from, true);
+          view.setInt16(8, i16(inFrame, 12) + border, true);
+          view.setInt16(10, i16(inFrame, 14) + border, true);
+          view.setUint16(12, width, true);
+          view.setUint16(14, height, true);
+          view.setUint32(16, 0xffffffff, true);
+        }),
+      );
+    const image = await readPixmap(pixmap);
     x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
     return image ? { image, width, height } : undefined;
   };
