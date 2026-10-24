@@ -59,13 +59,16 @@ const fakeLeases = (input: {
       }),
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
+    setTarget: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
-    detection: Effect.succeed(input.detection ?? { humanInput: true, privateMode: true }),
+    detection: Effect.succeed(
+      input.detection ?? { humanInput: true, privateMode: true, frames: false },
+    ),
     resume: Effect.die("unused"),
     sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
@@ -208,8 +211,8 @@ describe("computerUseAttachment", () => {
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         for (const detection of [
-          { humanInput: false, privateMode: true },
-          { humanInput: true, privateMode: false },
+          { humanInput: false, privateMode: true, frames: false },
+          { humanInput: true, privateMode: false, frames: false },
         ])
           assert.deepEqual(
             yield* decide(driver, {
@@ -221,7 +224,9 @@ describe("computerUseAttachment", () => {
         // A person directing the thread can watch and stop it, so interactive turns still attach.
         assert.equal(
           (yield* decide(driver, {
-            leases: fakeLeases({ detection: { humanInput: false, privateMode: false } }).leases,
+            leases: fakeLeases({
+              detection: { humanInput: false, privateMode: false, frames: false },
+            }).leases,
           }))._tag,
           "proxied",
         );
