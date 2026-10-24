@@ -18,6 +18,7 @@ import {
   OrchestrationV2RuntimeRequest,
   ProviderInstanceId,
   type ProviderInteractionMode,
+  type TurnCapability,
   ProviderSessionId,
   ThreadId,
   type ProviderThreadId,
@@ -56,6 +57,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
+import { withTurnAgentAccess } from "./TurnCapabilities.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
@@ -170,6 +172,35 @@ export interface ProviderMemoryPrepareInput {
   /** Plan turns never get computer use. */
   readonly interactionMode?: ProviderInteractionMode;
   readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
+  /** What this turn's `@computer` / `@browser` chips asked for; the next turn starts over. */
+  readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
+}
+
+/** What opening a provider session for a turn admits; the same for a new or a shared session. */
+function openPrepareInput(
+  input: Parameters<ProviderSessionManagerV2Shape["open"]>[0],
+  providerInstanceId: ProviderInstanceId,
+): ProviderMemoryPrepareInput {
+  const sandbox = input.runtimePolicy.sandboxPolicy;
+  return {
+    threadId: input.threadId,
+    providerInstanceId,
+    ...(input.runId === undefined ? {} : { runId: input.runId }),
+    ...(input.delegatedTaskId === undefined ? {} : { delegatedTaskId: input.delegatedTaskId }),
+    ...(input.memoryGrantCeiling === undefined
+      ? {}
+      : { memoryGrantCeiling: input.memoryGrantCeiling }),
+    ...(input.dispatchScopes === undefined ? {} : { dispatchScopes: input.dispatchScopes }),
+    readOnly:
+      input.readOnly === true ||
+      sandbox === "read-only" ||
+      (typeof sandbox === "object" &&
+        sandbox !== null &&
+        "type" in sandbox &&
+        sandbox.type === "readOnly"),
+    interactionMode: input.runtimePolicy.interactionMode,
+    turnCapabilities: input.turnCapabilities ?? [],
+  };
 }
 
 export interface McpCredentialRotation {
@@ -206,6 +237,7 @@ export interface ProviderSessionManagerV2Shape {
     readonly memoryGrantCeiling?: MemoryTaskGrantCeiling | null;
     readonly readOnly?: boolean;
     readonly dispatchScopes?: ReadonlyArray<AuthEnvironmentScope>;
+    readonly turnCapabilities?: ReadonlyArray<TurnCapability>;
     readonly resumeFromSession?: OrchestrationV2ProviderSession;
     readonly initialNativeThreadId?: string;
     readonly initialProviderItemIdentityVersion?: 2;
@@ -635,6 +667,7 @@ export const layerWithOptions = (
                         ...(input.interactionMode === undefined
                           ? {}
                           : { interactionMode: input.interactionMode }),
+                        ...(input.turnCapabilities && { turnCapabilities: input.turnCapabilities }),
                         readOnly: admitted.readOnly === true || input.readOnly === true,
                       }
                     : { ...input, readOnly: input.readOnly === true };
@@ -718,7 +751,10 @@ export const layerWithOptions = (
                 // re-attaches across a workspace handoff must come back to the
                 // same token or the process's tool calls fail auth.
                 const { browser: browserToolsAvailable, device: deviceToolsAvailable } =
-                  yield* agentAccessSettings(threadId);
+                  withTurnAgentAccess(
+                    yield* agentAccessSettings(threadId),
+                    preparedInput.turnCapabilities,
+                  );
                 const capabilities = new Set<
                   import("../mcp/McpInvocationContext.ts").McpCapability
                 >(["orchestration", "worktree", "pull-requests"]);
@@ -2630,28 +2666,7 @@ export const layerWithOptions = (
                   // Joining a shared session is a new session for this thread.
                   if (!attached) yield* agentScope.clear(input.threadId);
                   const prepared = yield* prepareMcpSession(
-                    {
-                      threadId: input.threadId,
-                      providerInstanceId: existing.runtime.instanceId,
-                      ...(input.runId === undefined ? {} : { runId: input.runId }),
-                      ...(input.delegatedTaskId === undefined
-                        ? {}
-                        : { delegatedTaskId: input.delegatedTaskId }),
-                      ...(input.memoryGrantCeiling === undefined
-                        ? {}
-                        : { memoryGrantCeiling: input.memoryGrantCeiling }),
-                      ...(input.dispatchScopes === undefined
-                        ? {}
-                        : { dispatchScopes: input.dispatchScopes }),
-                      readOnly:
-                        input.readOnly === true ||
-                        input.runtimePolicy.sandboxPolicy === "read-only" ||
-                        (typeof input.runtimePolicy.sandboxPolicy === "object" &&
-                          input.runtimePolicy.sandboxPolicy !== null &&
-                          "type" in input.runtimePolicy.sandboxPolicy &&
-                          input.runtimePolicy.sandboxPolicy.type === "readOnly"),
-                      interactionMode: input.runtimePolicy.interactionMode,
-                    },
+                    openPrepareInput(input, existing.runtime.instanceId),
                     admission ?? false,
                   );
                   if (prepared.mcpCredentialId)
@@ -2698,28 +2713,7 @@ export const layerWithOptions = (
                     ),
                   );
                   const prepared = yield* prepareMcpSession(
-                    {
-                      threadId: input.threadId,
-                      providerInstanceId: input.modelSelection.instanceId,
-                      ...(input.runId === undefined ? {} : { runId: input.runId }),
-                      ...(input.delegatedTaskId === undefined
-                        ? {}
-                        : { delegatedTaskId: input.delegatedTaskId }),
-                      ...(input.memoryGrantCeiling === undefined
-                        ? {}
-                        : { memoryGrantCeiling: input.memoryGrantCeiling }),
-                      ...(input.dispatchScopes === undefined
-                        ? {}
-                        : { dispatchScopes: input.dispatchScopes }),
-                      readOnly:
-                        input.readOnly === true ||
-                        input.runtimePolicy.sandboxPolicy === "read-only" ||
-                        (typeof input.runtimePolicy.sandboxPolicy === "object" &&
-                          input.runtimePolicy.sandboxPolicy !== null &&
-                          "type" in input.runtimePolicy.sandboxPolicy &&
-                          input.runtimePolicy.sandboxPolicy.type === "readOnly"),
-                      interactionMode: input.runtimePolicy.interactionMode,
-                    },
+                    openPrepareInput(input, input.modelSelection.instanceId),
                     admission ?? false,
                   );
                   const mcpCredentialId = prepared.mcpCredentialId;
