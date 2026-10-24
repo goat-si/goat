@@ -376,11 +376,23 @@ export function projectComposerContextForProvider(input: {
   return `${body}\n\n<${CONTEXT_ENVELOPE_TAG} version="1">\n${entries.join("\n")}\n</${CONTEXT_ENVELOPE_TAG}>`;
 }
 
-// Thread reads are environment-local even when a draft moves between machines.
+export function isThreadContextReadable(input: {
+  record: ThreadContextRecord;
+  environmentId: EnvironmentId;
+  hostRoutingEnvironmentId?: EnvironmentId | undefined;
+}): boolean {
+  return (
+    input.record.environmentId === input.environmentId ||
+    (input.hostRoutingEnvironmentId === input.environmentId && Boolean(input.record.host?.trim()))
+  );
+}
+
+// A host is meaningful only to the agent whose current routes settled it.
 export function threadContextsOutsideEnvironment(input: {
   text: string;
   records: ReadonlyArray<ComposerContextRecord>;
   environmentId: EnvironmentId;
+  hostRoutingEnvironmentId?: EnvironmentId | undefined;
 }): ThreadContextRecord[] {
   const referenced = new Set(
     collectComposerContextReferences(input.text).map((occurrence) => occurrence.contextId),
@@ -390,7 +402,11 @@ export function threadContextsOutsideEnvironment(input: {
       record.kind === "thread" &&
       "threadId" in record &&
       referenced.has(record.contextId) &&
-      record.environmentId !== input.environmentId,
+      !isThreadContextReadable({
+        record,
+        environmentId: input.environmentId,
+        hostRoutingEnvironmentId: input.hostRoutingEnvironmentId,
+      }),
   );
 }
 
