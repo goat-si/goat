@@ -80,6 +80,32 @@ describe("agentInputLog", () => {
     assert.isTrue(log.isAgents(40_100, "pointer"));
   });
 
+  it("a start that arrives late still dates its run from when it began", () => {
+    // Reports of different controls can reach the server out of order.
+    const log = makeAgentInputLog();
+    log.started("B:1", 1_100, ["pointer"]);
+    log.started("A:1", 1_000, ["pointer"]);
+    log.prune(11_025);
+    assert.isFalse(log.isAgents(11_025, "pointer"));
+  });
+
+  it("a late start bridging two runs joins them under the earlier start", () => {
+    const log = makeAgentInputLog();
+    log.started("A", 1_000, ["pointer"]);
+    log.ended("A", 1_100);
+    log.started("C", 5_000, ["pointer"]);
+    // B began between them and is still running when its start arrives.
+    log.started("B", 1_500, ["pointer"]);
+    log.prune(11_000);
+    assert.isFalse(log.isAgents(11_000, "pointer"));
+    // Once B and C end, a call long after is a run of its own again.
+    log.ended("B", 11_000);
+    log.ended("C", 11_000);
+    log.prune(30_000);
+    log.started("D", 30_000, ["pointer"]);
+    assert.isTrue(log.isAgents(30_100, "pointer"));
+  });
+
   it("names the kinds a call can post from its tool and arguments", () => {
     for (const tool of ["get_window_state", "list_apps", "zoom", "invoke_menu", "launch_app"])
       assert.isFalse(postsInput(tool));
