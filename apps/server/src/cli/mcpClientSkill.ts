@@ -1,5 +1,5 @@
-// The installable skill at skills/goat-mcp/SKILL.md, byte for byte, so `goat mcp skill` works
-// offline from the bundled CLI. mcpClientSkill.test.ts fails when the two differ.
+// Generated from skills/goat-mcp/SKILL.md by apps/server/scripts/sync-mcp-client-skill.ts.
+// Bundled so `goat mcp skill` works offline; mcpClientSkill.test.ts fails when they differ.
 export const MCP_CLIENT_SKILL = `---
 name: goat-mcp
 description: Connect an MCP client (Claude Code, Claude Desktop, Codex CLI, Cursor, VS Code, OpenCode, Gemini CLI, ChatGPT, Grok, or any stdio or HTTP MCP client) to a GOAT environment's MCP server, verify it with goat_describe, and rotate or revoke its access. Use when asked to install, add, connect, or fix the GOAT MCP server.
@@ -25,12 +25,12 @@ fails; the troubleshooting table names the usual causes.
 
 The URL is the environment's address followed by \`/mcp\`:
 
-| Where the client runs | URL |
-| --- | --- |
-| Same machine as the environment | \`http://127.0.0.1:3773/mcp\` (3773 is the default port) |
-| Another of your machines on a tailnet | \`https://<machine>.<tailnet>.ts.net/mcp\` (Tailscale HTTPS) |
-| Another machine with SSH access to the host | \`ssh -N -L 3773:127.0.0.1:3773 <user>@<host>\`, then \`http://127.0.0.1:3773/mcp\` |
-| A hosted service (ChatGPT, the xAI API, Claude connectors) | A public \`https://\` address you manage |
+| Where the client runs                                      | URL                                                                             |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Same machine as the environment                            | \`http://127.0.0.1:3773/mcp\` (3773 is the default port)                          |
+| Another of your machines on a tailnet                      | \`https://<machine>.<tailnet>.ts.net/mcp\` (Tailscale HTTPS)                      |
+| Another machine with SSH access to the host                | \`ssh -N -L 3773:127.0.0.1:3773 <user>@<host>\`, then \`http://127.0.0.1:3773/mcp\` |
+| A hosted service (ChatGPT, the xAI API, Claude connectors) | A public \`https://\` address you manage                                          |
 
 In the GOAT app, **Settings → Connections**, then the environment's menu, **Copy MCP URL** copies
 the address this device uses. A hosted service calls GOAT from its own servers, so a \`localhost\`
@@ -266,17 +266,17 @@ issue a separate token on each environment a client connects to directly.
 
 ## Troubleshooting
 
-| Symptom | Cause and fix |
-| --- | --- |
-| Connection refused or timeout | Wrong host or port, or the environment is not running. Run the \`curl\` from step 1 on the client's machine. |
-| 401 on every request | The token is missing, revoked, expired, or from another environment. The header must be exactly \`Authorization: Bearer <token>\`, and the client process must see the variable. Issue a new token. |
-| Literal \`\${env:…}\` or \`{env:…}\` sent | The client started without the variable. Start it from a shell that exports it, or set it system-wide, then restart. |
-| Sign-in page cannot finish | The URL is plain \`http\` on a non-loopback address. Use Tailscale HTTPS, an SSH tunnel to \`127.0.0.1\`, or a client token. |
-| 404 or 405 while connecting, or an SSE error | The client uses the old SSE transport (\`"type": "sse"\`, Gemini \`url\`), or the path does not end in \`/mcp\`. Switch to streamable HTTP, or bridge with \`mcp-remote\`. |
-| "Session not found" after the environment restarted | Restart or reconnect the client so it initializes a new session. |
-| \`initialize\` fails on the protocol version | The client predates MCP \`2025-06-18\`. Update it, or bridge with \`mcp-remote\`. |
-| Tools refuse to change anything | The grant is read-only. Issue a token with the default scopes, or approve the sign-in with a permission mode. |
-| A hosted service cannot connect | It needs a public \`https\` address; \`localhost\` and tailnet names are private. |
+| Symptom                                             | Cause and fix                                                                                                                                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection refused or timeout                       | Wrong host or port, or the environment is not running. Run the \`curl\` from step 1 on the client's machine.                                                                                        |
+| 401 on every request                                | The token is missing, revoked, expired, or from another environment. The header must be exactly \`Authorization: Bearer <token>\`, and the client process must see the variable. Issue a new token. |
+| Literal \`\${env:…}\` or \`{env:…}\` sent                | The client started without the variable. Start it from a shell that exports it, or set it system-wide, then restart.                                                                              |
+| Sign-in page cannot finish                          | The URL is plain \`http\` on a non-loopback address. Use Tailscale HTTPS, an SSH tunnel to \`127.0.0.1\`, or a client token.                                                                          |
+| 404 or 405 while connecting, or an SSE error        | The client uses the old SSE transport (\`"type": "sse"\`, Gemini \`url\`), or the path does not end in \`/mcp\`. Switch to streamable HTTP, or bridge with \`mcp-remote\`.                                |
+| "Session not found" after the environment restarted | Restart or reconnect the client so it initializes a new session.                                                                                                                                  |
+| \`initialize\` fails on the protocol version          | The client predates MCP \`2025-06-18\`. Update it, or bridge with \`mcp-remote\`.                                                                                                                     |
+| Tools refuse to change anything                     | The grant is read-only. Issue a token with the default scopes, or approve the sign-in with a permission mode.                                                                                     |
+| A hosted service cannot connect                     | It needs a public \`https\` address; \`localhost\` and tailnet names are private.                                                                                                                     |
 
 \`goat mcp skill\` prints this guide on any machine with GOAT installed.
 `;

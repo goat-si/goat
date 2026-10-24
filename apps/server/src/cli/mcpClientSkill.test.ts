@@ -20,7 +20,7 @@ describe("goat mcp skill", () => {
     Effect.gen(function* () {
       yield* Command.runWith(cli, { version: "0.0.0" })(["mcp", "skill"]);
       const printed = (yield* TestConsole.logLines).join("\n") + "\n";
-      // When this fails, regenerate mcpClientSkill.ts from SKILL.md; installers read the file.
+      // Installers read the file. After editing it, run apps/server/scripts/sync-mcp-client-skill.ts.
       assert.strictEqual(printed, installableSkill);
       assert.match(installableSkill, /^---\nname: goat-mcp\ndescription: \S/);
     }).pipe(
