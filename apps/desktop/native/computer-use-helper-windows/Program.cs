@@ -22,6 +22,8 @@ namespace Goat.ComputerUse
     {
         const int ProtocolVersion = 1;
         const int MaxLineBytes = 1 << 20;
+        /// <summary>Names this helper process; replies and events are trusted only with it.</summary>
+        public static readonly string Generation = Guid.NewGuid().ToString("N");
         static readonly object OutputLock = new object();
         static readonly Stream Output = Console.OpenStandardOutput();
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
@@ -56,12 +58,15 @@ namespace Goat.ComputerUse
                 return 77;
             }
             var service = new DriverService(Path.GetDirectoryName(executable), Emit);
+            var signals = new Signals(Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
             hello["bundleId"] = BuildInfo.HelperId;
             hello["version"] = BuildInfo.Version;
             hello["platform"] = "windows";
+            hello["generation"] = Generation;
+            hello["signals"] = Signals.Capabilities();
             Emit(hello);
 
             Stream input = Console.OpenStandardInput();
@@ -81,7 +86,7 @@ namespace Goat.ComputerUse
                         start = i + 1;
                         byte[] line = buffer.ToArray();
                         buffer.SetLength(0);
-                        if (line.Length > 0) Handle(service, new UTF8Encoding(false, true).GetString(line));
+                        if (line.Length > 0) Handle(service, signals, new UTF8Encoding(false, true).GetString(line));
                     }
                     buffer.Write(chunk, start, read - start);
                     if (buffer.Length > MaxLineBytes)
@@ -95,11 +100,13 @@ namespace Goat.ComputerUse
                 }
             }
             catch (IOException) { }
+            // The host is gone; a helper that exits clears every target of its generation.
+            signals.Unwatch(delegate { });
             service.Stop();
             return 0;
         }
 
-        static void Handle(DriverService service, string line)
+        static void Handle(DriverService service, Signals signals, string line)
         {
             Dictionary<string, object> request = null;
             try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
@@ -124,6 +131,18 @@ namespace Goat.ComputerUse
             {
                 switch ((string)method)
                 {
+                    // The answer goes out inside the watch change, between clearing and new state.
+                    case "watch":
+                        reply["result"] = new Dictionary<string, object>();
+                        object watchId;
+                        if (!parameters.TryGetValue("watchId", out watchId) || !(watchId is string) || ((string)watchId).Trim().Length == 0)
+                            throw new HelperException("bad_request", "watch needs a watchId.");
+                        signals.Watch((string)watchId, Targets(parameters), delegate { Emit(reply); });
+                        return;
+                    case "unwatch":
+                        reply["result"] = new Dictionary<string, object>();
+                        signals.Unwatch(delegate { Emit(reply); });
+                        return;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
                     case "start": reply["result"] = service.Start(parameters); break;
@@ -158,6 +177,25 @@ namespace Goat.ComputerUse
             failure["code"] = code;
             failure["message"] = message;
             return failure;
+        }
+
+        /// <summary>watch's targets, at least one; one window per process, as the session holds them.</summary>
+        static Dictionary<int, long> Targets(Dictionary<string, object> parameters)
+        {
+            object raw;
+            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]) || ((object[])raw).Length == 0)
+                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...].");
+            var targets = new Dictionary<int, long>();
+            foreach (object entry in (object[])raw)
+            {
+                var target = entry as Dictionary<string, object>;
+                object pid, windowId;
+                if (target == null || !target.TryGetValue("pid", out pid) || !(pid is int) ||
+                    !target.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
+                    throw new HelperException("bad_request", "Each watch target needs an integer pid and windowId.");
+                targets[(int)pid] = Convert.ToInt64(windowId);
+            }
+            return targets;
         }
     }
 }
