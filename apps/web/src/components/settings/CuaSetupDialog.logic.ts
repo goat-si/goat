@@ -74,19 +74,21 @@ export function cuaGrantSteps(
 
 /**
  * Remedies for the ways a grant goes missing: an older copy's entry left on, the wrong app
- * switched on, no entry at all, and a rebuilt app. GOAT shows the reset command and never runs it.
+ * switched on, no entry at all, and a rebuilt app. macOS lists each copy as its own row under
+ * the same name, so a switch that reads on can belong to a copy that is gone (#1333).
+ * GOAT shows the reset command and never runs it.
  */
 export function cuaGrantTroubleshooting(grants: CuaGrantHolder): readonly string[] {
   const name = grants.name;
   return [
-    `${name} is already on in the list but setup still waits: that entry belongs to an older copy. Select it, remove it with the − button, then drag ${name} in again and turn it on.`,
+    `${name} is already on in the list but setup still waits: that row belongs to an older copy, and macOS can show several rows with the same name. In both Accessibility and Screen & System Audio Recording, select every ${name} row and remove it with the − button, then drag ${name} in again and turn it on.`,
     ...(grants.principal === "helper"
       ? [
           `Only the switch for ${name} counts. Turning on GOAT, Terminal, or another app does not let agents use this Mac.`,
         ]
       : []),
     `If ${name} is not in the list, drag it in from the panel next to System Settings, or show it in Finder and drag it from there.`,
-    `After an update or a new development build, macOS can treat ${name} as a new app. Remove its old entry and allow it again.`,
+    `After an update or a new development build, macOS can treat ${name} as a new app and list it twice. Remove the old rows from both lists and allow it again.`,
     `To clear every entry for it, run these in Terminal, then allow it again: tccutil reset Accessibility ${grants.bundleId} and tccutil reset ScreenCapture ${grants.bundleId}`,
   ];
 }

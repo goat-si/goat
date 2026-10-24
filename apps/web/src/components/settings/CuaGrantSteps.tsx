@@ -157,8 +157,10 @@ export function CuaGrantSteps({
             </div>
             {step.state === "waiting" ? (
               <p role="status" className="mt-2 text-xs text-muted-foreground">
-                Drag {grants.name} from the panel into the list, then turn on its switch. Already
-                on? Remove it with the − button and drag it in again.
+                Drag {grants.name} from the panel into the list, then turn on its switch. Already on
+                but still waiting? That row belongs to an older copy: in both Accessibility and
+                Screen & System Audio Recording, remove every {grants.name} row with the − button,
+                then drag this copy in again.
               </p>
             ) : null}
           </li>
