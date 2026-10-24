@@ -106,7 +106,7 @@ export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
  * The block that still explains anything: once the helper's newer readiness reports every
  * missing grant granted, the last failure is history and the next start tries again (#1399).
  */
-export const currentBlock = (
+const currentBlock = (
   failure: Option.Option<CuaDriverError>,
   readiness: ComputerUseReadiness | undefined,
 ) => {
