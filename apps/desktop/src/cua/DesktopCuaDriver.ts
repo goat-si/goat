@@ -555,6 +555,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     if (Option.isNone(windowId)) {
       const detail = "Keep a GOAT window open on screen, then try again.";
       record("capture", detail);
+      if (!identityHolds()) return done();
       yield* noteChecked((state) =>
         withProof(state, { capture: "noWindow", screenLocked: false, details: [detail] }),
       );
@@ -587,6 +588,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         screenLocked,
         details: captureFailure === undefined ? [] : [captureFailure],
       };
+      if (!identityHolds()) return done();
       yield* noteChecked((current) => withProof(current, proof));
       return done();
     }

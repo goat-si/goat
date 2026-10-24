@@ -166,16 +166,28 @@ describe("macOS readiness transport", () => {
     ),
   );
 
-  it.effect(
-    "refuses readiness when the helper's identity is withdrawn after the identity check",
-    () =>
+  it.effect.each([
+    { path: "a capture that works", after: "get_window_state", tools: {} },
+    {
+      path: "no GOAT window",
+      after: "list_windows",
+      tools: { list_windows: toolResult({ windows: [] }) },
+    },
+    {
+      path: "no screenshot",
+      after: "get_window_state",
+      tools: { get_window_state: toolResult({ element_count: 3 }) },
+    },
+  ])(
+    "refuses an authenticated helper whose identity is withdrawn after the identity check ($path)",
+    ({ after, tools }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const test = yield* fixture({
             platform: "darwin",
             helper: { granted: true },
-            withdrawIdentityAfter: "get_window_state",
-            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+            withdrawIdentityAfter: after,
+            tools: { ...helperTools({ bundle: HELPER_ID, parent: HELPER_PID }), ...tools },
           });
           const result = yield* test.verify;
           assert.isFalse(result.verified);
