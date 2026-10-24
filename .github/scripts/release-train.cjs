@@ -120,14 +120,22 @@ function decideNightlyBuild({ releases, sha, manual, compareStatus }) {
     .filter((release) => !release.draft && release.published_at)
     .map((release) => {
       const match = NIGHTLY_TAG.exec(release.tag_name);
-      const builtSha = NAME_SHA.exec(release.name ?? "")?.[1];
-      return match && builtSha ? { release, builtSha, order: numbers(match, 5) } : undefined;
+      return match ? { release, order: numbers(match, 5) } : undefined;
     })
     .filter(Boolean)
     .sort((a, b) => compare(b.order, a.order))[0];
   if (newest === undefined) return { build: true, reason: "no nightly has been published" };
-  const label = newest.release.tag_name + " (" + newest.builtSha + ")";
-  const status = compareStatus(newest.builtSha, sha);
+  // An unreadable commit must not let an older nightly stand in for the newest one.
+  const builtSha = NAME_SHA.exec(newest.release.name ?? "")?.[1];
+  if (!builtSha) {
+    throw new Error(
+      "the newest nightly " +
+        newest.release.tag_name +
+        " does not name its commit; name a commit to build",
+    );
+  }
+  const label = newest.release.tag_name + " (" + builtSha + ")";
+  const status = compareStatus(builtSha, sha);
   if (status === "ahead") return { build: true, reason: sha + " is newer than " + label };
   if (status === "behind") return { build: false, reason: sha + " is older than " + label };
   if (status === "identical") return { build: false, reason: sha + " is the commit of " + label };

@@ -264,4 +264,20 @@ describe("decideNightlyBuild", () => {
     const { calls } = decideNightly({ releases: [draft, ...shipped] });
     assert.deepEqual(calls, ["3065d73c3aaa..." + GREEN]);
   });
+
+  it("refuses when the newest nightly's name does not carry its commit, instead of comparing an older one", () => {
+    const unnamed = { ...shipped[0], name: "GOAT Nightly 0.1.2-nightly.20261024.263" };
+    assert.throws(
+      () => decideNightly({ releases: [unnamed, ...releases] }),
+      /newest nightly v0\.1\.2-nightly\.20261024\.263 does not name its commit/,
+    );
+    assert.throws(() => decideNightly({ releases: [unnamed] }), /does not name its commit/);
+    assert.equal(decideNightly({ releases: [unnamed], manual: true }).result.build, true);
+  });
+
+  it("compares with the newest nightly by version across bases, not by list position", () => {
+    const nextBase = nightly("0.1.3-nightly.20261020.200", "999999999999", ago(90 * HOUR));
+    const { calls } = decideNightly({ releases: [...shipped, nextBase] });
+    assert.deepEqual(calls, ["999999999999..." + GREEN]);
+  });
 });
