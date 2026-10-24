@@ -307,6 +307,13 @@ a password, one-time code or passkey prompt has focus (`PreviewPrivateMode.ts`):
 `SessionControl` refuses agent actions and observation, and only its controlling viewer and no
 recording get frames.
 
+A desktop session's live picture (`previewSessions.frames`, `orchestration:read`) comes from
+`apps/server/src/preview/DesktopFrames.ts`. It asks the desktop's helper over the control pipe
+(`cuaFrames`) to capture the window the control's proxy last reported on its lease route. It asks
+only while someone watches and the control is active, not idle, paused or ended. Every frame is
+checked again against the current request and control when it arrives, and is capped at 480 px,
+two a second and 256 KiB.
+
 ## Services
 
 A WebSocket handler, HTTP route, or MCP tool decodes input, calls one service method, and maps
