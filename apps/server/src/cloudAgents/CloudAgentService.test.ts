@@ -503,6 +503,47 @@ it.effect("lists a provider's run that sits behind newer runs of another provide
   }),
 );
 
+it.effect("calls a page truncated only when another run it can return follows", () =>
+  Effect.gen(function* () {
+    yield* run(
+      makeWorld(),
+      Effect.gen(function* () {
+        const service = yield* CloudAgents.CloudAgentService;
+        const sql = yield* SqlClient.SqlClient;
+        yield* cloudRun("thread:claude-oldest", "claudeCloud");
+        yield* cloudRun("thread:cursor-unreadable", "cursorCloud");
+        yield* cloudRun("thread:cursor-newest", "cursorCloud");
+        yield* sql`
+          UPDATE orchestration_v2_projection_provider_threads
+          SET payload_json = json_set(payload_json, '$.cloudTask.status', 'unknown-status')
+          WHERE thread_id = 'thread:cursor-unreadable'
+        `;
+
+        const cursor = yield* service.list({ provider: "cursorCloud", limit: 1 });
+        assert.deepEqual(
+          [cursor.runs.map((entry) => entry.threadId), cursor.truncated],
+          [["thread:cursor-newest"], false],
+        );
+        const first = yield* service.list({ limit: 1 });
+        assert.deepEqual(
+          [first.runs.map((entry) => entry.threadId), first.truncated],
+          [["thread:cursor-newest"], true],
+        );
+        const second = yield* service.list({ limit: 1, cursor: first.nextCursor! });
+        assert.deepEqual(
+          [second.runs.map((entry) => entry.threadId), second.truncated],
+          [["thread:claude-oldest"], false],
+        );
+        const both = yield* service.list({ limit: 2 });
+        assert.deepEqual(
+          [both.runs.map((entry) => entry.threadId), both.truncated],
+          [["thread:cursor-newest", "thread:claude-oldest"], false],
+        );
+      }),
+    );
+  }),
+);
+
 it.effect("forgets a registered run that has more than 200 newer runs ahead of it", () =>
   Effect.gen(function* () {
     const world = makeWorld();

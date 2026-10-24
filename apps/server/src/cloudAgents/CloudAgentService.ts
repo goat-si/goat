@@ -204,17 +204,13 @@ const decodeCursor = (cursor: string): RunPosition | undefined => {
 };
 
 /**
- * Filters run inside the query, so a match behind newer runs is still found. One extra row
- * tells whether more match than the page holds.
+ * Filters run inside the query, so a match behind newer runs is still found. A row that does
+ * not decode is skipped, so the page keeps reading until it holds limit runs and has seen one
+ * more it could return; only then is it truncated.
  */
 const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (query: RunQuery) {
   const sql = yield* SqlClient.SqlClient;
-  const rows = yield* sql<{
-    readonly provider_thread_id: string;
-    readonly updated_at: string;
-    readonly provider_json: string;
-    readonly thread_json: string;
-  }>`
+  const batch = (after: RunPosition | undefined) => sql<RunRow>`
     SELECT p.provider_thread_id, p.updated_at,
       p.payload_json AS provider_json, t.payload_json AS thread_json
     FROM orchestration_v2_projection_provider_threads AS p
@@ -226,57 +222,82 @@ const readCloudRuns = Effect.fn("CloudAgentService.readRuns")(function* (query: 
       ${query.provider === undefined ? sql`` : sql`AND p.driver = ${query.provider}`}
       ${query.threadId === undefined ? sql`` : sql`AND p.thread_id = ${query.threadId}`}
       ${
-        query.after === undefined
+        after === undefined
           ? sql``
-          : sql`AND (p.updated_at < ${query.after.updatedAt}
-              OR (p.updated_at = ${query.after.updatedAt}
-                AND p.provider_thread_id > ${query.after.providerThreadId}))`
+          : sql`AND (p.updated_at < ${after.updatedAt}
+              OR (p.updated_at = ${after.updatedAt}
+                AND p.provider_thread_id > ${after.providerThreadId}))`
       }
     ORDER BY p.updated_at DESC, p.provider_thread_id ASC
     LIMIT ${query.limit + 1}
   `;
-  const page = rows.slice(0, query.limit);
-  const last = page.at(-1);
-  const next =
-    rows.length > query.limit && last !== undefined
-      ? encodeCursor({ updatedAt: last.updated_at, providerThreadId: last.provider_thread_id })
-      : undefined;
   const runs: Array<StoredRun> = [];
-  for (const row of page) {
-    const providerThread = yield* decodeProviderThreadPayload(row.provider_json).pipe(
-      Effect.option,
-    );
-    const thread = yield* decodeThreadPayload(row.thread_json).pipe(Effect.option);
-    if (Option.isNone(providerThread) || Option.isNone(thread)) continue;
-    const task = providerThread.value.cloudTask;
-    const driver = providerThread.value.driver;
-    if (task === undefined || !isCloudAgentProvider(driver)) continue;
-    runs.push({
-      externalId: providerThread.value.nativeThreadRef?.nativeId ?? undefined,
-      summary: {
-        threadId: thread.value.id,
-        provider: driver,
-        instanceId: providerThread.value.providerInstanceId,
-        title: thread.value.title,
-        status: task.status,
-        tracking: task.tracking,
-        ...(task.url === undefined ? {} : { url: task.url }),
-        ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
-        repository: task.source.repository,
-        ...(task.branch !== undefined
-          ? { branch: task.branch }
-          : task.source.branch !== "HEAD"
-            ? { branch: task.source.branch }
-            : {}),
-        ...(thread.value.externalLauncher === undefined
-          ? {}
-          : { launchedBy: thread.value.externalLauncher }),
-        registered: task.attach === "registered",
-        updatedAt: task.updatedAt,
-      },
-    });
+  let after = query.after;
+  let last: RunPosition | undefined;
+  let more = false;
+  while (!more) {
+    const rows = yield* batch(after);
+    for (const row of rows) {
+      const run = yield* decodeRunRow(row);
+      if (run === undefined) continue;
+      if (runs.length === query.limit) {
+        more = true;
+        break;
+      }
+      runs.push(run);
+      last = positionOf(row);
+    }
+    const end = rows.at(-1);
+    if (rows.length <= query.limit || end === undefined) break;
+    after = positionOf(end);
   }
-  return { runs, next };
+  return { runs, next: more && last !== undefined ? encodeCursor(last) : undefined };
+});
+
+interface RunRow {
+  readonly provider_thread_id: string;
+  readonly updated_at: string;
+  readonly provider_json: string;
+  readonly thread_json: string;
+}
+
+const positionOf = (row: RunRow): RunPosition => ({
+  updatedAt: row.updated_at,
+  providerThreadId: row.provider_thread_id,
+});
+
+// Untraced: it runs once per row inside readRuns, which already has the span.
+const decodeRunRow = Effect.fnUntraced(function* (row: RunRow) {
+  const providerThread = yield* decodeProviderThreadPayload(row.provider_json).pipe(Effect.option);
+  const thread = yield* decodeThreadPayload(row.thread_json).pipe(Effect.option);
+  if (Option.isNone(providerThread) || Option.isNone(thread)) return undefined;
+  const task = providerThread.value.cloudTask;
+  const driver = providerThread.value.driver;
+  if (task === undefined || !isCloudAgentProvider(driver)) return undefined;
+  return {
+    externalId: providerThread.value.nativeThreadRef?.nativeId ?? undefined,
+    summary: {
+      threadId: thread.value.id,
+      provider: driver,
+      instanceId: providerThread.value.providerInstanceId,
+      title: thread.value.title,
+      status: task.status,
+      tracking: task.tracking,
+      ...(task.url === undefined ? {} : { url: task.url }),
+      ...(task.prUrl === undefined ? {} : { prUrl: task.prUrl }),
+      repository: task.source.repository,
+      ...(task.branch !== undefined
+        ? { branch: task.branch }
+        : task.source.branch !== "HEAD"
+          ? { branch: task.source.branch }
+          : {}),
+      ...(thread.value.externalLauncher === undefined
+        ? {}
+        : { launchedBy: thread.value.externalLauncher }),
+      registered: task.attach === "registered",
+      updatedAt: task.updatedAt,
+    },
+  } satisfies StoredRun;
 });
 /** Cloud runs this environment follows or links, newest first. Needs only the database. */
 export const listCloudRuns = Effect.fn("CloudAgentService.listRuns")(function* (
