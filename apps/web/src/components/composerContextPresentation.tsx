@@ -1,3 +1,8 @@
+import { useAtomValue } from "@effect/atom-react";
+import { isThreadContextReadable } from "@goat/shared/composerContextReferences";
+import { environmentCatalog } from "~/connection/catalog";
+import { resolveThreadContextRoute, routeThreadContextRecord } from "~/lib/threadContextRoute";
+import { useEnvironmentConnectionPhase } from "~/state/presentation";
 import ChatMarkdown from "./ChatMarkdown";
 import { ReadOnlySourcePreview } from "./files/AttachmentFilePreview";
 import type { PreviewAnnotationPayload, ThreadContextRecord } from "@goat/contracts";
@@ -327,12 +332,30 @@ function ComposerPreviewAnnotationDetails({
 
 function ComposerThreadContextChip(props: { record: ThreadContextRecord }) {
   const { environmentId } = use(ComposerContextActionsContext);
-  return (
-    <ThreadContextChip
-      record={props.record}
-      unreadable={environmentId !== null && props.record.environmentId !== environmentId}
-    />
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const phase = useEnvironmentConnectionPhase(props.record.environmentId);
+  const agentEnvironmentId = environmentId ?? props.record.environmentId;
+  const route = resolveThreadContextRoute({
+    agentEnvironmentId,
+    threadEnvironmentId: props.record.environmentId,
+    entries: catalog.entries,
+    isDesktopRenderer: window.desktopBridge !== undefined,
+  });
+  const record = routeThreadContextRecord(
+    props.record,
+    route.kind === "unreachable" ? { kind: "local" } : route,
   );
+  const readable = isThreadContextReadable({
+    record,
+    environmentId: agentEnvironmentId,
+    hostRoutingEnvironmentId: agentEnvironmentId,
+  });
+  const state = !readable
+    ? "invalid"
+    : record.host && phase !== "connected"
+      ? "unavailable"
+      : "readable";
+  return <ThreadContextChip record={record} state={state} />;
 }
 
 function UnresolvedContextChip(props: { label: string }) {
