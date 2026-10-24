@@ -85,4 +85,27 @@ describe("linuxComputerUseSetup", () => {
     expect(setup.ready).toBe(false);
     expect(setup.steps.at(-1)).toMatchObject({ id: "blocker", status: "action" });
   });
+
+  it("a named display the helper cannot use keeps the helper's reason, and nothing reads done", () => {
+    const blocked = (reason: string, displayServer: "x11" | "wayland"): ComputerUseReadiness => ({
+      ...READY,
+      grants: { accessibility: "unknown", screenCapture: "unknown" },
+      capture: "unavailable",
+      tree: "unavailable",
+      input: "unavailable",
+      reasons: [reason],
+      platform: { linux: { displayServer } },
+    });
+    const noBus = blocked("No D-Bus session bus is set (DBUS_SESSION_BUS_ADDRESS).", "x11");
+    expect(linuxComputerUseSetup(noBus, "lidge-ai").steps).toEqual([
+      expect.objectContaining({ id: "session", status: "action", detail: noBus.reasons[0] }),
+    ]);
+    const gnome50 = blocked(
+      "GNOME 50 on Wayland is not supported by Cua Driver 0.37.0.",
+      "wayland",
+    );
+    const steps = linuxComputerUseSetup(gnome50, "lidge-ai").steps;
+    expect(steps.some((step) => step.status === "done")).toBe(false);
+    expect(JSON.stringify(steps)).not.toContain("can still read and use app controls");
+  });
 });

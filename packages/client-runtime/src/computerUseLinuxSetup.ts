@@ -53,12 +53,25 @@ const SESSION_NAMES = {
 
 function sessionStep(readiness: ComputerUseReadiness, machine: string): ComputerUseSetupStep {
   const server = readiness.platform?.linux?.displayServer;
-  if (server !== undefined)
+  // A named display is not proof the helper can use it: without a session bus, or on a
+  // compositor the driver cannot drive, every step reads unavailable and the reason says why.
+  const reached = readiness.input !== "unavailable";
+  if (server !== undefined && reached)
     return {
       id: "session",
       status: "done",
       title: "Desktop session",
       detail: "GOAT uses " + SESSION_NAMES[server] + " on " + machine + ".",
+      guidance: [],
+    };
+  if (server !== undefined)
+    return {
+      id: "session",
+      status: "action",
+      title: "Desktop session cannot be used",
+      detail:
+        readiness.reasons[0] ??
+        "GOAT found " + SESSION_NAMES[server] + " on " + machine + " but cannot use it.",
       guidance: [],
     };
   // The helper explains which of display or session bus is missing in its first reason.
@@ -177,7 +190,8 @@ function captureStep(readiness: ComputerUseReadiness): ComputerUseSetupStep {
     status: "unavailable",
     title: "Screen capture",
     detail: wayland
-      ? "This Wayland desktop cannot show GOAT a single window. GOAT can still read and use app controls."
+      ? "This Wayland desktop cannot show GOAT a single window." +
+        (readiness.tree === "ready" ? " GOAT can still read and use app controls." : "")
       : "GOAT could not capture a window on this desktop.",
     guidance: [],
   };
