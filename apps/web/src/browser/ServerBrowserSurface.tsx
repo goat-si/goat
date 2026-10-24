@@ -406,6 +406,8 @@ export function ServerBrowserSurface(props: {
           else inputRef.current?.blur();
         },
         onPointer: (pointer) => {
+          // A thumbnail shows the page only; the cursor's click marker would keep repainting it.
+          if (thumbnailFrameMs !== undefined) return;
           const placed = placeAgentCursor(pointer, canvasRef.current, viewportRef.current);
           if (placed) setAgentCursor(placed);
         },

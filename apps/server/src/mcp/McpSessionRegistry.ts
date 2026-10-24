@@ -211,6 +211,8 @@ export interface McpSessionRegistryOptions {
   readonly now?: () => number;
   /** Makes (or reuses) the directory a thread's agent gets as TMPDIR; none when absent. */
   readonly makeThreadTemporaryDirectory?: (threadKey: string) => Effect.Effect<string | undefined>;
+  /** The system temporary directory those thread directories stand in for. */
+  readonly systemTemporaryDirectory?: string;
 }
 
 /**
@@ -447,6 +449,9 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           browserToolsAvailable: scope.capabilities.has("preview"),
           capabilities: scope.capabilities,
           ...(temporaryDirectory === undefined ? {} : { temporaryDirectory }),
+          ...(temporaryDirectory === undefined || options.systemTemporaryDirectory === undefined
+            ? {}
+            : { systemTemporaryDirectory: options.systemTemporaryDirectory }),
         },
       };
     },
@@ -657,7 +662,7 @@ const makeThreadTemporaryDirectories = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-threads-" });
-  return (threadKey: string) => {
+  const makeThreadTemporaryDirectory = (threadKey: string) => {
     const directory = path.join(root, threadKey);
     return fileSystem.makeDirectory(directory, { recursive: true }).pipe(
       Effect.as(directory),
@@ -668,13 +673,12 @@ const makeThreadTemporaryDirectories = Effect.gen(function* () {
       ),
     );
   };
+  return { makeThreadTemporaryDirectory, systemTemporaryDirectory: path.dirname(root) };
 });
 
 const make = Effect.acquireRelease(
   makeThreadTemporaryDirectories.pipe(
-    Effect.flatMap((makeThreadTemporaryDirectory) =>
-      makeWithOptions({ makeThreadTemporaryDirectory }),
-    ),
+    Effect.flatMap(makeWithOptions),
     Effect.tap((registry) =>
       Effect.sync(() => {
         activeMcpSessionRegistry = registry;

@@ -263,13 +263,17 @@ node scripts/build-computer-use-helper.ts --channel dev
 GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
 ```
 
-The script signs with the keychain's Developer ID Application identity when one is usable, and
-`--identity -` signs ad-hoc. An ad-hoc helper gets a new code hash on every build, so macOS asks
-for Accessibility and Screen Recording again after each rebuild. Stable and nightly helpers verify
-that GOAT.app, signed by the same team, launched them, so they are ad-hoc only when `--identity -`
-asks for it, and then serve any parent.
-Signing needs the login keychain of the signed-in user, so it fails over SSH or from an agent
-session that cannot unlock it (`errSecInternalComponent`).
+The script signs with the keychain's Developer ID Application identity and pins the helper's
+designated requirement to its bundle id and team, so a rebuild keeps its Accessibility and
+Screen Recording grants. Signing needs the login keychain of the signed-in user: over SSH or
+from an agent session that cannot use it (`errSecInternalComponent`), the build stops and says
+so. Run it from Terminal on the Mac and allow codesign to use the key.
+
+`--ad-hoc` signs a throwaway dev build without a certificate. Each ad-hoc build gets a new code
+hash, so its grants stop applying after a rebuild and System Settings adds another
+"GOAT Computer Use" row to both lists; remove the old rows before allowing the new build. Only
+`--channel dev` may be ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the
+same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
 
 A packaged build carries the helper in `GOAT.app/Contents/Helpers` when asked to:
 
@@ -277,10 +281,12 @@ A packaged build carries the helper in `GOAT.app/Contents/Helpers` when asked to
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
 ```
 
-The build embeds an ad-hoc helper and signs GOAT.app ad-hoc around it, for arm64 or x64, and does
-not notarize. It fails when the embedded helper's code hash differs from the one it built, or when
-GOAT.app or the helper carries a Developer ID team. With `--signed` the flag is refused until the
-helper brokers the driver over stdio and GOAT's run-as-Node fuses are off (#1210).
+Until signed builds may carry the helper (#1210), this is an unsigned build: an ad-hoc helper
+that serves any parent, inside an ad-hoc GOAT.app, for arm64 or x64, never notarized. It has the
+same row problem as `--ad-hoc` and prints the same warning. The build fails when the embedded
+helper's code hash differs from the one it built, or when GOAT.app or the helper carries a
+Developer ID team. `--signed` with the flag is refused until the helper brokers the driver over
+stdio and GOAT's run-as-Node fuses are off.
 
 ### Windows computer use helper
 

@@ -213,7 +213,10 @@ export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(functi
     repoRoot: input.repoRoot,
     output: path.join(input.stageRoot, "computer-use-helper"),
     channel: input.appId.endsWith(".nightly") ? "nightly" : "stable",
-    identity: input.signed ? Option.getOrUndefined(identity) : "-",
+    identity: input.signed ? Option.getOrUndefined(identity) : undefined,
+    // Logs #1337's warning: every ad-hoc build is a new app to macOS's privacy lists.
+    adHoc: !input.signed,
+    unsignedPackage: !input.signed,
     notaryProfile: undefined,
   });
   if (built.bundleId !== computerUseHelperBundleId(input.appId))
