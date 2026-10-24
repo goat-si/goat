@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, expect, it } from "@effect/vitest";
+import { computerUseReady } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -582,6 +583,79 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
             detail: "Accessibility and Screen Recording are off for GOAT Computer Use.",
           },
         ]);
+      }),
+    ),
+  );
+
+  it.effect("reports grants the helper asked for as waiting, with neither safety signal", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
+        yield* test.request("agent");
+        yield* test.next;
+        const report = test.readiness.at(-1);
+        assert.deepEqual(report?.readiness.grants, {
+          accessibility: "pending",
+          screenCapture: "pending",
+        });
+        assert.equal(report?.readiness.helper, "unauthenticated");
+        assert.deepEqual(report?.signals, {
+          privateMode: "unsupported",
+          humanInput: "unsupported",
+        });
+        assert.isFalse(report ? computerUseReady(report.readiness) : true);
+      }),
+    ),
+  );
+
+  it.effect(
+    "is ready only after the check proved capture and the tree and while the helper runs the driver",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const started = test.readiness.at(-1);
+          // Running, but nothing has read a window yet.
+          assert.equal(started?.readiness.helper, "authenticated");
+          assert.equal(started?.readiness.capture, "pending");
+          assert.isFalse(started ? computerUseReady(started.readiness) : true);
+
+          assert.isTrue((yield* test.verify).verified);
+          const checked = test.readiness.at(-1);
+          assert.equal(checked?.readiness.capture, "ready");
+          assert.equal(checked?.readiness.tree, "ready");
+          // The check retired the agent's driver to see fresh grants.
+          assert.equal((yield* test.next).status, "stopped");
+          assert.equal(checked?.readiness.helper, "unauthenticated");
+
+          yield* test.request("agent-again");
+          assert.equal((yield* test.next).status, "ready");
+          const running = test.readiness.at(-1);
+          assert.isTrue(running ? computerUseReady(running.readiness) : false);
+          assert.isAbove(running?.generation ?? 0, started?.generation ?? 0);
+          assert.deepEqual(running?.readiness.reasons, []);
+        }),
+      ),
+  );
+
+  it.effect("reports a blank capture from the check as blank, not ready", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          blankCapture: true,
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isFalse((yield* test.verify).verified);
+        assert.equal(test.readiness.at(-1)?.readiness.capture, "blank");
+        assert.equal(test.readiness.at(-1)?.readiness.tree, "unavailable");
       }),
     ),
   );

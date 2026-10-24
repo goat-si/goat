@@ -56,7 +56,10 @@ export interface ComputerUseLease {
   readonly apps?: ReadonlyArray<string>;
 }
 
-/** Whether the host's helper reports a person's input and secret fields at all. */
+/**
+ * Whether the host's helper reports a person's input and secret fields at all: true only for a
+ * signal its latest readiness report calls supported.
+ */
 export interface ComputerUseDetection {
   readonly humanInput: boolean;
   readonly privateMode: boolean;
@@ -325,8 +328,9 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
-  // The desktop host's helper reports a person's own input and secret fields, and says which it
-  // can detect at all; a standalone server and an older helper report nothing (#1235).
+  // The desktop host's helper reports a person's own input and secret fields, and its readiness
+  // says which it can detect at all; a standalone server and an older helper report nothing, so
+  // they detect neither (#1235).
   let detection: ComputerUseDetection = { humanInput: false, privateMode: false };
   let privateHost = false;
   const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
@@ -334,9 +338,12 @@ const make = Effect.gen(function* () {
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
         if (report.type === "cuaHumanInput") return pause("human_input");
-        if (report.type === "cuaDetection")
+        if (report.type === "cuaReadiness")
           return Effect.sync(() => {
-            detection = { humanInput: report.humanInput, privateMode: report.privateMode };
+            detection = {
+              humanInput: report.signals.humanInput === "supported",
+              privateMode: report.signals.privateMode === "supported",
+            };
           }).pipe(Effect.andThen(changed));
         return Effect.sync(() => {
           if (report.active && !privateHost) interrupted("private");

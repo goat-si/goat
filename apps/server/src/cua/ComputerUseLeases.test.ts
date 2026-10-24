@@ -180,9 +180,18 @@ it.effect(
         assert.deepEqual(yield* leases.detection, { humanInput: false, privateMode: false });
         yield* Queue.offer(reports, {
           version: 1,
-          type: "cuaDetection",
-          humanInput: true,
-          privateMode: true,
+          type: "cuaReadiness",
+          generation: 1,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { humanInput: "supported", privateMode: "supported" },
         });
         yield* PubSub.take(signals);
         assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: true });

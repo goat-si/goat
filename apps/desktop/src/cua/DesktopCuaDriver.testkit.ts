@@ -1,6 +1,10 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
 import * as NodePath from "@effect/platform-node/NodePath";
-import type { DesktopCuaDriverReport, DesktopCuaDriverRequest } from "@goat/contracts";
+import type {
+  DesktopCuaDriverReport,
+  DesktopCuaDriverRequest,
+  DesktopCuaReadinessReport,
+} from "@goat/contracts";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -86,6 +90,7 @@ export const fixture = Effect.fn(function* (
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
+  const readiness: DesktopCuaReadinessReport[] = [];
   const starting = yield* Deferred.make<void>();
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
@@ -313,6 +318,10 @@ export const fixture = Effect.fn(function* (
     publishUpdateReport: () => Effect.void,
     cuaRequests: Stream.fromQueue(requests),
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
+    publishCuaReadiness: (report) =>
+      Effect.sync(() => {
+        readiness.push(report);
+      }),
   });
   const environment = DesktopEnvironment.layer({
     dirname: "/app",
@@ -363,6 +372,7 @@ export const fixture = Effect.fn(function* (
     manifestListings,
     helperAppListings,
     helperLaunches,
+    readiness,
     counts: () => ({ starts, stops, destroys }),
   };
 });

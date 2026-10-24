@@ -34,6 +34,16 @@ import * as Stream from "effect/Stream";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
+  HELPER_SIGNALS,
+  initialHelperReadiness,
+  toReadiness,
+  withGrants,
+  withProof,
+  withRunning,
+  type HelperProof,
+  type HelperReadinessState,
+} from "./helperReadiness.ts";
+import {
   classifyHelperBundle,
   helperBundle,
   makeHelperHost,
@@ -356,6 +366,27 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let owned: OwnedHost | undefined;
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
+  // The server learns the helper's readiness from these reports; only a helper build sends them.
+  let helperState = initialHelperReadiness;
+  let helperGeneration = 0;
+  let helperSeen = false;
+  let lastReadiness: string | undefined;
+  const noteHelper = (update: (state: HelperReadinessState) => HelperReadinessState) =>
+    Effect.suspend(() => {
+      if (!helperSeen || closed) return Effect.void;
+      helperState = update(helperState);
+      const report = {
+        version: 1,
+        type: "cuaReadiness",
+        generation: helperGeneration,
+        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
+        signals: HELPER_SIGNALS,
+      } as const;
+      const key = encodeJson(report);
+      if (key === lastReadiness) return Effect.void;
+      lastReadiness = key;
+      return publisher.publishCuaReadiness(report);
+    });
 
   // UniFFI calls can outlive cancellation. Retain the host until every native
   // promise settles, even after the public shutdown deadline has elapsed.
@@ -380,7 +411,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           Effect.orElseSucceed(() => false),
         )
       : Effect.succeed(true),
-  );
+  ).pipe(Effect.tap(() => noteHelper((state) => withRunning(state, false))));
   const report = (requestId: string, status: "stopped" | "unavailable", message?: string) =>
     closed
       ? Effect.void
@@ -505,6 +536,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     if (closed) return undefined;
     let host: NativeHost;
     if (engine.kind === "helper") {
+      helperSeen = true;
+      helperGeneration += 1;
       const { environment: driverEnvironment } = cuaDriverHostOptions(
         engine.bundle.driverPath,
         engine.bundle.bundleId,
@@ -587,6 +620,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const grants = yield* Effect.tryPromise(() =>
       selected ? engineGrants(selected, false) : native.checkGrants(),
     ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
+    if (selected?.kind === "helper") {
+      helperSeen = true;
+      yield* noteHelper((state) => withGrants(state, grants, false));
+    }
     const missing = [
       ...(grants.accessibility ? [] : ["Accessibility"]),
       ...(grants.screenRecording ? [] : ["Screen Recording"]),
@@ -692,7 +729,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       Option.fromNullishOr(readNumber(readArray(structured, "windows")[0], "window_id")),
     );
     if (Option.isNone(windowId)) {
-      record("capture", "Keep a GOAT window open on screen, then try again.");
+      const detail = "Keep a GOAT window open on screen, then try again.";
+      record("capture", detail);
+      yield* noteHelper((state) =>
+        withProof(state, { capture: "noWindow", screenLocked: false, details: [detail] }),
+      );
       return done();
     }
     const state = yield* call("get_window_state", {
@@ -701,35 +742,47 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     });
     const degraded = Option.flatMap(state, ({ structured }) =>
       Option.fromNullishOr(readString(structured, "degraded_reason")),
-    ).pipe(Option.map(describeDegraded), Option.getOrUndefined);
+    );
+    const screenLocked = Option.exists(degraded, (reason) => reason.startsWith("screen_locked"));
+    const degradedDetail = degraded.pipe(Option.map(describeDegraded), Option.getOrUndefined);
     const image = Option.flatMap(state, ({ result }) => Option.fromNullishOr(result.images[0]));
     const captured = Option.isSome(image)
       ? yield* Effect.tryPromise(() => native.imageHasContent(image.value)).pipe(
           Effect.orElseSucceed(() => false),
         )
       : false;
-    if (
-      !record(
-        "capture",
-        captured
-          ? undefined
-          : (degraded ??
-              (Option.isSome(image)
-                ? "The screenshot was blank. Check Screen Recording, then try again."
-                : "The driver returned no screenshot. Check Screen Recording, then try again.")),
-      )
-    )
+    const captureFailure = captured
+      ? undefined
+      : (degradedDetail ??
+        (Option.isSome(image)
+          ? "The screenshot was blank. Check Screen Recording, then try again."
+          : "The driver returned no screenshot. Check Screen Recording, then try again."));
+    if (!record("capture", captureFailure)) {
+      const proof: HelperProof = {
+        capture: Option.isSome(image) && degradedDetail === undefined ? "blank" : "unavailable",
+        screenLocked,
+        details: captureFailure === undefined ? [] : [captureFailure],
+      };
+      yield* noteHelper((current) => withProof(current, proof));
       return done();
+    }
     const elements = Option.match(state, {
       onNone: () => 0,
       onSome: ({ structured }) =>
         readNumber(structured, "element_count") ?? readArray(structured, "elements").length,
     });
-    record(
-      "accessibility",
+    const treeFailure =
       elements > 0
         ? undefined
-        : (degraded ?? "The driver could not read GOAT's window. Check Accessibility."),
+        : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
+    record("accessibility", treeFailure);
+    yield* noteHelper((current) =>
+      withProof(current, {
+        capture: "ready",
+        elements,
+        screenLocked,
+        details: treeFailure === undefined ? [] : [treeFailure],
+      }),
     );
     return done();
   }).pipe(
@@ -776,6 +829,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
           const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
+          if (selected.kind === "helper") {
+            helperSeen = true;
+            yield* noteHelper((state) => withGrants(state, grants, true));
+          }
           if (!grants.accessibility || !grants.screenRecording) {
             yield* report(
               request.requestId,
@@ -789,6 +846,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
           const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
+          helperSeen = true;
+          yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
             yield* report(
               request.requestId,
@@ -805,6 +864,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.timeout("20 seconds"),
       );
       const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
+      if (selected.kind === "helper") yield* noteHelper((state) => withRunning(state, true));
       if (!closed)
         yield* publisher.publishCuaReport({
           version: 1,
