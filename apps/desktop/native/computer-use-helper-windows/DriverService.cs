@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -6,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
 
 namespace Goat.ComputerUse
@@ -17,15 +19,15 @@ namespace Goat.ComputerUse
     }
 
     /// <summary>
-    /// Owns exactly one Cua Driver daemon. The driver runs from the files this build pinned by
-    /// SHA-256, inside a job that ends it with the helper, and is ready only once the pipe it
-    /// serves is provably its own.
+    /// Owns exactly one Cua Driver daemon, and runs the driver for nothing else but the short app
+    /// listing GOAT's capability manifest needs. Every run uses the files this build pinned by
+    /// SHA-256, inside a job that ends it with the helper.
     /// </summary>
     internal sealed class DriverService
     {
         static readonly Regex PipeName = new Regex(@"^\\\\\.\\pipe\\goat-cu-[A-Za-z0-9-]{1,64}$");
 
-        /// <summary>Names the daemon inherits: the Windows session basics. Anything else is dropped.</summary>
+        /// <summary>Names the driver inherits: the Windows session basics. Anything else is dropped.</summary>
         static readonly string[] InheritedNames =
         {
             "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "PATH", "PATHEXT", "COMSPEC", "TEMP", "TMP",
@@ -45,73 +47,108 @@ namespace Goat.ComputerUse
             new[] { "CUA_TELEMETRY_ENABLED", "false" },
             new[] { "CUA_DRIVER_RS_UPDATE_CHECK", "false" },
             new[] { "DO_NOT_TRACK", "1" },
+            new[] { "CUA_TELEMETRY", "0" },
         };
+        const int ListAppsTimeoutMs = 15000;
 
         readonly object gate = new object();
-        readonly string helperDirectory;
+        readonly string executablePath;
         readonly Action<Dictionary<string, object>> emit;
         IntPtr job = IntPtr.Zero;
         IntPtr process = IntPtr.Zero;
         int driverPid;
+        int generation;
         SafeFileHandle liveness;
-        readonly List<FileStream> pinnedHandles = new List<FileStream>();
+        readonly List<IDisposable> pins = new List<IDisposable>();
+        string driverDirectory;
 
-        public DriverService(string helperDirectory, Action<Dictionary<string, object>> emit)
+        public DriverService(string executablePath, Action<Dictionary<string, object>> emit)
         {
-            this.helperDirectory = helperDirectory;
+            this.executablePath = executablePath;
             this.emit = emit;
         }
 
-        string DriverDirectory { get { return Path.Combine(helperDirectory, "cua-driver"); } }
-
         /// <summary>
-        /// Opens every pinned file without write or delete sharing and checks its hash. The
-        /// handles stay open while the driver runs, so nobody can swap a file between this check
-        /// and the loader reading it.
+        /// Pins the driver: opens the helper's folder, the driver folder and every pinned file,
+        /// requires each to resolve to the path the helper itself runs from (no link or junction
+        /// anywhere on the way), checks each file's hash, and keeps all of them open. Open
+        /// directories cannot be renamed or replaced and open files cannot be written or
+        /// deleted, so the paths the driver later starts from name exactly these bytes.
         /// </summary>
         void PinDriverFiles()
         {
-            if (IsReparsePoint(helperDirectory) || IsReparsePoint(DriverDirectory))
-                throw new HelperException("driver_untrusted", "The helper's driver folder is a link.");
-            foreach (KeyValuePair<string, string> pin in BuildInfo.PinnedFiles)
+            if (pins.Count > 0) return;
+            try
             {
-                string path = Path.Combine(DriverDirectory, pin.Key);
-                if (!File.Exists(path) || IsReparsePoint(path))
-                    throw new HelperException("driver_missing", "The helper has no " + pin.Key + ".");
-                var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                pinnedHandles.Add(stream);
-                string actual;
-                using (var sha = SHA256.Create()) actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
-                if (actual != pin.Value)
-                    throw new HelperException("driver_untrusted", pin.Key + " does not match the Cua Driver this helper was built with.");
+                string self;
+                using (var own = new FileStream(executablePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+                    self = FinalPath(own.SafeFileHandle);
+                string helperDirectory = Path.GetDirectoryName(self);
+                string drivers = Path.Combine(helperDirectory, "cua-driver");
+                foreach (string directory in new[] { helperDirectory, drivers })
+                {
+                    SafeFileHandle handle = NativeMethods.CreateFileW(directory, NativeMethods.FILE_READ_ATTRIBUTES,
+                        NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE, IntPtr.Zero, NativeMethods.OPEN_EXISTING,
+                        NativeMethods.FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero);
+                    if (handle.IsInvalid) throw new HelperException("driver_missing", "The helper's driver folder is missing.");
+                    pins.Add(handle);
+                    if (!SamePath(FinalPath(handle), directory))
+                        throw new HelperException("driver_untrusted", "The helper's driver folder is reached through a link.");
+                }
+                foreach (KeyValuePair<string, string> pin in BuildInfo.PinnedFiles)
+                {
+                    string path = Path.Combine(drivers, pin.Key);
+                    if (!File.Exists(path)) throw new HelperException("driver_missing", "The helper has no " + pin.Key + ".");
+                    var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    pins.Add(stream);
+                    if (!SamePath(FinalPath(stream.SafeFileHandle), path))
+                        throw new HelperException("driver_untrusted", pin.Key + " is reached through a link.");
+                    string actual;
+                    using (var sha = SHA256.Create()) actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                    if (actual != pin.Value)
+                        throw new HelperException("driver_untrusted", pin.Key + " does not match the Cua Driver this helper was built with.");
+                }
+                driverDirectory = drivers;
+            }
+            catch
+            {
+                ReleasePins();
+                throw;
             }
         }
 
-        static bool IsReparsePoint(string path)
+        static string FinalPath(SafeFileHandle handle)
         {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            var name = new StringBuilder(1024);
+            int length = NativeMethods.GetFinalPathNameByHandleW(handle, name, name.Capacity, 0);
+            if (length <= 0 || length >= name.Capacity) throw new HelperException("driver_untrusted", "The helper cannot resolve its own files.");
+            string path = name.ToString();
+            return path.StartsWith(@"\\?\UNC\") ? @"\\" + path.Substring(8) : path.StartsWith(@"\\?\") ? path.Substring(4) : path;
+        }
+
+        static bool SamePath(string a, string b)
+        {
+            return string.Equals(Path.GetFullPath(a).TrimEnd('\\'), Path.GetFullPath(b).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase);
         }
 
         void ReleasePins()
         {
-            foreach (FileStream stream in pinnedHandles) stream.Dispose();
-            pinnedHandles.Clear();
+            foreach (IDisposable pin in pins) pin.Dispose();
+            pins.Clear();
+            driverDirectory = null;
         }
+
+        string DriverExecutable { get { return Path.Combine(driverDirectory, "cua-driver.exe"); } }
 
         public Dictionary<string, object> Start(Dictionary<string, object> parameters)
         {
             lock (gate)
             {
                 if (process != IntPtr.Zero) throw new HelperException("already_running", "The driver is already running.");
-                Dictionary<string, object> readiness = WindowsFacts.Readiness();
-                if (!(bool)readiness["interactiveSession"])
-                    throw new HelperException("no_interactive_desktop",
-                        "This GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Computer use needs GOAT started from a signed-in desktop.");
-                if ((bool)readiness["helperElevated"])
-                    throw new HelperException("helper_elevated", "GOAT Computer Use does not run elevated. Start GOAT without Run as administrator.");
+                RequireUsableSession();
                 string socketPath = parameters.ContainsKey("socketPath") ? parameters["socketPath"] as string : null;
                 if (socketPath == null || !PipeName.IsMatch(socketPath))
-                    throw new HelperException("bad_request", "socketPath must be a pipe named \\\\.\\pipe\\goat-cu-<id>.");
+                    throw new HelperException("bad_request", @"socketPath must be a pipe named \\.\pipe\goat-cu-<id>.");
                 if (NativeMethods.WaitNamedPipeW(socketPath, 1) || Marshal.GetLastWin32Error() != NativeMethods.ERROR_FILE_NOT_FOUND)
                     throw new HelperException("socket_in_use", "Something already serves that pipe.");
 
@@ -136,7 +173,25 @@ namespace Goat.ComputerUse
                 try
                 {
                     PinDriverFiles();
-                    Spawn(arguments, Environment(parameters));
+                    job = CreateJob();
+                    var security = Inheritable();
+                    SafeFileHandle readEnd;
+                    if (!NativeMethods.CreatePipe(out readEnd, out liveness, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
+                    NativeMethods.SetHandleInformation(liveness, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+                    using (readEnd)
+                    using (SafeFileHandle nul = Nul())
+                    {
+                        var environment = DriverEnvironment(parameters);
+                        environment["CUA_DRIVER_EMBEDDED"] = "1";
+                        environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = System.Diagnostics.Process.GetCurrentProcess().Id.ToString();
+                        process = Launch(job, arguments, environment, readEnd, nul, out driverPid);
+                    }
+                    int started = ++generation;
+                    IntPtr watched = Duplicate(process);
+                    int watchedPid = driverPid;
+                    var watcher = new Thread(delegate () { WatchExit(watched, watchedPid, started); });
+                    watcher.IsBackground = true;
+                    watcher.Start();
                     WaitUntilServing(socketPath);
                 }
                 catch
@@ -152,7 +207,145 @@ namespace Goat.ComputerUse
             }
         }
 
-        static SortedDictionary<string, string> Environment(Dictionary<string, object> parameters)
+        static void RequireUsableSession()
+        {
+            Dictionary<string, object> readiness = WindowsFacts.Readiness();
+            if (!(bool)readiness["interactiveSession"])
+                throw new HelperException("no_interactive_desktop",
+                    "This GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Computer use needs GOAT started from a signed-in desktop.");
+            if ((bool)readiness["helperElevated"])
+                throw new HelperException("helper_elevated", "GOAT Computer Use does not run elevated. Start GOAT without Run as administrator.");
+        }
+
+        /// <summary>
+        /// The driver's list_apps, which GOAT's capability manifest is built from, read through
+        /// the pinned driver in a job of its own. GOAT never runs the driver outside the helper.
+        /// </summary>
+        public object ListApps()
+        {
+            lock (gate)
+            {
+                RequireUsableSession();
+                bool pinnedHere = pins.Count == 0;
+                PinDriverFiles();
+                IntPtr listJob = IntPtr.Zero;
+                IntPtr child = IntPtr.Zero;
+                try
+                {
+                    listJob = CreateJob();
+                    var security = Inheritable();
+                    SafeFileHandle inRead, inWrite, outRead, outWrite;
+                    if (!NativeMethods.CreatePipe(out inRead, out inWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
+                    if (!NativeMethods.CreatePipe(out outRead, out outWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
+                    NativeMethods.SetHandleInformation(inWrite, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+                    NativeMethods.SetHandleInformation(outRead, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+                    int pid;
+                    using (inRead)
+                    using (outWrite)
+                        child = Launch(listJob, new List<string> { "mcp" }, DriverEnvironment(new Dictionary<string, object>()), inRead, outWrite, out pid);
+                    using (var input = new FileStream(inWrite, FileAccess.Write))
+                    using (var output = new FileStream(outRead, FileAccess.Read))
+                        return ExchangeListApps(input, output);
+                }
+                finally
+                {
+                    if (listJob != IntPtr.Zero) { NativeMethods.TerminateJobObject(listJob, 0); NativeMethods.CloseHandle(listJob); }
+                    if (child != IntPtr.Zero) NativeMethods.CloseHandle(child);
+                    if (pinnedHere && process == IntPtr.Zero) ReleasePins();
+                }
+            }
+        }
+
+        static object ExchangeListApps(Stream input, Stream output)
+        {
+            var json = new JavaScriptSerializer { MaxJsonLength = 16 * 1024 * 1024 };
+            var lines = new BlockingCollection<string>();
+            var reader = new Thread(delegate ()
+            {
+                try
+                {
+                    var text = new StreamReader(output, new UTF8Encoding(false));
+                    string line;
+                    while ((line = text.ReadLine()) != null) lines.Add(line);
+                }
+                catch (IOException) { }
+                catch (ObjectDisposedException) { }
+                lines.CompleteAdding();
+            });
+            reader.IsBackground = true;
+            reader.Start();
+            Action<string> send = delegate (string message)
+            {
+                byte[] bytes = new UTF8Encoding(false).GetBytes(message + "\n");
+                input.Write(bytes, 0, bytes.Length);
+                input.Flush();
+            };
+            send("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"goat\",\"version\":\"1\"}}}");
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(ListAppsTimeoutMs);
+            while (true)
+            {
+                int remaining = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                string line;
+                if (remaining <= 0 || !lines.TryTake(out line, remaining))
+                    throw new HelperException(lines.IsAddingCompleted ? "list_failed" : "list_timeout", "Cua Driver did not list apps.");
+                Dictionary<string, object> message = null;
+                try { message = json.DeserializeObject(line) as Dictionary<string, object>; }
+                catch (ArgumentException) { }
+                object id;
+                if (message == null || !message.TryGetValue("id", out id)) continue;
+                if (Convert.ToInt32(id) == 1)
+                {
+                    send("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}");
+                    send("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"list_apps\",\"arguments\":{}}}");
+                    continue;
+                }
+                if (Convert.ToInt32(id) != 2) continue;
+                object result, structured, apps;
+                if (message.TryGetValue("result", out result) && result is Dictionary<string, object> &&
+                    ((Dictionary<string, object>)result).TryGetValue("structuredContent", out structured) &&
+                    structured is Dictionary<string, object> &&
+                    ((Dictionary<string, object>)structured).TryGetValue("apps", out apps) && apps is object[])
+                    return apps;
+                throw new HelperException("list_failed", "Cua Driver could not list apps.");
+            }
+        }
+
+        static NativeMethods.SECURITY_ATTRIBUTES Inheritable()
+        {
+            return new NativeMethods.SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(NativeMethods.SECURITY_ATTRIBUTES)), bInheritHandle = true };
+        }
+
+        static SafeFileHandle Nul()
+        {
+            SafeFileHandle nul = NativeMethods.CreateFileW("NUL", NativeMethods.GENERIC_WRITE, 3, IntPtr.Zero, NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
+            NativeMethods.SetHandleInformation(nul, NativeMethods.HANDLE_FLAG_INHERIT, NativeMethods.HANDLE_FLAG_INHERIT);
+            return nul;
+        }
+
+        static IntPtr CreateJob()
+        {
+            IntPtr created = NativeMethods.CreateJobObjectW(IntPtr.Zero, null);
+            if (created == IntPtr.Zero) throw NativeMethods.LastError("CreateJobObject");
+            var limits = new NativeMethods.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            limits.BasicLimitInformation.LimitFlags = NativeMethods.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | NativeMethods.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
+            if (!NativeMethods.SetInformationJobObject(created, NativeMethods.JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(limits)))
+            {
+                NativeMethods.CloseHandle(created);
+                throw NativeMethods.LastError("SetInformationJobObject");
+            }
+            return created;
+        }
+
+        static IntPtr Duplicate(IntPtr handle)
+        {
+            IntPtr self = NativeMethods.GetCurrentProcess();
+            IntPtr copy;
+            if (!NativeMethods.DuplicateHandle(self, handle, self, out copy, 0, false, NativeMethods.DUPLICATE_SAME_ACCESS))
+                throw NativeMethods.LastError("DuplicateHandle");
+            return copy;
+        }
+
+        static SortedDictionary<string, string> DriverEnvironment(Dictionary<string, object> parameters)
         {
             var environment = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (string name in InheritedNames)
@@ -173,8 +366,6 @@ namespace Goat.ComputerUse
                 }
             }
             foreach (string[] pair in PrivacyEnvironment) environment[pair[0]] = pair[1];
-            environment["CUA_DRIVER_EMBEDDED"] = "1";
-            environment["CUA_DRIVER_EMBEDDED_HOST_PID"] = System.Diagnostics.Process.GetCurrentProcess().Id.ToString();
             return environment;
         }
 
@@ -196,33 +387,20 @@ namespace Goat.ComputerUse
         }
 
         /// <summary>
-        /// Starts the driver suspended, puts it in a kill-on-close job, then lets it run, so no
-        /// process it starts can escape the job. Only the liveness pipe and stderr are inherited.
+        /// Starts the pinned driver suspended, puts it in the job, then lets it run, so no process
+        /// it starts can escape the job. A child the job refuses is ended before it ever runs.
+        /// Only stdin, stdout and stderr are inherited.
         /// </summary>
-        void Spawn(List<string> arguments, SortedDictionary<string, string> environment)
+        IntPtr Launch(IntPtr intoJob, List<string> arguments, SortedDictionary<string, string> environment,
+            SafeFileHandle stdin, SafeFileHandle stdout, out int pid)
         {
-            string executable = Path.Combine(DriverDirectory, "cua-driver.exe");
-            job = NativeMethods.CreateJobObjectW(IntPtr.Zero, null);
-            if (job == IntPtr.Zero) throw NativeMethods.LastError("CreateJobObject");
-            var limits = new NativeMethods.JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
-            limits.BasicLimitInformation.LimitFlags = NativeMethods.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | NativeMethods.JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;
-            if (!NativeMethods.SetInformationJobObject(job, NativeMethods.JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(limits)))
-                throw NativeMethods.LastError("SetInformationJobObject");
-
-            var security = new NativeMethods.SECURITY_ATTRIBUTES { nLength = Marshal.SizeOf(typeof(NativeMethods.SECURITY_ATTRIBUTES)), bInheritHandle = true };
-            SafeFileHandle readEnd;
-            if (!NativeMethods.CreatePipe(out readEnd, out liveness, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
-            NativeMethods.SetHandleInformation(liveness, NativeMethods.HANDLE_FLAG_INHERIT, 0);
-            SafeFileHandle nul = NativeMethods.CreateFileW("NUL", NativeMethods.GENERIC_WRITE, 3, IntPtr.Zero, NativeMethods.OPEN_EXISTING, 0, IntPtr.Zero);
-            NativeMethods.SetHandleInformation(nul, NativeMethods.HANDLE_FLAG_INHERIT, NativeMethods.HANDLE_FLAG_INHERIT);
+            string executable = DriverExecutable;
             IntPtr stderr = NativeMethods.GetStdHandle(-12);
-
             var block = new StringBuilder();
             foreach (KeyValuePair<string, string> pair in environment) block.Append(pair.Key).Append('=').Append(pair.Value).Append('\0');
             block.Append('\0');
             IntPtr environmentBlock = Marshal.StringToHGlobalUni(block.ToString());
-
-            var handles = new List<IntPtr> { readEnd.DangerousGetHandle(), nul.DangerousGetHandle() };
+            var handles = new List<IntPtr> { stdin.DangerousGetHandle(), stdout.DangerousGetHandle() };
             bool stderrInheritable = stderr != IntPtr.Zero && stderr != new IntPtr(-1);
             if (stderrInheritable) handles.Add(stderr);
             IntPtr handleArray = Marshal.AllocHGlobal(IntPtr.Size * handles.Count);
@@ -239,26 +417,31 @@ namespace Goat.ComputerUse
                 var startup = new NativeMethods.STARTUPINFOEX();
                 startup.StartupInfo.cb = Marshal.SizeOf(typeof(NativeMethods.STARTUPINFOEX));
                 startup.StartupInfo.dwFlags = NativeMethods.STARTF_USESTDHANDLES;
-                startup.StartupInfo.hStdInput = readEnd.DangerousGetHandle();
-                startup.StartupInfo.hStdOutput = nul.DangerousGetHandle();
-                startup.StartupInfo.hStdError = stderrInheritable ? stderr : nul.DangerousGetHandle();
+                startup.StartupInfo.hStdInput = stdin.DangerousGetHandle();
+                startup.StartupInfo.hStdOutput = stdout.DangerousGetHandle();
+                startup.StartupInfo.hStdError = stderrInheritable ? stderr : stdout.DangerousGetHandle();
                 startup.lpAttributeList = attributes;
                 var commandLine = new StringBuilder(Quote(executable));
                 foreach (string argument in arguments) commandLine.Append(' ').Append(Quote(argument));
                 NativeMethods.PROCESS_INFORMATION info;
                 if (!NativeMethods.CreateProcessW(executable, commandLine, IntPtr.Zero, IntPtr.Zero, true,
                         NativeMethods.CREATE_SUSPENDED | NativeMethods.CREATE_UNICODE_ENVIRONMENT | NativeMethods.CREATE_NO_WINDOW | NativeMethods.EXTENDED_STARTUPINFO_PRESENT,
-                        environmentBlock, DriverDirectory, ref startup, out info))
+                        environmentBlock, driverDirectory, ref startup, out info))
                     throw new HelperException("spawn_failed", "Could not start Cua Driver (" + Marshal.GetLastWin32Error() + ").");
-                process = info.hProcess;
-                driverPid = info.dwProcessId;
-                if (!NativeMethods.AssignProcessToJobObject(job, process))
+                if (!NativeMethods.AssignProcessToJobObject(intoJob, info.hProcess))
                 {
+                    int error = Marshal.GetLastWin32Error();
+                    // Never resumed, so it has run no code; end it before anyone can.
+                    NativeMethods.TerminateProcess(info.hProcess, 1);
+                    NativeMethods.WaitForSingleObject(info.hProcess, 5000);
                     NativeMethods.CloseHandle(info.hThread);
-                    throw new HelperException("spawn_failed", "Could not contain Cua Driver in the helper's job (" + Marshal.GetLastWin32Error() + ").");
+                    NativeMethods.CloseHandle(info.hProcess);
+                    throw new HelperException("spawn_failed", "Could not contain Cua Driver in the helper's job (" + error + ").");
                 }
                 NativeMethods.ResumeThread(info.hThread);
                 NativeMethods.CloseHandle(info.hThread);
+                pid = info.dwProcessId;
+                return info.hProcess;
             }
             finally
             {
@@ -266,17 +449,14 @@ namespace Goat.ComputerUse
                 Marshal.FreeHGlobal(attributes);
                 Marshal.FreeHGlobal(handleArray);
                 Marshal.FreeHGlobal(environmentBlock);
-                readEnd.Dispose();
-                nul.Dispose();
             }
-            IntPtr watched = process;
-            int watchedPid = driverPid;
-            var watcher = new Thread(delegate () { WatchExit(watched, watchedPid); });
-            watcher.IsBackground = true;
-            watcher.Start();
         }
 
-        /// <summary>Ready once the pipe exists and the process serving it is the driver this helper started.</summary>
+        /// <summary>
+        /// Ready once the pipe exists and the process serving it is the driver this helper
+        /// started. Later connections are not re-checked: any process that could serve a rogue
+        /// instance runs as this user and could already drive GOAT itself (#1210).
+        /// </summary>
         void WaitUntilServing(string socketPath)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(20);
@@ -309,15 +489,17 @@ namespace Goat.ComputerUse
             throw new HelperException("startup_timeout", "Cua Driver did not become ready within 20 seconds.");
         }
 
-        void WatchExit(IntPtr watched, int watchedPid)
+        /// <summary>Waits on its own copy of the handle; a stop or restart since then makes it stale.</summary>
+        void WatchExit(IntPtr watched, int watchedPid, int startedGeneration)
         {
             NativeMethods.WaitForSingleObject(watched, 0xFFFFFFFF);
             uint code;
             NativeMethods.GetExitCodeProcess(watched, out code);
+            NativeMethods.CloseHandle(watched);
             lock (gate)
             {
                 // An orderly stop clears the process first and stays silent.
-                if (process != watched) return;
+                if (startedGeneration != generation || process == IntPtr.Zero) return;
                 CleanUpLocked();
             }
             var exited = new Dictionary<string, object>();
@@ -347,6 +529,7 @@ namespace Goat.ComputerUse
 
         void CleanUpLocked()
         {
+            generation++;
             if (liveness != null) { liveness.Dispose(); liveness = null; }
             // Closing the last job handle kills anything the driver left behind.
             if (job != IntPtr.Zero) { NativeMethods.CloseHandle(job); job = IntPtr.Zero; }
