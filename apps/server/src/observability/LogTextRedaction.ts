@@ -330,12 +330,11 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // hide a token, and dotted names such as serverLogger.test.ts are left alone.
   [/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g, maskJoseToken],
   // https://user:token@host/repo.git. Userinfo runs to the authority's last @, as URL parsers read
-  // it, so a password holding @ is hidden whole. The scheme is bounded (a longer run is matched by
-  // its end) and an authority ends at the next slash, so scanning stays linear.
-  // URL parsers also accept spaces and tabs in userinfo, so user:password may hold them on either
-  // side of its first colon, within one line; without a colon, whitespace ends it, so prose stays
-  // readable. The username part cannot cross that colon, which keeps the match linear.
-  [/([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^/\r\n?#:]*:[^/\r\n?#]*|[^/\s?#]*)@/gi, `$1${MASK}@`],
+  // it, so a password holding @ is hidden whole. Parsers end an authority only at /, ? or #, and
+  // accept spaces and tabs in userinfo, so it may hold them within one line; a pathless URL
+  // followed on its line by an @ is masked up to that @. The scheme is bounded (a longer run is
+  // matched by its end) and an authority ends at the next slash, so scanning stays linear.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\r\n?#]*@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],

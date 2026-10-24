@@ -95,6 +95,8 @@ describe("redactLogText", () => {
     ["https://alice:CANARY\tPASSWORD@example.com/repo", "https://***@example.com/repo"],
     ["https://alice name:CANARY@example.com/repo", "https://***@example.com/repo"],
     ["https://ali\tce:CANARY@example.com/repo", "https://***@example.com/repo"],
+    ["https://alice CANARY@example.com/repo", "https://***@example.com/repo"],
+    ["https://alice\tCANARY@example.com/repo", "https://***@example.com/repo"],
     [
       `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
       "clone https://***@example.com/r.git",
@@ -122,7 +124,7 @@ describe("redactLogText", () => {
     "eyes.width.px and ewma.window.size=3",
     "Basic auth is enabled for the dev server",
     "apps/server/src/serverLogger.test.ts and collector.example.com.local",
-    "see https://example.com, then mail bob@example.com",
+    "see https://example.com/docs, then mail bob@example.com",
   ])("leaves %j as it is", (text) => {
     expect(redactLogText(text)).toBe(text);
   });
