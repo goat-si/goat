@@ -220,16 +220,40 @@ final class DriverService {
     // realpath on both sides: Foundation's symlink resolution drops /private from /private/tmp.
     guard let resolved = realpath(path, nil), let bundleRoot = realpath(Bundle.main.bundlePath, nil)
     else { return "The bundled Cua Driver cannot be resolved." }
-    let inside = String(cString: resolved).hasPrefix(String(cString: bundleRoot) + "/")
+    let bundlePath = String(cString: bundleRoot)
+    let inside = String(cString: resolved).hasPrefix(bundlePath + "/")
     free(resolved)
     free(bundleRoot)
     guard inside else {
       return "The bundled Cua Driver resolves outside the helper bundle."
     }
-    guard let own = selfStaticCode() else { return "The helper cannot read its own signature." }
-    let flags = SecCSFlags(rawValue: kSecCSCheckNestedCode | kSecCSStrictValidate | kSecCSCheckAllArchitectures)
-    guard SecStaticCodeCheckValidity(own, flags, nil) == errSecSuccess else {
-      return "The helper bundle's signature no longer matches its contents."
+    // Validate the running code, not just the files: the dynamic check also compares the
+    // kernel's code directory hash for this process with the bundle on disk, so a bundle that
+    // was changed and signed again after this helper started is refused too.
+    var live: SecCode?
+    guard SecCodeCopySelf([], &live) == errSecSuccess, let live else {
+      return "The helper cannot read its own signature."
+    }
+    var liveStatic: SecStaticCode?
+    var livePath: CFURL?
+    guard SecCodeCopyStaticCode(live, [], &liveStatic) == errSecSuccess, let liveStatic,
+      SecCodeCopyPath(liveStatic, [], &livePath) == errSecSuccess, let livePath,
+      let liveRoot = realpath((livePath as URL).path, nil)
+    else { return "The helper cannot locate its own bundle." }
+    let sameBundle = String(cString: liveRoot) == bundlePath
+    free(liveRoot)
+    guard sameBundle else { return "The running helper is not the bundle its driver comes from." }
+    // Dynamic: this process's code directory hash against the disk. Static: the whole sealed
+    // bundle, driver bytes included, from that same code object.
+    let dynamic = SecCodeCheckValidity(live, [], nil)
+    guard dynamic == errSecSuccess else {
+      return "The helper bundle no longer matches the running helper (\(dynamic))."
+    }
+    let flags = SecCSFlags(
+      rawValue: kSecCSCheckNestedCode | kSecCSStrictValidate | kSecCSCheckAllArchitectures)
+    let sealed = SecStaticCodeCheckValidity(liveStatic, flags, nil)
+    guard sealed == errSecSuccess else {
+      return "The helper bundle's signature no longer matches its contents (\(sealed))."
     }
     return nil
   }
