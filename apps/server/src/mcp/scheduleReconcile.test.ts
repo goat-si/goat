@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  ScheduledTaskError,
   ScheduledTaskId,
   type ScheduledTaskUpsertInput,
   ThreadId,
@@ -209,7 +210,7 @@ const updateFixture = () => {
           if (stored.failNext === true) {
             delete stored.failNext;
             return Effect.fail(
-              new ScheduledTasks.ScheduledTaskError({ message: "Could not save schedule task." }),
+              new ScheduledTaskError({ message: "Could not save schedule task." }),
             );
           }
           const park = parked.next;
