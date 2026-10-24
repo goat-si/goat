@@ -207,6 +207,13 @@ it.effect(
         });
         yield* PubSub.take(signals);
         assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        // A person's input the helper cannot attribute to a device still pauses the agents.
+        yield* Queue.offer(reports, { version: 1, type: "cuaHumanInput", source: "unknown" });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "human_input",
+        });
       }).pipe(
         Effect.provide(
           ComputerUseLeases.layer.pipe(

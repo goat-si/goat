@@ -191,7 +191,8 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  source: Schema.Literals(["keyboard", "pointer"]),
+  /** unknown: the helper saw a person's input but not which device sent it. */
+  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
