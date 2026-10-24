@@ -48,7 +48,6 @@ import {
   type HelperReadinessState,
 } from "./helperReadiness.ts";
 import {
-  classifyHelperBundle,
   ComputerUseHelperError,
   helperBundle,
   makeHelperHost,
@@ -65,6 +64,7 @@ import {
   windowsHelperBundle,
   windowsPermissionsFailure,
 } from "./ComputerUseHelperWindows.ts";
+import { resolveHelperBundle } from "./ComputerUseHelperInstall.ts";
 
 /** The daemon lifecycle both engines share: the SDK's in-process host and the helper app. */
 interface NativeHost {
@@ -128,17 +128,9 @@ export interface DesktopCuaDriverDependencies {
   /**
    * The helper bundle this build ships. absent: the build has none, and GOAT itself runs the
    * driver as releases did before the helper. unusable: it should be there and cannot be used,
-   * so computer use stays off rather than run under another principal.
+   * so computer use stays off rather than run under another principal. note: something to log.
    */
-  readonly helperBundlePath: (input: {
-    readonly isPackaged: boolean;
-    readonly resourcesPath: string;
-    readonly platform: NodeJS.Platform;
-  }) => Promise<
-    | { readonly kind: "found"; readonly path: string }
-    | { readonly kind: "absent" }
-    | { readonly kind: "unusable"; readonly message: string }
-  >;
+  readonly helperBundlePath: typeof resolveHelperBundle;
   readonly helperHost: (
     options: Omit<HelperHostOptions, "spawn" | "readMetadata"> & {
       readonly platform: NodeJS.Platform;
@@ -231,22 +223,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     platform === "win32"
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
-  helperBundlePath: async ({ isPackaged, resourcesPath, platform }) => {
-    const { join } = await import("node:path");
-    const configured = isPackaged ? undefined : process.env.GOAT_CUA_HELPER_PATH?.trim();
-    if (!isPackaged && !configured) return { kind: "absent" };
-    // A set dev path must exist; only a packaged build with nothing at the helper's place falls back.
-    return platform === "win32"
-      ? classifyHelperBundle(
-          configured || join(resourcesPath, "computer-use-helper"),
-          configured !== undefined,
-          (path) => windowsHelperBundle(path, "").executable,
-        )
-      : classifyHelperBundle(
-          configured || join(resourcesPath, "..", "Helpers", COMPUTER_USE_HELPER_NAME + ".app"),
-          configured !== undefined,
-        );
-  },
+  helperBundlePath: resolveHelperBundle,
   helperHost: ({ platform, ...options }) =>
     makeHelperHost({
       ...options,
@@ -490,11 +467,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
     if (environment.platform === "darwin" || environment.platform === "win32") {
+      const bundleId = computerUseHelperBundleId(environment.appUserModelId);
       const found = yield* Effect.tryPromise(() =>
         native.helperBundlePath({
           isPackaged: environment.isPackaged,
           resourcesPath: environment.resourcesPath,
           platform: environment.platform,
+          stateDir: environment.stateDir,
+          bundleId,
+          // The installed helper switches generations only while none runs (#1162).
+          busy: owned !== undefined,
         }),
       ).pipe(
         Effect.orElseSucceed(
@@ -507,7 +489,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
       if (found.kind === "unusable") return found.message;
       if (found.kind === "found") {
-        const bundleId = computerUseHelperBundleId(environment.appUserModelId);
+        if (found.note) yield* Effect.logWarning(found.note);
         return {
           kind: "helper",
           bundle:
