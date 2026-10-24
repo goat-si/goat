@@ -366,6 +366,33 @@ it.live.each([
     ).pipe(Effect.provide(layer)),
 );
 
+it.live("a snapshot that cannot capture times out on the request's own deadline (#1084)", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const cdp = contexts[0]!.sessions[0]!;
+      const original = cdp.send.getMockImplementation()!;
+      const captured = Promise.withResolvers<Record<string, unknown>>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => captured.resolve({ data: "" })));
+      cdp.send.mockImplementation((method, input) =>
+        method === "Page.captureScreenshot" ? captured.promise : original(method, input),
+      );
+      const error = yield* broker
+        .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+        .pipe(Effect.flip);
+      // The server browser answered with the deadline the error names, before the broker gave up
+      // on it and cut it off.
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationTimeoutError",
+        timeoutMs: 200,
+        remoteTag: "PreviewAutomationTimeoutError",
+      });
+      cdp.send.mockImplementation(original);
+      yield* broker.invoke({ scope, tabId, operation: "status", input: {} });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("logs read filtered diagnostics without page capture or invalidating snapshot refs", () =>
   Effect.scoped(
     Effect.gen(function* () {
