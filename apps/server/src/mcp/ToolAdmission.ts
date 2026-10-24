@@ -180,7 +180,8 @@ const principalOf = (scope: McpInvocationContext.McpInvocationScope) =>
       ? `client:${scope.client.sessionId}`
       : undefined;
 
-const hostOf = (params: unknown) => {
+const hostOf = (entry: KeyedEntry, params: unknown) => {
+  if (!entry.hostRoutable) return undefined;
   const host = (params as { readonly host?: unknown } | null)?.host;
   return typeof host === "string" ? host : undefined;
 };
@@ -476,7 +477,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
           digest,
           ...audit,
           grant,
-          host: hostOf(params) ?? null,
+          host: hostOf(entry, params) ?? null,
         });
         if (reservation.kind === "reserved") yield* Ref.set(held, receiptId);
         if (
@@ -526,7 +527,7 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
                               reservation.kind,
                               entry,
                               clientRequestId,
-                              hostOf(params),
+                              hostOf(entry, params),
                             ),
                           ),
                         );
