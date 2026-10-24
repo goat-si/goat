@@ -28,7 +28,6 @@ import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMen
 import { readLocalApi } from "~/localApi";
 import { GOAT_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
-import { resolveFilePathCopyTargets } from "~/filePathCopy";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
 import { joinHostPath } from "./filePath";
@@ -36,6 +35,7 @@ import {
   copyFilePathsForCommand,
   filePathCopyCommandForEvent,
   fileTreeCopyPaths,
+  hasRelativeCopyPaths,
   type FilePathCopyCommand,
 } from "./filePathCopyShortcut";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
@@ -237,15 +237,20 @@ export default function FileBrowserPanel({
           ? selectedPaths.map((path) => path.replace(/\/$/, ""))
           : [relativePath];
       const plural = copyRows.length > 1 ? "s" : "";
-      const hasRelativePath =
-        resolveFilePathCopyTargets({ filePath: panelPath(relativePath), workspaceRoot })
-          .relativePath !== null;
+      // Native menus have no tooltips, so the label names the root relative paths start at.
+      const workspaceName = workspaceRoot.split(/[\\/]/).findLast(Boolean) ?? workspaceRoot;
+      const hasRelativePath = hasRelativeCopyPaths(copyRows.map(panelPath), workspaceRoot);
       void settlePromise(async () => {
         const clicked = await api.contextMenu.show(
           [
             ...fileMenuItems,
             ...(hasRelativePath
-              ? [{ id: "copy-relative", label: `Copy relative path${plural}` }]
+              ? [
+                  {
+                    id: "copy-relative",
+                    label: `Copy relative path${plural} (from ${workspaceName})`,
+                  },
+                ]
               : []),
             { id: "copy-full", label: `Copy full path${plural}` },
             { id: "copy-mention", label: "Copy mention" },

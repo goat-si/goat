@@ -1,8 +1,12 @@
-import { EnvironmentId, type ProjectEntry } from "@goat/contracts";
-import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
+import { EnvironmentId, type KeybindingRule, type ProjectEntry } from "@goat/contracts";
+import {
+  compileResolvedKeybindingRule,
+  DEFAULT_RESOLVED_KEYBINDINGS,
+} from "@goat/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
+import { resolveShortcutCommand } from "~/keybindings";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
@@ -10,11 +14,12 @@ const state = vi.hoisted(() => ({
   toast: vi.fn(),
   menu: vi.fn(),
   loads: [] as string[],
+  keybindings: [] as typeof DEFAULT_RESOLVED_KEYBINDINGS,
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
   ...(await original()),
-  useAtomValue: (() => DEFAULT_RESOLVED_KEYBINDINGS) as never,
+  useAtomValue: (() => state.keybindings) as never,
 }));
 vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: "keybindings" }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
@@ -82,8 +87,13 @@ import { FilePathCopyMenu } from "./FilePathCopyMenu";
 const MOD = /mac|iphone|ipad/i.test(navigator.platform) ? "Meta" : "Control";
 const COPY_PATH = `{${MOD}>}{Alt>}c{/Alt}{/${MOD}}`;
 const COPY_RELATIVE_PATH = `{${MOD}>}{Alt>}{Shift>}c{/Shift}{/Alt}{/${MOD}}`;
+const THREAD_COPY_REFERENCE = `{${MOD}>}{Shift>}c{/Shift}{/${MOD}}`;
 
-function setup() {
+function setup(customRules: KeybindingRule[] = []) {
+  state.keybindings = [
+    ...DEFAULT_RESOLVED_KEYBINDINGS,
+    ...customRules.map((rule) => compileResolvedKeybindingRule(rule)!),
+  ];
   state.copy.mockClear();
   state.toast.mockClear();
   state.menu.mockReset();
@@ -219,6 +229,61 @@ describe("file tree path copy shortcuts", () => {
     expect(state.copy).not.toHaveBeenCalled();
   });
 
+  it("ignores a custom copy rule without a when clause while typing in the search field", async () => {
+    setup([{ key: "mod+alt+c", command: "files.copyPath" }]);
+    await using screen = await renderPanel();
+    await userEvent.click(await row(screen.container, "README.md"));
+    await userEvent.click(screen.getByRole("searchbox", { name: "Search repo files" }));
+    await userEvent.keyboard(COPY_PATH);
+    expect(state.copy).not.toHaveBeenCalled();
+  });
+
+  it("lets a copy rule rebound onto another command's keys win over a global capture listener", async () => {
+    setup([
+      { key: "mod+shift+c", command: "files.copyPath", when: "fileViewFocus && !editableFocus" },
+    ]);
+    // Mirrors useChatShortcuts: window capture, the chat's own context, and it stops what it handles.
+    const taken: string[] = [];
+    const chatShortcuts = (event: KeyboardEvent) => {
+      const command = resolveShortcutCommand(event, state.keybindings, {
+        context: { terminalFocus: false },
+      });
+      if (command !== "thread.copyReference") return;
+      taken.push(command);
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("keydown", chatShortcuts, true);
+    using _listener = {
+      [Symbol.dispose]: () => window.removeEventListener("keydown", chatShortcuts, true),
+    };
+    await using screen = await renderPanel();
+    await userEvent.click(await row(screen.container, "README.md"));
+    await expectCopied(THREAD_COPY_REFERENCE, "/home/dev/repo/README.md");
+    expect(taken).toEqual([]);
+  });
+
+  it("refuses a relative copy when part of the selection is outside the workspace", async () => {
+    setup();
+    await using screen = await renderPanel({
+      cwd: "/home/dev",
+      workspaceRoot: "/home/dev/src",
+      hostFolder: true,
+    });
+    await userEvent.click(await row(screen.container, "src/"));
+    await userEvent.click(await row(screen.container, "README.md"), { modifiers: [MOD] });
+    await userEvent.keyboard(COPY_RELATIVE_PATH);
+    await vi.waitFor(() =>
+      expect(state.toast).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: "error",
+          description: "1 of 2 items are outside /home/dev/src",
+        }),
+      ),
+    );
+    expect(state.copy).not.toHaveBeenCalled();
+  });
+
   it("copies a host folder's host path and has no relative path outside the workspace", async () => {
     setup();
     await using screen = await renderPanel({
@@ -252,7 +317,7 @@ describe("file tree context menu path copy", () => {
     );
     const items = state.menu.mock.calls[0]?.[0] as Array<{ id: string; label: string }>;
     expect(items.filter((item) => item.id.startsWith("copy-")).map((item) => item.label)).toEqual([
-      "Copy relative path",
+      "Copy relative path (from repo)",
       "Copy full path",
       "Copy mention",
     ]);
@@ -269,20 +334,21 @@ describe("file tree context menu path copy", () => {
       expect(state.copy).toHaveBeenCalledWith("README.md\nnotes.md", "relative path"),
     );
     const items = state.menu.mock.calls[0]?.[0] as Array<{ id: string; label: string }>;
-    expect(items.map((item) => item.label)).toContain("Copy relative paths");
+    expect(items.map((item) => item.label)).toContain("Copy relative paths (from repo)");
   });
 });
 
 describe("file viewer path copy shortcuts", () => {
   async function renderViewer() {
     return render(
-      <div data-file-view>
-        <FilePathCopyMenu filePath="docs/guide.md" workspaceRoot="/home/dev/repo" />
-        <p>Rendered file content</p>
-        <input aria-label="Find in file" />
-        <div data-file-browser-panel>
-          <p>Tree area</p>
+      <div>
+        {/* Matches FilePreviewPanel's surface root, which clicks on content focus. */}
+        <div data-file-view tabIndex={-1}>
+          <FilePathCopyMenu filePath="docs/guide.md" workspaceRoot="/home/dev/repo" />
+          <p>Rendered file content</p>
+          <input aria-label="Find in file" />
         </div>
+        <button type="button">Outside the file view</button>
       </div>,
       { router: false /* no links */ },
     );
@@ -296,10 +362,10 @@ describe("file viewer path copy shortcuts", () => {
     await expectCopied(COPY_RELATIVE_PATH, "docs/guide.md");
   });
 
-  it("leaves the shortcuts to the tree and to text fields", async () => {
+  it("ignores the shortcuts outside the view and in its text fields", async () => {
     setup();
     await using screen = await renderViewer();
-    await userEvent.click(screen.getByText("Tree area"));
+    await userEvent.click(screen.getByRole("button", { name: "Outside the file view" }));
     await userEvent.keyboard(COPY_PATH);
     await userEvent.click(screen.getByRole("textbox", { name: "Find in file" }));
     await userEvent.keyboard(COPY_PATH);

@@ -109,7 +109,7 @@ import {
   FileSurfaceLoading,
 } from "./fileSurfaceChrome";
 import SourceFilePreview from "./ReadOnlySourcePreview";
-import { resolveCenteredFileLineScrollTop } from "./fileLineReveal";
+import { clampFileLine, resolveCenteredFileLineScrollTop } from "./fileLineReveal";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { projectFileCacheKey } from "./fileContentRevision";
 import {
@@ -413,20 +413,6 @@ function WorkspaceAudioPreview(props: {
       onError={() => setFailedUrl(url)}
     />
   );
-}
-
-function clampFileLine(contents: string, requestedLine: number): number {
-  let lineCount = 1;
-  for (let index = 0; index < contents.length; index += 1) {
-    const character = contents.charCodeAt(index);
-    if (character === 10) {
-      lineCount += 1;
-    } else if (character === 13) {
-      lineCount += 1;
-      if (contents.charCodeAt(index + 1) === 10) index += 1;
-    }
-  }
-  return Math.min(Math.max(1, requestedLine), lineCount);
 }
 
 function updateFileLinkReveal(fileContainer: HTMLElement, line: number | null): void {
@@ -1333,7 +1319,12 @@ export default function FilePreviewPanel({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background" data-file-view>
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background"
+      data-file-view
+      // Clicking read-only content focuses the view, so the path copy shortcuts follow it.
+      tabIndex={-1}
+    >
       {breadcrumbPath !== null && breadcrumbTrail !== null ? (
         <div className={FILE_SURFACE_SUBHEADER_CLASS} data-surface-subheader>
           <ScrollArea

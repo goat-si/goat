@@ -18,39 +18,25 @@ import {
 
 /**
  * Path copying stays available even when no editor or shell actions are supported.
- * The copy shortcuts act on this file while focus, or the last click, is in its
- * view; the file tree inside the view handles its own rows.
+ * The copy shortcuts act on this file while focus is in its view; the file tree
+ * inside the view handles its own rows and stops those events.
  */
 export function FilePathCopyMenu(props: { filePath: string; workspaceRoot: string }) {
   const { relativePath, fullPath } = resolveFilePathCopyTargets(props);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const lastPointerInViewRef = useRef(false);
-  const ownsTarget = (target: EventTarget | null) => {
-    const view = triggerRef.current?.closest("[data-file-view]");
-    if (!view || !(target instanceof Element) || !view.contains(target)) return false;
-    return target.closest("[data-file-browser-panel]") === null;
-  };
-  const rememberPointer = useStableCallback((event: PointerEvent) => {
-    lastPointerInViewRef.current = ownsTarget(event.target);
-  });
-  // Clicking read-only file content focuses nothing, so the key event arrives on the body.
   const copyFromShortcut = useStableCallback((event: KeyboardEvent) => {
-    const onBody = event.target === document.body || event.target === document.documentElement;
-    if (!(onBody ? lastPointerInViewRef.current : ownsTarget(event.target))) return;
     const command = filePathCopyCommandForEvent(event, keybindings);
     if (command === null) return;
     event.preventDefault();
     if (!event.repeat) void copyFilePathsForCommand(command, [props.filePath], props.workspaceRoot);
   });
   useEffect(() => {
-    window.addEventListener("pointerdown", rememberPointer, true);
-    window.addEventListener("keydown", copyFromShortcut);
-    return () => {
-      window.removeEventListener("pointerdown", rememberPointer, true);
-      window.removeEventListener("keydown", copyFromShortcut);
-    };
-  }, [copyFromShortcut, rememberPointer]);
+    const view = triggerRef.current?.closest<HTMLElement>("[data-file-view]");
+    if (!view) return;
+    view.addEventListener("keydown", copyFromShortcut);
+    return () => view.removeEventListener("keydown", copyFromShortcut);
+  }, [copyFromShortcut]);
   const relativeShortcut = filePathCopyShortcutLabel(keybindings, "files.copyRelativePath");
   const fullShortcut = filePathCopyShortcutLabel(keybindings, "files.copyPath");
   return (
