@@ -17,7 +17,7 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
  * - Masked whole: GOAT MCP credentials; bare JWT and JWE tokens; Authorization header values
  *   (Bearer, Basic or any scheme); Cookie and Set-Cookie headers; and the values of JSON fields,
  *   structured log fields and key=value assignments whose name is in the fixed CREDENTIAL_KEY list
- *   (LogTextRedaction.ts), plus URL userinfo and a few provider token shapes.
+ *   (LogTextRedaction.ts), plus URL userinfo written on one line and a few provider token shapes.
  * - Errors keep their name, message, stack and Error cause chain and lose every other field.
  * - Logging never fails, runs no getter, hook or method of a logged value (apart from an Error's
  *   name/message/stack/cause, read as Effect reads them, and a Redactable's own hook), and costs

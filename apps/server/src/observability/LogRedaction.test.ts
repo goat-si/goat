@@ -93,6 +93,8 @@ describe("redactLogText", () => {
     // URL parsers accept, and percent-encode, spaces and tabs in a password.
     ["https://alice:CANARY PASSWORD@example.com/repo", "https://***@example.com/repo"],
     ["https://alice:CANARY\tPASSWORD@example.com/repo", "https://***@example.com/repo"],
+    ["https://alice name:CANARY@example.com/repo", "https://***@example.com/repo"],
+    ["https://ali\tce:CANARY@example.com/repo", "https://***@example.com/repo"],
     [
       `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
       "clone https://***@example.com/r.git",
@@ -146,6 +148,13 @@ describe("redactLogText", () => {
       expect(text).not.toContain(header.slice(0, 40));
     },
   );
+
+  it("hides a URL's userinfo whose @ falls past the scanned part of a huge text", () => {
+    const text = `clone https://alice:canary-long-url${"a".repeat(260_000)}@example.com/repo`;
+    const redacted = redactLogText(text);
+    expect(redacted.startsWith("clone https://***")).toBe(true);
+    expect(redacted).not.toContain("canary-long-url");
+  });
 
   it("finds a token joined to a long prefix whatever the length of its header", () => {
     const longHeader = Buffer.from(

@@ -221,6 +221,14 @@ function maskUnfinishedJose(text: string): string {
   return masked === undefined ? text : text.slice(0, start) + masked;
 }
 
+/**
+ * A URL authority that the scan cut runs through may still hold userinfo whose @ lies past the
+ * cut, so it is masked from its scheme to the cut, as an unfinished JOSE token is.
+ */
+function maskUnfinishedUrl(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\r\n?#]*$/i, `$1${MASK}`);
+}
+
 function startsJsonObject(part: string): boolean {
   // The whole part is decoded: a header may open with any amount of whitespace.
   return /^\s*\{/.test(Buffer.from(part, "base64url").toString("utf8"));
@@ -324,9 +332,10 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // https://user:token@host/repo.git. Userinfo runs to the authority's last @, as URL parsers read
   // it, so a password holding @ is hidden whole. The scheme is bounded (a longer run is matched by
   // its end) and an authority ends at the next slash, so scanning stays linear.
-  // URL parsers also accept spaces and tabs in a password, so after user: the userinfo may hold
-  // them, up to the line's end; without a colon, whitespace ends it, so prose stays readable.
-  [/([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^/\s?#:@]*:[^/\r\n?#]*|[^/\s?#]*)@/gi, `$1${MASK}@`],
+  // URL parsers also accept spaces and tabs in userinfo, so user:password may hold them on either
+  // side of its first colon, within one line; without a colon, whitespace ends it, so prose stays
+  // readable. The username part cannot cross that colon, which keeps the match linear.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^/\r\n?#:]*:[^/\r\n?#]*|[^/\s?#]*)@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
@@ -343,7 +352,9 @@ const MAX_SCANNED = 8 * MAX_STRING;
 /** Text with credentials replaced, then cut to a bound, so the cut never splits a credential. */
 export function redactLogText(text: string): string {
   const scanned =
-    text.length <= MAX_SCANNED ? text : maskUnfinishedJose(text.slice(0, MAX_SCANNED));
+    text.length <= MAX_SCANNED
+      ? text
+      : maskUnfinishedUrl(maskUnfinishedJose(text.slice(0, MAX_SCANNED)));
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) =>
       typeof replacement === "string"
