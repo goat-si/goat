@@ -329,7 +329,12 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              if (found.success !== null) {
+              // Settled "failed" yet its thread exists: its first message was refused, so the thread got
+              // no worktree and the slot moves on instead of adopting it.
+              const refusedFirst =
+                found.success !== null &&
+                (yield* store.claimOf(action.actionId))?.outcome === "failed";
+              if (found.success !== null && !refusedFirst) {
                 const thread = found.success;
                 yield* store.settle(action.actionId, "adopted", nowIso, {
                   host: thread.host,
@@ -349,20 +354,24 @@ const make = Effect.gen(function* () {
                   worker,
                   action.actionId,
                 );
-              } else if (action.expired) {
-                yield* store.settle(action.actionId, "unknown", nowIso);
+              } else if (action.expired || refusedFirst) {
+                if (!refusedFirst) yield* store.settle(action.actionId, "unknown", nowIso);
+                const why = refusedFirst
+                  ? "first message was refused"
+                  : "launch was never confirmed";
                 // A dropped slot just ends; a wanted one moves to its next attempt.
                 const dropped = worker.slot >= desiredSlots(goal).length;
                 const next = dropped
                   ? { ...worker, state: "superseded" as const }
-                  : nextAttempt(goal, worker, "Launch was never confirmed.");
+                  : nextAttempt(goal, worker, "The " + why + ".");
                 workers.set(worker.slot, next);
                 note(
                   "Warning",
                   "LaunchUnknown",
                   "Slot " +
                     worker.slot +
-                    " launch was never confirmed" +
+                    " " +
+                    why +
                     (dropped ? "." : "; moving to attempt " + next.attempt + "."),
                   worker,
                   action.actionId,
@@ -508,8 +517,8 @@ const make = Effect.gen(function* () {
                 return;
               }
               if (lost !== null) {
-                // Created, but its first message was refused: no worktree was prepared for it
-                // (that follows the first message), so the next attempt starts over.
+                // Created, but its first message was refused: the next pass moves the slot on
+                // (resolve_launch) instead of adopting a thread that got no worktree.
                 yield* store.settle(action.actionId, "failed", nowIso);
                 if (!lost.goalChanged)
                   issues.push({
@@ -517,14 +526,6 @@ const make = Effect.gen(function* () {
                     reason: "OwnerAuthorityLost",
                     message: lost.message,
                   });
-                workers.set(worker.slot, nextAttempt(goal, worker, lost.message));
-                note(
-                  "Warning",
-                  "LaunchRefused",
-                  "Slot " + worker.slot + ": " + lost.message,
-                  worker,
-                  action.actionId,
-                );
                 return;
               }
               if (created.success !== null) {

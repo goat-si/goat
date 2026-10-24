@@ -52,7 +52,7 @@ interface Fake {
   /** Runs once, inside the next launch, follow-up or interrupt, right before its confirm. */
   beforeConfirm: Effect.Effect<void> | null;
   /** Makes the next launch create its thread and then lose its owner, as a refused first message does. */
-  loseAfterCreate: boolean;
+  loseAfterCreate: boolean | "goalChanged";
   reading: (threadId: string) => WorkerReading;
   pullRequest: PullRequestObservation;
 }
@@ -131,9 +131,15 @@ const runtimeFor = (fake: Fake) =>
         fake.launches.push({ ...request, mode: current.runtimeMode });
         const threadId = ThreadId.make("thread:worker-" + fake.launches.length);
         fake.threads.set(request.actionId, threadId);
-        if (fake.loseAfterCreate) {
+        if (fake.loseAfterCreate !== false) {
+          const goalChanged = fake.loseAfterCreate === "goalChanged";
           fake.loseAfterCreate = false;
-          return yield* new GoalOwnerAuthorityLost({ message: "revoked", goalChanged: false });
+          if (goalChanged && fake.duringLaunch !== null) {
+            const run = fake.duringLaunch;
+            fake.duringLaunch = null;
+            yield* run;
+          }
+          return yield* new GoalOwnerAuthorityLost({ message: "revoked", goalChanged });
         }
         if (fake.duringLaunch !== null) {
           const run = fake.duringLaunch;
@@ -517,12 +523,47 @@ describe("GoalController", () => {
           const [claim] = yield* store.launches(FleetGoalId.make("goal_half"));
           expect(claim).toMatchObject({ outcome: "failed" });
           expect(yield* blocked("goal_half")).toMatchObject({ reason: "OwnerAuthorityLost" });
-          expect((yield* record("goal_half")).workers[0]).toMatchObject({ attempt: 2 });
-          // The empty thread is left alone; the next pass starts attempt 2, never attempt 1 again.
+          // The next pass moves the slot on rather than adopt the empty thread, and the one after
+          // starts attempt 2, never attempt 1 again.
+          yield* pass("goal_half");
+          expect((yield* record("goal_half")).workers[0]).toMatchObject({
+            attempt: 2,
+            threadId: null,
+          });
           yield* pass("goal_half");
           expect(fake.launches.map((launch) => launch.actionId)).toEqual([
             "goal:goal_half:s0:a1:launch",
             "goal:goal_half:s0:a2:launch",
+          ]);
+        }).pipe(Effect.provide(layerFor(fake)));
+      },
+    );
+
+    it.effect(
+      "never adopts that empty thread when the goal also moved on and its status was lost",
+      () => {
+        const fake = makeFake();
+        return Effect.gen(function* () {
+          const store = yield* GoalStore;
+          yield* insert(withWorkers("goal_half_moved", 1));
+          // The thread exists, then an apply moves the goal on, so the first message is refused and
+          // this pass's status write is refused too.
+          fake.loseAfterCreate = "goalChanged";
+          fake.duringLaunch = Effect.gen(function* () {
+            const { goal } = yield* record("goal_half_moved");
+            yield* store.updateSpec(
+              { ...goal, title: "Renamed", generation: goal.generation + 1 },
+              goal.generation,
+            );
+          }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
+          yield* pass("goal_half_moved");
+          yield* pass("goal_half_moved");
+          yield* pass("goal_half_moved");
+          const workers = (yield* record("goal_half_moved")).workers;
+          expect(workers.find((worker) => worker.threadId === "thread:worker-1")).toBeUndefined();
+          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+            "goal:goal_half_moved:s0:a1:launch",
+            "goal:goal_half_moved:s0:a2:launch",
           ]);
         }).pipe(Effect.provide(layerFor(fake)));
       },
