@@ -17,6 +17,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
+import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as EventSink from "./EventSink.ts";
@@ -24,7 +25,6 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 
 const layerTestDatabase = SqlitePersistence.layerMemory;
 const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pipe(
@@ -34,7 +34,7 @@ const layerTestEventSink = EventSink.layer.pipe(
   Layer.provide(Layer.mergeAll(layerTestStores, layerTestDatabase)),
 );
 const layerGit = GitVcsDriver.layer.pipe(
-  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "ingestor-redaction-" })),
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "event-store-redaction-" })),
   Layer.provideMerge(NodeServices.layer),
 );
 const layerDependencies = Layer.mergeAll(
@@ -58,59 +58,67 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const TOKEN = "testtag0SyntheticMcpTokenNotARealCredential00000000";
 registerCredentialRunTag("testtag0");
 
-it.layer(layerTest)("ProviderEventIngestorV2 credential redaction", (it) => {
-  it.effect("persists a command row's env dump without the GOAT MCP token", () =>
+const seedThread = (fixtureName: string) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const eventSink = yield* EventSink.EventSinkV2;
+    const idAllocator = yield* IdAllocator.IdAllocatorV2;
+    const projectId = yield* idAllocator.allocate.project({ fixtureName });
+    const threadId = yield* idAllocator.allocate.thread({ fixtureName, projectId });
+    const thread: OrchestrationV2AppThread = {
+      createdBy: "user",
+      creationSource: "web",
+      id: threadId,
+      projectId,
+      title: "Credential redaction",
+      providerInstanceId: modelSelection.instanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      branchPullRequest: null,
+      activeOrderKey: null,
+      activeProviderThreadId: null,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+      deletedAt: null,
+    };
+    yield* eventSink.write({
+      events: [
+        {
+          id: yield* idAllocator.allocate.event({ threadId }),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: thread,
+        },
+      ],
+    });
+    return threadId;
+  });
+
+it.layer(layerTest)("orchestration event log credential redaction", (it) => {
+  it.effect("persists a provider's command row without the GOAT MCP token it printed", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
-      const eventSink = yield* EventSink.EventSinkV2;
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const projectId = yield* idAllocator.allocate.project({ fixtureName: "redaction" });
-      const threadId = yield* idAllocator.allocate.thread({ fixtureName: "redaction", projectId });
-      const thread: OrchestrationV2AppThread = {
-        createdBy: "user",
-        creationSource: "web",
-        id: threadId,
-        projectId,
-        title: "Credential redaction",
-        providerInstanceId: modelSelection.instanceId,
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        branchPullRequest: null,
-        activeOrderKey: null,
-        activeProviderThreadId: null,
-        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-        forkedFrom: null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        settledOverride: null,
-        settledAt: null,
-        lastVisitedAt: null,
-        deletedAt: null,
-      };
-      yield* eventSink.write({
-        events: [
-          {
-            id: yield* idAllocator.allocate.event({ threadId }),
-            type: "thread.created",
-            threadId,
-            occurredAt: now,
-            payload: thread,
-          },
-        ],
-      });
-      const runId = RunId.make("run:provider-event-redaction");
-      const itemId = TurnItemId.make("turn-item:provider-event-redaction");
+      const threadId = yield* seedThread("redaction-command");
+      const runId = RunId.make("run:redaction-command");
+      const itemId = TurnItemId.make("turn-item:redaction-command");
       const turnItem = {
         id: itemId,
         threadId,
         runId,
-        nodeId: NodeId.make("node:provider-event-redaction"),
+        nodeId: NodeId.make("node:redaction-command"),
         providerThreadId: null,
         providerTurnId: null,
         nativeItemRef: null,
@@ -146,45 +154,50 @@ it.layer(layerTest)("ProviderEventIngestorV2 credential redaction", (it) => {
     }),
   );
 
-  it.effect("redacts every provider record, such as an agent message repeating the token", () =>
+  // Run finalization, cloud results and MCP-driven messages write without the ingestor.
+  it.effect("stores and projects an event written straight to the sink without the token", () =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
-      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const projectId = yield* idAllocator.allocate.project({ fixtureName: "redaction-message" });
-      const threadId = yield* idAllocator.allocate.thread({
-        fixtureName: "redaction-message",
-        projectId,
-      });
-      const events = yield* ingestor.normalize({
-        providerSessionId: yield* idAllocator.allocate.providerSession({
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-        }),
-        providerInstanceId: modelSelection.instanceId,
-        threadId,
-        event: {
-          type: "message.updated",
-          driver: CODEX_DRIVER,
-          message: {
-            createdBy: "agent",
-            creationSource: "provider",
-            id: MessageId.make("message:redaction"),
+      const threadId = yield* seedThread("redaction-message");
+      const messageId = MessageId.make("message:redaction");
+      const stored = yield* eventSink.write({
+        events: [
+          {
+            id: yield* idAllocator.allocate.event({ threadId }),
+            type: "message.updated",
             threadId,
-            runId: null,
-            nodeId: null,
-            role: "assistant",
-            text: `Your token is ${TOKEN}.`,
-            attachments: [],
-            streaming: false,
-            createdAt: now,
-            updatedAt: now,
+            occurredAt: now,
+            payload: {
+              createdBy: "agent",
+              creationSource: "provider",
+              id: messageId,
+              threadId,
+              runId: null,
+              nodeId: null,
+              role: "assistant",
+              text: `Your token is ${TOKEN}.`,
+              attachments: [],
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
           },
-        },
+        ],
       });
+      const projection = yield* projectionStore.getThreadProjection(threadId);
 
-      const payload = events[0]?.type === "message.updated" ? events[0].payload : undefined;
-      assert.equal(payload?.text, "Your token is [redacted].");
+      const logged = stored[0]?.event;
+      assert.equal(
+        logged?.type === "message.updated" ? logged.payload.text : undefined,
+        "Your token is [redacted].",
+      );
+      assert.equal(
+        projection.messages.find((message) => message.id === messageId)?.text,
+        "Your token is [redacted].",
+      );
     }),
   );
 });

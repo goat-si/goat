@@ -284,6 +284,35 @@ layer("CommandOutputHub", (it) => {
     ),
   );
 
+  it.effect("a command whose held-back output is evicted streams nothing more", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "GOAT_ACP_MCP_AUTHORIZATION=Bearer othe",
+        });
+        // More commands hold back output than the hub keeps context for.
+        for (let index = 0; index < 256; index += 1) {
+          const itemId = TurnItemId.make(`turn-item:carry-${index}`);
+          yield* hub.append({ threadId, itemId, chunk: "export GOAT_ACP_MCP_AUTHORIZATION=" });
+        }
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "rrunSyntheticMcpTokenNotARealCredential00000000\n",
+        });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.notInclude(client.text, "Credential");
+      }),
+    ),
+  );
+
   it.effect("a row that is not a known command fails instead of waiting forever", () =>
     Effect.gen(function* () {
       const hub = yield* CommandOutputHub.CommandOutputHub;

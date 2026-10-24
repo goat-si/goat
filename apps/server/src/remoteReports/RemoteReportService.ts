@@ -290,7 +290,10 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     input: RemoteOriginReportInput,
   ) {
-    const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
+    // Remote or local, an agent's report is stored and relayed like its tool output.
+    const value = redactGoatCredentialsDeep(
+      yield* decodeReportInput(input).pipe(Effect.mapError(invalid)),
+    );
     const shell = yield* liveShell(threadId);
     return yield* append(threadId, shell, value, null).pipe(
       Effect.catchIf(

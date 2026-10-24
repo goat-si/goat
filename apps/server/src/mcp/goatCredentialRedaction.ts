@@ -113,15 +113,23 @@ function partialStart(text: string): number {
   let start = text.length;
   const labeled = PARTIAL_LABELED.exec(text.slice(windowStart));
   if (labeled !== null) start = windowStart + labeled.index;
-  // A token minted here, cut short.
-  for (let index = Math.max(0, text.length - TOKEN_LENGTH + 1); index < start; index += 1) {
+  // A token minted here that the next chunk may continue: hold from its tag, wherever the tag sits
+  // in the trailing run of token characters, so the cut never splits a recognized token.
+  let runStart = text.length;
+  while (runStart > 0 && text.length - runStart < 2 * TOKEN_LENGTH) {
+    if (!TOKEN_CHARS.test(text.charAt(runStart - 1))) break;
+    runStart -= 1;
+  }
+  const run = text.slice(runStart);
+  const tagged = runTags
+    .map((tag) => run.indexOf(tag))
+    .filter((index) => index !== -1)
+    .toSorted((left, right) => left - right)[0];
+  if (tagged !== undefined) start = Math.min(start, runStart + tagged);
+  // Or the start of a tag.
+  for (let index = Math.max(runStart, text.length - TOKEN_LENGTH); index < start; index += 1) {
     const tail = text.slice(index);
-    if (!TOKEN_CHARS.test(tail)) continue;
-    if (
-      runTags.some((tag) =>
-        tail.length < tag.length ? tag.startsWith(tail) : tail.startsWith(tag),
-      )
-    ) {
+    if (runTags.some((tag) => tail.length < tag.length && tag.startsWith(tail))) {
       start = index;
       break;
     }

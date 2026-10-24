@@ -98,6 +98,8 @@ describe("redactGoatCredentialChunk", () => {
       `PWD=/work\nGOAT_ACP_MCP_AUTHORIZATION=Bearer ${TOKEN}\nTERM=xterm\n`,
       `PWD=/work\nGOAT_MCP_BEARER_TOKEN=${TOKEN}\nTERM=xterm\n`,
       `the token is ${TOKEN} ok\n`,
+      // A secret that ends with the start of its own tag.
+      `${TAG}${"a".repeat(42)}t\n`,
     ];
     for (const output of outputs) {
       for (let first = 1; first < output.length; first += 1) {

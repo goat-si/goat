@@ -39,7 +39,6 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailureTurnItem } from "@goat/provider-core/server/failure";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
@@ -540,12 +539,7 @@ export const layer: Layer.Layer<
     const normalize: ProviderEventIngestorV2Shape["normalize"] =
       /* This helper runs for individual orchestration events; the enclosing operation owns the span. */
       Effect.fnUntraced(
-        function* (providerInput) {
-          // Everything a provider reports can carry agent output, and all of it is persisted.
-          const input = {
-            ...providerInput,
-            event: redactGoatCredentialsDeep(providerInput.event),
-          };
+        function* (input) {
           switch (input.event.type) {
             case "app_thread.created": {
               const offered = input.event.appThread;

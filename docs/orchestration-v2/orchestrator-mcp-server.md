@@ -46,7 +46,7 @@ Before `ProviderSessionManager` opens a new V2 provider session, it asks
 - the provider session.
 
 The credential grants `preview` and `orchestration` capabilities. The raw
-token is not persisted in orchestration state. Agents see it in their shell environment, so provider events, the live command output stream
+token is not persisted in orchestration state. Agents see it in their shell environment, so the orchestration event log, the live command output stream
 and agent reports are redacted before they are stored or shown
 ([goatCredentialRedaction.ts](../../apps/server/src/mcp/goatCredentialRedaction.ts)).
 
