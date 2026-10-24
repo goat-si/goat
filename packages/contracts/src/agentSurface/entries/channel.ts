@@ -18,6 +18,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "clientRequestId is required and is the inbound message's key in the channel ledger, which ingests each message once.",
     annotations: {
       title: "Message GOAT's front desk",
       idempotentHint: true,

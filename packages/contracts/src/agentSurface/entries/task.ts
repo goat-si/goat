@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const taskEntries = {
   "task.create": entry({
@@ -18,6 +19,7 @@ export const taskEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Delegate a child task",
       idempotentHint: false,
@@ -66,6 +68,7 @@ export const taskEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Cancel delegated task",
       idempotentHint: false,

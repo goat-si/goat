@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const scheduleEntries = {
   "schedule.create": entry({
@@ -17,6 +18,7 @@ export const scheduleEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["secret"],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Schedule a recurring task",
       idempotentHint: false,
