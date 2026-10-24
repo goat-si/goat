@@ -84,8 +84,12 @@ once per server. Restart an existing agent session after granting access so it
 receives the device CLI environment.
 
 To keep agents away from simulators, turn off **Agent device access** in
-**Settings → Integrations → Devices**. This hides the device tools from agents
-started from then on; your own Device panel is unaffected.
+**Settings → Integrations → Devices**, or in a project's settings for that
+project alone. This hides the device tools from agents started from then on,
+and agents already running are refused when they next list, open, or capture a
+device; they can still close one. A device an agent already opened stays
+reachable through the `agent-device` flags it was given until it is closed.
+Your own Device panel is unaffected.
 
 ## Remote connections
 

@@ -10,7 +10,9 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
@@ -47,19 +49,32 @@ const simulator = {
   platform: "ios" as const,
   name: "iPhone 17 Pro",
   version: "iOS 27.0",
-  booted: true,
   physical: false,
 };
 
-// A local iOS host that records when agent tools start and when a device is attached.
-const makeDeviceService = (activity: Array<string>) =>
+interface Fixture {
+  readonly activity: Array<string>;
+  /** Present when the simulator starts shut down; booting runs this first. */
+  readonly boot?: Effect.Effect<void>;
+  readonly projectLookupFails?: boolean;
+}
+
+// A local iOS host that records agent tool starts, device attaches, and agent-device configuration.
+const makeDeviceService = ({ activity, boot }: Fixture) =>
   Effect.gen(function* () {
+    let booted = boot === undefined;
     const ready: DeviceHost.DeviceHostReady = {
       nodePath: process.execPath,
       hub: { origin: "http://device.test" },
       devices: {
-        list: Effect.succeed({ devices: [simulator], detail: undefined }),
-        boot: () => Effect.die("The simulator is already booted"),
+        list: Effect.sync(() => ({ devices: [{ ...simulator, booted }], detail: undefined })),
+        boot: () =>
+          (boot ?? Effect.void).pipe(
+            Effect.map(() => {
+              booted = true;
+              return simulator.id;
+            }),
+          ),
         attach: () => Effect.sync(() => void activity.push("attach")),
         shutdown: () => Effect.void,
         screenshot: () => Effect.succeed(new Uint8Array(24)),
@@ -93,7 +108,10 @@ const makeDeviceService = (activity: Array<string>) =>
       stop: Effect.void,
     };
     const service = yield* DeviceService.makeWithHosts(new Map([[host.id, host]]), undefined, () =>
-      Effect.succeed("/host.json"),
+      Effect.sync(() => {
+        activity.push("configure");
+        return "/host.json";
+      }),
     );
     return { ...service, agentCli: Effect.succeed("/agent-device") };
   });
@@ -109,33 +127,41 @@ const threadsLayer = Layer.mock(ThreadManagement.ThreadManagementService)({
   },
 });
 
-const projectsLayer = Layer.mock(ProjectService.ProjectService)({
-  getById: (projectId) =>
-    Effect.succeed(
-      projectId === deleted
-        ? Option.none()
-        : Option.some({
-            id: projectId,
-            title: projectId,
-            workspaceRoot: process.cwd(),
-            defaultModelSelection: null,
-            scripts: [],
-            createdAt: "2026-01-01T00:00:00.000Z",
-            updatedAt: "2026-01-01T00:00:00.000Z",
-            deletedAt: null,
-          } as Project),
-    ),
-});
+const project = (id: ProjectId) =>
+  ({
+    id,
+    title: id,
+    workspaceRoot: process.cwd(),
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    deletedAt: null,
+  }) as Project;
 
-const layer = (settings: Parameters<typeof ServerSettings.layerTest>[0], activity: Array<string>) =>
+const projectsLayer = (lookupFails: boolean) =>
+  Layer.mock(ProjectService.ProjectService)({
+    getById: (projectId) =>
+      lookupFails
+        ? Effect.fail(
+            new ProjectService.ProjectOperationError({
+              operation: "read-project",
+              projectId,
+              cause: new Error("database is locked"),
+            }),
+          )
+        : Effect.succeed(projectId === deleted ? Option.none() : Option.some(project(projectId))),
+  });
+
+const layer = (settings: Parameters<typeof ServerSettings.layerTest>[0], fixture: Fixture) =>
   McpHttpServer.layerDeviceToolkit.pipe(
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threadsLayer),
-    Layer.provideMerge(Layer.effect(DeviceService.DeviceService, makeDeviceService(activity))),
+    Layer.provideMerge(Layer.effect(DeviceService.DeviceService, makeDeviceService(fixture))),
     Layer.provideMerge(ServerSettings.layerTest(settings)),
     Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provide(projectsLayer),
+    Layer.provide(projectsLayer(fixture.projectLookupFails === true)),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-device-access-test-" })),
     Layer.provide(NodeServices.layer),
@@ -178,6 +204,12 @@ const refusal = (result: {
   readonly content: ReadonlyArray<unknown>;
 }) => (result.isError === true ? JSON.stringify(result.content) : "not refused");
 
+const envOffProjectOn = {
+  enableDeviceSupport: true,
+  enableAgentDeviceAccess: false,
+  projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: true } },
+};
+
 describe("device tools authorize the calling thread's project at each call", () => {
   it.effect(
     "a project grant reaches only its own threads while the environment default is off",
@@ -189,26 +221,19 @@ describe("device tools authorize the calling thread's project at each call", () 
         expect((opened.structuredContent as { quickStart: string }).quickStart).toContain(
           "--config /host.json",
         );
-        expect(activity).toEqual(["agent", "attach", "agent"]);
+        const afterGrant = ["agent", "attach", "agent", "configure"];
+        expect(activity).toEqual(afterGrant);
 
-        for (const threadId of [threads.other, threads.orphaned, threads.missing]) {
+        for (const threadId of [threads.other, threads.orphaned]) {
           expect(refusal(yield* call(threadId, "goat_device_open", { platform: "ios" }))).toContain(
             AGENT_DEVICE_ACCESS_OFF,
           );
         }
-        expect(activity).toEqual(["agent", "attach", "agent"]);
-      }).pipe(
-        Effect.provide(
-          layer(
-            {
-              enableDeviceSupport: true,
-              enableAgentDeviceAccess: false,
-              projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: true } },
-            },
-            activity,
-          ),
-        ),
-      );
+        expect(
+          refusal(yield* call(threads.missing, "goat_device_open", { platform: "ios" })),
+        ).toContain("thread_not_found");
+        expect(activity).toEqual(afterGrant);
+      }).pipe(Effect.provide(layer(envOffProjectOn, { activity })));
     },
   );
 
@@ -216,16 +241,26 @@ describe("device tools authorize the calling thread's project at each call", () 
     const activity: Array<string> = [];
     return Effect.gen(function* () {
       const settings = yield* ServerSettings.ServerSettingsService;
-      const opened = yield* call(threads.granted, "goat_device_open", { deviceId: "SIM-1" });
+      const keyedOpen = { deviceId: "SIM-1", clientRequestId: "open-1" };
+      const opened = yield* call(threads.granted, "goat_device_open", keyedOpen);
       expect(opened.isError, JSON.stringify(opened.content)).toBe(false);
 
       yield* settings.updateSettings({
         projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: false } },
       });
       const before = [...activity];
+      // The device is open in this thread, so only the access check can refuse the screenshot.
+      const screenshot = yield* call(threads.granted, "goat_device_screenshot", {
+        deviceId: "SIM-1",
+      });
+      expect(screenshot.isError).toBe(true);
+      expect(screenshot.structuredContent).toMatchObject({
+        error: { _tag: "DeviceToolUnavailableError" },
+      });
       for (const [name, args] of [
-        ["goat_device_screenshot", { deviceId: "SIM-1" }],
         ["goat_device_list", {}],
+        // A retry with the same key must not replay the earlier grant.
+        ["goat_device_open", keyedOpen],
         ["goat_device_open", { deviceId: "SIM-1" }],
       ] as const) {
         expect(refusal(yield* call(threads.granted, name, args))).toContain(
@@ -237,14 +272,60 @@ describe("device tools authorize the calling thread's project at each call", () 
       expect((yield* call(threads.granted, "goat_device_close", {})).isError).toBe(false);
       expect((yield* (yield* DeviceService.DeviceService).state).sessions).toEqual([]);
 
-      yield* settings.updateSettings({
-        enableAgentDeviceAccess: false,
-        projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: true } },
-      });
+      yield* settings.updateSettings(envOffProjectOn);
       const reopened = yield* call(threads.granted, "goat_device_open", { deviceId: "SIM-1" });
       expect(reopened.isError, JSON.stringify(reopened.content)).toBe(false);
     }).pipe(
-      Effect.provide(layer({ enableDeviceSupport: true, enableAgentDeviceAccess: true }, activity)),
+      Effect.provide(
+        layer({ enableDeviceSupport: true, enableAgentDeviceAccess: true }, { activity }),
+      ),
+    );
+  });
+
+  it.effect("access revoked while a device boots withholds its agent-device configuration", () => {
+    const activity: Array<string> = [];
+    return Effect.gen(function* () {
+      const bootStarted = yield* Deferred.make<void>();
+      const finishBoot = yield* Deferred.make<void>();
+      return yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const opening = yield* call(threads.granted, "goat_device_open", {
+          deviceId: "SIM-1",
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(bootStarted);
+        yield* settings.updateSettings({
+          projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: false } },
+        });
+        yield* Deferred.succeed(finishBoot, undefined);
+        expect(refusal(yield* Fiber.join(opening))).toContain(AGENT_DEVICE_ACCESS_OFF);
+        expect(activity).not.toContain("configure");
+      }).pipe(
+        Effect.provide(
+          layer(envOffProjectOn, {
+            activity,
+            boot: Deferred.succeed(bootStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishBoot)),
+            ),
+          }),
+        ),
+      );
+    });
+  });
+
+  it.effect("a project lookup that fails refuses instead of falling back to a default", () => {
+    const activity: Array<string> = [];
+    return Effect.gen(function* () {
+      expect(
+        refusal(yield* call(threads.granted, "goat_device_open", { platform: "ios" })),
+      ).toContain(AGENT_DEVICE_ACCESS_OFF);
+      expect(activity).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layer(
+          { enableDeviceSupport: true, enableAgentDeviceAccess: true },
+          { activity, projectLookupFails: true },
+        ),
+      ),
     );
   });
 
@@ -256,15 +337,7 @@ describe("device tools authorize the calling thread's project at each call", () 
       ).toContain("Device support is off");
       expect(activity).toEqual([]);
     }).pipe(
-      Effect.provide(
-        layer(
-          {
-            enableDeviceSupport: false,
-            projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: true } },
-          },
-          activity,
-        ),
-      ),
+      Effect.provide(layer({ ...envOffProjectOn, enableDeviceSupport: false }, { activity })),
     );
   });
 });
