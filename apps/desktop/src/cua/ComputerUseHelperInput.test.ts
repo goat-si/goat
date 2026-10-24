@@ -5,12 +5,13 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 const helperDir = NodePath.join(import.meta.dirname, "../../native/computer-use-helper");
 const swiftc = () =>
   NodeChildProcess.spawnSync("xcrun", ["--find", "swiftc"], { encoding: "utf8" }).status === 0;
 // The helper is macOS-only and its checks need the host's Swift toolchain.
-const macWithSwift = process.platform === "darwin" && swiftc();
+const macWithSwift = HostProcess.Platform.defaultValue() === "darwin" && swiftc();
 
 describe("computer use helper input reports (Swift)", () => {
   it.skipIf(!macWithSwift)(
