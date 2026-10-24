@@ -120,41 +120,44 @@ it.effect("discards a helper answer from a driver retired while status was being
   ),
 );
 
-it.effect("a helper report that arrives while the Linux helper is read still wins", () =>
-  Effect.gen(function* () {
-    const settings = yield* fixture();
-    yield* settings.updateSettings({ enableCua: true });
-    const requested = yield* Deferred.make<void>();
-    const answer = yield* Deferred.make<typeof linuxReport>();
-    const helperReport = yield* Ref.make(
-      Option.none<Pick<CuaHostStatus, "readiness" | "signals">>(),
-    );
-    const pending: ComputerUseReadiness = { ...readiness, capture: "pending" };
-    const service = yield* CuaDriver.make(
-      () =>
-        Effect.succeed({
-          start: Effect.succeed(mcp),
-          stop: Effect.void,
-          waitForExit: Effect.never,
-        }),
-      Effect.succeed({ capability: "available", reason: "Desktop ready.", environment: [] }),
-      {
-        helperReadiness: Ref.get(helperReport),
-        observeReadiness: () =>
-          Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(answer))),
-      },
-    ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, settings));
-    yield* service.acquire;
-    const status = yield* service.status.pipe(Effect.forkChild);
-    yield* Deferred.await(requested);
-    // The helper reports a capture still pending while the Linux helper was being read.
-    yield* Ref.set(helperReport, Option.some({ readiness: pending }));
-    yield* Deferred.succeed(answer, linuxReport);
-    const reported = yield* Fiber.join(status);
-    expect(reported.readiness).toEqual(pending);
-  }).pipe(
-    Effect.provide(ServerSettings.layerTest()),
-    Effect.provideService(HostProcess.Platform, "linux"),
-    Effect.scoped,
-  ),
+it.effect.each([true, false])(
+  "a helper report that arrives while the Linux helper is read still wins (Linux answered: %s)",
+  (linuxAnswers) =>
+    Effect.gen(function* () {
+      const settings = yield* fixture();
+      yield* settings.updateSettings({ enableCua: true });
+      const requested = yield* Deferred.make<void>();
+      const answer = yield* Deferred.make<typeof linuxReport | undefined>();
+      const helperReport = yield* Ref.make(
+        Option.none<Pick<CuaHostStatus, "readiness" | "signals">>(),
+      );
+      const pending: ComputerUseReadiness = { ...readiness, capture: "pending" };
+      const service = yield* CuaDriver.make(
+        () =>
+          Effect.succeed({
+            start: Effect.succeed(mcp),
+            stop: Effect.void,
+            waitForExit: Effect.never,
+          }),
+        Effect.succeed({ capability: "available", reason: "Desktop ready.", environment: [] }),
+        {
+          helperReadiness: Ref.get(helperReport),
+          observeReadiness: () =>
+            Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(answer))),
+        },
+      ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, settings));
+      yield* service.acquire;
+      const status = yield* service.status.pipe(Effect.forkChild);
+      yield* Deferred.await(requested);
+      // The helper reports a capture still pending while the Linux helper was being read.
+      yield* Ref.set(helperReport, Option.some({ readiness: pending }));
+      // A failed or timed-out Linux read answers undefined.
+      yield* Deferred.succeed(answer, linuxAnswers ? linuxReport : undefined);
+      const reported = yield* Fiber.join(status);
+      expect(reported.readiness).toEqual(pending);
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.scoped,
+    ),
 );

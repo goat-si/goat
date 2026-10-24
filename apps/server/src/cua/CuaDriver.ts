@@ -350,17 +350,20 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       const reportedByHelper = options.helperReadiness ?? Effect.succeedNone;
       const first = yield* reportedByHelper;
       const entry = active;
+      const observe =
+        Option.isNone(first) && entry?.running && entry.mcp ? options.observeReadiness : undefined;
       const observed =
-        Option.isNone(first) && options.observeReadiness && entry?.running && entry.mcp
-          ? yield* options.observeReadiness(entry.mcp, entry.displayEnvironment ?? []).pipe(
+        observe && entry?.mcp
+          ? yield* observe(entry.mcp, entry.displayEnvironment ?? []).pipe(
               Effect.timeoutOrElse({
                 duration: "15 seconds",
                 orElse: () => Effect.succeed(undefined),
               }),
             )
           : undefined;
-      // A report that arrived while the Linux helper was read is newer, so it still wins.
-      const helper = observed === undefined ? first : yield* reportedByHelper;
+      // A report that arrived while the Linux helper was read is newer, so it still wins, even
+      // when that read failed or timed out.
+      const helper = observe ? yield* reportedByHelper : first;
       const isEnabled = yield* enabled;
       return {
         platform:
