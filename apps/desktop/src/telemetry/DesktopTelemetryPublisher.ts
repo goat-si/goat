@@ -388,6 +388,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     message,
   ) => {
     switch (message.type) {
+      // This desktop never reports frames in its readiness, so the server's gate asks it for none.
+      case "cuaFrames":
+        return Effect.void;
       case "cuaDriverRequest":
         return Effect.suspend(() => {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;

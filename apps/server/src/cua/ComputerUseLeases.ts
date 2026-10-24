@@ -63,6 +63,8 @@ export interface ComputerUseLease {
 export interface ComputerUseDetection {
   readonly humanInput: boolean;
   readonly privateMode: boolean;
+  /** The helper sends live frames of one window (#1370). */
+  readonly frames: boolean;
 }
 
 /** One thread's current stretch of computer use, what its proxy was started with. */
@@ -79,6 +81,8 @@ export interface ComputerUseControl {
    * the proxy, but no agent can act on it until then.
    */
   readonly idle?: boolean;
+  /** The window the agent's latest admitted call named, as its proxy reported it. */
+  readonly target?: { readonly pid: number; readonly windowId: number };
 }
 
 export type ComputerUseControlState =
@@ -143,6 +147,15 @@ export class ComputerUseLeases extends Context.Service<
     ) => Effect.Effect<ComputerUseControlState, ComputerUseLeaseError>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
+    /**
+     * Records the window an agent's admitted call named, reported by that control's own proxy;
+     * false when the control is not the thread's live one.
+     */
+    readonly setTarget: (
+      threadId: ThreadId,
+      controlId: string,
+      target: { readonly pid: number; readonly windowId: number },
+    ) => Effect.Effect<boolean>;
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
     /**
@@ -387,15 +400,16 @@ const make = Effect.gen(function* () {
     ? desktop.value.cuaReadiness.pipe(
         Effect.map(
           Option.match({
-            onNone: () => ({ humanInput: false, privateMode: false }),
-            onSome: ({ signals }) => ({
+            onNone: () => ({ humanInput: false, privateMode: false, frames: false }),
+            onSome: ({ signals, frames }) => ({
               humanInput: signals.humanInput === "supported",
               privateMode: signals.privateMode === "supported",
+              frames: frames === true,
             }),
           }),
         ),
       )
-    : Effect.succeed({ humanInput: false, privateMode: false });
+    : Effect.succeed({ humanInput: false, privateMode: false, frames: false });
   if (Option.isSome(desktop))
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
@@ -529,6 +543,25 @@ const make = Effect.gen(function* () {
       Effect.sync(() => end(threadId, "stopped")).pipe(
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
+    setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
+      threadId: ThreadId,
+      controlId: string,
+      target: { readonly pid: number; readonly windowId: number },
+    ) {
+      const record = controls.get(threadId);
+      if (record?.controlId !== controlId || record.ended !== undefined) return false;
+      // An expired control is ended to every reader even before anything marks it so.
+      const now = yield* DateTime.now;
+      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return false;
+      if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
+        return true;
+      controls.set(threadId, {
+        ...record,
+        target: { pid: target.pid, windowId: target.windowId },
+      });
+      yield* changed;
+      return true;
+    }),
     stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
       Effect.tap(() => changed),
     ),
