@@ -1,4 +1,4 @@
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as DecisionService from "../goatclaw/DecisionService.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
@@ -789,7 +789,7 @@ it.effect.each([
     catalogDependencies,
     ServerSettings.layerTest(),
     Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
-    Layer.mock(DecisionInbox.DecisionInbox)({
+    Layer.mock(DecisionService.DecisionService)({
       create: (_caller, input) =>
         record(input).pipe(
           Effect.as({
