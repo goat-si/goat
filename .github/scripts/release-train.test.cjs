@@ -4,6 +4,7 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   SOAK_MS,
+  decideNightlyBuild,
   decideStablePromotion,
   nextStableBase,
   recheckStablePromotion,
@@ -190,5 +191,77 @@ describe("recheckStablePromotion", () => {
     ];
     assert.match(recheck({ releases: later }).reason, /newer stable v0\.1\.3/);
     assert.equal(recheck({ releases: later, manual: true }).ok, false);
+  });
+});
+
+describe("decideNightlyBuild", () => {
+  const GREEN = "eb2a07db09ab" + "0".repeat(28);
+  // The newest nightly by version, published by a manual run that named a newer commit.
+  const shipped = [
+    nightly("0.1.2-nightly.20261024.263", "3065d73c3aaa", ago(2 * HOUR)),
+    ...releases,
+  ];
+  const decideNightly = (input = {}) => {
+    const calls = [];
+    const status = input.status ?? "ahead";
+    const result = decideNightlyBuild({
+      releases: shipped,
+      sha: GREEN,
+      manual: false,
+      compareStatus: (base, head) => {
+        calls.push(base + "..." + head);
+        return status;
+      },
+      ...input,
+    });
+    return { result, calls };
+  };
+
+  it("skips a green commit that is an ancestor of the newest published nightly's commit", () => {
+    const { result, calls } = decideNightly({ status: "behind" });
+    assert.equal(result.build, false);
+    assert.match(result.reason, /older than v0\.1\.2-nightly\.20261024\.263 \(3065d73c3aaa\)/);
+    assert.deepEqual(calls, ["3065d73c3aaa..." + GREEN]);
+  });
+
+  it("skips a green commit identical to the newest published nightly's commit", () => {
+    assert.equal(decideNightly({ status: "identical" }).result.build, false);
+  });
+
+  it("builds a green commit that is newer than the newest published nightly's commit", () => {
+    const { result, calls } = decideNightly({ status: "ahead" });
+    assert.equal(result.build, true);
+    assert.deepEqual(calls, ["3065d73c3aaa..." + GREEN]);
+  });
+
+  it("refuses a green commit whose history diverged from the newest published nightly's", () => {
+    assert.throws(() => decideNightly({ status: "diverged" }), /diverged/);
+  });
+
+  it("skips a commit that is already a published nightly without comparing", () => {
+    const { result, calls } = decideNightly({ sha: "aaaaaaaaaaaa" + "1".repeat(28) });
+    assert.equal(result.build, false);
+    assert.match(result.reason, /already a published nightly/);
+    assert.deepEqual(calls, []);
+  });
+
+  it("builds a commit a manual run named even when it is older, without comparing", () => {
+    const { result, calls } = decideNightly({ manual: true, status: "behind" });
+    assert.equal(result.build, true);
+    assert.deepEqual(calls, []);
+    const again = decideNightly({ manual: true, sha: "3065d73c3aaa" + "2".repeat(28) });
+    assert.equal(again.result.build, false);
+  });
+
+  it("builds when no nightly has been published, and ignores drafts when picking the newest", () => {
+    const none = decideNightly({ releases: [stable("0.1.1", "111111111111")] });
+    assert.equal(none.result.build, true);
+    assert.deepEqual(none.calls, []);
+    const draft = {
+      ...nightly("0.1.2-nightly.20261025.270", "ffffffffffff", ago(HOUR)),
+      draft: true,
+    };
+    const { calls } = decideNightly({ releases: [draft, ...shipped] });
+    assert.deepEqual(calls, ["3065d73c3aaa..." + GREEN]);
   });
 });
