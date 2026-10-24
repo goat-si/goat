@@ -8,7 +8,8 @@ const read = (snapshot: number): DriverWindowState => ({
   pid: 10,
   window_id: 20,
   truncated: false,
-  screenshot_scale: 2,
+  screenshot_width: 800,
+  screenshot_height: 600,
   window_bounds: { width: 400, height: 300 },
   elements: [
     { element_index: 0, element_token: "s" + snapshot + ":0", role: "AXGroup", label: "Form" },
@@ -27,7 +28,13 @@ const read = (snapshot: number): DriverWindowState => ({
 const setup = (overrides: Partial<Omit<ActionContext, "observations">> = {}) => {
   let id = 0;
   const observations = makeObservationTracker(() => "id" + ++id);
-  const first = observations.observe({ read: read(1), screenshot: true, privateMode: false });
+  const first = observations.observe({
+    read: read(1),
+    epoch: "e1",
+    scope: "all",
+    screenshot: true,
+    privateMode: false,
+  });
   if (first.kind !== "full") throw new Error("expected a full observation");
   const save = first.elements[1]!.ref;
   const context: ActionContext = {
@@ -57,6 +64,8 @@ describe("computer use actions", () => {
     const next = observations.observe({
       read: read(2),
       since: first.observationId,
+      epoch: "e1",
+      scope: "all",
       screenshot: true,
       privateMode: false,
     });
@@ -118,6 +127,8 @@ describe("computer use actions", () => {
     observations.observe({
       read: read(2),
       since: first.observationId,
+      epoch: "e1",
+      scope: "all",
       screenshot: true,
       privateMode: false,
     });
@@ -168,5 +179,27 @@ describe("computer use actions", () => {
     expect(reason("permission_denied")).toBe("permissionsNotGranted");
     // #1146: a refusal the driver did not explain is the target's refusal, not the person's Stop.
     expect(reason("private_future_refusal")).toBe("targetRefused");
+  });
+});
+
+describe("computer use keys on mac", () => {
+  it("presses canonical keys under the driver's names and refuses ones it cannot press", () => {
+    const { context, request } = setup();
+    const press = (key: string, modifiers?: string[]) => {
+      const call = driverCallFor(
+        request({ action: "pressKey", key, ...(modifiers ? { modifiers } : {}) }),
+        context,
+      );
+      return "outcome" in call ? call.reason : call.args;
+    };
+    expect(press("enter")).toMatchObject({ key: "return" });
+    expect(press("backspace")).toMatchObject({ key: "delete" });
+    expect(press("arrowLeft", ["command"])).toMatchObject({ key: "left", modifiers: ["cmd"] });
+    // A chord: command-shift-z.
+    expect(press("Z", ["command"])).toMatchObject({ key: "z", modifiers: ["cmd", "shift"] });
+    // Forward delete and keys past f12 have no driver name on mac.
+    expect(press("delete")).toBe("unsupported");
+    expect(press("f13")).toBe("unsupported");
+    expect(press("/")).toBe("unsupported");
   });
 });

@@ -1,6 +1,7 @@
 import type {
   ComputerUseActionRequest,
   ComputerUseActionResult,
+  ComputerUseKey,
   ComputerUseRefusal,
   ComputerUseRefusalReason,
 } from "@goat/contracts";
@@ -51,6 +52,34 @@ const AX_ACTIONS: Readonly<Record<string, string>> = {
 };
 
 type Point = Extract<ComputerUseActionRequest, { action: "scroll" }>["at"];
+
+/** Named keys as Cua Driver 0.37.0's press_key spells them on mac. */
+const NAMED_KEYS: Readonly<Record<string, string>> = {
+  enter: "return",
+  tab: "tab",
+  escape: "escape",
+  // The Mac key labeled delete erases backwards; the driver names no forward delete.
+  backspace: "delete",
+  space: "space",
+  arrowUp: "up",
+  arrowDown: "down",
+  arrowLeft: "left",
+  arrowRight: "right",
+  home: "home",
+  end: "end",
+  pageUp: "pageup",
+  pageDown: "pagedown",
+  ...Object.fromEntries(
+    Array.from({ length: 12 }, (_, index) => [`f${index + 1}`, `f${index + 1}`]),
+  ),
+};
+
+/** The driver's name for a protocol key, or undefined when this driver cannot press it. */
+function driverKey(key: ComputerUseKey): string | undefined {
+  if (/^[a-z0-9]$/u.test(key)) return key;
+  if (/^[A-Z]$/u.test(key)) return key.toLowerCase();
+  return NAMED_KEYS[key];
+}
 
 export function driverCallFor(
   request: ComputerUseActionRequest,
@@ -139,14 +168,23 @@ export function driverCallFor(
       return { tool: "type_text", args: { ...window, ...at, text: request.text } };
     }
     case "pressKey": {
-      const modifier = modifiers(request.modifiers);
+      const key = driverKey(request.key);
+      if (key === undefined)
+        return {
+          ...refusal("unsupported", `The key ${request.key} cannot be pressed on mac.`),
+          method: "pressKey",
+          platform: "mac",
+        };
+      // An uppercase letter is its key with shift, as the contract names keys unmodified.
+      const shifted = key !== request.key && /^[A-Z]$/u.test(request.key);
+      const modifier = modifiers(
+        shifted ? [...(request.modifiers ?? []), "shift"] : request.modifiers,
+      );
       return {
         tool: "press_key",
-        args: { ...window, key: request.key, ...(modifier ? { modifiers: modifier } : {}) },
+        args: { ...window, key, ...(modifier ? { modifiers: [...new Set(modifier)] } : {}) },
       };
     }
-    case "hotkey":
-      return { tool: "hotkey", args: { ...window, keys: [...request.keys] } };
     case "scroll": {
       const at = locate(request.at);
       if (isRefusal(at)) return at;
@@ -244,15 +282,7 @@ export function actionResultFromDriver(
   const effect = field(result.structured, "effect");
   const code = field(result.structured, "code");
   const detail = result.text.trim().split("\n", 1)[0] || undefined;
-  const sent = (
-    outcome: "confirmed" | "partial" | "unverifiable" | "suspected_noop",
-    dispatch: "dispatched_unknown" | "verified",
-  ): ComputerUseActionResult => ({
-    outcome,
-    dispatch,
-    delivery: request.delivery,
-    ...(detail === undefined ? {} : { detail }),
-  });
+  const sent = { delivery: request.delivery, ...(detail === undefined ? {} : { detail }) };
   if (
     effect === "refused" ||
     (typeof code === "string" && effect === undefined && result.isError)
@@ -266,16 +296,16 @@ export function actionResultFromDriver(
   }
   switch (effect) {
     case "confirmed":
-      return sent("confirmed", "verified");
+      return { ...sent, outcome: "confirmed", dispatch: "verified" };
     case "partial":
-      return sent("partial", "dispatched_unknown");
+      return { ...sent, outcome: "partial", dispatch: "dispatched_unknown" };
     // The driver saw the target and nothing changed: a drag no window accepted, a value the
     // control did not take.
     case "suspected_noop":
     case "no_drop":
     case "not_applied":
-      return sent("suspected_noop", "verified");
+      return { ...sent, outcome: "suspected_noop", dispatch: "verified" };
     default:
-      return sent("unverifiable", "dispatched_unknown");
+      return { ...sent, outcome: "unverifiable", dispatch: "dispatched_unknown" };
   }
 }

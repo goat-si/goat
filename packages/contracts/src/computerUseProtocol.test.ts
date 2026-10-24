@@ -7,7 +7,11 @@ import {
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseActionResult,
   ComputerUseCapabilities,
+  ComputerUseActionRequest,
+  ComputerUseHelloReply,
+  ComputerUseKey,
   ComputerUseObservation,
+  ComputerUseRequestFrame,
   admitComputerUseReply,
   computerUseDeadlineResult,
   computerUseNextStep,
@@ -74,14 +78,27 @@ describe("computer use helper protocol", () => {
 
   it("quarantines replies from another generation, to requests no longer pending, or oversized", () => {
     const reply = { id: "7", generation: "g2", result: {} };
-    const admit = (generation: string, pending: string[], frameBytes = 100) =>
-      admitComputerUseReply({ reply, frameBytes, generation, pending: new Set(pending) });
+    const admit = (
+      generation: string,
+      pending: string[],
+      frameBytes = 100,
+      maxFrameBytes = COMPUTER_USE_MAX_FRAME_BYTES,
+    ) =>
+      admitComputerUseReply({
+        reply,
+        frameBytes,
+        maxFrameBytes,
+        generation,
+        pending: new Set(pending),
+      });
     expect(admit("g2", ["7"])).toBe("deliver");
     // The helper restarted: a late answer from the old process never reaches the caller.
     expect(admit("g3", ["7"])).toBe("wrongGeneration");
     // Stop cancelled the request; its late result is dropped.
     expect(admit("g2", [])).toBe("notPending");
     expect(admit("g2", ["7"], COMPUTER_USE_MAX_FRAME_BYTES + 1)).toBe("frameTooLarge");
+    // The limit the hello agreed on, not the protocol maximum.
+    expect(admit("g2", ["7"], 70 * 1024, 64 * 1024)).toBe("frameTooLarge");
   });
 
   it("refuses a helper on another protocol version before any work", () => {
@@ -107,5 +124,76 @@ describe("computer use helper protocol", () => {
       removed: ["e3"],
     });
     expect(observation.screenshot).toEqual({ mimeType: "image/png", width: 800, height: 600 });
+  });
+});
+
+describe("computer use protocol values", () => {
+  const decodes = (schema: Schema.Codec<unknown, unknown>, value: unknown) =>
+    Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+
+  it("accepts only outcome and dispatch pairs that make sense", () => {
+    expect(
+      decodes(ComputerUseActionResult, {
+        outcome: "confirmed",
+        dispatch: "verified",
+        delivery: "background",
+      }),
+    ).toBe(true);
+    expect(
+      decodes(ComputerUseActionResult, {
+        outcome: "confirmed",
+        dispatch: "dispatched_unknown",
+        delivery: "background",
+      }),
+    ).toBe(false);
+    expect(
+      decodes(ComputerUseActionResult, {
+        outcome: "unverifiable",
+        dispatch: "verified",
+        delivery: "background",
+      }),
+    ).toBe(false);
+    expect(
+      decodes(ComputerUseActionResult, {
+        outcome: "partial",
+        dispatch: "not_dispatched",
+        delivery: "background",
+      }),
+    ).toBe(false);
+  });
+
+  it("names keys by meaning, so every platform reads a request the same way", () => {
+    for (const key of ["a", "/", "enter", "arrowLeft", "f12"])
+      expect(decodes(ComputerUseKey, key)).toBe(true);
+    for (const key of ["ctrl+a", "Return", "", "f25"])
+      expect(decodes(ComputerUseKey, key)).toBe(false);
+  });
+
+  it("bounds scroll amounts, deadlines and frame limits", () => {
+    const scroll = {
+      target: { pid: 1, windowId: 2, epoch: "e" },
+      observationId: "o",
+      delivery: "background",
+      action: "scroll",
+      at: { x: 1, y: 1 },
+      direction: "down",
+    };
+    expect(decodes(ComputerUseActionRequest, { ...scroll, amount: 3 })).toBe(true);
+    expect(decodes(ComputerUseActionRequest, { ...scroll, amount: 0 })).toBe(false);
+    const frame = { id: "1", generation: "g", method: "observe", params: {} };
+    expect(decodes(ComputerUseRequestFrame, { ...frame, deadlineMs: 5000 })).toBe(true);
+    expect(decodes(ComputerUseRequestFrame, { ...frame, deadlineMs: 0 })).toBe(false);
+    const hello = {
+      serverApiVersion: 1,
+      binding: { executable: "/h", pid: 1, generation: "g" },
+      capabilities: {
+        protocol: 1,
+        platform: "mac",
+        methods: allMethods("supported"),
+        backgroundDelivery: true,
+      },
+    };
+    expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 1024 * 1024 })).toBe(true);
+    expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 16 })).toBe(false);
   });
 });
