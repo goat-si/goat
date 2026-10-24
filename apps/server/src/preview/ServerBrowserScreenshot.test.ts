@@ -67,6 +67,7 @@ const fixture = ({ width = 1500, height = 4000, deviceScale = 1 } = {}) => {
       consoleEntries: [],
       networkEntries: [],
       actionTimeline: [],
+      timeoutMs: 15_000,
     });
   return { page, send, take };
 };
