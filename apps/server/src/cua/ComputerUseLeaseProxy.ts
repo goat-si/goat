@@ -64,6 +64,8 @@ export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = 
     "A person is using this computer, so computer use is paused and your call did not run. Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
   takeover:
     "A person took over the screen, so computer use is paused and your call did not run. Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
+  private:
+    "A password or other secret field has focus on this computer, so computer use is paused and your call did not run. Do not retry now; observe the screen again after the person leaves it.",
 };
 
 const scopeMessage = (
@@ -253,12 +255,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     yield* readLines(current).pipe(Effect.forkIn(scope));
   });
 
+  const pausedDetail = (reason: ComputerUsePauseReason) =>
+    reason === "private" ? ("private_mode" as const) : ("waiting_for_human" as const);
+
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
   ) {
-    if (finished !== undefined || paused !== undefined) return;
+    if (finished !== undefined) return;
+    if (paused === undefined) yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
     paused = reason;
-    yield* interrupt("waiting_for_human", PAUSE_MESSAGES[reason]);
+    // A proxy told it is paused before it was ever active refuses its waiting calls now.
+    yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
 
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
@@ -267,10 +274,23 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const expiresAt = DateTime.make(update.expiresAt);
     if (Option.isSome(expiresAt))
       deadline = Math.min(deadline, DateTime.toEpochMillis(expiresAt.value));
-    apps = approvedApps(update.apps);
+    const next = approvedApps(update.apps);
+    // Fewer apps than before: work already running may be in one of them, so it ends now and
+    // anything it still answers is dropped with the old child.
+    const narrowed =
+      (yield* Deferred.isDone(confirmed)) &&
+      next !== undefined &&
+      (apps === undefined || [...apps].some((app) => !next.has(app)));
+    apps = next;
     if (paused !== undefined) {
       paused = undefined;
       if (finished === undefined) yield* start();
+    } else if (narrowed && finished === undefined && running !== undefined) {
+      yield* interrupt(
+        "app_not_approved",
+        "An app this call used is no longer approved for this thread, so it was stopped. Observe again before acting.",
+      );
+      yield* start();
     }
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
@@ -344,7 +364,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (finished !== undefined)
       return refusal(id, message.method, finished, LEASE_END_MESSAGES[finished]);
     if (paused !== undefined)
-      return refusal(id, message.method, "waiting_for_human", PAUSE_MESSAGES[paused]);
+      return refusal(id, message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
     if (verdict._tag === "resolve")
       return refusal(
         id,

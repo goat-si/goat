@@ -29,7 +29,12 @@ import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { resolveAttachmentRelativePath } from "../attachmentPaths.ts";
-import { createAttachmentId } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  parseAttachmentFileExtension,
+  parseThreadSegmentFromAttachmentId,
+  toSafeThreadAttachmentSegment,
+} from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as HeadlessChrome from "./headlessChrome.ts";
@@ -105,6 +110,27 @@ export class HtmlRenderStoreError extends Schema.TaggedError<HtmlRenderStoreErro
   }
 }
 
+export class HtmlRenderListError extends Schema.TaggedError<HtmlRenderListError>()(
+  "HtmlRenderListError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "The saved HTML pages could not be listed.";
+  }
+}
+
+export const HtmlSavedPages = Schema.Struct({
+  pages: Schema.Array(
+    Schema.Struct({
+      attachmentId: Schema.String,
+      path: Schema.String,
+      sizeBytes: Schema.Number,
+      modifiedAt: Schema.NullOr(Schema.String),
+    }),
+  ),
+  nextCursor: Schema.NullOr(Schema.String),
+});
+
 export type HtmlRenderPrepareError =
   | HtmlRenderImagesNotFoundError
   | HtmlRenderImageTooLargeError
@@ -124,6 +150,11 @@ export class HtmlRender extends Context.Service<
   HtmlRender,
   {
     readonly prepare: (html: string) => Effect.Effect<string, HtmlRenderPrepareError>;
+    readonly list: (input: {
+      readonly threadId: ThreadId;
+      readonly cursor?: string | undefined;
+      readonly limit?: number | undefined;
+    }) => Effect.Effect<typeof HtmlSavedPages.Type, HtmlRenderListError>;
     readonly publish: (input: {
       readonly threadId: ThreadId;
       readonly html: string;
@@ -501,7 +532,55 @@ const make = Effect.gen(function* () {
     } satisfies HtmlPreview;
   });
 
-  return HtmlRender.of({ prepare, publish, preview });
+  const list = Effect.fn("HtmlRender.list")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly cursor?: string | undefined;
+      readonly limit?: number | undefined;
+    }) {
+      const segment = toSafeThreadAttachmentSegment(input.threadId);
+      const names = yield* fileSystem.readDirectory(config.attachmentsDir);
+      const ids = names
+        .filter((name) => name.endsWith(".html"))
+        .map((name) => name.slice(0, -5))
+        .filter(
+          (id) =>
+            segment !== null &&
+            parseThreadSegmentFromAttachmentId(id) === segment &&
+            parseAttachmentFileExtension(id) === "html" &&
+            (input.cursor === undefined || id > input.cursor),
+        )
+        .sort();
+      const limit = Math.max(1, Math.min(100, input.limit ?? 20));
+      const pageIds = ids.slice(0, limit);
+      const pages = yield* Effect.forEach(pageIds, (attachmentId) =>
+        Effect.gen(function* () {
+          const path = resolveAttachmentRelativePath({
+            attachmentsDir: config.attachmentsDir,
+            relativePath: `${attachmentId}.html`,
+          });
+          if (path === null) return [];
+          const info = yield* fileSystem.stat(path);
+          if (info.type !== "File") return [];
+          return [
+            {
+              attachmentId,
+              path,
+              sizeBytes: Number(info.size),
+              modifiedAt: Option.getOrUndefined(info.mtime)?.toISOString() ?? null,
+            },
+          ];
+        }),
+      );
+      return {
+        pages: pages.flat(),
+        nextCursor: ids.length > limit ? (pageIds.at(-1) ?? null) : null,
+      };
+    },
+    Effect.mapError((cause) => new HtmlRenderListError({ cause })),
+  );
+
+  return HtmlRender.of({ prepare, publish, preview, list });
 });
 
 export const layer = Layer.effect(HtmlRender, make);

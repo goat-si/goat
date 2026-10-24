@@ -23,6 +23,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { computerUseOrigin, projectionOriginReads } from "./ComputerUseOrigin.ts";
 
 const DEFAULT_MINUTES = 30;
 
@@ -47,6 +48,22 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       holderThreadId: held.value.threadId,
       message: `Thread ${held.value.threadId} holds computer use on this host until ${DateTime.formatIso(held.value.expiresAt)}. Ask again after it ends.`,
     } satisfies ComputerUseRequestResult;
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const origin = yield* computerUseOrigin(
+    projectionOriginReads({
+      getThreadRecords: (id, fields, filter) => threads.getThreadRecords(id, fields, filter),
+      channelOrigin: leases.channelOrigin,
+    }),
+    { threadId: input.threadId },
+  );
+  const detection = yield* leases.detection;
+  if (origin._tag === "unattended" && (!detection.humanInput || !detection.privateMode))
+    return {
+      kind: "refused",
+      reason: "detection_unsupported",
+      message:
+        "This host cannot yet tell when a person types a secret or uses the desktop, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
+    } satisfies ComputerUseRequestResult;
   const own = yield* leases.active(input.threadId);
   const wanted = input.request.apps;
   // A live admission answers the request only when it already covers what is asked.
@@ -62,7 +79,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
-  const threads = yield* ThreadManagement.ThreadManagementService;
   const view = yield* threads.getThreadSnapshot(input.threadId);
   const run = view.projection.runs.at(-1);
   if (!run || run.rootNodeId === null)
