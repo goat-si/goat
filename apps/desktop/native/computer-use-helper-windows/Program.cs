@@ -6,6 +6,7 @@
 // and exactly one reply each, and driverExited as the only event. On Windows it also answers
 // what only a process on the user's desktop can know: readiness (an interactive session, a
 // usable input desktop, UI Automation) and one window's identity and admission facts.
+// While the host asks for frames, frame and frameUnavailable lines carry them (FrameSource.cs).
 //
 // The helper runs exactly one embedded Cua Driver daemon from the files this build pinned, in
 // a job object that ends with the helper. stdin EOF means the host is gone.
@@ -77,6 +78,7 @@ namespace Goat.ComputerUse
             }
             var service = new DriverService(executable, Emit);
             var signals = new Signals(Emit);
+            var frames = new FrameSource(service, Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -85,6 +87,8 @@ namespace Goat.ComputerUse
             hello["platform"] = "windows";
             hello["generation"] = Generation;
             hello["signals"] = Signals.Capabilities();
+            // Methods beyond protocol 1's first set, as the macOS helper lists them.
+            hello["features"] = new[] { "frames" };
             Emit(hello);
 
             Stream input = Console.OpenStandardInput();
@@ -104,7 +108,7 @@ namespace Goat.ComputerUse
                         start = i + 1;
                         byte[] line = buffer.ToArray();
                         buffer.SetLength(0);
-                        if (line.Length > 0) Handle(service, signals, new UTF8Encoding(false, true).GetString(line));
+                        if (line.Length > 0) Handle(service, signals, frames, new UTF8Encoding(false, true).GetString(line));
                     }
                     buffer.Write(chunk, start, read - start);
                     if (buffer.Length > MaxLineBytes)
@@ -122,13 +126,13 @@ namespace Goat.ComputerUse
             {
                 // The host is gone. Nothing more is written (a helper that exits clears every
                 // target of its generation), and the driver stops even if listening does not.
-                try { signals.Shutdown(); }
+                try { frames.Shutdown(); signals.Shutdown(); }
                 finally { service.Stop(); }
             }
             return 0;
         }
 
-        static void Handle(DriverService service, Signals signals, string line)
+        static void Handle(DriverService service, Signals signals, FrameSource frames, string line)
         {
             Dictionary<string, object> request = null;
             try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
@@ -166,6 +170,7 @@ namespace Goat.ComputerUse
                         reply["result"] = new Dictionary<string, object>();
                         signals.Unwatch(reply);
                         return;
+                    case "frames": reply["result"] = frames.Frames(parameters); break;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
                     case "start": reply["result"] = service.Start(parameters); break;
