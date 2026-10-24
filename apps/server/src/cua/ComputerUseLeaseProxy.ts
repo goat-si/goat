@@ -383,8 +383,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
               // Stopped, paused or cancelled while it was checked: that already answered it.
               if (finished !== undefined || running !== current || !outstanding.has(key)) return;
-              outstanding.delete(key);
-              // Every answered call updates the overlay; a display refusal counts as failed.
+              // Every answered call updates the overlay; a display refusal counts as failed. It is
+              // drawn while the call is still outstanding, so a stop or pause that lands during
+              // the draw answers the call itself, and the check below drops this reply.
               const failed =
                 message.error !== undefined ||
                 message.result?.isError === true ||
@@ -397,6 +398,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 ...(image ? { image } : {}),
                 ...(failed ? { failed: true } : {}),
               });
+              if (finished !== undefined || running !== current || !outstanding.has(key)) return;
+              outstanding.delete(key);
               if (verdict === "other") {
                 yield* options.output(
                   refusal(

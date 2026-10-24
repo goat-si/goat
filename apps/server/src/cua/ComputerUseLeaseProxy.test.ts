@@ -235,6 +235,39 @@ describe("ComputerUseLeaseProxy", () => {
   );
 
   it.effect(
+    "refuses a call whose reply was still being drawn when Stop came, and drops the reply",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const entered = yield* Deferred.make<void>();
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show" && command.phase === "resting"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+              : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(6, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 6,
+            result: { content: [{ type: "text", text: "clicked" }] },
+          }),
+        );
+        // The reply's draw is waiting when the person presses Stop.
+        yield* Deferred.await(entered);
+        yield* h.push({ state: "ended", reason: "stopped" });
+        yield* h.killed;
+        yield* Deferred.succeed(gate, undefined);
+        const answer = yield* h.nextToProvider;
+        assert.deepEqual(answer, refusedCall(6, "stopped"));
+        assert.notInclude(JSON.stringify(answer), "clicked");
+      }),
+  );
+
+  it.effect(
     "refuses a call drawn while a pause is still hiding the overlay, before the driver stops",
     () =>
       Effect.gen(function* () {
