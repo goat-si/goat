@@ -106,6 +106,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 
 import {
   delegatedTaskProgress,
@@ -1635,19 +1636,10 @@ const make = Effect.gen(function* () {
 
     const inheritsOptions =
       instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
-    let options = inheritsOptions ? inheritedSelection.options : undefined;
-    if (requestedOptions !== undefined) {
-      const selections = new Map(
-        (requestedOptions.length === 0 ? [] : (options ?? [])).map((selection) => [
-          selection.id,
-          selection,
-        ]),
-      );
-      for (const selection of requestedOptions) {
-        selections.set(selection.id, selection);
-      }
-      options = [...selections.values()];
-    }
+    const options = overrideOptionSelections(
+      inheritsOptions ? inheritedSelection.options : undefined,
+      requestedOptions,
+    );
     return {
       modelSelection: { instanceId, model, ...(options === undefined ? {} : { options }) },
       supportedRuntimeModes: provider.supportedRuntimeModes,
