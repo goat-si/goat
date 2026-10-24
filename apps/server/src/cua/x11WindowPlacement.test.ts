@@ -21,6 +21,8 @@ interface FakeWindow {
   readonly y?: number;
   readonly width?: number;
   readonly height?: number;
+  /** The root of the screen it is on; screen 0's by default. */
+  readonly root?: number;
 }
 
 /** An X server holding these windows; withResources adds X-Resource 1.2. */
@@ -95,6 +97,7 @@ async function scriptedServer(
         } else if (op === 14) {
           if (!found) return badWindow();
           const extra = Buffer.alloc(24);
+          extra.writeUInt32LE(found.root ?? ROOT, 0);
           extra.writeUInt16LE(found.width ?? 100, 8);
           extra.writeUInt16LE(found.height ?? 80, 10);
           reply(extra, 24);
@@ -103,7 +106,7 @@ async function scriptedServer(
           const extra = Buffer.alloc(24);
           extra.writeInt16LE(found.x ?? 0, 4);
           extra.writeInt16LE(found.y ?? 0, 6);
-          reply(extra, 1);
+          reply(extra, (found.root ?? ROOT) === ROOT ? 1 : 0);
         } else if (op === 20) {
           if (!found) return badWindow();
           const extra = Buffer.alloc(found.pid === undefined ? 24 : 28);
@@ -177,6 +180,11 @@ describe("X11 window placement (#1358)", () => {
       ]),
     ).toBe("other");
     expect(await placement([{ pid: 900, windowId: 20 }])).toBe("other");
+    // A window on the display's other screen, which the driver on screen 0 must not act on.
+    await using screens = await scriptedServer(new Map([[30, { pid: 10, root: 0x500 }]]));
+    const second = makeX11WindowPlacement(display, screens.path);
+    expect(await second([{ pid: 10, windowId: 30 }])).toBe("other");
+    expect(await second([{ pid: 10, windowId: 30, bounds }])).toBe("other");
     // The same id and pid on another X server, as one process with windows on both would have.
     expect(await placement([{ pid: 10, windowId: 20, bounds: { ...bounds, x: 300 } }])).toBe(
       "other",

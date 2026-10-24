@@ -167,6 +167,8 @@ async function place(
       request(GET_GEOMETRY, 0, 2, (view) => view.setUint32(4, window.windowId, true)),
     );
     if (!geometry) return "other";
+    // The driver is on screen 0; a window under another screen's root is not on it.
+    if (new DataView(geometry.buffer).getUint32(8, true) !== root) return "other";
     if (window.bounds !== undefined) {
       const origin = await x.ask(
         request(TRANSLATE_COORDINATES, 0, 4, (view) => {
@@ -175,6 +177,7 @@ async function place(
         }),
       );
       if (!origin) return "unknown";
+      if (origin[1] !== 1) return "other";
       const g = new DataView(geometry.buffer);
       const o = new DataView(origin.buffer);
       if (
