@@ -326,16 +326,23 @@ function validateNightlyWorkflow(source, yaml) {
     // prepare verifies the commit and never needs it.
     if (Object.hasOwn(job, "permissions")) {
       const permissions = job.permissions;
+      // publish may also read issues: its stable recheck counts release-blocker issues
+      // inside the publish lock (.github/scripts/release-train.cjs).
+      const extraKeys = name === "publish" ? ["issues"] : [];
       const contentsWrite =
         isMapping(permissions) &&
-        Object.keys(permissions).length === 1 &&
-        permissions.contents === "write";
+        permissions.contents === "write" &&
+        Object.keys(permissions).every(
+          (key) => key === "contents" || (extraKeys.includes(key) && permissions[key] === "read"),
+        );
       const readOnly = !JSON.stringify(permissions ?? {}).includes("write");
       if (name === "prepare" ? !readOnly : !(contentsWrite || readOnly)) {
         fail(
           name === "prepare"
             ? "jobs.prepare must not request write permissions"
-            : `jobs.${name} may only request contents: write`,
+            : name === "publish"
+              ? "jobs.publish may only request contents: write and issues: read"
+              : `jobs.${name} may only request contents: write`,
         );
       }
     }

@@ -928,6 +928,14 @@ describe("goat pre-push nightly workflow guard", () => {
     expect(result.status).toBe(0);
   });
 
+  it("allows publish to read release-blocker issues beside contents: write", () => {
+    const jobs = nightlyJobs();
+    jobs.publish = { ...jobs.publish, permissions: { contents: "write", issues: "read" } };
+    const result = push(nightly(jobs));
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
+
   it("allows the shipped nightly workflow", () => {
     const shipped = NodePath.join(sourceRoot, nightlyPath);
     if (!NodeFS.existsSync(shipped)) return;
@@ -1200,6 +1208,16 @@ describe("goat pre-push nightly workflow guard", () => {
     [
       "write permissions beyond contents",
       withJob("publish", { permissions: { contents: "write", actions: "write" } }),
+      "jobs.publish may only request contents: write",
+    ],
+    [
+      "issues: read beside contents: write outside publish",
+      withJob("build_mac", { permissions: { contents: "write", issues: "read" } }),
+      "jobs.build_mac may only request contents: write",
+    ],
+    [
+      "issues: write on publish",
+      withJob("publish", { permissions: { contents: "write", issues: "write" } }),
       "jobs.publish may only request contents: write",
     ],
     [
