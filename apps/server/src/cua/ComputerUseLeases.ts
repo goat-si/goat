@@ -32,12 +32,14 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
@@ -55,6 +57,12 @@ export interface ComputerUseLease {
   readonly expiresAt: DateTime.Utc;
   /** Absent when the grant admits every app. */
   readonly apps?: ReadonlyArray<string>;
+}
+
+/** The thread holding this host's screen for unattended work, by grant or full access. */
+export interface ComputerUseHolder {
+  readonly threadId: ThreadId;
+  readonly expiresAt: DateTime.Utc;
 }
 
 /**
@@ -123,10 +131,10 @@ export class ComputerUseLeases extends Context.Service<
     readonly active: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
-    /** The live admission on this host held by a thread other than `except`. */
+    /** The thread other than `except` holding this host's screen for unattended work. */
     readonly holder: (
       except?: ThreadId,
-    ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
+    ) => Effect.Effect<Option.Option<ComputerUseHolder>, ComputerUseLeaseError>;
     /** Whether the thread is the GOAT Bot thread. Channel workers are known by their id. */
     readonly channelOrigin: (
       threadId: ThreadId,
@@ -141,6 +149,23 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       lease: Option.Option<ComputerUseLease>,
     ) => Effect.Effect<ComputerUseControl>;
+    /**
+     * A control on every app without a grant, for a full access thread on a host that admits
+     * those. It ends once the host stops admitting them or the thread leaves full access. None
+     * for unattended work while another thread holds the screen for its own.
+     */
+    readonly everyAppControl: (
+      threadId: ThreadId,
+      unattended: boolean,
+    ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
+    /**
+     * Runs a grant approval's holder check through its commit with unattended claims held off,
+     * so neither lands between the other's check and its commit and two unattended threads
+     * never act on the screen at once.
+     */
+    readonly serializeAdmission: <A, E, R>(
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E, R>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
       threadId: ThreadId,
@@ -222,6 +247,8 @@ interface ControlRecord extends ComputerUseControl {
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
+  /** Admitted by the full access setting rather than a grant; see everyAppControl. */
+  readonly everyApp?: "interactive" | "unattended";
 }
 
 /** Whether an agent can act on the screen through this control now. */
@@ -235,7 +262,21 @@ const make = Effect.gen(function* () {
   const watchKick = yield* PubSub.sliding<void>(1);
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  // A failed read admits nothing, so a control living on the setting ends.
+  const fullAccessAdmitted = Effect.fn("ComputerUseLeases.fullAccessAdmitted")(
+    function* (threadId: ThreadId) {
+      if (Option.isNone(settings)) return false;
+      if (!(yield* settings.value.getSettings).cuaFullAccessAutoAdmit) return false;
+      const rows = yield* sql<{ readonly runtime_mode: string }>`
+        SELECT runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
+      `;
+      return rows[0]?.runtime_mode === "full-access";
+    },
+    Effect.orElseSucceed(() => false),
+  );
   const controls = new Map<ThreadId, ControlRecord>();
+  const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
 
@@ -284,17 +325,32 @@ const make = Effect.gen(function* () {
     } as const;
   });
 
-  const control = Effect.fn("ComputerUseLeases.control")(function* (
+  /** Another thread acting on the screen for unattended work admitted by the setting. */
+  const unattendedEveryApp = (except: ThreadId | undefined, now: DateTime.Utc) =>
+    [...controls.values()].find(
+      (record) =>
+        record.threadId !== except &&
+        record.everyApp === "unattended" &&
+        acting(record) &&
+        DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now),
+    );
+
+  const mint = Effect.fn("ComputerUseLeases.mint")(function* (
     threadId: ThreadId,
     lease: Option.Option<ComputerUseLease>,
+    everyApp: ControlRecord["everyApp"],
   ) {
     const now = yield* DateTime.now;
+    // Checked and claimed with no yield between, so two unattended turns cannot both pass.
+    if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
+      return undefined;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     const existing = controls.get(threadId);
     if (
       existing !== undefined &&
       existing.ended === undefined &&
       existing.handoffId === handoffId &&
+      existing.everyApp === everyApp &&
       DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
     ) {
       const { idle, ...rest } = existing;
@@ -311,6 +367,7 @@ const make = Effect.gen(function* () {
         ? lease.value.expiresAt
         : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
       ...(handoffId === undefined ? {} : { handoffId }),
+      ...(everyApp === undefined ? {} : { everyApp }),
       uses: 0,
     };
     controls.set(threadId, next);
@@ -318,6 +375,24 @@ const make = Effect.gen(function* () {
     // A proxy still holding the previous id hears it was replaced.
     if (existing !== undefined && existing.ended === undefined) yield* changed;
     return next as ComputerUseControl;
+  });
+
+  const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>) =>
+    mint(threadId, lease, undefined).pipe(Effect.map((record) => record as ComputerUseControl));
+
+  const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
+    threadId: ThreadId,
+    unattended: boolean,
+  ) {
+    if (!unattended)
+      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "interactive"));
+    return yield* admission.withPermits(1)(
+      Effect.gen(function* () {
+        if ((yield* live()).some((lease) => lease.threadId !== threadId))
+          return Option.none<ComputerUseControl>();
+        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended"));
+      }),
+    );
   });
 
   let interruptions: Interruptions = { count: 0, last: "human_input" };
@@ -344,9 +419,30 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
+    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
+      if (end(threadId, "revoked")) yield* changed;
+      return { _tag: "ended", reason: "revoked" };
+    }
+    // An approval that checked holder() before this claim can commit after it. A person's
+    // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
+    if (
+      record.everyApp === "unattended" &&
+      (yield* live()).some((lease) => lease.threadId !== threadId)
+    ) {
+      if (end(threadId, "revoked")) yield* changed;
+      return { _tag: "ended", reason: "revoked" };
+    }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    if (record.everyApp !== undefined)
+      return {
+        _tag: "active",
+        expiresAt: record.expiresAt,
+        interruptions,
+        apps: scoped(record, undefined),
+        wakeAt: DateTime.toEpochMillis(record.expiresAt),
+      };
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;
@@ -533,12 +629,17 @@ const make = Effect.gen(function* () {
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
-    holder: (except) =>
-      live().pipe(
-        Effect.map((leases) =>
-          Option.fromNullishOr(leases.find((lease) => lease.threadId !== except)),
-        ),
-      ),
+    holder: Effect.fn("ComputerUseLeases.holder")(function* (except?: ThreadId) {
+      const lease = (yield* live()).find((grant) => grant.threadId !== except);
+      if (lease !== undefined) return Option.some<ComputerUseHolder>(lease);
+      const admitted = unattendedEveryApp(except, yield* DateTime.now);
+      return admitted === undefined
+        ? Option.none<ComputerUseHolder>()
+        : Option.some<ComputerUseHolder>({
+            threadId: admitted.threadId,
+            expiresAt: admitted.expiresAt,
+          });
+    }),
     channelOrigin: Effect.fn("ComputerUseLeases.channelOrigin")(function* (threadId) {
       const read = <A>(effect: Effect.Effect<A, ChannelBotDirectory.ChannelBotDirectoryError>) =>
         effect.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
@@ -547,6 +648,8 @@ const make = Effect.gen(function* () {
     }),
     state,
     control,
+    everyAppControl,
+    serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
     stop: (threadId) =>
       Effect.sync(() => end(threadId, "stopped")).pipe(
