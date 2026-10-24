@@ -753,6 +753,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       )
         reported = target;
     }
+    // Every wait is behind it now: another thread's grant that arrived meanwhile still refuses
+    // a call that would take the screen from it.
+    if (
+      isRequest &&
+      message?.method === "tools/call" &&
+      shared &&
+      takesScreen(message.params?.name, message.params?.arguments)
+    ) {
+      outstanding.delete(JSON.stringify(id));
+      return yield* options.output(refusal(id, message.method, "screen_shared", SCREEN_SHARED));
+    }
     yield* running.driver.send(line);
   });
 

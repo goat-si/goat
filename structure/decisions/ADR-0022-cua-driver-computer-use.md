@@ -199,8 +199,10 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   handoff is the lease: it expires on its clock rather than when the asking turn ends, a person
   ends it early by moving it to cancelled (the only terminal transition allowed after approval),
   and turning computer use off ends it. Live leases on a host do not overlap. A grant naming
-  apps overlaps another thread's grant naming one of the same apps (matched without case, as the
-  proxy matches them); a grant without apps overlaps every other, because under it the driver
+  apps overlaps another thread's grant naming one of the same apps. Both sides compare the id
+  `list_apps` reports (the bundle id, or the app name where there is none) without case; the
+  proxy never approves an app by its display name, which would let two grants naming one app
+  differently both reach it. A grant without apps overlaps every other, because under it the driver
   acts on the whole desktop and runs scripts, and unattended full access work counts as one. An
   overlapping request is refused naming the holder and its apps in the way, and so is an
   overlapping approval. Grants on different apps coexist: the proxy forwards only calls aimed at

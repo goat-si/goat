@@ -37,3 +37,19 @@ describe("learnApps", () => {
     });
   });
 });
+
+describe("scopeVerdict", () => {
+  it("approves an app by the id list_apps reports, so its display name is no second grant to it", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed);
+    assert.deepEqual(
+      scopeVerdict({
+        name: "click",
+        args: { pid: KAKAO.pid, window_id: 57000, x: 51, y: 104 },
+        apps: approvedApps([KAKAO.name]),
+        appOf: (pid) => listed.get(pid),
+      }),
+      { _tag: "refuse", reason: "app_not_approved", app: KAKAO.bundle_id },
+    );
+  });
+});

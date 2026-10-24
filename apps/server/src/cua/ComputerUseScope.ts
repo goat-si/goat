@@ -106,7 +106,9 @@ export function scopeVerdict(input: {
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
-  return approves(input.apps, app.id, app.name)
+  // Only the id list_apps reports counts: a display name would let two grants that name the
+  // same app differently both reach it, and grants are told apart by these strings alone.
+  return approves(input.apps, app.id)
     ? { _tag: "allow" }
     : { _tag: "refuse", reason: "app_not_approved", app: app.id };
 }
