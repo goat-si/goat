@@ -769,3 +769,30 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
     });
   });
 });
+
+describe("server dev watch", () => {
+  it("restarts on workspace package sources and never on package roots, where Vite and installs write", () => {
+    const repo = NodePath.resolve(import.meta.dirname, "..");
+    const serverPackage = JSON.parse(
+      NodeFS.readFileSync(NodePath.join(repo, "apps/server/package.json"), "utf8"),
+    ) as { readonly scripts: { readonly dev: string } };
+    const watched = [...serverPackage.scripts.dev.matchAll(/--watch-path=(\S+)/g)].map(
+      ([, path]) => path,
+    );
+    const packageSources = NodeFS.readdirSync(NodePath.join(repo, "packages"))
+      .filter((name) => NodeFS.existsSync(NodePath.join(repo, "packages", name, "src")))
+      .map((name) => `../../packages/${name}/src`);
+
+    assert.deepStrictEqual(
+      watched.sort(),
+      [
+        "src",
+        "package.json",
+        ...packageSources,
+        // Runtime code outside src: source-control-github/src/server/pullRequestReads.graphql.ts
+        // imports it.
+        "../../packages/source-control-github/schema",
+      ].sort(),
+    );
+  });
+});
