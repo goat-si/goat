@@ -21,6 +21,7 @@ import {
   type ComputerUseControlEnd,
   type ComputerUsePauseReason,
   type CuaAgentBlock,
+  cuaAgentBlockUnder,
   Handoff,
   type ThreadId,
   type TurnItemId,
@@ -922,8 +923,17 @@ const make = Effect.gen(function* () {
     proxy,
     blocked: (threadId, block) =>
       Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
-    blockedTurns: Effect.sync(() =>
-      [...blockedTurns].map(([threadId, block]) => ({ threadId, block })),
+    // Read against the helper's latest readiness: a grant that came back is no longer named, and a
+    // turn whose grants all came back has nothing to show. Its readiness report wakes the lists.
+    blockedTurns: (Option.isSome(desktop) ? desktop.value.cuaReadiness : Effect.succeedNone).pipe(
+      Effect.map((report) =>
+        [...blockedTurns].flatMap(([threadId, recorded]) => {
+          const block = Option.isSome(report)
+            ? cuaAgentBlockUnder(recorded, report.value.readiness)
+            : recorded;
+          return block === undefined ? [] : [{ threadId, block }];
+        }),
+      ),
     ),
   });
 });
