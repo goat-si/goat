@@ -75,8 +75,10 @@ export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKin
   const held = given?.modifier ?? given?.modifiers;
   const modifiers = Array.isArray(held) && held.length > 0;
   if (KEYBOARD_TOOLS.has(tool)) return point ? ["keyboard", "pointer"] : ["keyboard"];
-  // With a point, scroll turns the wheel there; without one it presses Page Down or arrows.
-  if (tool === "scroll") return point ? ["pointer"] : ["keyboard"];
+  // With a point or an element, scroll turns the wheel there; with neither it presses Page Down
+  // or arrows in the focused element.
+  if (tool === "scroll")
+    return point || given?.element_token !== undefined ? ["pointer"] : ["keyboard"];
   if (POINTER_TOOLS.has(tool)) return modifiers ? ["pointer", "keyboard"] : ["pointer"];
   return ["keyboard", "pointer"];
 }
@@ -102,13 +104,16 @@ const KEEP_MS = 10_000;
  */
 const OPEN_MS = 10_000;
 
-/** Cover of one kind that never lapsed: from its first call until the last one's tail. */
+/** Cover of one kind that never lapsed: from its first call until the last tail to close. */
 interface Run {
   readonly from: number;
-  /** Undefined while a call of the run is still open. */
-  to: number | undefined;
-  open: number;
+  /** The latest tail of a call of this run that has closed. */
+  tail: number;
+  /** Calls of this run still open; while any is, the run has not ended. */
+  readonly open: Set<string>;
 }
+
+const runEnd = (run: Run) => (run.open.size > 0 ? Infinity : run.tail);
 
 export function makeAgentInputLog() {
   const open = new Map<
@@ -125,29 +130,28 @@ export function makeAgentInputLog() {
    * not make a long run look as if it began later.
    */
   const runs: Record<InputKind, Array<Run>> = { keyboard: [], pointer: [] };
-  const opened = (kinds: ReadonlyArray<InputKind>, at: number) => {
+  const opened = (key: string, kinds: ReadonlyArray<InputKind>, at: number) => {
     for (const kind of kinds) {
       const last = runs[kind].at(-1);
-      if (last !== undefined && (last.to === undefined || at - BEFORE_MS <= last.to)) {
-        last.to = undefined;
-        last.open += 1;
-      } else runs[kind].push({ from: at - BEFORE_MS, to: undefined, open: 1 });
+      if (last !== undefined && at - BEFORE_MS <= runEnd(last)) last.open.add(key);
+      else runs[kind].push({ from: at - BEFORE_MS, tail: at - BEFORE_MS, open: new Set([key]) });
     }
   };
-  const closed = (kinds: ReadonlyArray<InputKind>, until: number) => {
+  const closed = (key: string, kinds: ReadonlyArray<InputKind>, until: number) => {
     for (const kind of kinds) {
-      const last = runs[kind].at(-1);
-      if (last === undefined || last.open === 0) continue;
-      last.open -= 1;
-      if (last.open === 0) last.to = until;
+      const run = runs[kind].findLast((entry) => entry.open.has(key));
+      if (run === undefined) continue;
+      run.open.delete(key);
+      run.tail = Math.max(run.tail, until);
     }
   };
   const finish = (
+    key: string,
     call: { readonly start: number; readonly kinds: ReadonlyArray<InputKind> },
     end: number,
   ) => {
     done = [...done, { ...call, end }];
-    closed(call.kinds, end + AFTER_MS);
+    closed(key, call.kinds, end + AFTER_MS);
   };
   /**
    * Forgets what can no longer cover an event near now: finished calls after KEEP_MS, open ones
@@ -160,29 +164,32 @@ export function makeAgentInputLog() {
     for (const [key, call] of open)
       if (now - call.start > OPEN_MS) {
         open.delete(key);
-        closed(call.kinds, call.start + OPEN_MS);
+        closed(key, call.kinds, call.start + OPEN_MS);
       }
     for (const kind of ["keyboard", "pointer"] as const)
-      runs[kind] = runs[kind].filter((run) => run.to === undefined || now - run.to < KEEP_MS);
+      runs[kind] = runs[kind].filter((run) => now - runEnd(run) < KEEP_MS);
   };
   return {
     prune,
     started: (key: string, at: number, kinds: ReadonlyArray<InputKind> = BOTH) => {
+      // A repeated start for one call ends the earlier record first, so every open has its close.
+      const earlier = open.get(key);
+      if (earlier !== undefined) finish(key, earlier, at);
       open.set(key, { start: at, kinds });
-      opened(kinds, at);
+      opened(key, kinds, at);
     },
     /** A call answered, cancelled or cut off; true when it was open. */
     ended: (key: string, now: number) => {
       const call = open.get(key);
       if (call === undefined) return false;
       open.delete(key);
-      finish(call, now);
+      finish(key, call, now);
       return true;
     },
     /** Every open call ends, as when the driver child is stopped; returns their keys. */
     endAll: (now: number) => {
       const keys = [...open.keys()];
-      for (const call of open.values()) finish(call, now);
+      for (const [key, call] of open) finish(key, call, now);
       open.clear();
       return keys;
     },
@@ -210,7 +217,7 @@ export function makeAgentInputLog() {
             call.kinds.includes(kind) && at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS,
         );
       if (!covered) return false;
-      const run = runs[kind].find((entry) => entry.from <= at && (entry.to ?? Infinity) >= at);
+      const run = runs[kind].find((entry) => entry.from <= at && at <= runEnd(entry));
       // No run on record for covered input: err toward the person.
       return run !== undefined && at - run.from <= OPEN_MS;
     },
