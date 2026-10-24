@@ -199,7 +199,10 @@ export function makeDeviceLedger() {
       held.push({ device, change: changes, input });
       return "held";
     },
-    /** A device list read after change covers; returns held input it shows to be a person's. */
+    /**
+     * A device list whose reply arrived after change covers had been announced (the count when
+     * the reply arrives, not when it was asked for); returns held input it shows to be a person's.
+     */
     list: (covers: number, devices: ReadonlyMap<number, boolean>) => {
       list = { covers, devices };
       const people: HumanInput[] = [];
@@ -274,7 +277,8 @@ export async function openX11HumanInput(
   let major: number | undefined;
   const ledger = makeDeviceLedger();
   let refreshing = false;
-  const waiting: Array<(message: Uint8Array | undefined) => void> = [];
+  /** Each reply goes out with the number of device changes announced before it. */
+  const waiting: Array<(message: Uint8Array | undefined, changes: number) => void> = [];
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
   const close = () => {
     if (closed) return;
@@ -282,7 +286,7 @@ export async function openX11HumanInput(
     socket.destroy();
     observe.onLost?.();
     setup?.(undefined);
-    for (const wake of waiting.splice(0)) wake(undefined);
+    for (const wake of waiting.splice(0)) wake(undefined, ledger.changes());
   };
   const count = (input: HumanInput) => {
     if (latest === undefined || input.at > latest.at) latest = input;
@@ -311,7 +315,9 @@ export async function openX11HumanInput(
       const code = (message[0] ?? 0) & 0x7f;
       // Replies (1) and errors (0) answer requests in order; events report input.
       if (code <= 1) {
-        waiting.shift()?.(message);
+        // The server sends every event it made before answering ahead of the answer, so a
+        // reply reflects exactly the changes counted up to here.
+        waiting.shift()?.(message, ledger.changes());
         continue;
       }
       // Events selected before the first list are recorded too; that list then reads them.
@@ -337,29 +343,32 @@ export async function openX11HumanInput(
   });
   const root = reply ? setupRoot(reply) : undefined;
   // A request left unanswered puts the queue out of step with the replies, so it closes.
-  const ask = (bytes: Uint8Array) =>
-    new Promise<Uint8Array | undefined>((resolve) => {
-      if (closed) return resolve(undefined);
-      const timer = setTimeout(() => {
-        close();
-        resolve(undefined);
-      }, ASK_TIMEOUT_MS);
-      timer.unref();
-      waiting.push((message) => {
-        clearTimeout(timer);
-        resolve(message);
-      });
-      socket.write(bytes);
-    });
+  const askCounted = (bytes: Uint8Array) =>
+    new Promise<{ readonly message: Uint8Array | undefined; readonly changes: number }>(
+      (resolve) => {
+        if (closed) return resolve({ message: undefined, changes: ledger.changes() });
+        const timer = setTimeout(() => {
+          close();
+          resolve({ message: undefined, changes: ledger.changes() });
+        }, ASK_TIMEOUT_MS);
+        timer.unref();
+        waiting.push((message, changes) => {
+          clearTimeout(timer);
+          resolve({ message, changes });
+        });
+        socket.write(bytes);
+      },
+    );
+  const ask = async (bytes: Uint8Array) => (await askCounted(bytes)).message;
   /** Reads device lists, one at a time, until one covers every change and held input. */
   const refresh = async (): Promise<void> => {
     if (major === undefined || closed || refreshing) return;
     refreshing = true;
     try {
       while (!closed && ledger.stale()) {
-        // Requests are answered in order, so the list reflects every change announced so far.
-        const covers = ledger.changes();
-        const list = await ask(xiQueryDevice(major));
+        // The list covers every change announced before its reply, which may be more than were
+        // announced when it was asked for.
+        const { message: list, changes: covers } = await askCounted(xiQueryDevice(major));
         if (!list || list[0] !== 1) return close();
         for (const input of ledger.list(covers, classifyDevices(parseDevices(list)))) count(input);
         observe.onListed?.();

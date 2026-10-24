@@ -105,6 +105,10 @@ async function scriptedServer(options: {
   readonly after?: (query: number) => ReadonlyArray<Uint8Array>;
 }) {
   let queries = 0;
+  /** A held XIQueryDevice is answered only when released, so events can go out first. */
+  let hold = false;
+  let held: (() => void) | undefined;
+  let requested = Promise.withResolvers<void>();
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
   const path = NodePath.join(dir, "X0");
   let client: NodeNet.Socket | undefined;
@@ -146,9 +150,16 @@ async function scriptedServer(options: {
           socket.write(reply);
         } else if (op === MAJOR && minor === 48) {
           queries++;
-          socket.write(
-            Buffer.concat([devicesReply(deviceList), ...(options.after?.(queries) ?? [])]),
-          );
+          const answer = () =>
+            socket.write(
+              Buffer.concat([devicesReply(deviceList), ...(options.after?.(queries) ?? [])]),
+            );
+          requested.resolve();
+          requested = Promise.withResolvers<void>();
+          if (hold) {
+            hold = false;
+            held = answer;
+          } else answer();
         }
       }
     });
@@ -161,6 +172,11 @@ async function scriptedServer(options: {
     setDevices: (next: ReadonlyArray<XiDevice>) => {
       deviceList = next;
     },
+    holdNextList: () => {
+      hold = true;
+    },
+    listRequested: () => requested.promise,
+    releaseList: () => held?.(),
     close: () => {
       client?.destroy();
       server.close();
@@ -313,6 +329,39 @@ describe("XInput2 human input", () => {
     server.send(hierarchyEvent([8, 10, 11, 12]));
     await third;
     expect(source.latest()).toEqual({ at: 9, source: "keyboard" });
+    source.close();
+    server.close();
+  });
+
+  it("a device id reused while a list is being read never drops a person's held key", async () => {
+    // The keyboard on 11 is a person's. An unrelated change starts a read; the person's key is
+    // held for it; then 11 is removed and the driver's keyboard takes it, and those changes are
+    // announced before the reply, which already lists the driver's device.
+    const removed = hierarchyEvent([11]);
+    new DataView(removed.buffer).setUint32(16, 0x8, true);
+    new DataView(removed.buffer).setUint32(40, 0x8, true);
+    const server = await scriptedServer({
+      minor: 2,
+      after: () => [],
+    });
+    server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
+    const listed = lists();
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 11, {
+      socketPath: server.path,
+      onListed: listed.onListed,
+    });
+    if (!source) throw new Error("no source");
+    server.holdNextList();
+    const applied = listed.next();
+    server.send(hierarchyEvent([30]));
+    server.send(xiEvent(RAW_KEY, 11));
+    await server.listRequested();
+    server.setDevices([...XVFB, { id: 11, use: 4, name: "CUA v1.AAAA.BBBB.CCCC uinput keyboard" }]);
+    server.send(removed);
+    server.send(hierarchyEvent([11]));
+    server.releaseList();
+    await applied;
+    expect(source.latest()).toEqual({ at: 11, source: "keyboard" });
     source.close();
     server.close();
   });
