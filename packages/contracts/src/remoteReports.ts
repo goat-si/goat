@@ -9,6 +9,7 @@ import {
 } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ThreadResultOutcome } from "./threadResult.ts";
+import { TurnCapability } from "./composerContext.ts";
 import { ChannelWorkerObservation } from "./channelWorkerObservation.ts";
 
 export const REMOTE_REPORT_SUMMARY_MAX_CHARS = 4000;
@@ -37,6 +38,8 @@ export const RemoteRelaySend = Schema.Struct({
   threadId: ThreadId,
   message: TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)),
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
+  /** The turn capabilities the send asked for; an older origin drops them. */
+  capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
 });
 export type RemoteRelaySend = typeof RemoteRelaySend.Type;

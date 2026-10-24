@@ -112,6 +112,15 @@ const withoutHost = <T extends { readonly host?: unknown; readonly allHosts?: un
   return rest;
 };
 
+/**
+ * A host older than turn capabilities refuses an argument it does not declare, so an empty
+ * request is left out; a real one reaches it and fails there with nothing sent.
+ */
+const remoteSendArguments = (input: OrchestratorMcpThreadSendInput) => {
+  const { capabilities, ...rest } = withoutHost(input);
+  return capabilities === undefined || capabilities.length === 0 ? rest : { ...rest, capabilities };
+};
+
 /** Another machine's answer is untrusted: it must decode as the tool's own result. */
 const decodeRemote =
   <A, E>(decode: (value: unknown) => Effect.Effect<A, E>, host: string, tool: string) =>
@@ -368,6 +377,7 @@ const make = Effect.gen(function* () {
             threadId: input.threadId,
             message: input.message,
             ...(input.mode === undefined ? {} : { mode: input.mode }),
+            ...(input.capabilities?.length ? { capabilities: input.capabilities } : {}),
             ...(input.clientRequestId === undefined
               ? {}
               : { clientRequestId: input.clientRequestId }),
@@ -839,8 +849,8 @@ const make = Effect.gen(function* () {
                       arguments:
                         scope.thread !== undefined &&
                         (input.mode === "queue" || input.mode === "steer")
-                          ? { ...withoutHost(input), ...forwarded, mode: "auto" }
-                          : { ...withoutHost(input), ...forwarded },
+                          ? { ...remoteSendArguments(input), ...forwarded, mode: "auto" }
+                          : { ...remoteSendArguments(input), ...forwarded },
                       writes: true,
                       // A relayed send arrives as the origin's launcher thread, without this ceiling.
                       ...(ceiling === undefined

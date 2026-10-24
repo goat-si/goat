@@ -585,6 +585,7 @@ const make = Effect.gen(function* () {
                 ...(send.mode === undefined
                   ? {}
                   : { mode: send.mode === "restart" ? "restart" : "auto" }),
+                ...(send.capabilities?.length ? { capabilities: send.capabilities } : {}),
                 clientRequestId: `relay:${r.correlation_id}:${requestKey}`,
               },
               writes: true,
