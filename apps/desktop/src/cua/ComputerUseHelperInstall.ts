@@ -45,6 +45,8 @@ export interface HelperInstallDependencies {
   readonly copy: (from: string, to: string) => Promise<void>;
   /** Starts the bundle's helper and resolves once its hello names the expected bundle id. */
   readonly probe: (bundle: string, bundleId: string) => Promise<void>;
+  /** Whether two helper bundles carry byte-identical Cua Driver executables. */
+  readonly sameDriver: (bundle: string, other: string) => Promise<boolean>;
   readonly grants: (
     bundle: string,
     bundleId: string,
@@ -68,24 +70,34 @@ export type HelperInstallResult =
   | { readonly kind: "unusable"; readonly message: string };
 
 const HELPER_APP = COMPUTER_USE_HELPER_NAME + ".app";
-const bothGranted = (grants: {
-  readonly accessibility: boolean;
-  readonly screenRecording: boolean;
-}) => grants.accessibility && grants.screenRecording;
+/** A generation directory is named for its code directory hash: no separators, no dots. */
+const GENERATION_NAME = /^[0-9A-Za-z]+$/u;
+type Grants = { readonly accessibility: boolean; readonly screenRecording: boolean };
+const lostGrant = (before: Grants, after: Grants | undefined) =>
+  (before.accessibility && !after?.accessibility) ||
+  (before.screenRecording && !after?.screenRecording);
 
 export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
-  // The generation proven in this process, so a running app checks a seal once per switch.
-  let proven: string | undefined;
-
-  return async (input: HelperInstallInput): Promise<HelperInstallResult> => {
+  const install = async (input: HelperInstallInput): Promise<HelperInstallResult> => {
     const generations = NodePath.join(input.root, "generations");
     const bundleOf = (generation: string) => NodePath.join(generations, generation, HELPER_APP);
-    const linked = async (name: string) => {
-      try {
-        return NodePath.basename(await NodeFSP.readlink(NodePath.join(input.root, name)));
-      } catch {
+    /** The generation a link this installer wrote names; anything else reads as no link. */
+    const linked = async (name: string, mustExist = true) => {
+      const target = await NodeFSP.readlink(NodePath.join(input.root, name)).catch(() => undefined);
+      const generation = target === undefined ? undefined : NodePath.basename(target);
+      if (
+        generation === undefined ||
+        !GENERATION_NAME.test(generation) ||
+        target !== NodePath.join("generations", generation)
+      )
         return undefined;
-      }
+      if (!mustExist) return generation;
+      return (await NodeFSP.stat(NodePath.join(generations, generation)).then(
+        (stat) => stat.isDirectory(),
+        () => false,
+      ))
+        ? generation
+        : undefined;
     };
     const point = async (name: string, generation: string | undefined) => {
       const link = NodePath.join(input.root, name);
@@ -104,30 +116,35 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
       '" and identifier "' +
       input.bundleId +
       '"';
-    const unusable = (problem: string): HelperInstallResult => ({
-      kind: "unusable",
-      message: COMPUTER_USE_HELPER_NAME + " " + problem,
-    });
     const wanted = (await dependencies.signature(input.source))?.cdhash;
-    if (wanted === undefined || !(await dependencies.satisfies(input.source, requirement)))
-      return unusable("in GOAT.app is not signed by GOAT's team as " + input.bundleId + ".");
-
-    const current = await linked("current");
-    const valid = async (generation: string | undefined) =>
-      generation !== undefined &&
-      (proven === generation || (await dependencies.satisfies(bundleOf(generation), requirement)));
-    const use = (generation: string, note?: string): HelperInstallResult => {
-      proven = generation;
-      return { kind: "found", path: bundleOf(generation), ...(note ? { note } : {}) };
-    };
-    const currentValid = await valid(current);
-    if (current === wanted && currentValid) return use(current);
     if (
-      current !== undefined &&
-      currentValid &&
-      (input.busy || (await linked("rejected")) === wanted)
+      wanted === undefined ||
+      !GENERATION_NAME.test(wanted) ||
+      !(await dependencies.satisfies(input.source, requirement))
     )
-      return use(current);
+      return {
+        kind: "unusable",
+        message:
+          COMPUTER_USE_HELPER_NAME +
+          " in GOAT.app is not signed by GOAT's team as " +
+          input.bundleId +
+          ".",
+      };
+
+    // Checked on every use: the directory is writable by the user, so a name proves nothing.
+    const valid = async (generation: string | undefined) =>
+      generation !== undefined && (await dependencies.satisfies(bundleOf(generation), requirement));
+    const use = (generation: string, note?: string): HelperInstallResult => ({
+      kind: "found",
+      path: bundleOf(generation),
+      ...(note ? { note } : {}),
+    });
+    const current = await linked("current");
+    const currentValid = await valid(current);
+    if (current !== undefined && currentValid) {
+      if (current === wanted) return use(current);
+      if (input.busy || (await linked("rejected", false)) === wanted) return use(current);
+    }
     // Busy with a copy that fails its check: the sealed one in GOAT.app is the only safe choice.
     if (input.busy) return { kind: "found", path: input.source };
 
@@ -153,35 +170,48 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
     const kept = previous !== undefined && (await valid(previous)) ? previous : undefined;
     await point("previous", kept);
     await point("current", wanted);
-    proven = undefined;
     for (const entry of await NodeFSP.readdir(generations))
       if (entry !== wanted && entry !== kept)
         await NodeFSP.rm(NodePath.join(generations, entry), { recursive: true, force: true });
 
-    // A new code identity can lose the grants; keep the generation that still has them.
+    // A new code identity can lose grants; keep the generation that still has them, as long as
+    // it speaks this app's protocol and carries the same driver, so the host can still run it.
     if (kept !== undefined) {
-      const after = await dependencies
-        .grants(bundleOf(wanted), input.bundleId)
-        .catch(() => undefined);
-      if (!after || !bothGranted(after)) {
-        const before = await dependencies
-          .grants(bundleOf(kept), input.bundleId)
-          .catch(() => undefined);
-        if (before && bothGranted(before)) {
-          await point("current", kept);
-          await point("previous", wanted);
-          await point("rejected", wanted);
-          return use(
-            kept,
-            "The updated " +
-              COMPUTER_USE_HELPER_NAME +
-              " lost its Accessibility or Screen Recording grant, so the previous one keeps running.",
-          );
-        }
+      const grantsOf = (generation: string) =>
+        dependencies.grants(bundleOf(generation), input.bundleId).catch(() => undefined);
+      const after = await grantsOf(wanted);
+      const before =
+        after && after.accessibility && after.screenRecording ? undefined : await grantsOf(kept);
+      if (
+        before !== undefined &&
+        lostGrant(before, after) &&
+        (await dependencies.sameDriver(input.source, bundleOf(kept))) &&
+        (await dependencies.probe(bundleOf(kept), input.bundleId).then(
+          () => true,
+          () => false,
+        ))
+      ) {
+        await point("current", kept);
+        await point("previous", wanted);
+        await point("rejected", wanted);
+        return use(
+          kept,
+          "The updated " +
+            COMPUTER_USE_HELPER_NAME +
+            " lost an Accessibility or Screen Recording grant the previous one holds, so the previous one keeps running. Grant the new one to move to it.",
+        );
       }
     }
     await point("rejected", undefined);
     return use(wanted);
+  };
+
+  // One install at a time: a second caller would otherwise prune the first one's directories.
+  let queue: Promise<unknown> = Promise.resolve();
+  return (input: HelperInstallInput): Promise<HelperInstallResult> => {
+    const run = queue.then(() => install(input));
+    queue = run.catch(() => undefined);
+    return run;
   };
 }
 
@@ -210,6 +240,13 @@ const helperInstallDependencies: HelperInstallDependencies = {
   // provenance or quarantine mark from following the copy to its new path.
   copy: async (from, to) => {
     await execFile("ditto", ["--noextattr", "--noqtn", from, to]);
+  },
+  sameDriver: async (bundle, other) => {
+    const digest = async (path: string) =>
+      NodeCrypto.createHash("sha256")
+        .update(await NodeFSP.readFile(helperBundle(path, "").driverPath))
+        .digest("hex");
+    return (await digest(bundle)) === (await digest(other).catch(() => ""));
   },
   probe: async (bundle, bundleId) => {
     const session = await openHelperSession(

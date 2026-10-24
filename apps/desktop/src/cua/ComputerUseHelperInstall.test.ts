@@ -16,6 +16,10 @@ interface FakeSignature {
   readonly team?: string;
   readonly identifier?: string;
   readonly granted?: boolean;
+  /** Overrides granted per grant. */
+  readonly grants?: { readonly accessibility: boolean; readonly screenRecording: boolean };
+  /** Stands for the bundled cua-driver's bytes; generations compare it. */
+  readonly driver?: string;
   readonly hello?: boolean;
 }
 
@@ -40,6 +44,8 @@ async function fixture() {
   const root = NodePath.join(dir, "state", "computer-use-helper");
   await bundle(app, { cdhash: "app", team: TEAM, identifier: "si.goat.desktop" });
   const copies: string[] = [];
+  /** While set, every hello waits for it, so a test can hold one install in the middle. */
+  let helloGate: Promise<void> | undefined;
   const dependencies: HelperInstallDependencies = {
     signature: async (path) => {
       const signature = await read(path);
@@ -58,11 +64,15 @@ async function fixture() {
       await NodeFSP.cp(from, to, { recursive: true });
     },
     probe: async (path) => {
+      await helloGate;
       if ((await read(path))?.hello === false) throw new Error("no hello");
     },
+    sameDriver: async (path, other) =>
+      ((await read(path))?.driver ?? "d1") === ((await read(other))?.driver ?? "d1"),
     grants: async (path) => {
-      const granted = (await read(path))?.granted ?? true;
-      return { accessibility: granted, screenRecording: granted };
+      const signature = await read(path);
+      const granted = signature?.granted ?? true;
+      return signature?.grants ?? { accessibility: granted, screenRecording: granted };
     },
   };
   return {
@@ -82,6 +92,10 @@ async function fixture() {
     generations: () =>
       NodeFSP.readdir(NodePath.join(root, "generations")).then((names) => names.sort()),
     fresh: () => makeHelperInstaller(dependencies),
+    holdHello: (gate: Promise<void> | undefined) => {
+      helloGate = gate;
+    },
+    bundleAt: (generation: string) => NodePath.join(root, "generations", generation, APP),
   };
 }
 
@@ -124,26 +138,51 @@ describe("ComputerUseHelperInstall", () => {
     assert.equal(await f.link("current"), "g2");
   });
 
-  it("replaces an installed copy that no longer meets GOAT's team and identifier", async () => {
+  it("replaces an installed copy that no longer meets GOAT's team and identifier, even after it was used", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     await f.install(f.input());
-    await bundle(NodePath.join(f.root, "generations", "g1", APP), {
-      cdhash: "g1",
-      team: "ATTACKER1",
-    });
-    const result = await f.fresh()(f.input());
+    // The same installer that just checked it: having used a generation proves nothing later.
+    await bundle(f.bundleAt("g1"), { cdhash: "g1", team: "OTHERTEAM1" });
+    const result = await f.install(f.input());
     assert.equal(result.kind, "found");
-    assert.equal((await read(NodePath.join(f.root, "generations", "g1", APP)))?.team, TEAM);
+    assert.equal((await read(f.bundleAt("g1")))?.team, TEAM);
     // Busy, a tampered copy is never used: the sealed copy in GOAT.app runs instead.
-    await bundle(NodePath.join(f.root, "generations", "g1", APP), {
-      cdhash: "g1",
-      team: "ATTACKER1",
-    });
-    assert.deepEqual(await f.fresh()(f.input(true)), {
+    await bundle(f.bundleAt("g1"), { cdhash: "g1", team: "OTHERTEAM1" });
+    assert.deepEqual(await f.install(f.input(true)), {
       kind: "found",
       path: NodePath.join(f.app, "Contents", "Helpers", APP),
     });
+  });
+
+  it("runs installs one at a time, so a second caller never removes the first one's generation", async () => {
+    await using f = await fixture();
+    await f.ship({ cdhash: "g1" });
+    let release!: () => void;
+    f.holdHello(new Promise<void>((resolve) => (release = resolve)));
+    const first = f.install(f.input());
+    const second = f.install(f.input());
+    release();
+    f.holdHello(undefined);
+    const results = await Promise.all([first, second]);
+    for (const result of results)
+      assert.deepEqual(result, { kind: "found", path: f.bundleAt("g1") });
+    assert.equal(await f.link("current"), "g1");
+    assert.deepEqual(await f.generations(), ["g1"]);
+    assert.lengthOf(f.copies, 1);
+  });
+
+  it("ignores and repairs a current link that does not name one of its generations", async () => {
+    await using f = await fixture();
+    await f.ship({ cdhash: "g1" });
+    await f.install(f.input());
+    await NodeFSP.rm(NodePath.join(f.root, "current"));
+    await NodeFSP.symlink("/nonexistent/elsewhere/g1", NodePath.join(f.root, "current"));
+    assert.deepEqual(await f.install(f.input()), { kind: "found", path: f.bundleAt("g1") });
+    assert.equal(
+      await NodeFSP.readlink(NodePath.join(f.root, "current")),
+      NodePath.join("generations", "g1"),
+    );
   });
 
   it("leaves the current generation in place when the new one does not answer hello", async () => {
@@ -160,14 +199,15 @@ describe("ComputerUseHelperInstall", () => {
     assert.deepEqual(await f.generations(), ["g1"]);
   });
 
-  it("rolls back a generation that lost the grants its predecessor had, and does not retry it", async () => {
+  it("rolls back a generation that lost a grant its predecessor had, and does not retry it", async () => {
     await using f = await fixture();
-    await f.ship({ cdhash: "g1", granted: true });
+    // The old generation held only Accessibility; losing that one grant is enough.
+    await f.ship({ cdhash: "g1", grants: { accessibility: true, screenRecording: false } });
     await f.install(f.input());
     await f.ship({ cdhash: "g2", granted: false });
     const result = await f.install(f.input());
     assert.equal(result.kind === "found" && NodePath.basename(NodePath.dirname(result.path)), "g1");
-    assert.match(result.kind === "found" ? (result.note ?? "") : "", /lost its Accessibility/);
+    assert.match(result.kind === "found" ? (result.note ?? "") : "", /lost an Accessibility/);
     assert.equal(await f.link("current"), "g1");
     assert.equal(await f.link("previous"), "g2");
     assert.equal(await f.link("rejected"), "g2");
@@ -178,6 +218,17 @@ describe("ComputerUseHelperInstall", () => {
     await f.ship({ cdhash: "g3", granted: true });
     await f.install(f.input());
     assert.equal(await f.link("current"), "g3");
+    assert.isUndefined(await f.link("rejected"));
+  });
+
+  it("keeps a new generation that lost grants when the previous one carries another driver", async () => {
+    await using f = await fixture();
+    await f.ship({ cdhash: "g1", granted: true, driver: "0.36" });
+    await f.install(f.input());
+    await f.ship({ cdhash: "g2", granted: false, driver: "0.37" });
+    const result = await f.install(f.input());
+    // The host would refuse the old driver, so rolling back would leave computer use broken.
+    assert.deepEqual(result, { kind: "found", path: f.bundleAt("g2") });
     assert.isUndefined(await f.link("rejected"));
   });
 
