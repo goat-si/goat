@@ -78,7 +78,7 @@ const DesktopIpcSenderRefusal = Schema.Literals([
   "sender-destroyed",
   "untrusted-window",
   "frame-detached",
-  "subframe",
+  "not-top-frame",
 ]);
 type DesktopIpcSenderRefusal = typeof DesktopIpcSenderRefusal.Type;
 
@@ -98,10 +98,12 @@ export interface DesktopIpcTrustedWindow {
   readonly webContents: DesktopIpcIncomingEvent["sender"];
 }
 
-// Only the main window loads the desktop preload, and only in its top frame, so
-// that frame is the one sender every DesktopIpc channel answers. Anything else
-// (a subframe, a webview or other window, a document that has navigated away,
-// a closed or replaced main window) is refused before its payload is decoded.
+// Only the main window loads the desktop preload for itself, and only in its top
+// frame, so that frame is the one sender every DesktopIpc channel answers.
+// Anything else (a subframe, a webview or other window, the frame of a document
+// that has navigated away, a closed or replaced main window) is refused before
+// its payload is decoded. A window.open child of the main window may inherit the
+// preload, but its UI is rendered by the main window through the opener's bridge.
 const findSenderRefusal = (
   event: DesktopIpcIncomingEvent,
   trusted: Option.Option<DesktopIpcTrustedWindow>,
@@ -111,10 +113,11 @@ const findSenderRefusal = (
     const sender = event.sender;
     if (sender.isDestroyed()) return "sender-destroyed";
     if (sender !== trusted.value.webContents) return "untrusted-window";
-    // Electron reports null once the sending frame has navigated or been destroyed.
+    // Electron reports null once the sending frame is gone; a frame still
+    // unloading stays non-null but is no longer the current main frame.
     const frame = event.senderFrame;
     if (frame === null || frame === undefined) return "frame-detached";
-    if (frame !== sender.mainFrame) return "subframe";
+    if (frame !== sender.mainFrame) return "not-top-frame";
     return undefined;
   } catch {
     // Electron throws when a sender or window is torn down while being inspected.

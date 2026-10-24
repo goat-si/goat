@@ -637,6 +637,29 @@ describe("DesktopWindow", () => {
     }),
   );
 
+  it.effect("trusts the main window for desktop IPC before its page starts loading", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      // The preload's first sendSync arrives once loading starts; DesktopIpc only answers
+      // the registered main window, so registration has to come first.
+      const mainAtLoad: Array<Option.Option<Electron.BrowserWindow>> = [];
+      fakeWindow.loadURL.mockImplementation(() => {
+        mainAtLoad.push(Effect.runSync(Ref.get(mainWindow)));
+        return Promise.resolve();
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+      }).pipe(Effect.provide(layerTest({ window: fakeWindow.window, createCount, mainWindow })));
+
+      assert.isAbove(mainAtLoad.length, 0);
+      assert.deepStrictEqual(mainAtLoad[0], Option.some(fakeWindow.window));
+    }),
+  );
+
   it.effect("uses persisted bounds when the window spans two connected displays", () =>
     Effect.gen(function* () {
       vi.mocked(Electron.screen.getAllDisplays).mockReturnValueOnce([
