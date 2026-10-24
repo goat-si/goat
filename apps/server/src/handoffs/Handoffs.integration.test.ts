@@ -30,7 +30,8 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import { instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
+import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
+import { computerUseGrantClients, instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(Handoff));
 
@@ -867,7 +868,7 @@ it.effect(
 );
 
 it.effect(
-  "computer use grants: settings:write approves, one thread per host, ending early and expiry end the lease",
+  "computer use grants: settings:write approves, one thread per host, ending early, expiry and an operator's Stop all end the lease",
   () =>
     withHarness(({ orchestrator, worker }) =>
       Effect.gen(function* () {
@@ -898,55 +899,8 @@ it.effect(
           creationSource: "server",
         });
         yield* worker.drain();
-        const stored = new Map<string, Uint8Array>();
-        const now = yield* DateTime.now;
-        const session = (id: string, permissions: NonNullable<AuthClientSession["permissions"]>) =>
-          ({
-            sessionId: AuthSessionId.make(id),
-            subject: "test",
-            method: "browser-session-cookie",
-            scopes: ["orchestration:operate"],
-            permissions,
-            client: { label: id, deviceType: "unknown" },
-            issuedAt: now,
-            expiresAt: DateTime.add(now, { days: 1 }),
-            lastConnectedAt: now,
-            connected: true,
-            current: true,
-          }) satisfies AuthClientSession;
-        const owner = session("owner", ["orchestration:operate", "settings:write"]);
-        const operator = session("operator", ["orchestration:operate"]);
-        const environmentId = EnvironmentId.make("test-environment");
-        const dependencies = Layer.mergeAll(
-          Layer.mock(ThreadManagement.ThreadManagementService)({
-            dispatch: orchestrator.dispatch,
-            getThreadRecords: orchestrator.getThreadRecords,
-          }),
-          Layer.mock(SessionStore.SessionStore)({
-            cookieName: "test",
-            legacyCookieName: undefined,
-            listActive: () => Effect.succeed([owner, operator]),
-          }),
-          Layer.mock(SecretRequests.SecretRequests)({}),
-          Layer.mock(Environment.ServerEnvironment)({
-            getEnvironmentId: Effect.succeed(environmentId),
-          }),
-          Layer.succeed(
-            SecretStore.ServerSecretStore,
-            SecretStore.ServerSecretStore.of({
-              get: (name) => Effect.sync(() => Option.fromNullishOr(stored.get(name))),
-              set: (name, value) => Effect.sync(() => void stored.set(name, value)),
-              create: (name, value) => Effect.sync(() => void stored.set(name, value)),
-              remove: (name) => Effect.sync(() => void stored.delete(name)),
-              getOrCreateRandom: (name, size) =>
-                Effect.sync(() => {
-                  const bytes = stored.get(name) ?? new Uint8Array(size).fill(7);
-                  stored.set(name, bytes);
-                  return bytes;
-                }),
-            }),
-          ),
-        );
+        const { owner, operator, environmentId, dependencies } =
+          yield* computerUseGrantClients(orchestrator);
         yield* Effect.gen(function* () {
           const service = yield* Handoffs.Handoffs;
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -1013,6 +967,35 @@ it.effect(
             reason: "expired",
           });
           assert.isTrue(Option.isNone(yield* leases.holder()));
+
+          // Stop all is for whoever may stop agents: revoking a grant only narrows access, so an
+          // operator without settings:write still ends it instead of leaving it for the next turn.
+          const third = yield* ask(threadId);
+          yield* worker.drain();
+          const thirdAddress = { threadId, handoffId: third.handoffId };
+          yield* service.respond({ ...thirdAddress, action: "completed" }, owner.sessionId);
+          yield* PubSub.take(wake);
+          assert.isTrue(Option.isSome(yield* leases.active(threadId)));
+          const stopped = yield* stopAllComputerUse(
+            Option.some(leases),
+            service,
+            operator.sessionId,
+          );
+          assert.deepEqual(stopped, { stopped: 1, failed: 0 });
+          assert.equal((yield* service.read(thirdAddress)).state, "cancelled");
+          assert.isTrue(Option.isNone(yield* leases.active(threadId)));
+          // Approving still takes settings:write.
+          const fourth = yield* ask(otherThread);
+          yield* worker.drain();
+          assert.equal(
+            (yield* service
+              .respond(
+                { threadId: otherThread, handoffId: fourth.handoffId, action: "completed" },
+                operator.sessionId,
+              )
+              .pipe(Effect.result))._tag,
+            "Failure",
+          );
         }).pipe(
           Effect.provide(
             Handoffs.layer.pipe(

@@ -123,6 +123,16 @@ export class CuaDriver extends Context.Service<
      * driver is not running or has no X display.
      */
     readonly x11Display?: Effect.Effect<Option.Option<CuaX11Display>>;
+    /**
+     * The running driver's socket and the display environment it was started with, for the
+     * server's own live frames of a Linux session (#1370). None when the driver is not running.
+     */
+    readonly driverSession?: Effect.Effect<
+      Option.Option<{
+        readonly mcp: CuaDriverMcpConfiguration;
+        readonly display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>;
+      }>
+    >;
   }
 >()("goat/cua/CuaDriver") {}
 
@@ -368,6 +378,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     x11Display: Effect.sync(() =>
       active?.running && active.displayEnvironment !== undefined
         ? x11DisplayOf(active.displayEnvironment)
+        : Option.none(),
+    ),
+    driverSession: Effect.sync(() =>
+      active?.running && active.mcp !== undefined && active.displayEnvironment !== undefined
+        ? Option.some({ mcp: active.mcp, display: active.displayEnvironment })
         : Option.none(),
     ),
     enabled,

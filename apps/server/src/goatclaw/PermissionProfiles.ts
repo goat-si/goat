@@ -1,5 +1,6 @@
 import {
-  type GoatclawRole,
+  GOATCLAW_ROLE_PROFILES,
+  GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -65,6 +66,10 @@ interface CheckContext {
   readonly lanesRunning?: number | undefined;
   readonly runtimeMode?: RuntimeMode | undefined;
 }
+interface RecheckContext extends CheckContext {
+  /** The role the launch claimed, so the recheck compares the same grant claim made. */
+  readonly role?: GoatclawRole | undefined;
+}
 interface ClaimInput {
   readonly id: string;
   readonly runtimeMode: RuntimeMode;
@@ -92,6 +97,31 @@ export interface ProfileNarrowing {
   readonly ceilings: ReadonlyArray<PermissionProfile>;
 }
 export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
+
+/**
+ * What a role launch grants: the role's stored profile within the caller's, plus what the role
+ * keeps (RoleTemplates `keeps`) when the caller may launch and only its own stored profile lacked
+ * it. A launch snapshot or forwarded ceiling that lacks the capability still removes it.
+ */
+export const roleProfile = (
+  role: GoatclawRole,
+  named: PermissionProfile,
+  caller: EffectiveProfile,
+): PermissionProfile => {
+  const profile = intersectProfiles(named, caller.profile);
+  const ceilings = caller.narrowing?.ceilings;
+  if (ceilings === undefined || !caller.profile.capabilities.includes("threads.launch"))
+    return profile;
+  const kept = goatclawRoleTemplate(role).keeps.filter(
+    (capability) =>
+      named.capabilities.includes(capability) &&
+      !profile.capabilities.includes(capability) &&
+      ceilings.every((ceiling) => ceiling.capabilities.includes(capability)),
+  );
+  return kept.length === 0
+    ? profile
+    : { ...profile, capabilities: [...profile.capabilities, ...kept] };
+};
 export type CheckResult =
   | { readonly ok: true; readonly effective: EffectiveProfile }
   | { readonly ok: false; readonly reason: string };
@@ -129,7 +159,7 @@ export class PermissionProfiles extends Context.Service<
     readonly recheck: (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context?: CheckContext,
+      context?: RecheckContext,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     /**
      * A cloud launch bills a paid account, so with goatclaw on the `cloud.launch` capability is
@@ -342,6 +372,34 @@ export const layer = Layer.effect(
     ) {
       return yield* admit(yield* check(scope, capability, context));
     });
+    /** What a role launch holds under the caller's current profile; claim and recheck share it. */
+    const roleGrant = Effect.fn("PermissionProfiles.roleGrant")(function* (
+      role: GoatclawRole,
+      caller: EffectiveProfile,
+    ) {
+      const { profileId } = goatclawRoleTemplate(role);
+      const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
+      const named = policy.profiles[profileId];
+      if (named === undefined)
+        return yield* refusal(`Permission profile ${profileId} does not exist.`);
+      // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
+      return { named, profile: roleProfile(role, named, caller) };
+    });
+    /**
+     * What a caller grants a thread bound under `profileId` when it reaches that thread without
+     * launching it, as a send does: a role thread that keeps capabilities gets the role's grant,
+     * so a kept capability is neither read as exceeding the caller nor stripped on rebinding.
+     */
+    const reachGrant = Effect.fn("PermissionProfiles.reachGrant")(function* (
+      profileId: string | undefined,
+      caller: EffectiveProfile,
+    ) {
+      const role = GoatclawRole.literals.find(
+        (role) =>
+          GOATCLAW_ROLE_PROFILES[role] === profileId && goatclawRoleTemplate(role).keeps.length > 0,
+      );
+      return role === undefined ? caller.profile : (yield* roleGrant(role, caller)).profile;
+    });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
       threadId: ThreadId,
@@ -352,18 +410,16 @@ export const layer = Layer.effect(
       const caller = yield* resolve(scope, callerMode, forwarded);
       if (!caller.enabled) return;
       const target = yield* resolve(scope, targetMode, undefined, threadId);
-      if (
-        encodeProfile(intersectProfiles(target.profile, caller.profile)) !==
-        encodeProfile(target.profile)
-      )
-        return yield* refusal(
-          "The target thread's permission profile exceeds the caller's ceiling.",
-        );
+      const within = (ceiling: PermissionProfile) =>
+        encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
+      if (within(caller.profile)) return;
+      if (within(yield* reachGrant(target.narrowing?.named.id, caller))) return;
+      return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
       scope: McpInvocationScope,
       initial: PermissionProfileView,
-      context: CheckContext = {},
+      { role, ...context }: RecheckContext = {},
     ) {
       if (!initial.enabled) return;
       const current = yield* require(scope, "threads.launch", {
@@ -372,8 +428,10 @@ export const layer = Layer.effect(
       });
       if (!current.enabled) return;
       if (context.host !== undefined) yield* require(scope, "threads.remote", context);
+      const granted =
+        role === undefined ? current.profile : (yield* roleGrant(role, current)).profile;
       if (
-        encodeProfile(intersectProfiles(initial.profile, current.profile)) !==
+        encodeProfile(intersectProfiles(initial.profile, granted)) !==
         encodeProfile(initial.profile)
       )
         return yield* refusal(
@@ -463,13 +521,7 @@ export const layer = Layer.effect(
       // The profile the child is bound under before any ceiling narrows it.
       let base = effective.narrowing?.named ?? effective.profile;
       if (input.role !== undefined) {
-        const { profileId } = goatclawRoleTemplate(input.role);
-        const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
-        const named = policy.profiles[profileId];
-        if (named === undefined)
-          return yield* refusal(`Permission profile ${profileId} does not exist.`);
-        // intersectProfiles keeps its first argument's id, so the child is bound under the role's profile.
-        const profile = intersectProfiles(named, effective.profile);
+        const { named, profile } = yield* roleGrant(input.role, effective);
         const missing = missingRoleCapabilities(input.role, profile);
         if (missing.length > 0) return yield* roleRefusal(input.role, missing);
         granted = { ...effective, profile, runtimeMode: profile.runtimeModeCeiling };
@@ -587,6 +639,8 @@ export const layer = Layer.effect(
               const narrower = sources.findLast(
                 (source) => source.id !== granted.profile.id && withinAll(source),
               );
+              // A send rebinds an existing role thread under the grant assertTarget admitted it
+              // with, so the capabilities its role keeps survive the narrowing.
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
@@ -594,7 +648,9 @@ export const layer = Layer.effect(
                       yield* decodeProfile(previous.ceiling_json).pipe(
                         Effect.mapError(storageFailure),
                       ),
-                      granted.profile,
+                      input.role === undefined
+                        ? yield* reachGrant(previous.profile_id, granted)
+                        : granted.profile,
                     );
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
           VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})
