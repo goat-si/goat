@@ -1314,7 +1314,6 @@ export interface DesktopBridge extends DesktopWindowMaterialBridge {
   /** Opens the pane plus a panel to drag that app into its list; false if it did not open. */
   openCuaPermissionGuide?: (pane: "accessibility" | "screen-recording") => Promise<boolean>;
   revealCuaGrantTarget?: () => Promise<void>;
-  /** Quits and reopens GOAT, for grants macOS applies only to a new process. */
   relaunchForCuaGrants?: () => Promise<void>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
