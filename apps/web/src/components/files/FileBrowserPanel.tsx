@@ -196,6 +196,7 @@ export default function FileBrowserPanel({
   const previousTreePathsRef = useRef<readonly string[] | null>(null);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
+  const selectedTreePathsRef = useRef<readonly string[]>([]);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
 
   // The tree renders rows in shadow DOM and its anchor rect is unreliable, so
@@ -230,10 +231,10 @@ export default function FileBrowserPanel({
         .buildItems(fileTarget)
         .filter((entry) => entry.id !== "copy-relative" && entry.id !== "copy-full");
       // Right-clicking inside a multi-selection copies all of it, as in VS Code.
-      const selectedPaths = model.getSelectedPaths();
+      const selectedPaths = selectedTreePathsRef.current;
       const copyRows =
         selectedPaths.length > 1 && selectedPaths.includes(item.path)
-          ? fileTreeCopyPaths(model)
+          ? selectedPaths.map((path) => path.replace(/\/$/, ""))
           : [relativePath];
       const plural = copyRows.length > 1 ? "s" : "";
       const hasRelativePath =
@@ -330,6 +331,7 @@ export default function FileBrowserPanel({
     initialExpansion: "closed",
     icons: GOAT_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
+      selectedTreePathsRef.current = selectedPaths;
       // The drag controller's selection cache must track every change,
       // including reveal-driven ones, or drags act on a stale selection.
       dragMention.handleSelectionChange(selectedPaths);

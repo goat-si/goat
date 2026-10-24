@@ -22,8 +22,6 @@ const browser = vi.hoisted(() => ({
     subscribe: () => () => {},
     isSearchOpen: () => false,
     getItem: vi.fn(),
-    getSelectedPaths: () => [],
-    getFocusedPath: () => null,
   },
 }));
 

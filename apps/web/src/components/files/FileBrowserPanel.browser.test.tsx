@@ -39,7 +39,7 @@ vi.mock("~/state/queries", () => ({
 // Folders list their children only once expanded, like the real directory query,
 // so a toggle reshapes the tree under the focused row.
 vi.mock("./useDirectoryEntries", async () => {
-  const { useCallback, useState } = await import("react");
+  const { useState } = await import("react");
   const children: Record<string, ProjectEntry[]> = {
     src: [
       { path: "src/lib", kind: "directory" },
@@ -54,14 +54,15 @@ vi.mock("./useDirectoryEntries", async () => {
         { path: "README.md", kind: "file" },
         { path: "notes.md", kind: "file" },
       ]);
-      const load = useCallback(async (path: string) => {
+      // One load function per mount, like the real hook's stable callback.
+      const [load] = useState(() => async (path: string) => {
         state.loads.push(path);
         await Promise.resolve();
         setEntries((current) => [
           ...current,
           ...(children[path] ?? []).filter((entry) => !current.some((e) => e.path === entry.path)),
         ]);
-      }, []);
+      });
       return {
         entries,
         load,
