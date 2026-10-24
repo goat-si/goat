@@ -207,6 +207,9 @@ export const fixture = Effect.fn(function* (
       const session = {
         canWatch: options.helperWithoutWatch !== true,
         reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
+        canFrame: false,
+        frames: async () => undefined,
+        onFrame: () => () => undefined,
         watch: async (_watchId: string) => {
           Queue.offerUnsafe(helperWatches, "watch");
           // A watch's first state follows its answer.
@@ -395,6 +398,8 @@ export const fixture = Effect.fn(function* (
       Effect.sync(() => {
         readiness.push(report);
       }),
+    cuaFrames: Stream.empty,
+    publishCuaFrame: () => Effect.void,
     publishCuaSafety: (report) =>
       Effect.sync(() => {
         if (report.type === "cuaPrivateMode") safety.push(report);

@@ -9,8 +9,8 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 import * as HostProcess from "@goat/shared/HostProcess";
 
+import { bypassesOsKeyStore } from "../app/DesktopDevSecretStorage.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { isIsolatedDesktopBaseDir } from "../app/DesktopStatePaths.ts";
 
 const DEV_PLAINTEXT_SECRET_PREFIX = "goat-dev-plaintext:v1:";
 
@@ -105,78 +105,56 @@ export class ElectronSafeStorage extends Context.Service<
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const desktopEnvironment = yield* Effect.serviceOption(DesktopEnvironment.DesktopEnvironment);
-  // Unsigned dev Electron launched from a shell or agent lacks OS keyring
-  // access. Only an opted-in, unpackaged dev run in an isolated home may fall
-  // back to plaintext-wrapped secrets; anything else keeps refusing to save.
-  const allowInsecureDevFallback = Option.isNone(desktopEnvironment)
+  // Never calls Electron.safeStorage when bypassed: any call can open the Keychain item.
+  const bypassOsKeyStore = Option.isNone(desktopEnvironment)
     ? false
-    : yield* Effect.gen(function* () {
-        const env = desktopEnvironment.value;
-        if (env.isPackaged || !env.isDevelopment || env.insecureDevSecretStorage !== true)
-          return false;
-        return yield* isIsolatedDesktopBaseDir({
-          homeDirectory: env.homeDirectory,
-          baseDir: env.baseDir,
-          platform: env.platform,
-        });
-      });
+    : yield* bypassesOsKeyStore(desktopEnvironment.value);
   const warnedRef = yield* Ref.make(false);
-  const warnInsecureFallbackOnce = Ref.getAndSet(warnedRef, true).pipe(
+  const warnBypassOnce = Ref.getAndSet(warnedRef, true).pipe(
     Effect.flatMap((alreadyWarned) =>
       alreadyWarned
         ? Effect.void
         : Effect.logWarning(
-            "Desktop secure storage is unavailable; storing secrets with development-plaintext encoding because GOAT_DEV_INSECURE_SECRET_STORAGE is enabled for an isolated home.",
+            "Storing desktop secrets with development-plaintext encoding instead of the OS keychain because GOAT_DEV_INSECURE_SECRET_STORAGE is enabled for an isolated home.",
           ),
     ),
   );
 
-  const checkNativeEncryptionAvailable = Effect.try({
-    try: () => Electron.safeStorage.isEncryptionAvailable(),
-    catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
-  });
-
   return ElectronSafeStorage.of({
-    isEncryptionAvailable: Effect.gen(function* () {
-      const available = yield* checkNativeEncryptionAvailable;
-      if (available) {
-        return true;
-      }
-      if (!allowInsecureDevFallback) {
-        return false;
-      }
-      yield* warnInsecureFallbackOnce;
-      return true;
-    }),
+    isEncryptionAvailable: bypassOsKeyStore
+      ? warnBypassOnce.pipe(Effect.as(true))
+      : Effect.try({
+          try: () => Electron.safeStorage.isEncryptionAvailable(),
+          catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
+        }),
     encryptString: (value) =>
-      Effect.gen(function* () {
-        if (allowInsecureDevFallback) {
-          const available = yield* Effect.try({
-            try: () => Electron.safeStorage.isEncryptionAvailable(),
+      bypassOsKeyStore
+        ? warnBypassOnce.pipe(Effect.as(encodeDevPlaintextSecret(value)))
+        : Effect.try({
+            try: () => Electron.safeStorage.encryptString(value),
             catch: (cause) => new ElectronSafeStorageEncryptError({ cause }),
-          });
-          if (!available) {
-            yield* warnInsecureFallbackOnce;
-            return encodeDevPlaintextSecret(value);
-          }
-        }
-        return yield* Effect.try({
-          try: () => Electron.safeStorage.encryptString(value),
-          catch: (cause) => new ElectronSafeStorageEncryptError({ cause }),
-        });
-      }),
+          }),
     decryptString: (value) =>
       Effect.gen(function* () {
         if (hasDevPlaintextPrefix(value)) {
-          if (!allowInsecureDevFallback) {
+          if (!bypassOsKeyStore) {
             return yield* new ElectronSafeStorageDecryptError({
               cause: new Error(
                 "Refusing to decrypt a development plaintext secret while insecure development secret storage is inactive.",
               ),
             });
           }
-          yield* warnInsecureFallbackOnce;
+          yield* warnBypassOnce;
           return yield* decodeDevPlaintextSecret(value);
+        }
+        if (bypassOsKeyStore) {
+          // Saved under the OS keychain before the opt-in. It stays on disk untouched; unset the
+          // flag to read it, or enter the credential again to store a development copy.
+          return yield* new ElectronSafeStorageDecryptError({
+            cause: new Error(
+              "This secret was encrypted with the OS keychain, which GOAT_DEV_INSECURE_SECRET_STORAGE bypasses. Unset it to read the secret, or enter the credential again.",
+            ),
+          });
         }
         return yield* Effect.try({
           try: () => Electron.safeStorage.decryptString(Buffer.from(value)),
@@ -184,7 +162,7 @@ export const make = Effect.gen(function* () {
         });
       }),
     selectedStorageBackend: Effect.sync(() => {
-      if (platform !== "linux") {
+      if (platform !== "linux" || bypassOsKeyStore) {
         return Option.none();
       }
       try {

@@ -330,6 +330,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "Overlay.swift"),
       // A person's input while an agent connection runs (#1235); the overlay channel carries it.
       path.join(sourceDir, "HumanInput.swift"),
+      // Single-window live pictures (#1370), requested with the frames method.
+      path.join(sourceDir, "Frames.swift"),
     ]);
     slices.push(slice);
   }
