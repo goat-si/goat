@@ -139,4 +139,3 @@ func runMcp() -> Never {
   runOverlayIfConnected()
   dispatchMain()
 }
-

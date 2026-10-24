@@ -58,4 +58,3 @@ func pumpMcpFrames(
   // a final delimiter; its complete validated reply must still drain on normal completion.
   if acceptTail && !frame.isEmpty { try forward() }
 }
-
