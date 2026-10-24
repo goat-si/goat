@@ -4,19 +4,23 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   GoatHostStatusInput,
   GoatHostStatusResult,
+  GoatHubOpenCodexSyncInput,
   GoatHubDeviceVerifyInput,
   GoatHubDeviceVerifyResult,
   HubDeviceOperationInput,
   hubDeviceToolResult,
+  OpenCodexSyncReport,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as HostStatusMcpService from "../../HostStatusMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as HubParity from "../../../hub/HubParity.ts";
 import * as HubMembership from "../../../hub/HubMembership.ts";
+import * as OpenCodexSync from "../../../hub/OpenCodexSync.ts";
 
 const HostStatusTool = Tool.make(agentSurfaceRegistry["host.status"].name, {
   description: agentSurfaceRegistry["host.status"].description,
@@ -62,10 +66,25 @@ const membershipTool = <
     ],
   }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry[path]));
 
+const OpenCodexSyncTool = Tool.make(agentSurfaceRegistry["hub.opencodex_sync"].name, {
+  description: agentSurfaceRegistry["hub.opencodex_sync"].description,
+  parameters: withClientRequestId(GoatHubOpenCodexSyncInput),
+  success: OpenCodexSyncReport,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    OpenCodexSync.OpenCodexSync,
+    Profiles.PermissionProfiles,
+  ],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["hub.opencodex_sync"]));
+
 export const HostStatusToolkit = Toolkit.make(
   HostStatusTool,
   VerifyTool,
   membershipTool("hub.device_join"),
   membershipTool("hub.device_leave"),
   membershipTool("hub.device_repair"),
+  OpenCodexSyncTool,
 );

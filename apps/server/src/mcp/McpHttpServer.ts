@@ -66,6 +66,8 @@ import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
+import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
+import * as OpenCodexUpdateHost from "../hub/OpenCodexUpdateHost.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -1294,7 +1296,10 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),
   Layer.provide(RepositoryInventory.layer),
-  Layer.provideMerge(OpenCodexManagedUpdate.layer),
+  Layer.provideMerge(OpenCodexManagedUpdate.layerService),
+  // One sync for the update window, the ws RPCs and the agent tool, so runs never overlap.
+  Layer.provideMerge(OpenCodexSync.layer.pipe(Layer.provide(HubOcx.layer))),
+  Layer.provide(OpenCodexUpdateHost.layerHost),
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),

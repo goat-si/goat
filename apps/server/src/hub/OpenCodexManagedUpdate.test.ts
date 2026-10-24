@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   type HubParityResult,
   type OpenCodexInventorySnapshot,
+  type OpenCodexSyncReport,
   type OpenCodexUpdateStatus,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -12,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 
@@ -26,6 +28,8 @@ import * as Settings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubParity from "./HubParity.ts";
 import * as ManagedUpdate from "./OpenCodexManagedUpdate.ts";
+import { OpenCodexSync } from "./OpenCodexSync.ts";
+import * as UpdateHost from "./OpenCodexUpdateHost.ts";
 import { fleetSnapshot } from "./parity.testkit.ts";
 
 const MINUTE = 60_000;
@@ -49,6 +53,14 @@ const makeFleet = (
     ["mac-studio", 0],
   ]),
   installs: [] as Array<string>,
+  /** Installs and syncs in the order they ran, as `install:<member>` and `sync:<member>@<version>`. */
+  log: [] as Array<string>,
+  /** Members whose sync restarts their runtime, as a Child's can after applying Home settings. */
+  syncRestarts: new Set<string | null>(),
+  syncFails: new Set<string | null>(),
+  syncReport: undefined as OpenCodexSyncReport | undefined,
+  /** What the managed update last told the sync about its window. */
+  updating: undefined as boolean | undefined,
   /** Hosts that cannot hold turn admission, and how many holds are open right now. */
   noAdmission: new Set<string | null>(),
   holds: 0,
@@ -100,7 +112,45 @@ const build = (fleet: Fleet, baseDir: string) =>
   Layer.build(
     ManagedUpdate.layerService.pipe(
       Layer.provide(
-        Layer.succeed(ManagedUpdate.OpenCodexUpdateHost, {
+        Layer.succeed(OpenCodexSync, {
+          plan: () => Effect.die("A window never plans a manual sync."),
+          run: () => Effect.die("A window never runs a manual sync."),
+          latest: Effect.sync(() => fleet.syncReport),
+          changes: Stream.empty,
+          markUpdating: (open) =>
+            Effect.sync(() => {
+              fleet.updating = open;
+            }),
+          exclusive: (body) => body,
+          beginUpdate: (targetVersion) =>
+            Effect.sync(() => {
+              fleet.syncReport = { trigger: "update", checkedAt: 0, targetVersion, members: [] };
+            }),
+          syncUpdatedMember: (alias) =>
+            Effect.sync(() => {
+              fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
+              if (fleet.syncRestarts.has(alias)) {
+                fleet.startedAt.set(alias, fleet.startedAt.get(alias)! + 5 * 60_000);
+                fleet.processId.set(alias, fleet.processId.get(alias)! + 1);
+              }
+              const failed = fleet.syncFails.has(alias);
+              fleet.syncReport = {
+                ...fleet.syncReport!,
+                members: [
+                  ...fleet.syncReport!.members,
+                  {
+                    alias,
+                    state: failed ? "failed" : "synced",
+                    restartCodex: true,
+                    ...(failed ? { reason: "exit-1" } : {}),
+                  },
+                ],
+              };
+            }),
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(UpdateHost.OpenCodexUpdateHost, {
           latestRelease: Effect.succeed({
             version: "2.90.0",
             publishedAt: PUBLISHED_AT,
@@ -115,6 +165,7 @@ const build = (fleet: Fleet, baseDir: string) =>
             Effect.sync(() => {
               const key = `${alias ?? "home"}@${version}`;
               fleet.installs.push(key);
+              fleet.log.push(`install:${alias ?? "home"}`);
               if (fleet.failOnce.delete(key)) return false;
               fleet.versions.set(alias, version);
               fleet.startedAt.set(alias, fleet.installs.length * 60_000);
@@ -213,6 +264,87 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
         ["mac-studio", "accepted", undefined],
       ]);
       expect(fleet.installs).toHaveLength(2);
+    }),
+  );
+
+  it.effect("syncs each member right after its install, Home first, and reports it", () =>
+    Effect.gen(function* () {
+      const { fleet, update } = yield* setup();
+      const status = yield* update.checkNow;
+      expect(fleet.log).toEqual([
+        "install:home",
+        "sync:home@2.90.0",
+        "install:mac-studio",
+        "sync:mac-studio@2.90.0",
+      ]);
+      expect(status?.sync).toMatchObject({
+        trigger: "update",
+        targetVersion: "2.90.0",
+        members: [
+          { alias: null, state: "synced" },
+          { alias: "mac-studio", state: "synced" },
+        ],
+      });
+    }),
+  );
+
+  it.effect("accepts a Child whose sync restarted its runtime after the install", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      fleet.syncRestarts.add("mac-studio");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([
+        [null, "accepted", undefined],
+        ["mac-studio", "accepted", undefined],
+      ]);
+      expect(fleet.installs).toHaveLength(2);
+    }),
+  );
+
+  it.effect("reports a failed sync and keeps the update", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet();
+      fleet.syncFails.add("mac-studio");
+      const { update } = yield* setup(fleet);
+      const status = yield* update.checkNow;
+      expect(phases(status)?.map(([, phase]) => phase)).toEqual(["probation", "probation"]);
+      expect(status?.sync?.members).toEqual([
+        { alias: null, state: "synced", restartCodex: true },
+        { alias: "mac-studio", state: "failed", restartCodex: true, reason: "exit-1" },
+      ]);
+    }),
+  );
+
+  it.effect("keeps a manual sync and another version's sync out of the update status", () =>
+    Effect.gen(function* () {
+      const { fleet, update } = yield* setup();
+      yield* update.check;
+      fleet.syncReport = { ...fleet.syncReport!, trigger: "manual" };
+      expect((yield* update.status)?.sync).toBeUndefined();
+      fleet.syncReport = { ...fleet.syncReport, trigger: "update", targetVersion: "2.91.0" };
+      expect((yield* update.status)?.sync).toBeUndefined();
+    }),
+  );
+
+  it.effect("holds manual syncs off for a window restored after a GOAT restart", () =>
+    Effect.gen(function* () {
+      const { fleet, baseDir, update } = yield* setup();
+      yield* update.check;
+      expect(fleet.updating).toBe(true);
+      // A restart with the hub switched off never runs a check, and still holds them off.
+      fleet.updating = undefined;
+      fleet.hub = false;
+      yield* service(fleet, baseDir);
+      expect(fleet.updating).toBe(true);
+
+      fleet.hub = true;
+      const restarted = yield* service(fleet, baseDir);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* restarted.check;
+      expect(fleet.updating).toBe(false);
     }),
   );
 
@@ -535,7 +667,7 @@ it.effect(
     Effect.gen(function* () {
       let inFlight = 1;
       const context = yield* Layer.build(
-        ManagedUpdate.layerHost.pipe(
+        UpdateHost.layerHost.pipe(
           Layer.provide(
             Layer.mock(HubParity.HubParity)({ readLocal: Effect.succeed(fleetSnapshot("home")) }),
           ),
@@ -562,7 +694,7 @@ it.effect(
           Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/")),
         ),
       );
-      const host = yield* ManagedUpdate.OpenCodexUpdateHost.pipe(Effect.provideContext(context));
+      const host = yield* UpdateHost.OpenCodexUpdateHost.pipe(Effect.provideContext(context));
       const member = yield* host.member(null, {
         environmentId: EnvironmentId.make("hub-fixture"),
         capabilities: new Set(["orchestration"]),

@@ -198,6 +198,8 @@ import * as Keybindings from "./keybindings.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as HubParity from "./hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "./hub/OpenCodexManagedUpdate.ts";
+import { makeOpenCodexRpcHandlers } from "./hub/opencodexRpc.ts";
+import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
 import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -1612,9 +1614,6 @@ export const layerWsRpc = (
       const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
       const hubParity = yield* HubParity.HubParity;
       const hubMembership = yield* HubMembership.HubMembership;
-      const opencodexUpdate = yield* Effect.serviceOption(
-        OpenCodexManagedUpdate.OpenCodexManagedUpdate,
-      );
       /** Hub reads stay read-only; membership changes write, so their decisions can be filed. */
       const hubScope = (access: "read-only" | "full-access") =>
         Effect.gen(function* () {
@@ -1629,6 +1628,7 @@ export const layerWsRpc = (
             client: { sessionId: currentSessionId, label: "GOAT client", access },
           } satisfies McpInvocationScope;
         });
+      const opencodexRpc = yield* makeOpenCodexRpcHandlers(hubScope("full-access"));
       // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
       const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
         ? { sessionId: currentSessionId, scopes: currentSession.scopes }
@@ -2929,11 +2929,7 @@ export const layerWsRpc = (
             Effect.flatMap((scope) => hubParity.verify(input.deviceAlias, scope)),
             Effect.map((parity) => ({ deviceAlias: input.deviceAlias, parity })),
           ),
-        [WS_METHODS.serverCheckOpenCodexUpdate]: () =>
-          Option.match(opencodexUpdate, {
-            onNone: () => Effect.succeed(null),
-            onSome: (update) => update.checkNow.pipe(Effect.map((status) => status ?? null)),
-          }),
+        ...opencodexRpc,
         [WS_METHODS.hubDeviceJoin]: hubMembershipOperation("join"),
         [WS_METHODS.hubDeviceLeave]: hubMembershipOperation("leave"),
         [WS_METHODS.hubDeviceRepair]: hubMembershipOperation("repair"),
@@ -3695,6 +3691,7 @@ export const layer = Layer.unwrap(
     const opencodexUpdateService = yield* Effect.serviceOption(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
+    const opencodexSync = yield* OpenCodexSync.OpenCodexSync;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
@@ -3804,8 +3801,9 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(HostStatusMcpService.HostStatusMcpService, hostStatus)),
               Layer.provide(Layer.succeed(HubParity.HubParity, hubParityService)),
               Layer.provide(
-                Layer.merge(
+                Layer.mergeAll(
                   Layer.succeed(HubMembership.HubMembership, hubMembershipService),
+                  Layer.succeed(OpenCodexSync.OpenCodexSync, opencodexSync),
                   Option.match(opencodexUpdateService, {
                     onNone: () => Layer.empty,
                     onSome: (service) =>
