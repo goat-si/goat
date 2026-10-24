@@ -25,6 +25,10 @@ const environmentFor = (
     stateDir: path.join(input.baseDir, "userdata"),
     serverRoot: "/opt/T3 Code/resources/app.asar",
     appImagePath: Option.none(),
+    branding: DesktopEnvironment.resolveDesktopAppBranding({
+      isDevelopment: false,
+      appVersion: "1.2.3",
+    }),
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
 const commandIn = (

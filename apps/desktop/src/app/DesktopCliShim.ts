@@ -129,10 +129,15 @@ export const renderCliShim = (input: {
   ].join("\n");
 };
 
+/**
+ * Nightly and stable share one GOAT home, and the server hands this path to every thread as
+ * `GOAT_CLI_PATH`. Each channel keeps its own launcher so a thread runs the app that started it.
+ */
 export const launcherPath = (environment: DesktopEnvironment.DesktopEnvironment["Service"]) =>
   environment.path.join(
     environment.baseDir,
     "bin",
+    ...(environment.branding.stageLabel === "Nightly" ? ["nightly"] : []),
     environment.platform === "win32" ? "goat.cmd" : "goat",
   );
 

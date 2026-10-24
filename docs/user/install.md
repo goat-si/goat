@@ -99,7 +99,9 @@ terminal, open **Settings → General → About** and choose **Install** next to
 **goat command**. On macOS and Linux it adds a `goat` link to a folder on your
 `PATH`; on Windows it adds the app's command folder to your `PATH`. Open a new
 terminal afterwards. **Remove** takes it off again. If you already have `t3`
-from npm, it stays as it is.
+from npm, it stays as it is. With both GOAT and GOAT (Nightly) installed, `goat`
+runs the app you installed it from; to switch, choose **Remove** and then **Install**
+in the other app.
 
 ### Windows Subsystem for Linux
 
