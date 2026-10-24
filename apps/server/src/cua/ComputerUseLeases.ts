@@ -19,6 +19,7 @@ import {
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
   type ComputerUseControlEnd,
+  type ComputerUseHumanInputSource,
   type ComputerUsePauseReason,
   type CuaAgentBlock,
   Handoff,
@@ -45,7 +46,7 @@ import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { makeAgentInputLog } from "./agentInputLog.ts";
+import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { approvedApps } from "./ComputerUseScope.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
@@ -226,14 +227,15 @@ export class ComputerUseLeases extends Context.Service<
     ) => Effect.Effect<boolean>;
     /**
      * A keyboard or pointer event at "at" that a control's proxy saw through its helper, outside
-     * its own input calls (#1235). Unless another agent's input covers that moment, every agent on
-     * the host pauses, as for the desktop's report. False when the control is not the thread's
-     * live one, so an old proxy cannot pause anyone.
+     * its own input calls (#1235). Unless another agent's input of the same kind covers that
+     * moment, every agent on the host pauses, as for the desktop's report. Refused when the
+     * control is not the thread's live one, so an old proxy cannot pause anyone.
      */
     readonly humanInput: (
       threadId: ThreadId,
       controlId: string,
       at: number,
+      source: ComputerUseHumanInputSource,
     ) => Effect.Effect<"paused" | "agents" | "refused">;
     /**
      * One of a control's calls that can post input started or ended (#1235). A person's input
@@ -243,7 +245,12 @@ export class ComputerUseLeases extends Context.Service<
     readonly agentInput: (
       threadId: ThreadId,
       controlId: string,
-      report: { readonly call: string; readonly state: "start" | "end"; readonly at: number },
+      report: {
+        readonly call: string;
+        readonly state: "start" | "end";
+        readonly at: number;
+        readonly kinds?: ReadonlyArray<InputKind>;
+      },
     ) => Effect.Effect<boolean>;
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
@@ -867,9 +874,14 @@ const make = Effect.gen(function* () {
       threadId: ThreadId,
       controlId: string,
       at: number,
+      source: ComputerUseHumanInputSource,
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
       if (!(yield* nearNow(at))) return "refused" as const;
+      // The calls that could have covered an older event are forgotten, so it cannot be judged:
+      // an agent's own late event would pass for a person's. A person still at the machine makes
+      // newer ones.
+      if (!agentInputs.remembers(at, yield* Clock.currentTimeMillis)) return "refused" as const;
       // Another agent's input on this host shows up in every helper; only a live control's
       // calls count.
       const live = new Set(
@@ -877,7 +889,7 @@ const make = Effect.gen(function* () {
           .filter((record) => record.ended === undefined)
           .map((record) => record.controlId),
       );
-      if (agentInputs.isAgents(at, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
+      if (agentInputs.isAgents(at, source, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
         return "agents" as const;
       yield* pause("human_input");
       return "paused" as const;
@@ -885,12 +897,17 @@ const make = Effect.gen(function* () {
     agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
       threadId: ThreadId,
       controlId: string,
-      report: { readonly call: string; readonly state: "start" | "end"; readonly at: number },
+      report: {
+        readonly call: string;
+        readonly state: "start" | "end";
+        readonly at: number;
+        readonly kinds?: ReadonlyArray<InputKind>;
+      },
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return false;
       if (!(yield* nearNow(report.at))) return false;
       const key = controlId + CALL_KEY + report.call;
-      if (report.state === "start") agentInputs.started(key, report.at);
+      if (report.state === "start") agentInputs.started(key, report.at, report.kinds);
       else agentInputs.ended(key, report.at);
       return true;
     }),

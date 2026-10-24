@@ -131,6 +131,11 @@ export const ComputerUseLeaseAgentInput = Schema.Struct({
     call: TrimmedNonEmptyString,
     state: Schema.Literals(["start", "end"]),
     at: EpochMillis,
+    /**
+     * The kinds of event a starting call can post. Only an event of a kind listed here is taken
+     * for the agent's own; a start without it covers both, as an older proxy's did.
+     */
+    kinds: Schema.optionalKey(Schema.Array(Schema.Literals(["keyboard", "pointer"]))),
   }),
 });
 export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
