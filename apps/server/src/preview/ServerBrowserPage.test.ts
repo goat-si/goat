@@ -101,6 +101,25 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
 
+  it("never clicks after Stop, even when Playwright was still waiting for the target", async () => {
+    await page.setContent('<button id="b" disabled onclick="window.clicked = true">Send</button>');
+    let stopped = false;
+    const clicking = ServerBrowserPage.click(
+      page,
+      { locator: "#b", timeoutMs: 10_000 },
+      undefined,
+      () => {
+        if (stopped) throw new Error("stopped");
+      },
+    );
+    void clicking.catch(() => undefined);
+    // A person stops the agent while the click waits for the button, which then becomes usable.
+    stopped = true;
+    await page.evaluate("document.getElementById('b').disabled = false");
+    await expect(clicking).rejects.toThrow("stopped");
+    expect(await page.evaluate("window.clicked === true")).toBe(false);
+  });
+
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
     await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
     const result = await ServerBrowserPage.snapshot({
@@ -547,7 +566,9 @@ describe("server browser drag", () => {
           ? {
               scrollIntoViewIfNeeded: async () => {},
               boundingBox: async () => box,
-              dragTo: () => Promise.reject(timedOut),
+              // The actionability trial passes; the drag itself times out mid-move.
+              dragTo: (_target: unknown, options?: { readonly trial?: boolean }) =>
+                options?.trial ? Promise.resolve() : Promise.reject(timedOut),
             }
           : { boundingBox: () => targetBox.promise },
     } as unknown as Page;
@@ -584,6 +605,7 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
   /** Each change the watcher reports, resolved in order. */
   let changes: Array<PromiseWithResolvers<boolean>>;
   let reported: number;
+  let delivered: number;
   const nextChange = () => changes[reported++]!.promise;
 
   beforeAll(async () => {
@@ -597,8 +619,10 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     page = await context.newPage();
     changes = Array.from({ length: 8 }, () => Promise.withResolvers<boolean>());
     reported = 0;
-    let delivered = 0;
+    delivered = 0;
     await watchPrivateMode(page, (on) => changes[delivered++]!.resolve(on));
+    // Bindings are answered in order, so awaiting this one means every earlier report arrived.
+    await page.exposeFunction("__fence", () => undefined);
   });
   afterEach(async () => {
     await context.close();
@@ -622,6 +646,17 @@ describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
     expect(await nextChange()).toBe(false);
     await page.focus("#otp");
     expect(await nextChange()).toBe(true);
+  });
+
+  it("stays private through history and hash moves, and clears only for a new document", async () => {
+    await load('<input id="pass" type="password">');
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.evaluate("history.pushState({}, '', '/step-2'); location.hash = 'otp'");
+    await page.evaluate("window.__fence()");
+    expect(delivered).toBe(1);
+    await page.goto("https://login.example/done");
+    expect(await nextChange()).toBe(false);
   });
 
   it("goes private for a passkey prompt until it settles, inside a frame too", async () => {

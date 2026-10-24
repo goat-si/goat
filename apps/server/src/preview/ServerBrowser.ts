@@ -242,6 +242,8 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
+    /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
+    readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
     readonly controlSession: (input: {
       readonly threadId: string;
@@ -999,7 +1001,7 @@ const make = Effect.gen(function* () {
         "PreviewAutomationExecutionError",
         `Upload paths must be absolute: ${relative}`,
       );
-    if (await ServerBrowserPage.setInputFiles(tab.page, input)) return undefined;
+    if (await ServerBrowserPage.setInputFiles(tab.page, input, gateFor(tab))) return undefined;
     const open = tab.fileChooser;
     if (!open)
       throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1548,12 +1550,18 @@ const make = Effect.gen(function* () {
     });
 
   let pointerSequence = 0;
+  const gateFor =
+    (tab: ServerTab): ServerBrowserPage.DispatchGate =>
+    () =>
+      tab.control.assertAgentMayDispatch();
+
   const pointerFor =
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>
     async ({ x, y }, phase) => {
       const encoder = tab.recording?.encoder;
 
-      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return;
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop)
+        return tab.control.assertAgentMayDispatch();
       const show = (next: "move" | "click") => {
         const sequence = ++pointerSequence;
         for (const viewer of tab.viewers)
@@ -1575,9 +1583,10 @@ const make = Effect.gen(function* () {
       };
       show("move");
       await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
-      if (phase !== "click") return;
-      show("click");
-      await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
+      if (phase === "click") {
+        show("click");
+        await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
+      }
     };
 
   const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
@@ -1954,21 +1963,31 @@ const make = Effect.gen(function* () {
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
         await recordAction(tab, "click", () =>
-          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab)),
+          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gateFor(tab)),
         );
         return undefined;
       }
       case "hover":
         return recordAction(tab, "hover", () =>
-          ServerBrowserPage.hover(tab.page, input as PreviewAutomationHoverInput, pointerFor(tab)),
+          ServerBrowserPage.hover(
+            tab.page,
+            input as PreviewAutomationHoverInput,
+            pointerFor(tab),
+            gateFor(tab),
+          ),
         );
       case "select":
         return recordAction(tab, "select", () =>
-          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput),
+          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gateFor(tab)),
         );
       case "drag":
         return recordAction(tab, "drag", () =>
-          ServerBrowserPage.drag(tab.page, input as PreviewAutomationDragInput, pointerFor(tab)),
+          ServerBrowserPage.drag(
+            tab.page,
+            input as PreviewAutomationDragInput,
+            pointerFor(tab),
+            gateFor(tab),
+          ),
         );
       case "upload":
         return recordAction(tab, "upload", () =>
@@ -1976,15 +1995,15 @@ const make = Effect.gen(function* () {
         );
       case "type":
         return recordAction(tab, "type", () =>
-          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput),
+          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gateFor(tab)),
         );
       case "press":
         return recordAction(tab, "press", () =>
-          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput),
+          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, gateFor(tab)),
         );
       case "scroll":
         return recordAction(tab, "scroll", () =>
-          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput),
+          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, gateFor(tab)),
         );
       case "evaluate":
         return ServerBrowserPage.evaluate(
@@ -2526,6 +2545,9 @@ const make = Effect.gen(function* () {
     answerFileChooser,
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
     sessionChanges: Stream.fromPubSub(sessionChanges),
+    stopAllAgents: Effect.sync(() => {
+      for (const tab of tabs.values()) tab.control.stopAgents();
+    }),
     controlSession: (input) =>
       Effect.sync(() => {
         const tab = tabs.get(tabKey(input.threadId, input.tabId));

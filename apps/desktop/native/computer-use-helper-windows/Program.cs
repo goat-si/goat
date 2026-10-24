@@ -1,0 +1,163 @@
+// GOAT Computer Use helper (Windows).
+//
+// GOAT's desktop host starts this executable with stdio pipes from the signed-in user's
+// session. It speaks the same line-delimited JSON as the macOS helper
+// (apps/desktop/native/computer-use-helper/main.swift): a hello line, then requests with an id
+// and exactly one reply each, and driverExited as the only event. On Windows it also answers
+// what only a process on the user's desktop can know: readiness (an interactive session, a
+// usable input desktop, UI Automation) and one window's identity and admission facts.
+//
+// The helper runs exactly one embedded Cua Driver daemon from the files this build pinned, in
+// a job object that ends with the helper. stdin EOF means the host is gone.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Web.Script.Serialization;
+
+namespace Goat.ComputerUse
+{
+    internal static class Program
+    {
+        const int ProtocolVersion = 1;
+        const int MaxLineBytes = 1 << 20;
+        static readonly object OutputLock = new object();
+        static readonly Stream Output = Console.OpenStandardOutput();
+        static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
+
+        static void Emit(Dictionary<string, object> message)
+        {
+            byte[] line = new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
+            lock (OutputLock)
+            {
+                Output.Write(line, 0, line.Length);
+                Output.Flush();
+            }
+        }
+
+        static Dictionary<string, object> Message(string type)
+        {
+            var message = new Dictionary<string, object>();
+            message["type"] = type;
+            return message;
+        }
+
+        static int Main()
+        {
+            string executable = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+            string refusal = WindowsFacts.ParentRefusal(BuildInfo.AllowAnyParent, executable, BuildInfo.ParentExecutable);
+            if (refusal != null)
+            {
+                var refused = Message("refused");
+                refused["reason"] = "untrusted_parent";
+                refused["message"] = refusal;
+                Emit(refused);
+                return 77;
+            }
+            var service = new DriverService(Path.GetDirectoryName(executable), Emit);
+            var hello = Message("hello");
+            hello["protocol"] = ProtocolVersion;
+            hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
+            hello["bundleId"] = BuildInfo.HelperId;
+            hello["version"] = BuildInfo.Version;
+            hello["platform"] = "windows";
+            Emit(hello);
+
+            Stream input = Console.OpenStandardInput();
+            var buffer = new MemoryStream();
+            var chunk = new byte[64 * 1024];
+            try
+            {
+                while (true)
+                {
+                    int read = input.Read(chunk, 0, chunk.Length);
+                    if (read <= 0) break;
+                    int start = 0;
+                    for (int i = 0; i < read; i++)
+                    {
+                        if (chunk[i] != (byte)'\n') continue;
+                        buffer.Write(chunk, start, i - start);
+                        start = i + 1;
+                        byte[] line = buffer.ToArray();
+                        buffer.SetLength(0);
+                        if (line.Length > 0) Handle(service, new UTF8Encoding(false, true).GetString(line));
+                    }
+                    buffer.Write(chunk, start, read - start);
+                    if (buffer.Length > MaxLineBytes)
+                    {
+                        var error = Message("error");
+                        error["code"] = "line_too_long";
+                        error["message"] = "Request line exceeds 1 MiB.";
+                        Emit(error);
+                        break;
+                    }
+                }
+            }
+            catch (IOException) { }
+            service.Stop();
+            return 0;
+        }
+
+        static void Handle(DriverService service, string line)
+        {
+            Dictionary<string, object> request = null;
+            try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
+            catch (ArgumentException) { }
+            object id, method;
+            if (request == null || !request.TryGetValue("id", out id) || !(id is string) ||
+                !request.TryGetValue("method", out method) || !(method is string))
+            {
+                var error = Message("error");
+                error["code"] = "bad_request";
+                error["message"] = "Expected {id, method, params}.";
+                Emit(error);
+                return;
+            }
+            object raw;
+            var parameters = request.TryGetValue("params", out raw) && raw is Dictionary<string, object>
+                ? (Dictionary<string, object>)raw
+                : new Dictionary<string, object>();
+            var reply = new Dictionary<string, object>();
+            reply["id"] = id;
+            try
+            {
+                switch ((string)method)
+                {
+                    // Windows has no grant to prompt for; "prompt" is accepted and ignored.
+                    case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
+                    case "start": reply["result"] = service.Start(parameters); break;
+                    case "stop": service.Stop(); reply["result"] = new Dictionary<string, object>(); break;
+                    case "window": reply["result"] = Window(parameters); break;
+                    default: throw new HelperException("unknown_method", "Unknown method " + method + ".");
+                }
+            }
+            catch (HelperException error)
+            {
+                reply["error"] = Failure(error.Code, error.Message);
+            }
+            catch (Exception error)
+            {
+                reply["error"] = Failure("internal", error.GetType().Name + ": " + error.Message);
+            }
+            Emit(reply);
+        }
+
+        static Dictionary<string, object> Window(Dictionary<string, object> parameters)
+        {
+            object pid, windowId;
+            if (!parameters.TryGetValue("pid", out pid) || !(pid is int) ||
+                !parameters.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
+                throw new HelperException("bad_request", "window needs an integer pid and windowId.");
+            return WindowsFacts.Window((int)pid, Convert.ToInt64(windowId));
+        }
+
+        static Dictionary<string, object> Failure(string code, string message)
+        {
+            var failure = new Dictionary<string, object>();
+            failure["code"] = code;
+            failure["message"] = message;
+            return failure;
+        }
+    }
+}

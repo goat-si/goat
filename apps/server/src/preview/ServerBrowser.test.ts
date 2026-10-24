@@ -487,7 +487,7 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
-      expect(locator.click).toHaveBeenCalledOnce();
+      expect(locator.click).toHaveBeenCalledTimes(2);
     }),
   ).pipe(Effect.provide(layer)),
 );

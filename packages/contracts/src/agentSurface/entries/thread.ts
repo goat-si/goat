@@ -9,9 +9,11 @@ export const threadEntries = {
     toolkit: "attachment",
     summary: "Send uploaded attachments to this thread or any other thread in this environment.",
     description:
-      "Send uploaded attachments in a new message to this or another GOAT thread in this environment. Each call creates a new message without a retry key. Acceptance does not mean the provider can consume the attachment or has finished the turn. Uncertain dispatch failures retain claimed files.",
+      "Send uploaded attachments in a new message to this or another thread in this environment. Retry with the same clientRequestId to avoid a second message. Acceptance does not confirm provider support or turn completion. Uncertain dispatch retains claimed files.",
     guide:
-      "Omit threadId to send to this thread. The target cannot have broader permission modes than the caller. Each call is a new message and has no retry key; do not treat a repeated call as reconciliation. Acceptance confirms message intake, not provider support for the attachment or turn completion. If dispatch outcome is uncertain, retain the claimed files.",
+      "Omit threadId to send to this thread. The target cannot have broader permission modes than the caller. Retry with the same clientRequestId and arguments to reuse the first message; use a new key for a new message. Acceptance confirms message intake, not provider support for the attachment or turn completion. If dispatch outcome is uncertain, retain the claimed files.",
+    idempotency: "key",
+    reconcile: "thread.read",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -501,9 +503,11 @@ export const threadEntries = {
     toolkit: "thread",
     summary: "Fork a thread from a stable run or checkpoint using the existing fork command.",
     description:
-      "Create a GOAT thread fork from a stable run or checkpoint. The fork inherits the source configuration. Acceptance confirms the fork command; it does not mean a provider turn has completed.",
+      "Create a GOAT thread fork from a stable run or checkpoint, inheriting its configuration. Retry with the same clientRequestId to reuse the first fork. Acceptance confirms the fork command, not completion of a provider turn.",
     guide:
       "Omit threadId to fork this thread. Choose latest_stable, a run, or a checkpoint as sourcePoint. This uses the existing fork command and its stable-source rules. The new thread inherits the source configuration; command acceptance does not mean a provider turn has completed.",
+    idempotency: "key",
+    reconcile: "thread.list",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -522,9 +526,11 @@ export const threadEntries = {
     toolkit: "thread",
     summary: "Merge context from a thread back to a related thread in the same project.",
     description:
-      "Merge context from a GOAT fork back to its parent thread in the same project. This records a context transfer for the target thread.",
+      "Merge context from a GOAT fork back to its parent in the same project, recording a context transfer for the target. Retry with the same clientRequestId to avoid a second transfer.",
     guide:
       "Omit sourceThreadId to merge from this thread. Existing lineage and transfer rules apply: the source must be a fork of targetThreadId with a matching fork transfer. Select a provider-finished source run or checkpoint; the source run must be completed or waiting.",
+    idempotency: "key",
+    reconcile: "thread.transfers",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
@@ -582,9 +588,12 @@ export const threadEntries = {
     name: "goat_thread_configure",
     toolkit: "thread",
     summary: "Set a thread's provider, model and options with the existing selection command.",
-    description: "Change a thread's provider, model and options. Permission modes stay unchanged.",
+    description:
+      "Change a thread's provider, model and options. Permission modes stay unchanged. Retry with the same clientRequestId to reuse the first configuration command.",
     guide:
       "Omit threadId to configure the calling thread. Use goat_provider_list to choose a provider and model selection.\n\nThe change goes through the existing selection command.",
+    idempotency: "key",
+    reconcile: "thread.configuration_read",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

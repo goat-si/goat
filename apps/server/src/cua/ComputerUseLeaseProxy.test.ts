@@ -367,6 +367,79 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect("stops a running call when its app loses approval, and drops its late answer", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active(undefined, ["com.apple.calculator", "com.apple.Notes"]));
+      yield* h.send(call(1, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { structuredContent: { apps: [{ pid: 9, bundle_id: "com.apple.Notes" }] } },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 1);
+      yield* h.send(
+        call(2, "type_text", { text: "long note", target: { kind: "window", pid: 9 } }),
+      );
+      assert.equal((yield* h.nextToDriver).id, 2);
+      // A person ends the Notes grant while the call runs.
+      yield* h.push(active(undefined, ["com.apple.calculator"]));
+      yield* h.killed;
+      assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+      const refused = yield* h.nextToProvider;
+      assert.equal(refused.id, 2);
+      assert.deepInclude((refused.result as Record<string, unknown>).structuredContent as object, {
+        detail: "app_not_approved",
+      });
+      yield* h.restarted;
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect(
+    "refuses a call held for a proxy whose first word is paused, and never runs it on hand back",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            refused: "userIntervened",
+          },
+        );
+        yield* h.push(active());
+        yield* h.restarted;
+        yield* h.send(call(2, "list_windows"));
+        // The fresh child sees only the new call; the held click is gone.
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
+  it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+      yield* h.killed;
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
+      const refused = yield* h.nextToProvider;
+      assert.deepInclude((refused.result as Record<string, unknown>).structuredContent as object, {
+        detail: "private_mode",
+      });
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+    }),
+  );
+
   it.effect("reads NDJSON lease lines and drops ones it cannot decode", () =>
     Effect.gen(function* () {
       const updates = yield* Stream.runCollect(

@@ -249,14 +249,17 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
       }),
     ),
   ),
-  goat_ssh_runtime_update: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      const caller = yield* check;
-      const setup = yield* SshHostSetup.SshHostSetup;
-      return yield* setup
-        .update(input, { kind: "mcp", scope: caller.scope })
-        .pipe(Effect.mapError(toSetupFailure("capability_denied")));
-    }),
+  goat_ssh_runtime_update: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        const caller = yield* check;
+        yield* McpToolAccess.admit(input);
+        const setup = yield* SshHostSetup.SshHostSetup;
+        return yield* setup
+          .update(input, { kind: "mcp", scope: caller.scope })
+          .pipe(Effect.mapError(toSetupFailure("capability_denied")));
+      }),
+    { admission: "handler" },
   ),
   // Reading ~/.ssh/config changes nothing; probing logs in but runs only `true`.
   goat_ssh_host_list: McpToolAccess.reads((input) =>
@@ -270,38 +273,42 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     }),
   ),
   // Linking stores a session that reaches another machine, like saving a connection.
-  goat_host_link_create: McpToolAccess.writesEnvironment((input, check) =>
-    Effect.gen(function* () {
-      yield* requireOrchestration;
-      const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-      const sshHosts = yield* dispatch
-        .listHosts({ probe: false })
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
-      if (sshHosts.some((host) => host.alias === input.name.trim())) {
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
-        });
-      }
-      const environment = yield* ServerEnvironment.ServerEnvironment;
-      const descriptor = yield* environment.getDescriptor;
-      const linkedHosts = yield* linkedHostsService;
-      const linked = yield* linkedHosts
-        .link({
-          name: input.name,
-          url: input.url,
-          code: input.code,
-          access: input.access ?? "approval-required",
-          beforeSave: check.pipe(Effect.asVoid),
-          clientName: `GOAT on ${descriptor.label}`,
-        })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
-          ),
-        );
-      return { host: linked.host, replaced: linked.replaced };
-    }),
+  goat_host_link_create: McpToolAccess.writesEnvironment(
+    (input, check) =>
+      Effect.gen(function* () {
+        yield* requireOrchestration;
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const sshHosts = yield* dispatch
+          .listHosts({ probe: false })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<SshRemoteDispatch.SshDispatchHost> => []));
+        if (sshHosts.some((host) => host.alias === input.name.trim())) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: `${input.name} is already an SSH host on this machine; pick another name for the link.`,
+          });
+        }
+        const environment = yield* ServerEnvironment.ServerEnvironment;
+        const descriptor = yield* environment.getDescriptor;
+        const linkedHosts = yield* linkedHostsService;
+        yield* check;
+        yield* McpToolAccess.admit(input);
+        const linked = yield* linkedHosts
+          .link({
+            name: input.name,
+            url: input.url,
+            code: input.code,
+            access: input.access ?? "approval-required",
+            beforeSave: check.pipe(Effect.asVoid),
+            clientName: `GOAT on ${descriptor.label}`,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof LinkedHosts.LinkedHostError ? toLinkFailure(error) : error,
+            ),
+          );
+        return { host: linked.host, replaced: linked.replaced };
+      }),
+    { admission: "handler" },
   ),
   goat_host_link_list: McpToolAccess.reads(() =>
     Effect.gen(function* () {
@@ -627,69 +634,74 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
     ),
   ),
   goat_ssh_thread_handoff: McpToolAccess.destructive(
-    McpToolAccess.writesEnvironment((input, check) =>
-      Effect.gen(function* () {
-        const caller = yield* check;
-        const sourceThreadId = input.threadId ?? caller.caller?.id;
-        if (sourceThreadId === undefined)
-          return yield* new OrchestratorMcpFailure({
-            code: "target_required",
-            message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
-          });
-        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
-        const hosts = yield* dispatch
-          .listHosts({ probe: false })
-          .pipe(Effect.mapError(toMcpFailure));
-        const host = input.host.trim();
-        if (!hosts.some((entry) => entry.alias === host))
-          return yield* new OrchestratorMcpFailure({
-            code: "invalid_request",
-            message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
-          });
-        // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
-        const target = { alias: host, hostname: host, username: null, port: null };
-        const current = yield* check;
-        const callerContext = yield* Effect.context<
-          | McpInvocationContext.McpInvocationContext
-          | ThreadManagementService.ThreadManagementService
-        >();
-        const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
-        const result = yield* sync
-          .handoffThread({
-            sourceThreadId,
-            target,
-            expectedEnvironmentId: null,
-            beforeRemoteChange: check.pipe(
-              Effect.asVoid,
-              Effect.provide(callerContext),
-              Effect.mapError(
-                () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+    McpToolAccess.writesEnvironment(
+      (input, check) =>
+        Effect.gen(function* () {
+          const caller = yield* check;
+          const sourceThreadId = input.threadId ?? caller.caller?.id;
+          if (sourceThreadId === undefined)
+            return yield* new OrchestratorMcpFailure({
+              code: "target_required",
+              message: "Pass threadId: this MCP client is not running inside a GOAT thread.",
+            });
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const hosts = yield* dispatch
+            .listHosts({ probe: false })
+            .pipe(Effect.mapError(toMcpFailure));
+          const host = input.host.trim();
+          if (!hosts.some((entry) => entry.alias === host))
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: `${host} is not in this machine's SSH config or known_hosts. Call goat_ssh_host_list for the hosts it can reach.`,
+            });
+          // Keep SSH-config routing, usernames and ports, like SshRemoteDispatch.resolveHost.
+          const target = { alias: host, hostname: host, username: null, port: null };
+          const current = yield* check;
+          yield* McpToolAccess.admit(input);
+          const callerContext = yield* Effect.context<
+            | McpInvocationContext.McpInvocationContext
+            | ThreadManagementService.ThreadManagementService
+          >();
+          const sync = yield* SshWorkspaceSync.SshWorkspaceSync;
+          const result = yield* sync
+            .handoffThread({
+              sourceThreadId,
+              target,
+              expectedEnvironmentId: null,
+              beforeRemoteChange: check.pipe(
+                Effect.asVoid,
+                Effect.provide(callerContext),
+                Effect.mapError(
+                  () => new SshWorkspaceError({ stage: "validate", code: "caller_not_authorized" }),
+                ),
               ),
-            ),
-            ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
-              ? { allowRunId: current.caller.activeRunId }
-              : {}),
-            ...(input.message === undefined ? {} : { message: input.message }),
-            ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
-            ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
-            ...(input.interactionMode === undefined
-              ? {}
-              : { interactionMode: input.interactionMode }),
-          })
-          .pipe(Effect.mapError(toHandoffFailure));
-        return {
-          host,
-          operationId: result.operationId,
-          remoteThreadId: result.remoteThreadId,
-          remoteProjectId: result.remoteProjectId,
-          remoteRepoPath: result.remoteRepoPath,
-          branch: result.branch,
-          notes: [
-            `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
-            `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
-          ],
-        };
-      }),
+              ...(sourceThreadId === current.caller?.id && current.caller.activeRunId !== null
+                ? { allowRunId: current.caller.activeRunId }
+                : {}),
+              ...(input.message === undefined ? {} : { message: input.message }),
+              ...(input.modelSelection === undefined
+                ? {}
+                : { modelSelection: input.modelSelection }),
+              ...(input.runtimeMode === undefined ? {} : { runtimeMode: input.runtimeMode }),
+              ...(input.interactionMode === undefined
+                ? {}
+                : { interactionMode: input.interactionMode }),
+            })
+            .pipe(Effect.mapError(toHandoffFailure));
+          return {
+            host,
+            operationId: result.operationId,
+            remoteThreadId: result.remoteThreadId,
+            remoteProjectId: result.remoteProjectId,
+            remoteRepoPath: result.remoteRepoPath,
+            branch: result.branch,
+            notes: [
+              `Read the remote thread with goat_thread_read({host:"${host}", threadId:"${result.remoteThreadId}"}).`,
+              `Bring results back with Git actions → Fetch branch, using ${host}, ${result.remoteRepoPath} and branch ${result.branch}.`,
+            ],
+          };
+        }),
+      { admission: "handler" },
     ),
   ),
   goat_ssh_reports: McpToolAccess.readsAsCaller((input) =>

@@ -1,5 +1,6 @@
 import * as NodeZlib from "node:zlib";
 import * as NodeOS from "node:os";
+import * as NodeNet from "node:net";
 
 import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -97,7 +98,34 @@ const unitTestProject = {
 // browser tests at once, and `server.strictPort` above is inherited, so the
 // second run fails instead of moving on. Hash the checkout path like
 // scripts/dev-runner.ts does, into 61000-64999 (above Linux's ephemeral range).
-const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
+const browserTestPortBase = 61_000;
+const browserTestPortSpan = 4_000;
+const hashedBrowserTestApiPort =
+  browserTestPortBase + ((Hash.string(import.meta.dirname) >>> 0) % browserTestPortSpan);
+
+const canListen = (port: number) =>
+  new Promise<boolean>((resolve) => {
+    const server = NodeNet.createServer();
+    server.once("error", () => resolve(false));
+    server.listen({ port, host: "localhost" }, () => server.close(() => resolve(true)));
+  });
+
+// Windows reserves blocks of its dynamic port range for Hyper-V and WinNAT (see
+// `netsh int ipv4 show excludedportrange protocol=tcp`). Binding inside one fails with
+// EACCES, which `strictPort: false` does not retry, so the whole run fails to start.
+const findBrowserTestApiPort = async () => {
+  for (let step = 0; step < browserTestPortSpan; step++) {
+    const port =
+      browserTestPortBase +
+      ((hashedBrowserTestApiPort - browserTestPortBase + step) % browserTestPortSpan);
+    if (await canListen(port)) return port;
+  }
+  return hashedBrowserTestApiPort;
+};
+
+const browserTestApiPort =
+  // oxlint-disable-next-line goat/no-global-process-runtime -- build config, outside Effect.
+  NodeOS.platform() === "win32" ? await findBrowserTestApiPort() : hashedBrowserTestApiPort;
 
 const browserTestProject = {
   extends: true,

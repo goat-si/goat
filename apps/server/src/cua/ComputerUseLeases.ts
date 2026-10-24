@@ -56,6 +56,12 @@ export interface ComputerUseLease {
   readonly apps?: ReadonlyArray<string>;
 }
 
+/** Whether the host's helper reports a person's input and secret fields at all. */
+export interface ComputerUseDetection {
+  readonly humanInput: boolean;
+  readonly privateMode: boolean;
+}
+
 /** One thread's current stretch of computer use, what its proxy was started with. */
 export interface ComputerUseControl {
   readonly controlId: string;
@@ -123,6 +129,8 @@ export class ComputerUseLeases extends Context.Service<
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
     /** Every live grant on this host, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
+    /** Which safety reports this host's helper sends; unattended turns need both. */
+    readonly detection: Effect.Effect<ComputerUseDetection>;
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
     readonly resume: Effect.Effect<void>;
@@ -266,6 +274,8 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
+    // A secret on screen outranks every other pause and lifts by itself when it loses focus.
+    if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
@@ -307,11 +317,23 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
-  // The desktop host's helper reports a person's own input; a standalone server has none.
+  // The desktop host's helper reports a person's own input and secret fields, and says which it
+  // can detect at all; a standalone server and an older helper report nothing (#1235).
+  let detection: ComputerUseDetection = { humanInput: false, privateMode: false };
+  let privateHost = false;
   const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
   if (Option.isSome(desktop))
-    yield* desktop.value.cuaHumanInput.pipe(
-      Stream.runForEach(() => pause("human_input")),
+    yield* desktop.value.cuaSafety.pipe(
+      Stream.runForEach((report) => {
+        if (report.type === "cuaHumanInput") return pause("human_input");
+        if (report.type === "cuaDetection")
+          return Effect.sync(() => {
+            detection = { humanInput: report.humanInput, privateMode: report.privateMode };
+          }).pipe(Effect.andThen(changed));
+        return Effect.sync(() => {
+          privateHost = report.active;
+        }).pipe(Effect.andThen(changed));
+      }),
       Effect.forkScoped,
     );
 
@@ -342,13 +364,20 @@ const make = Effect.gen(function* () {
     ),
     grants: live(),
     pause,
+    detection: Effect.sync(() => detection),
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),
-    sessions: Effect.forEach([...controls.values()], (record) =>
-      controlState(record.threadId, record.controlId).pipe(
-        Effect.orElseSucceed((): ComputerUseControlState => ({ _tag: "ended", reason: "revoked" })),
-        Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+    // Suspended: the controls are read each time it runs, never once when the service is built.
+    sessions: Effect.suspend(() =>
+      Effect.forEach([...controls.values()], (record) =>
+        controlState(record.threadId, record.controlId).pipe(
+          Effect.orElseSucceed((): ComputerUseControlState => ({
+            _tag: "ended",
+            reason: "revoked",
+          })),
+          Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+        ),
       ),
     ),
     subscribe: PubSub.subscribe(signals),

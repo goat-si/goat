@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  type DesktopCuaSafetyReport,
   EnvironmentId,
   Handoff,
   ProviderInstanceId,
@@ -15,8 +16,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
 import { runMigrations } from "../persistence/Migrations.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -76,6 +81,11 @@ layer("ComputerUseLeases controls", (it) => {
         // A second turn within the hour keeps the same control, so its proxy is not respawned.
         assert.equal((yield* leases.control(thread, Option.none())).controlId, first.controlId);
         assert.equal((yield* leases.controlState(thread, first.controlId))._tag, "active");
+        // The session list reads the controls each time, so one minted after startup is listed.
+        assert.include(
+          (yield* leases.sessions).map(({ control }) => control.controlId),
+          first.controlId,
+        );
 
         assert.isTrue(yield* leases.stop(thread));
         assert.isFalse(yield* leases.stop(thread));
@@ -161,3 +171,66 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 });
+
+it.effect(
+  "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
+  () =>
+    Effect.gen(function* () {
+      const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const signals = yield* leases.subscribe;
+        // Nothing reported yet: a host that never says it detects anything detects nothing.
+        assert.deepEqual(yield* leases.detection, { humanInput: false, privateMode: false });
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaDetection",
+          humanInput: true,
+          privateMode: true,
+        });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: true });
+
+        const control = yield* leases.control(thread, Option.none());
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaPrivateMode",
+          active: true,
+          target: { pid: 7, windowId: 3 },
+        });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "private",
+        });
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaPrivateMode",
+          active: false,
+          target: { pid: 7, windowId: 3 },
+        });
+        yield* PubSub.take(signals);
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        // A person's input the helper cannot attribute to a device still pauses the agents.
+        yield* Queue.offer(reports, { version: 1, type: "cuaHumanInput", source: "unknown" });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "human_input",
+        });
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({ cuaSafety: Stream.fromQueue(reports) }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);

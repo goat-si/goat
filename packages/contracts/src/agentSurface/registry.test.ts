@@ -219,8 +219,7 @@ describe("agent surface metadata", () => {
       expect(read?.effect, entry.path).toBe("read");
       const threadRead =
         (entry.resource === "ssh" && entry.verb.startsWith("thread_")) ||
-        entry.path === "cloud_agent.launch" ||
-        entry.path === "origin.report";
+        entry.path === "cloud_agent.launch";
       expect(read?.resource, entry.path).toBe(threadRead ? "thread" : entry.resource);
       // A write routed to another host is settled by reading that host.
       if (entry.hostRoutable) expect(read?.hostRoutable, entry.path).toBe(true);

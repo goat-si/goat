@@ -1,11 +1,15 @@
-// @effect-diagnostics nodeBuiltinImport:off -- The fake helper speaks over in-memory Node streams, like the real child process.
+// @effect-diagnostics nodeBuiltinImport:off -- The fake helper speaks over in-memory Node streams, and discovery reads a real temporary directory.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeStream from "node:stream";
 import * as NodeReadline from "node:readline";
 
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 
 import {
   ComputerUseHelperError,
+  classifyHelperBundle,
   daemonMismatch,
   makeHelperHost,
   openHelperSession,
@@ -185,5 +189,59 @@ describe("ComputerUseHelper daemon admission", () => {
     );
     assert.isTrue(helper.stdinEnded());
     assert.isUndefined(host.servicePid());
+  });
+});
+
+describe("ComputerUseHelper bundle discovery", () => {
+  /** A temporary directory removed when the test ends, pass or fail. */
+  const scratch = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-test-"));
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    return directory;
+  };
+  const makeBundle = (root: string) => {
+    const bundle = NodePath.join(root, "GOAT Computer Use.app");
+    NodeFS.mkdirSync(NodePath.join(bundle, "Contents", "MacOS"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(bundle, "Contents", "MacOS", "GOAT Computer Use"), "", {
+      mode: 0o755,
+    });
+    return bundle;
+  };
+
+  it("falls back only when nothing at all is at the helper path", async ({ onTestFinished }) => {
+    const root = scratch(onTestFinished);
+    expect(await classifyHelperBundle(NodePath.join(root, "GOAT Computer Use.app"), false)).toEqual(
+      { kind: "absent" },
+    );
+    // A path the developer set must exist.
+    expect(
+      (await classifyHelperBundle(NodePath.join(root, "GOAT Computer Use.app"), true)).kind,
+    ).toBe("unusable");
+  });
+
+  it("treats a dangling link or a bundle without its executable as unusable, not absent", async ({
+    onTestFinished,
+  }) => {
+    const root = scratch(onTestFinished);
+    const link = NodePath.join(root, "GOAT Computer Use.app");
+    NodeFS.symlinkSync(NodePath.join(root, "missing.app"), link);
+    expect(await classifyHelperBundle(link, false)).toMatchObject({
+      kind: "unusable",
+      message: expect.stringContaining("ENOENT"),
+    });
+    const empty = NodePath.join(scratch(onTestFinished), "GOAT Computer Use.app");
+    NodeFS.mkdirSync(empty);
+    expect((await classifyHelperBundle(empty, false)).kind).toBe("unusable");
+  });
+
+  it("finds a bundle through a link at its resolved path", async ({ onTestFinished }) => {
+    const root = scratch(onTestFinished);
+    const bundle = makeBundle(root);
+    const link = NodePath.join(scratch(onTestFinished), "GOAT Computer Use.app");
+    NodeFS.symlinkSync(bundle, link);
+    expect(await classifyHelperBundle(link, false)).toEqual({
+      kind: "found",
+      path: NodeFS.realpathSync(bundle),
+    });
   });
 });

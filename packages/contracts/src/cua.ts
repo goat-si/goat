@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { type ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -120,8 +121,11 @@ export const ComputerUseControlEnd = Schema.Literals([
 ]);
 export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
 
-/** Why the agent waits: a person's own input reached the shared desktop, or they took over. */
-export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover"]);
+/**
+ * Why the agent waits: a person's own input reached the shared desktop, they took over, or a
+ * secret field has focus (private) until it loses it.
+ */
+export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
 /**
@@ -147,24 +151,9 @@ export const ComputerUseLeaseUpdate = Schema.Union([
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
 /**
- * Why computer use refused or stopped one call, shared by the proxy and the native helpers. A
- * policy refusal is targetRefused, never a person's stop (#1146). The agent must observe again or
- * ask for approval; a refused call is never replayed for it.
+ * The proxy's finer account of a refusal, beside its shared reason (ComputerUseRefusalReason in
+ * computerUseProtocol.ts). A policy refusal is targetRefused, never a person's stop (#1146).
  */
-export const ComputerUseRefusalReason = Schema.Literals([
-  "userStoppedSession",
-  "userIntervened",
-  "screenLocked",
-  "permissionsNotGranted",
-  "permissionsPending",
-  "appNotAllowed",
-  "blockedURL",
-  "incompatibleClientVersion",
-  "targetRefused",
-]);
-export type ComputerUseRefusalReason = typeof ComputerUseRefusalReason.Type;
-
-/** The proxy's finer account of a refusal, beside its reason. */
 export const ComputerUseRefusalDetail = Schema.Literals([
   "app_not_approved",
   "desktop_not_approved",
@@ -202,9 +191,40 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  source: Schema.Literals(["keyboard", "pointer"]),
+  /** unknown: the helper saw a person's input but not which device sent it. */
+  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
+
+/**
+ * Sent by the desktop host when a secure text field or passkey prompt gains or loses focus, in
+ * the window it names; never what the field holds. While active, agents on the host neither
+ * observe nor act. The helper's own event frame is in computerUseProtocol.ts.
+ */
+export const DesktopCuaPrivateModeReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaPrivateMode"),
+  active: Schema.Boolean,
+  target: Schema.Struct({ pid: Schema.Int, windowId: Schema.Int }),
+});
+export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Type;
+
+/**
+ * Which of the two safety reports the helper sends at all, announced when it starts. Unattended
+ * turns run only where both are reported (#1235); a host that never says so has neither.
+ */
+export const DesktopCuaDetectionReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaDetection"),
+  humanInput: Schema.Boolean,
+  privateMode: Schema.Boolean,
+});
+export type DesktopCuaDetectionReport = typeof DesktopCuaDetectionReport.Type;
+
+export type DesktopCuaSafetyReport =
+  | DesktopCuaHumanInputReport
+  | DesktopCuaPrivateModeReport
+  | DesktopCuaDetectionReport;
 
 export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
 export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
@@ -247,7 +267,14 @@ export const ComputerUseRequestResult = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("refused"),
-    reason: Schema.Literals(["disabled", "unsupported", "held", "not_unattended"]),
+    reason: Schema.Literals([
+      "disabled",
+      "unsupported",
+      "held",
+      "not_unattended",
+      /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
+      "detection_unsupported",
+    ]),
     holderThreadId: Schema.optionalKey(ThreadId),
     message: Schema.String,
   }),

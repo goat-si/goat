@@ -32,7 +32,7 @@ export const scheduleEntries = {
     toolkit: "orchestrator",
     summary: "List scheduled tasks",
     description:
-      "Read recurring scheduled tasks, including their schedule, prompt, enabled state, bound thread, next run time and last run status. Omit projectId for this thread's project, or all projects when no thread calls.",
+      "Read recurring scheduled tasks, including their schedule, prompt, enabled state, bound thread, next run time, last run status, run count and last run time. Omit projectId for this thread's project, or all projects when no thread calls.",
     guide: "Use the returned scheduledTaskId with goat_schedule_update or goat_schedule_delete.",
     effect: "read",
     hostRoutable: false,
@@ -97,9 +97,11 @@ export const scheduleEntries = {
     toolkit: "thread",
     summary: "Run a scheduled task now through the existing scheduler.",
     description:
-      "Dispatch a manual run of a scheduled task. Each call is a new run, so retries can duplicate work. Completion covers dispatch and bookkeeping; the provider turn can still be running. threadId names the thread this run went to, or is null when dispatch failed.",
+      "Dispatch a manual run of a scheduled task. Retry with the same clientRequestId to reuse the first run. Completion covers dispatch and bookkeeping; the provider turn may still be running. threadId names the dispatched thread, or is null if dispatch failed.",
     guide:
-      "Requires a full-access/default caller. Each call requests a new manual run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
+      "Requires a full-access/default caller. Retry with the same clientRequestId to reuse the first manual run; a new key requests a new run. Webhook tasks refuse manual runs. The response includes taskId, threadId, lastRunStatus, runCount and nextRunAt. A task without a bound thread reports the fresh thread it launched.",
+    idempotency: "key",
+    reconcile: "schedule.list",
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,
