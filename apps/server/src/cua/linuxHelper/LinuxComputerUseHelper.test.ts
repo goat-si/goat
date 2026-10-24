@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The helper's channel is a Node stream; the test feeds it one.
+import * as NodeCrypto from "node:crypto";
 import * as NodeStream from "node:stream";
 import * as NodeZlib from "node:zlib";
 
@@ -45,17 +46,21 @@ const NOT_SECURE: SecureFocus = { known: true, secure: false, windows: 1 };
 /** A PNG of width x height: solid, striped, or noise that does not compress. */
 function png(width: number, height: number, fill: boolean | "noise") {
   const raw = Buffer.alloc((width * 3 + 1) * height);
-  let seed = 7;
+  // Noise from a CSPRNG does not compress, so the PNG is about as large as its pixels.
+  const noise = fill === "noise" ? NodeCrypto.randomBytes(raw.length) : undefined;
   for (let row = 0; row < height; row++)
-    for (let x = 0; x < width * 3; x++) {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      raw[row * (width * 3 + 1) + 1 + x] =
-        fill === "noise" ? (seed >>> 16) & 0xff : fill && x % 6 === 0 ? 255 : 10;
-    }
+    for (let x = 0; x < width * 3; x++)
+      raw[row * (width * 3 + 1) + 1 + x] = noise
+        ? (noise[row * width * 3 + x] ?? 0)
+        : fill && x % 6 === 0
+          ? 255
+          : 10;
   const chunk = (type: string, body: Buffer) => {
     const length = Buffer.alloc(4);
     length.writeUInt32BE(body.length);
-    return Buffer.concat([length, Buffer.from(type), body, Buffer.alloc(4)]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(NodeZlib.crc32(Buffer.concat([Buffer.from(type), body])));
+    return Buffer.concat([length, Buffer.from(type), body, crc]);
   };
   const header = Buffer.alloc(13);
   header.writeUInt32BE(width, 0);
@@ -85,7 +90,12 @@ function fixtureDriver() {
     imageData: SHOT,
     setValueEffect: "confirmed",
     loseNext: false,
+    calls: [] as Array<{ tool: string; args: Readonly<Record<string, unknown>> }>,
+    /** Answers the next input call instead of the fixture's own behavior. */
+    nextAnswer: undefined as DriverToolResult | undefined,
+    readinessImage: png(8, 4, true).toString("base64"),
   };
+  const exit = Promise.withResolvers<void>();
   const ok = (structured: unknown, text = "", images: DriverToolResult["images"] = []) =>
     ({ isError: false, text, structured, images }) satisfies DriverToolResult;
   const refused = (code: string, text: string) =>
@@ -108,7 +118,7 @@ function fixtureDriver() {
       });
     if (tool === "get_window_state") {
       if (args.include_accessibility_tree === false)
-        return ok({}, "", [{ mimeType: "image/png", data: png(8, 4, true).toString("base64") }]);
+        return ok({}, "", [{ mimeType: "image/png", data: state.readinessImage }]);
       state.snapshot++;
       const token = (index: number) => "s" + state.snapshot + ":" + index;
       const shot = args.include_screenshot !== false;
@@ -161,7 +171,13 @@ function fixtureDriver() {
       );
     }
     state.sent.push(tool);
+    state.calls.push({ tool, args });
     if (state.loseNext) return "lost";
+    if (state.nextAnswer) {
+      const answer = state.nextAnswer;
+      state.nextAnswer = undefined;
+      return answer;
+    }
     if (tool === "click") {
       if (args.element_token === undefined)
         return refused("background_unavailable", "Background delivery is not available.");
@@ -184,11 +200,11 @@ function fixtureDriver() {
   const client: DriverClient = {
     pid: 4242,
     version: "0.37.0",
-    exited: new Promise(() => undefined),
+    exited: exit.promise,
     close: async () => undefined,
     call,
   };
-  return { state, client };
+  return { state, client, exit: () => exit.resolve() };
 }
 
 /** An action as the agent writes it; the helper test fills in the target and observation. */
@@ -248,11 +264,13 @@ async function connect(
   const input = new NodeStream.PassThrough();
   const ended = new Promise<void>((resolve) => input.once("end", () => resolve()));
   const replies = new Map<string, Reply>();
+  const sizes: number[] = [];
   const lines: Array<Record<string, unknown>> = [];
   let wake: () => void = () => undefined;
   const served = serveHelperChannel({
     input,
     write: (line) => {
+      sizes.push(Buffer.byteLength(line));
       const value = JSON.parse(line) as Record<string, unknown>;
       if (typeof value.id === "string") replies.set(value.id, value as Reply);
       else lines.push(value);
@@ -325,6 +343,8 @@ async function connect(
     clock,
     gate,
     starts: () => starts,
+    sizes,
+    input,
     /** Ends stdin and waits until the channel has seen it, as a launcher closing the pipe. */
     end: () => {
       input.end();
@@ -608,9 +628,9 @@ describe("Linux computer use helper conformance", () => {
   });
 
   it("an action whose answer outgrows the frame keeps its outcome and leaves the evidence out", async () => {
-    const helper = await connect({ maxFrameBytes: 4096 });
+    const helper = await connect({ maxFrameBytes: 64 * 1024 });
     const first = await helper.observe();
-    helper.driver.state.imageData = png(128, 128, "noise").toString("base64");
+    helper.driver.state.imageData = png(160, 160, "noise").toString("base64");
     const reply = await helper.request(
       "click",
       helper.actionParams(
@@ -622,6 +642,82 @@ describe("Linux computer use helper conformance", () => {
     expect(reply.result).not.toHaveProperty("observation");
     expect(reply.image).toBeUndefined();
     expect(helper.driver.state.sent).toEqual(["click"]);
+    await helper.close();
+  });
+
+  it("a driver error that reports delivered input stays a sent action, whatever its code", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    helper.driver.state.nextAnswer = {
+      isError: true,
+      text: "Foreground delivery failed after the key was acknowledged.",
+      structured: { code: "foreground_unavailable", delivered_count: 1 },
+      images: [],
+    };
+    const result = await helper.act(
+      { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    expect(result).toMatchObject({ outcome: "unverifiable", dispatch: "dispatched_unknown" });
+    await helper.close();
+  });
+
+  it("an action validated before the driver exits never reaches the next driver", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    helper.gate.armed = true;
+    // A key names no element, so only the driver generation stands between it and a new driver.
+    const frameId = helper.send(
+      "pressKey",
+      helper.actionParams({ action: "pressKey", key: "a" }, first.observation),
+    );
+    await helper.gate.entered.promise;
+    helper.driver.exit();
+    await Promise.resolve();
+    await Promise.resolve();
+    helper.gate.release.resolve();
+    expect((await helper.answer(frameId)).result).toMatchObject({
+      outcome: "refused",
+      reason: "helperUnavailable",
+    });
+    expect(helper.driver.state.sent).toEqual([]);
+    expect(helper.starts()).toBe(1);
+    await helper.close();
+  });
+
+  it("a right click on an element is real pointer input at its center, never an activation", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    await helper.act(
+      { action: "rightClick", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    expect(helper.driver.state.calls).toEqual([
+      { tool: "click", args: expect.objectContaining({ x: 210, y: 71, button: "right" }) },
+    ]);
+    expect(helper.driver.state.calls[0]?.args).not.toHaveProperty("element_token");
+    expect(helper.driver.state.count).toBe(0);
+    await helper.close();
+  });
+
+  it("a capture whose bytes cannot be read does not prove capture", async () => {
+    const helper = await connect();
+    helper.driver.state.readinessImage = "UE5H";
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness.capture).toBe("unavailable");
+    expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("the reply to the largest request the channel accepts still fits the frame", async () => {
+    const helper = await connect({ maxFrameBytes: 64 * 1024 });
+    const id = "i".repeat(64 * 1024 - 4096 - 200);
+    helper.input.write(
+      JSON.stringify({ id, generation: "g1", method: "observe", deadlineMs: 5_000, params: {} }) +
+        "\n",
+    );
+    await helper.answer(id);
+    expect(Math.max(...helper.sizes)).toBeLessThanOrEqual(64 * 1024);
     await helper.close();
   });
 
@@ -712,6 +808,32 @@ describe("Linux computer use helper conformance", () => {
       reason: "invalidRequest",
     });
     await helper.close();
+  });
+});
+
+describe("makeLinuxHelper shutdown", () => {
+  it("every close waits for the one driver shutdown, so a signal during EOF cleanup cannot exit early", async () => {
+    const { client } = fixtureDriver();
+    const closing = Promise.withResolvers<void>();
+    const helper = makeLinuxHelper({
+      session: detectLinuxSession(X11),
+      screen: ":91",
+      startDriver: async () => ({ ...client, close: () => closing.promise }),
+      secureFocus: async () => NOT_SECURE,
+      uinputWritable: async () => false,
+      settle: async () => undefined,
+      newId: () => "o",
+      now: () => 0,
+    });
+    await helper.handle("listWindows", {}, 1_000);
+    let done = 0;
+    void helper.close().then(() => done++);
+    void helper.close().then(() => done++);
+    await Promise.resolve();
+    expect(done).toBe(0);
+    closing.resolve();
+    await helper.close();
+    expect(done).toBe(2);
   });
 });
 

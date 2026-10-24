@@ -41,6 +41,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import { withClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -66,7 +67,7 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
 
 const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   description: agentSurfaceRegistry["preview.open"].description,
-  parameters: PreviewAutomationOpenInput,
+  parameters: withClientRequestId(PreviewAutomationOpenInput),
   success: PreviewAutomationStatus,
   failure: PreviewToolFailure,
   dependencies,

@@ -107,6 +107,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   const lastReads = new Map<string, LastRead>();
   let queue: Promise<unknown> = Promise.resolve();
   let closed = false;
+  let closing: Promise<void> | undefined;
   const blocked = deps.session.unavailable ?? deps.session.unsupported;
 
   const ensureDriver = () => {
@@ -117,8 +118,10 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       void driver.then(
         (client) =>
           client.exited.then(() => {
-            // Tokens die with the driver: start clean the next time.
+            // Tokens die with the driver: a new generation at once, so an action validated
+            // against this one cannot reach the next driver, and a clean start next time.
             if (driverGeneration !== generation) return;
+            driverGeneration++;
             driver = undefined;
             observations = makeObservationTracker(deps.newId);
             lastReads.clear();
@@ -135,6 +138,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     tool: string,
     args: Readonly<Record<string, unknown>>,
     deadlineMs: number,
+    /** The driver generation the request was validated against; input goes to no other. */
+    validated?: number,
   ): Promise<DriverToolResult | "deadline" | "lost" | ComputerUseRefusal> => {
     let client: DriverClient;
     try {
@@ -145,6 +150,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         error instanceof Error ? error.message : "Cua Driver did not start.",
       );
     }
+    if (validated !== undefined && validated !== driverGeneration)
+      return refusal("helperUnavailable", "Cua Driver restarted; nothing was sent. Observe again.");
     const answer = await client.call(tool, args, deadlineMs);
     return answer === "unsent"
       ? refusal("helperUnavailable", "Cua Driver exited; nothing was sent. Try again.")
@@ -331,7 +338,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
           const image =
             typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
           const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
-          facts.capture = image === undefined ? "failed" : (colors ?? "varied");
+          facts.capture = image === undefined ? "failed" : (colors ?? "failed");
           // The tree is proven through AT-SPI directly: a driver read would replace the
           // snapshot the agent's element tokens belong to.
           const focus = await deps.secureFocus(shown.pid);
@@ -389,7 +396,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     if (left() <= 0)
       return { result: refusal("busy", "The deadline passed before anything was sent.") };
-    const answer = await call(call_.tool, call_.args, left());
+    const answer = await call(call_.tool, call_.args, left(), generation);
     if (answer === "deadline") return { result: computerUseDeadlineResult(request.delivery) };
     if (answer === "lost")
       return {
@@ -493,16 +500,18 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       queue = next.catch(() => undefined);
       return next;
     },
-    close: async () => {
-      closed = true;
-      const current = driver;
-      driver = undefined;
-      driverGeneration++;
-      if (current)
-        await current.then(
-          (client) => client.close(),
-          () => undefined,
-        );
-    },
+    // Every caller (stdin closing, a signal) waits for the same shutdown, driver included.
+    close: () =>
+      (closing ??= (async () => {
+        closed = true;
+        const current = driver;
+        driver = undefined;
+        driverGeneration++;
+        if (current)
+          await current.then(
+            (client) => client.close(),
+            () => undefined,
+          );
+      })()),
   };
 }

@@ -146,11 +146,30 @@ export function linuxDriverCall(
     case "click":
     case "doubleClick":
     case "rightClick": {
-      const at = locate(request.at);
+      const modifier = modifiers(request.modifiers);
+      // The driver's element route fires one AT-SPI activation and ignores button, count and
+      // modifiers, so anything but a plain click on an element goes to its frame's center as
+      // real pointer input instead, keeping the gesture the agent asked for.
+      const gesture = request.action !== "click" || modifier !== undefined;
+      const at: Located | ComputerUseRefusal =
+        gesture && "element" in request.at
+          ? (() => {
+              const resolved = element(request.at.element);
+              if (isRefusal(resolved)) return resolved;
+              if (!resolved.frame)
+                return refusal(
+                  "invalidRequest",
+                  "That element has no frame for a " + request.action + ". Use a point.",
+                );
+              return point(
+                resolved.frame.x + resolved.frame.width / 2,
+                resolved.frame.y + resolved.frame.height / 2,
+              );
+            })()
+          : locate(request.at);
       if (isRefusal(at)) return at;
       const blocked = needsDevice(at);
       if (blocked) return blocked;
-      const modifier = modifiers(request.modifiers);
       return {
         tool: "click",
         args: {
@@ -307,12 +326,17 @@ export function linuxActionResult(
   const code = driverRefusalCode(structured);
   const effect = field(structured, "effect");
   const detail = result.text.trim().split("\n", 1)[0] || undefined;
-  // A refusal only when the driver says it sent nothing; any other error may follow input.
+  // A refusal only when the driver says it sent nothing. Evidence that input left (an effect
+  // other than refused, or a delivered count) wins over the error code: the driver reports
+  // transport failures after acknowledged input with the same codes it refuses with.
   const known = code === undefined ? undefined : REFUSAL_CODES[code];
+  const delivered = field(structured, "delivered_count");
+  const sentSomething =
+    (typeof effect === "string" && effect !== "refused") ||
+    (typeof delivered === "number" && delivered > 0);
   if (
-    field(structured, "status") === "refused" ||
-    effect === "refused" ||
-    (result.isError && known)
+    !sentSomething &&
+    (field(structured, "status") === "refused" || effect === "refused" || (result.isError && known))
   ) {
     return refusal(
       known ?? "targetRefused",

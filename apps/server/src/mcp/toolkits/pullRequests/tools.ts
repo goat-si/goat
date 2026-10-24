@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -350,9 +351,14 @@ const WritePullRequestGuidesTool = Tool.make(
   agentSurfaceRegistry["pull_request_guide.update"].name,
   {
     description: agentSurfaceRegistry["pull_request_guide.update"].description,
-    parameters: Schema.Struct({
-      pullRequests: Schema.Array(GuideTarget).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
-    }),
+    parameters: withClientRequestId(
+      Schema.Struct({
+        pullRequests: Schema.Array(GuideTarget).check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(20),
+        ),
+      }),
+    ),
     success: WritePullRequestGuidesResult,
     failure: PullRequestToolError,
     dependencies: guideDependencies,
