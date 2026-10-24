@@ -65,3 +65,36 @@ final class InputActivity {
     }
   }
 }
+
+/// The reports a run of input events turns into, kept free of the system so it can be tested
+/// (apps/desktop/src/cua/ComputerUseHelperInput.test.ts). Polled: the system keeps only the
+/// newest event of each kind, and each tick reports that newest one if it is new.
+struct InputReports {
+  static func source(of type: CGEventType) -> String? {
+    switch type {
+    case .keyDown, .flagsChanged: return "keyboard"
+    case .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+      .leftMouseDragged, .rightMouseDragged:
+      return "pointer"
+    default: return nil
+    }
+  }
+
+  private var newest: [String: Double] = [:]
+  private var reported: [String: Double] = [:]
+
+  mutating func event(_ type: CGEventType, at: Double) -> (source: String, at: Double)? {
+    if let source = Self.source(of: type) { newest[source] = at }
+    return nil
+  }
+
+  mutating func tick() -> [(source: String, at: Double)] {
+    var out: [(source: String, at: Double)] = []
+    for (source, at) in newest.sorted(by: { $0.key < $1.key }) {
+      guard at > (reported[source] ?? -.infinity) + 0.001 else { continue }
+      reported[source] = at
+      out.append((source, at))
+    }
+    return out
+  }
+}
