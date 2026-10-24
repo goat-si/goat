@@ -152,6 +152,9 @@ describe("DefectReporter", () => {
         const report = (cause: Cause.Cause<unknown>) =>
           ErrorReporter.report(cause).pipe(Effect.provide(DefectReporter.layer));
         yield* report(Cause.die(new Expected("expected failure")));
+        let deep: object = { [ErrorReporter.ignore]: true };
+        for (let index = 0; index < 33; index++) deep = Object.create(deep);
+        yield* report(Cause.die(deep));
         yield* report(
           Cause.fromReasons([...failures, Cause.makeDieReason(new Error("only defect"))]),
         );

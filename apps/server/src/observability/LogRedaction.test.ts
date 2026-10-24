@@ -285,6 +285,12 @@ describe("redactCause", () => {
     expect(Cause.pretty(redactCause(Cause.die(error)))).toContain(
       "function@file:///synthetic.ts:1:2",
     );
+    // A stack without its own header is frames from its first line on.
+    const headerless = new Error("boom");
+    headerless.stack = "first@file:///a.js:1:1\nsecond@file:///b.js:2:2";
+    const printed = Cause.pretty(redactCause(Cause.die(headerless)));
+    expect(printed).toContain("first@file:///a.js:1:1");
+    expect(printed).toContain("second@file:///b.js:2:2");
   });
 
   it("keeps an error whose cause cannot be inspected", () => {

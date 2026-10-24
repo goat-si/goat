@@ -103,7 +103,8 @@ function listLength(listed: unknown): number {
 function inheritedData(target: unknown, key: PropertyKey): unknown {
   return guarded(() => {
     let current: unknown = target;
-    for (let depth = 0; depth < 32 && typeof current === "object" && current !== null; depth++) {
+    // Prototype chains cannot cycle, so the walk ends at the chain's root, however deep.
+    while (typeof current === "object" && current !== null) {
       const descriptor = Object.getOwnPropertyDescriptor(current, key);
       if (descriptor !== undefined) return "value" in descriptor ? descriptor.value : undefined;
       current = Object.getPrototypeOf(current);
@@ -235,7 +236,8 @@ function inspectError(
   const header = `${rawName}: ${rawMessage}`;
   const afterHeader = stack.startsWith(header)
     ? stack.slice(header.length)
-    : stack.slice(Math.max(0, stack.indexOf("\n")));
+    : // Without its own header (some engines, or a rewritten stack) the whole stack is frames.
+      `\n${stack}`;
   const stackFrames = afterHeader.trim().length === 0 ? "" : redactLogText(afterHeader);
   error.stack = bounded(`${name}: ${message}${stackFrames}${frames}`, MAX_STACK_CHARS);
   return error;
