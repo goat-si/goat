@@ -119,11 +119,19 @@ describe("computerUseDisplayInput", () => {
     });
     expect(JSON.stringify(lines)).not.toContain("hunter2");
     expect(computerUseRun(child)?.summary).toBe("Type 7 characters");
-    // The server already sent "7 characters": the card and row keep the real length.
-    const redacted = call("cua-driver.type_text", { pid: 1, text: "7 characters" });
-    expect(computerUseRun(redacted)?.summary).toBe("Type 7 characters");
-    expect(computerUseDisplayInput("cua-driver.type_text", { text: "7 characters" })).toEqual({
+    // The server sends a marker: the card and row show its length.
+    const marker = { text: { redactedCharacters: 7 } };
+    expect(computerUseRun(call("cua-driver.type_text", marker))?.summary).toBe("Type 7 characters");
+    expect(computerUseDisplayInput("cua-driver.type_text", marker)).toEqual({
       text: "7 characters",
+    });
+    // Raw text that reads like a label is measured, never trusted.
+    const lookalike = { text: "123 characters" };
+    expect(computerUseRun(call("cua-driver.type_text", lookalike))?.summary).toBe(
+      "Type 14 characters",
+    );
+    expect(computerUseDisplayInput("cua-driver.type_text", lookalike)).toEqual({
+      text: "14 characters",
     });
   });
 });

@@ -2,7 +2,7 @@ import type { OrchestrationV2TurnItem } from "@goat/contracts";
 import {
   computerUseTypedTextLength,
   cuaDriverToolName,
-  redactComputerUseTypedText,
+  replaceComputerUseTypedText,
 } from "@goat/shared/toolActivity";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
@@ -72,9 +72,14 @@ const characters = (length: number) => `${length} character${length === 1 ? "" :
 /**
  * A computer-use call's input with its typed text replaced by the text's length. The text can be
  * a password, so the expanded row, its copy text and every client show only how long it was. The
- * server already sends it redacted; this covers items from a server that did not.
+ * server sends a redacted marker; raw text from a server that did not redact gets the same label.
  */
-export const computerUseDisplayInput = redactComputerUseTypedText;
+export function computerUseDisplayInput(
+  toolName: string | null | undefined,
+  input: unknown,
+): unknown {
+  return replaceComputerUseTypedText(toolName, input, characters);
+}
 
 function summary(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
