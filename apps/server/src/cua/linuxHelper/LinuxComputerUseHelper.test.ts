@@ -364,7 +364,11 @@ describe("Linux session facts", () => {
       return "GNOME Shell 50.1\n";
     };
     const facts = linuxSessionFacts(
-      { WAYLAND_DISPLAY: "wayland-0", XDG_CURRENT_DESKTOP: "ubuntu:GNOME" },
+      {
+        WAYLAND_DISPLAY: "wayland-0",
+        XDG_CURRENT_DESKTOP: "ubuntu:GNOME",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      },
       gnomeShellVersion,
     );
     const calls: string[] = [];
@@ -381,6 +385,8 @@ describe("Linux session facts", () => {
       15_000,
     );
     expect(facts.gnomeShellMajor).toBe(50);
+    // Refused for GNOME 50 itself, not for a missing session bus or display.
+    expect(detectLinuxSession(facts).unsupported).toMatch(/^GNOME 50 on Wayland/);
     expect(computerUseReady(readiness)).toBe(false);
     expect(calls).toEqual([]);
     // Only Wayland GNOME reads the version; X11 never runs gnome-shell.
