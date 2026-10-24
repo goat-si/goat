@@ -145,3 +145,48 @@ it.effect("an Error: line with nothing readable still makes the submission uncer
     }),
   ),
 );
+
+it.effect("reads a wrapped diagnostic whose lines arrive in separate chunks", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Error: repository too large\r\r\n");
+      h.fake.emit("Connect GitHub to clone in the cloud.\r\r\n");
+      h.fake.finish(1);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toBe("repository too large Connect GitHub to clone in the cloud.");
+    }),
+  ),
+);
+
+it.effect.each([
+  // Near the 64 KiB output bound, with a value that rewrites every word.
+  [{ V: "abcdef", W: "redacted" }, "Error: " + "abcdef".repeat(10_900) + "\n"],
+  // Values equal to the mask label itself, so each pass re-masks earlier labels.
+  [
+    Object.fromEntries(Array.from({ length: 6 }, (_, index) => ["V" + index, "[redacted]"])),
+    "Error: [redacted]\n",
+  ],
+] as const)("redacts adversarial values without failing (%#)", ([values, output]) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const login = { ...LOGIN, environment: { ...LOGIN.environment, ...values } };
+      const fiber = yield* h.service
+        .start(login, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit(output);
+      h.fake.finish(1);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail.startsWith("[redacted]")).toBe(true);
+      expect(error.detail).not.toContain("abcdef");
+    }),
+  ),
+);

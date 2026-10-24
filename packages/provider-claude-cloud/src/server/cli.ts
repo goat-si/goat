@@ -483,6 +483,10 @@ const make = Effect.gen(function* () {
     let receipt: ReturnType<typeof readStartReceipt>;
     let exit: PtyAdapter.PtyExitEvent | undefined;
     let failure: ClaudeCloudError | undefined;
+    // Claude prints a long error over several wrapped lines, which can arrive in separate chunks.
+    // The failure is set at its first line, so it keeps its precedence, re-read as more arrives,
+    // and reported once the CLI exits (or the wait ends).
+    let diagnosticFailure: ClaudeCloudError | undefined;
     // Output before this offset belongs to trust prompts GOAT already answered.
     let trustFrom = 0;
     let answers = 0;
@@ -549,12 +553,16 @@ const make = Effect.gen(function* () {
       // With a trust policy, a prompt still rendering its options is answered on a later chunk.
       if (!failure && trustPrompt(pending) && (!trust || receipt))
         failure = trustFailure(cwd, receipt ? "uncertain" : "rejected");
-      const diagnostic = failure ? undefined : readDiagnostic(bounded, login.environment);
-      if (diagnostic !== undefined)
-        failure = new ClaudeCloudError({
+      const diagnostic =
+        failure && failure !== diagnosticFailure
+          ? undefined
+          : readDiagnostic(bounded, login.environment);
+      if (diagnostic !== undefined) {
+        failure = diagnosticFailure = new ClaudeCloudError({
           detail: diagnostic || "Claude could not confirm cloud submission.",
           outcome: "uncertain",
         });
+      }
       notify();
     };
     // The exit listener belongs to the process resource. Keep it until release sees real exit,
@@ -621,6 +629,7 @@ const make = Effect.gen(function* () {
       if (receipt) return Effect.succeed(receipt);
       // A refusal is final only once this process has really exited with nothing more to say.
       if (trust && failure?.reason === "folder_untrusted" && !exit) return undefined;
+      if (failure !== undefined && failure === diagnosticFailure && !exit) return undefined;
       if (failure) return Effect.fail(failure);
       if (exit) return Effect.fail(unknownSubmission());
       return undefined;
@@ -628,6 +637,7 @@ const make = Effect.gen(function* () {
     return {
       receipt: observed,
       exited: wait(() => {
+        if (failure !== undefined && failure === diagnosticFailure && !exit) return undefined;
         if (failure) return Effect.fail(failure);
         if (exit)
           // node-pty reports signal 0 for a normal Unix exit; other adapters omit it.

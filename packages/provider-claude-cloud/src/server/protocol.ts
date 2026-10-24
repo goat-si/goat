@@ -90,8 +90,9 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   if (first === undefined || first === null || line === undefined) return undefined;
   const firstStart = first.index + first[0].length - 1 - line.length;
   const lines = [cells.slice(firstStart, firstStart + line.length)];
-  // CR CR LF wraps read as one blank line between wrapped lines once cleaned.
-  const rest = /^(?:\n?[ \t]*\S[^\n]*\n)*/.exec(text.slice(first.index + first[0].length))?.[0];
+  // Claude wraps with CR CR LF, which reads as exactly one blank line once cleaned; a line right
+  // after the error is other output, not a continuation.
+  const rest = /^(?:\n[ \t]*\S[^\n]*\n)*/.exec(text.slice(first.index + first[0].length))?.[0];
   let offset = first.index + first[0].length;
   for (const piece of (rest ?? "").split("\n").slice(0, -1)) {
     if (piece.trim()) lines.push(cells.slice(offset, offset + piece.length));
@@ -102,7 +103,7 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   for (const [index, cellsOfLine] of lines.entries()) {
     if (index > 0) block.push({ character: "\n", gap: false });
     ranges.push([block.length, block.length + cellsOfLine.length]);
-    block.push(...cellsOfLine);
+    for (const cell of cellsOfLine) block.push(cell);
   }
   const marks = { hidden: new Set<number>(), masked: new Set<number>(), links: new Set<number>() };
   const pass = (start: number, end: number, link: RegExp) =>
@@ -204,13 +205,24 @@ function redactPass(
     const next: Token[] = [];
     let cursor = 0;
     for (const [index, length] of matches) {
-      next.push(...tokens.slice(cursor, index));
-      const ids = tokens.slice(index, index + length).flatMap((token) => token.ids);
+      // Loops, not spreads: a 64 KiB diagnostic overflows the call stack as arguments.
+      for (let at = cursor; at < index; at++) {
+        const token = tokens[at];
+        if (token) next.push(token);
+      }
+      // Label characters share one array, so a union of their ids stays small.
+      const union = new Set<number>();
+      for (let at = index; at < index + length; at++)
+        for (const id of tokens[at]?.ids ?? []) union.add(id);
+      const ids = Array.from(union);
       for (let offset = 0; offset < label.length; offset++)
         next.push({ character: label.charAt(offset), ids, label });
       cursor = index + length;
     }
-    next.push(...tokens.slice(cursor));
+    for (let at = cursor; at < tokens.length; at++) {
+      const token = tokens[at];
+      if (token) next.push(token);
+    }
     tokens = next;
   };
   for (const value of Object.values(environment)) {
