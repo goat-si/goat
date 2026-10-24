@@ -68,7 +68,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     echo: true,
     stream: new EventTarget(),
     // Each test is its own host, so no save queue carries over between tests.
-    host: crypto.randomUUID(),
+    host: expect.getState().currentTestName ?? "host",
     localMac: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
