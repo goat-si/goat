@@ -163,6 +163,11 @@ const CommandRow = memo(function CommandRow(props: {
   const iconName = itemIcon(props.item);
   const inactive =
     props.item.type === "capability" && props.item.availability.state !== "available";
+  // A row that opens setup still acts on press, so only rows that do nothing read as disabled.
+  const inert =
+    inactive &&
+    props.item.type === "capability" &&
+    !(props.item.availability.state === "unavailable" && props.item.availability.setup);
   const description =
     props.item.type === "capability"
       ? composerCapabilityDetail(props.item)
@@ -172,7 +177,7 @@ const CommandRow = memo(function CommandRow(props: {
     <Pressable
       accessibilityRole="button"
       accessibilityHint={inactive ? description : undefined}
-      accessibilityState={inactive ? { disabled: true } : undefined}
+      accessibilityState={inert ? { disabled: true } : undefined}
       onPress={props.onPress}
       className="flex-row items-center gap-2.5 border-border px-3.5 py-2.5 active:opacity-60"
       style={{ borderBottomWidth: props.isLast ? 0 : StyleSheet.hairlineWidth }}

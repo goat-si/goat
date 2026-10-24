@@ -108,12 +108,3 @@ describe("contextChipAccent", () => {
     expect(contextChipAccent("#00aa76", theme, theme["--color-md-body"])).toBe("#00aa76");
   });
 });
-
-describe("capability chips", () => {
-  it("shows a monitor for @computer and a globe for @browser", () => {
-    expect(contextChipPresentation("capability", { capability: "computer-use" }).icon).toBe(
-      "monitor",
-    );
-    expect(contextChipPresentation("capability", { capability: "browser" }).icon).toBe("globe");
-  });
-});

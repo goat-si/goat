@@ -50,6 +50,7 @@ import {
   withBuiltInProviderSkills,
 } from "@goat/client-runtime/providerSkills";
 import { useEffect, useRef, useState } from "react";
+import { useNavigation } from "@react-navigation/native";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { serverEnvironment } from "../../state/server";
@@ -177,11 +178,10 @@ export function useComposerCommandMenu({
   ownerKey,
   environmentId,
   threadShells = EMPTY_THREAD_SHELLS,
-  currentThreadId = null,
+  thread = null,
   projectCwd,
   pullRequestProjectId = null,
   pullRequestRepository = null,
-  threadPullRequests,
   selectedProviderStatus,
   serverSettings = null,
   hasThread,
@@ -196,11 +196,11 @@ export function useComposerCommandMenu({
   readonly ownerKey: string | null;
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
-  readonly currentThreadId?: ThreadId | null;
+  /** The composer's thread, with the draft's unsent settings such as plan mode applied. */
+  readonly thread?: Pick<EnvironmentThreadShell, "id" | "pullRequests" | "interactionMode"> | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepository?: string | null;
-  readonly threadPullRequests?: ReadonlyArray<ThreadPullRequestLink>;
   readonly selectedProviderStatus: ServerProvider | null;
   /** Decides which of GOAT's built-in skills the menu lists for this provider. */
   readonly serverSettings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null;
@@ -212,6 +212,9 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
 }) {
+  const navigation = useNavigation();
+  const currentThreadId = thread?.id ?? null;
+  const threadPullRequests = thread?.pullRequests;
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
   const onSelectionChange = (nextSelection: ComposerEditorSelection) => {
@@ -353,8 +356,7 @@ export function useComposerCommandMenu({
     environmentId,
     active: trigger?.kind === "path",
     turn: {
-      // A draft has no shell yet; the server applies plan mode again when the turn starts.
-      interactionMode: currentShell?.interactionMode ?? "default",
+      interactionMode: thread?.interactionMode ?? "default",
       providerDrivers: selectedProviderStatus === null ? [] : [selectedProviderStatus.driver],
       mayRunUnattended: composerThreadMayRunUnattended(currentThreadId, currentShell?.source),
     },
@@ -551,6 +553,13 @@ export function useComposerCommandMenu({
       // Still checking: the typed text stays until the host answers.
       if (availability.state === "checking") return;
       if (availability.state === "unavailable") {
+        if (availability.setup && environmentId !== null) {
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsEnvironmentDetail", params: { environmentId } },
+          });
+          return;
+        }
         Dialog.alert(
           "Computer use isn't ready",
           availability.setup
