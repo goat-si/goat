@@ -967,16 +967,19 @@ export const make = Effect.gen(function* () {
       );
     });
 
-    loadApplication();
-    if (environment.isDevelopment) {
-      window.webContents.openDevTools({ mode: "detach" });
-    }
-
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
       clearBoundsPersist();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
+
+    // Desktop IPC answers only the main window, and the preload calls it as soon
+    // as the page starts loading.
+    yield* electronWindow.setMain(window);
+    loadApplication();
+    if (environment.isDevelopment) {
+      window.webContents.openDevTools({ mode: "detach" });
+    }
 
     return Option.some(window);
   });
@@ -984,7 +987,6 @@ export const make = Effect.gen(function* () {
   const createMain = Effect.gen(function* () {
     const window = yield* createWindow();
     if (Option.isSome(window)) {
-      yield* electronWindow.setMain(window.value);
       yield* logWindowInfo("main window created");
     }
     return window;
