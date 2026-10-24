@@ -1,20 +1,14 @@
-import * as NodeEvents from "node:events";
 import { assert, describe, it } from "@effect/vitest";
-import { DEFAULT_CLIENT_SETTINGS, type DesktopWindowMaterialState } from "@goat/contracts";
-import * as Context from "effect/Context";
+import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import type { BrowserWindow } from "electron";
 import { vi } from "vite-plus/test";
-import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
-import * as ElectronTheme from "../../electron/ElectronTheme.ts";
-import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
 import * as Adapters from "./adapters.ts";
 import * as Material from "./DesktopWindowMaterial.ts";
+import { makeFixture } from "./materialTestFixture.ts";
 
 vi.mock("node:os", () => ({ release: () => "10.0.22621" }));
 vi.mock("electron", () => ({
@@ -22,129 +16,6 @@ vi.mock("electron", () => ({
     setBackgroundMaterial() {}
   },
 }));
-
-const makeFixture = Effect.fn("test.materialFixture")(function* (
-  options: {
-    enabled?: boolean;
-    prepare?: Adapters.MaterialAdapter["prepare"];
-    failAttach?: boolean;
-    settingsStore?: DesktopClientSettings.DesktopClientSettings["Service"];
-  } = {},
-) {
-  const states = yield* Queue.unbounded<DesktopWindowMaterialState>();
-  const settingsStore =
-    options.settingsStore ??
-    Context.get(
-      yield* Layer.build(
-        DesktopClientSettings.layerTest(
-          Option.some({
-            ...DEFAULT_CLIENT_SETTINGS,
-            desktopSystemMaterialEnabled: options.enabled ?? true,
-          }),
-        ),
-      ),
-      DesktopClientSettings.DesktopClientSettings,
-    );
-  const native = new NodeEvents.EventEmitter();
-  const model = {
-    backing: "#ffffff",
-    overlay: {} as unknown,
-    live: false,
-    destroyed: false,
-    fullscreen: false,
-    attaches: 0,
-    releases: 0,
-    releaseBackings: [] as string[],
-  };
-  const window = Object.assign(native, {
-    webContents: {
-      id: 1,
-      isDestroyed: () => model.destroyed,
-      send: (_channel: string, state: DesktopWindowMaterialState) =>
-        Queue.offerUnsafe(states, state),
-    },
-    isDestroyed: () => model.destroyed,
-    isFullScreen: () => model.fullscreen,
-    setBackgroundColor: (color: string) => {
-      model.backing = color;
-    },
-    setTitleBarOverlay: (overlay: unknown) => {
-      model.overlay = overlay;
-    },
-  }) as unknown as BrowserWindow;
-  let accessibility = { reducedTransparency: false, highContrast: false };
-  let updated = () => {};
-  const material = yield* Material.make.pipe(
-    Effect.provideService(DesktopEnvironment.DesktopEnvironment, {
-      platform: "win32",
-    } as DesktopEnvironment.DesktopEnvironment["Service"]),
-    Effect.provideService(DesktopClientSettings.DesktopClientSettings, settingsStore),
-    Effect.provideService(ElectronTheme.ElectronTheme, {
-      shouldUseDarkColors: Effect.succeed(false),
-      setSource: () => Effect.void,
-      accessibility: Effect.sync(() => accessibility),
-      onUpdated: (listener) =>
-        Effect.acquireRelease(
-          Effect.sync(() => {
-            updated = listener;
-          }),
-          () =>
-            Effect.sync(() => {
-              updated = () => {};
-            }),
-        ),
-    }),
-    Effect.provideService(Adapters.WindowMaterialAdapter, {
-      kind: "windows-mica",
-      prepare: options.prepare ?? (() => Effect.void),
-      attachSync: () => {
-        if (options.failAttach) throw new Error("native attachment failed");
-        model.attaches++;
-        model.live = true;
-        let released = false;
-        return {
-          releaseSync: () => {
-            if (released) return;
-            model.releaseBackings.push(model.backing);
-            model.releases++;
-            model.live = false;
-            released = true;
-          },
-        };
-      },
-    }),
-  );
-  yield* material.attach(window);
-  return {
-    material,
-    window,
-    model,
-    states,
-    settingsStore,
-    commit: (patch: Partial<typeof DEFAULT_CLIENT_SETTINGS>) =>
-      Effect.gen(function* () {
-        const current = yield* settingsStore.get;
-        yield* settingsStore.set({
-          ...DEFAULT_CLIENT_SETTINGS,
-          ...Option.getOrUndefined(current),
-          ...patch,
-        });
-      }),
-    fullscreen: (value: boolean) => {
-      model.fullscreen = value;
-      native.emit(value ? "enter-full-screen" : "leave-full-screen");
-    },
-    close: (cancel = false) => native.emit("close", { defaultPrevented: cancel }),
-    closed: () => {
-      model.destroyed = true;
-      native.emit("closed");
-    },
-    accessibility: (value: typeof accessibility) => {
-      accessibility = value;
-      updated();
-    },
-  };
-});
 
 describe("DesktopWindowMaterial", () => {
   it.effect("applies after reveal, toggles once, and restores solid backing before release", () =>
@@ -261,6 +132,7 @@ describe("DesktopWindowMaterial", () => {
         yield* Deferred.succeed(resume, undefined);
         yield* Fiber.join(reveal);
         assert.equal(f.model.attaches, 0);
+        assert.deepEqual(f.model.appearances, []);
         assert.isFalse(f.model.live);
         assert.equal(f.model.backing, "#ffffff");
       }),

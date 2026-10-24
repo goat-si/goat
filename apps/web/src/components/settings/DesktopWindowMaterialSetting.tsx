@@ -25,7 +25,9 @@ function materialStatus(state: DesktopWindowMaterialState | null): string {
     case "native-failed":
       return "The system material could not be applied.";
     case "active":
-      return state.applied === "windows-mica" ? "Using Mica." : "Using system glass.";
+      return state.applied === "windows-mica"
+        ? "Using Mica."
+        : "Using system glass (development candidate).";
     default:
       return "Use the system material in the sidebar and title bar.";
   }

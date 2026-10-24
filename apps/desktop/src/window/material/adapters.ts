@@ -13,7 +13,18 @@ export class NativeMaterialError extends Schema.TaggedError<NativeMaterialError>
 export interface MaterialAdapter {
   readonly kind: Exclude<DesktopWindowMaterialKind, "none">;
   readonly prepare: () => Effect.Effect<void, NativeMaterialError>;
-  readonly attachSync: (window: BrowserWindow) => { readonly releaseSync: () => void };
+  readonly attachSync: (
+    window: BrowserWindow,
+    context: MaterialAppearance,
+  ) => {
+    readonly updateSync: (context: MaterialAppearance) => void;
+    readonly releaseSync: () => void;
+  };
+}
+
+export interface MaterialAppearance {
+  readonly dark: boolean;
+  readonly glassOpacity: number;
 }
 
 export class WindowMaterialAdapter extends Context.Service<
@@ -34,6 +45,7 @@ const windowsMica: MaterialAdapter = {
     }
     let released = false;
     return {
+      updateSync: () => {},
       releaseSync: () => {
         if (released) return;
         window.setBackgroundMaterial("none");
