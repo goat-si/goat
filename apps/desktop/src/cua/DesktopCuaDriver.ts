@@ -951,6 +951,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
                 if (owned !== entry || entry.cleanup || closed) return;
                 const request = currentRequest;
                 yield* stop;
+                // A helper that exited on its own is not known to be the one a check confirmed.
+                if (entry.helper)
+                  yield* noteHelper((state) =>
+                    withoutProof(
+                      state,
+                      `${COMPUTER_USE_HELPER_NAME} stopped unexpectedly. Run the readiness check again.`,
+                    ),
+                  );
                 if (request) yield* unavailable(request.requestId);
               }),
             ),

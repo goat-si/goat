@@ -46,4 +46,35 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
         }),
       ),
   );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "drops an earlier check's proof when the running helper exits unexpectedly on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform,
+            helper: { granted: true },
+            tools:
+              platform === "win32"
+                ? {
+                    ...healthyTools(),
+                    check_permissions: toolResult({ elevated: false, uia: true }),
+                  }
+                : helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+          });
+          assert.isTrue((yield* test.verify).verified);
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const running = test.readiness.at(-1)?.readiness;
+          assert.isTrue(running ? computerUseReady(running) : false);
+
+          yield* test.crash;
+          assert.equal((yield* test.next).status, "unavailable");
+          const after = test.readiness.at(-1)?.readiness;
+          assert.equal(after?.helper, "unauthenticated");
+          assert.isFalse(after ? computerUseReady(after) : true);
+        }),
+      ),
+  );
 });
