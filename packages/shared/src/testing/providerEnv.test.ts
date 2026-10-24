@@ -10,7 +10,9 @@ describe("removeAmbientProviderEnv", () => {
       GOAT_ACP_MCP_AUTHORIZATION: "Bearer thread-token",
       GOAT_CLI_PATH: "/home/user/.goat/desktop/bin/goat",
       GOAT_HOME: "/home/user/.goat/desktop",
-      GOAT_CLI_PATH: "/home/user/.goat/desktop/bin/goat",
+      // goat-rename: legacy-begin
+      T3CODE_CLI_PATH: "/home/user/.goat/desktop/bin/goat",
+      // goat-rename: legacy-end
       ANTHROPIC_AUTH_TOKEN: "secret",
       GOAT_TEST_TMP_GUARD: "fail",
       GOAT_TEST_PARENT_TMPDIR: "/tmp/goat-ci",
