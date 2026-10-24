@@ -2,6 +2,10 @@ import {
   computerUseReadinessSteps,
   type ReadinessStepState,
 } from "@goat/client-runtime/computerUse/readinessSteps";
+import type {
+  ComputerUseSetup,
+  ComputerUseSetupStatus,
+} from "@goat/client-runtime/computer-use-linux-setup";
 import type { ComputerUseGrant, CuaHostStatus } from "@goat/contracts";
 import type { ReactNode } from "react";
 
@@ -12,6 +16,8 @@ export interface ComputerUseReadinessProps {
   readonly platform?: CuaHostStatus["platform"] | undefined;
   readonly tools?: CuaHostStatus["tools"];
   readonly signals?: CuaHostStatus["signals"];
+  /** The host's name, so the Linux guide says which machine to act on. */
+  readonly machine?: string;
   readonly renderGrantAction?: (
     grant: "accessibility" | "screenCapture",
     state: ComputerUseGrant,
@@ -26,6 +32,53 @@ const statePresentation = {
   unsupported: { label: "Unsupported", variant: "secondary" },
   unknown: { label: "Not checked", variant: "outline" },
 } as const satisfies Record<ReadinessStepState, { label: string; variant: string }>;
+
+const setupPresentation = {
+  done: { label: "Done", variant: "success" },
+  action: { label: "To do", variant: "error" },
+  waiting: { label: "Waiting", variant: "warning" },
+  limited: { label: "Limited", variant: "secondary" },
+  unavailable: { label: "Unavailable", variant: "secondary" },
+} as const satisfies Record<ComputerUseSetupStatus, { label: string; variant: string }>;
+
+/** The Linux steps with what to do at that machine; commands are shown to copy, never run. */
+function LinuxSetupGuide({ setup }: { setup: ComputerUseSetup }) {
+  return (
+    <section
+      aria-label="Set up computer use on Linux"
+      className="space-y-3 border-t border-border pt-3"
+    >
+      <h4 className="text-sm font-medium">Set up on Linux</h4>
+      <ul className="space-y-3">
+        {setup.steps.map((step, index) => (
+          <li key={`${step.id}:${index}`} className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm">{step.title}</span>
+              <Badge variant={setupPresentation[step.status].variant}>
+                {setupPresentation[step.status].label}
+              </Badge>
+            </div>
+            <p className="text-xs text-muted-foreground">{step.detail}</p>
+            {step.guidance.map((line) =>
+              line.kind === "command" ? (
+                <code
+                  key={line.text}
+                  className="block rounded-md bg-muted px-2 py-1 font-mono text-xs break-all select-all"
+                >
+                  {line.text}
+                </code>
+              ) : (
+                <p key={line.text} className="text-xs text-muted-foreground">
+                  {line.text}
+                </p>
+              ),
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUseReadinessProps) {
   const result = computerUseReadinessSteps(input);
@@ -79,6 +132,7 @@ export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUs
           </li>
         ))}
       </ol>
+      {result.linuxSetup ? <LinuxSetupGuide setup={result.linuxSetup} /> : null}
     </section>
   );
 }

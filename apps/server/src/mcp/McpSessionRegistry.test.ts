@@ -4,7 +4,9 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import { HttpServer } from "effect/http";
+import * as Layer from "effect/Layer";
 import * as NetAddress from "effect/net/NetAddress";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -452,6 +454,46 @@ it.effect("renews an idle credential while its session is attached and expires i
     expect(yield* registry.resolve(token)).toBeUndefined();
     expect((yield* registry.explainRefusal!(token)).reason).toBe("revoked");
   }),
+);
+
+it.effect(
+  "gives concurrently started threads different TMPDIRs that end with the server (#1206)",
+  () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const issueBoth = Effect.gen(function* () {
+        const registry = yield* McpSessionRegistry.McpSessionRegistry;
+        const issue = (name: string) =>
+          registry.issue({
+            threadId: ThreadId.make(`thread-tmp-${name}`),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          });
+        const [first, second] = yield* Effect.all([issue("first"), issue("second")], {
+          concurrency: "unbounded",
+        });
+        const again = yield* issue("first");
+        const directories = [first.config.temporaryDirectory, second.config.temporaryDirectory];
+        expect(new Set(directories).size).toBe(2);
+        expect(again.config.temporaryDirectory).toBe(first.config.temporaryDirectory);
+        // The system directory a thread shell's `goat app` still looks in holds the thread ones.
+        const system = first.config.systemTemporaryDirectory ?? "\0";
+        expect(first.config.temporaryDirectory?.startsWith(system)).toBe(true);
+        for (const directory of directories) {
+          expect((yield* fileSystem.stat(directory!)).type).toBe("Directory");
+        }
+        return directories;
+      }).pipe(
+        Effect.provide(
+          McpSessionRegistry.layer.pipe(
+            Layer.provide(Layer.succeed(HttpServer.HttpServer, fakeHttpServer)),
+            Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
+          ),
+        ),
+      );
+
+      const directories = yield* issueBoth;
+      for (const directory of directories) expect(yield* fileSystem.exists(directory!)).toBe(false);
+    }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("tells a token from an earlier server run apart from an unknown one", () =>

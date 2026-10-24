@@ -70,13 +70,14 @@
     principal whoever launched it, then spawns
     `cua-driver mcp --direct --embedded --host-bundle-id <helper bundle id>`: one stdio process per
     session that owns the driver runtime and listens on no socket, inherits the helper's grants and
-    passes the driver's identity check unpatched (D3 amendment, #1210). The first helper (#1211)
-    still runs `serve --embedded` on a private socket, and signed helper builds stay blocked until
-    the broker replaces it (#1202). Direct mode has no driver cursor overlay, so the helper draws
+    passes the driver's identity check unpatched (D3 amendment, #1210). Each agent connection's
+    proxy starts its own helper with `--mcp` for that driver, and Stop ends the pair (D3 amendment
+    2); only the desktop's readiness check still runs `serve --embedded` on a private socket. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
     driver patches with recorded provenance, never in a rewritten driver.
-  - **Channel.** The helper talks to its launcher over line-delimited JSON on stdio and brokers
-    every agent call to the driver in the #1207 envelope. A release helper serves only a parent
+  - **Channel.** The desktop's helper talks to its launcher over line-delimited JSON on stdio for
+    readiness, app listing and watches; an agent connection's helper passes MCP straight between
+    its launcher and the driver. A release helper serves only a parent
     signed by GOAT's team with the GOAT app identifier, and its service half only its own
     launcher; any socket, as in the fallback, adds a per-launch token and an audit-token peer
     check. The hello negotiates `clientApiVersion` and `serverApiVersion`, every request has a

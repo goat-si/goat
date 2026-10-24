@@ -72,6 +72,7 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -752,6 +753,7 @@ export const layerWithOptions = (
                   readOnly,
                   origin: computerUseOrigin,
                   leases: computerUseLeases,
+                  requested: preparedInput.turnCapabilities,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
@@ -1364,43 +1366,13 @@ export const layerWithOptions = (
         },
       );
 
-      // Scope close can wedge on a misbehaving adapter finalizer (e.g. a
-      // provider process that never yields its message stream).
-      const closeScopeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
-        scope: Scope.Closeable,
-        annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
-      ) {
-        const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
-          Effect.exit,
-          Effect.forkDetach({ startImmediately: true }),
-        );
-        const closeExit = yield* Fiber.join(closeFiber).pipe(
-          Effect.timeoutOption(RELEASE_SCOPE_CLOSE_TIMEOUT_MS),
-        );
-        if (Option.isNone(closeExit)) {
-          yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
-            ...annotations,
-            timeoutMs: RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-          });
-          yield* Fiber.join(closeFiber).pipe(
-            Effect.flatMap((exit) =>
-              Exit.isFailure(exit)
-                ? Effect.logWarning("orchestration-v2.provider-session-scope-close-failed", {
-                    ...annotations,
-                    cause: exit.cause,
-                  })
-                : Effect.logInfo(
-                    "orchestration-v2.provider-session-scope-close-completed-late",
-                    annotations,
-                  ),
-            ),
-            Effect.forkDetach,
-          );
-        }
-        return closeExit;
-      });
+      const {
+        closeWithin: closeScopeWithin,
+        trackRelease,
+        awaitPendingReleases,
+      } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
-      const releaseEntry = (input: {
+      const releaseEntryNow = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
@@ -1520,6 +1492,8 @@ export const layerWithOptions = (
             ),
           ),
         );
+      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
+        trackRelease(releaseEntryNow(input));
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -2538,6 +2512,7 @@ export const layerWithOptions = (
             ),
           { concurrency: "unbounded", discard: true },
         );
+        yield* awaitPendingReleases;
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(

@@ -17,7 +17,6 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "list_windows",
   "get_accessibility_tree",
   "get_window_state",
-  "get_desktop_state",
   "get_screen_size",
   "get_cursor_position",
   "verify_state",
@@ -54,6 +53,8 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
  * from the allow list.
  */
 export const CUA_DRIVER_EXCLUDED_TOOLS = {
+  get_desktop_state:
+    "screenshots the whole display, with every other app and GOAT's own windows on it (#1321); get_window_state captures one window",
   install_extension: "installs software on the host",
   install_ffmpeg: "installs software on the host",
   set_config: "driver configuration belongs to GOAT",
@@ -102,33 +103,60 @@ const EXCLUDED_BUNDLE_IDS = new Set([
 ]);
 const EXCLUDED_NAME =
   /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|keychain access|passwords)\b/iu;
+/** The driver and GOAT's helper on Windows, named by their executables. */
+const EXCLUDED_EXECUTABLE = /(^|[\\/])(cua-driver|GOAT Computer Use)\.exe$/iu;
 
 export interface CuaDriverListedApp {
   readonly bundle_id?: string | null;
   readonly name?: string | null;
+  /** A running app's executable path, added by the Windows helper (the driver gives none). */
+  readonly executable?: string | null;
 }
 
 /**
  * Bundle ids GOAT admits for general desktop control: every app the driver itself lists (its
  * list_apps result is what it attests a window's app identity against), minus the host GOAT runs
- * in and the exclusions above. Apps without a bundle id stay out, so an app installed after the
- * driver started needs a restart of computer use.
+ * in and the exclusions above. On Windows a running program with no Start menu entry has no
+ * bundle id; its executable path stands in, which the driver matches against the executable it
+ * attests for the window (#1368). Apps with neither stay out, so an app installed or started
+ * after the driver started needs a restart of computer use.
  */
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const host = new Set(hostBundleIds.map((id) => id.toLowerCase()));
+  const host = new Set(hostBundleIds.map(identityKey));
   const admitted = new Set<string>();
   for (const app of apps) {
-    const id = app.bundle_id?.trim();
+    const id = (app.bundle_id?.trim() || app.executable?.trim()) ?? "";
     if (!id) continue;
-    const lower = id.toLowerCase();
-    if (host.has(lower) || EXCLUDED_BUNDLE_IDS.has(lower)) continue;
-    if (EXCLUDED_NAME.test(app.name ?? "") || EXCLUDED_NAME.test(id)) continue;
+    if (host.has(identityKey(id)) || EXCLUDED_BUNDLE_IDS.has(id.toLowerCase())) continue;
+    if (
+      EXCLUDED_NAME.test(app.name ?? "") ||
+      EXCLUDED_NAME.test(id) ||
+      EXCLUDED_EXECUTABLE.test(id)
+    )
+      continue;
     admitted.add(id);
   }
   return [...admitted].sort();
+}
+
+/**
+ * One spelling per identity for comparing ids: a Windows path the way the driver compares it
+ * (session_manifest.rs normalize_windows_executable_path: \\?\ and \\?\UNC\ prefixes off, / as
+ * \, repeated separators collapsed, case folded); anything else lowercased. GOAT can run from a
+ * path spelled with a prefix while the helper lists the plain form, and must still be excluded.
+ */
+function identityKey(id: string): string {
+  let path = id.trim().replaceAll("/", "\\");
+  const windowsPath = /^[A-Za-z]:\\/u.test(path) || path.startsWith("\\\\");
+  if (!windowsPath) return id.trim().toLowerCase();
+  if (path.toLowerCase().startsWith("\\\\?\\unc\\")) path = "\\\\" + path.slice(8);
+  else if (path.startsWith("\\\\?\\")) path = path.slice(4);
+  const unc = path.startsWith("\\\\");
+  const parts = path.split("\\").filter((part) => part.length > 0);
+  return ((unc ? "\\\\" : "") + parts.join("\\")).toLowerCase();
 }
 
 /** v3 manifest text. JSON strings are valid YAML scalars, so every value is JSON-quoted. */

@@ -306,13 +306,141 @@ namespace Goat.ComputerUse
                     structured is Dictionary<string, object> &&
                     ((Dictionary<string, object>)structured).TryGetValue("apps", out apps) && apps is object[])
                 {
-                    // The same answer as the macOS helper's listApps.
+                    // The same answer as the macOS helper's listApps, plus each running app's
+                    // executable as Windows reports it for that pid. The driver lists a running
+                    // program without a Start menu entry with no bundle id at all, so without
+                    // its path GOAT's manifest could never admit it (#1368); a path grant is
+                    // matched against the executable the driver attests for the window.
+                    foreach (object entry in (object[])apps)
+                    {
+                        var app = entry as Dictionary<string, object>;
+                        object pid;
+                        if (app == null || app.ContainsKey("executable") || !app.TryGetValue("pid", out pid) || !(pid is int) || (int)pid <= 0) continue;
+                        string executable = ImagePath((int)pid);
+                        if (executable != null) app["executable"] = executable;
+                    }
                     var listed = new Dictionary<string, object>();
                     listed["apps"] = apps;
                     return listed;
                 }
                 throw new HelperException("list_failed", "Cua Driver could not list apps.");
             }
+        }
+
+        /// <summary>
+        /// The final path of a running process's image file, as the driver attests it: it
+        /// resolves links, junctions and short names (Rust's fs::canonicalize, which is
+        /// GetFinalPathNameByHandle on an opened file), so the helper does the same. Null when
+        /// Windows will not say or the file will not open; that app then stays out.
+        /// </summary>
+        static string ImagePath(int pid)
+        {
+            IntPtr process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return null;
+            string reported;
+            try
+            {
+                var name = new StringBuilder(1024);
+                int size = name.Capacity;
+                if (!NativeMethods.QueryFullProcessImageNameW(process, 0, name, ref size)) return null;
+                reported = name.ToString();
+            }
+            finally { NativeMethods.CloseHandle(process); }
+            using (SafeFileHandle file = NativeMethods.CreateFileW(reported, NativeMethods.FILE_READ_ATTRIBUTES,
+                NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | 4, IntPtr.Zero, NativeMethods.OPEN_EXISTING,
+                NativeMethods.FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero))
+            {
+                if (file.IsInvalid) return null;
+                try { return FinalPath(file); }
+                catch (HelperException) { return null; }
+            }
+        }
+
+        /// <summary>
+        /// Runs the pinned driver with the agent's own arguments ("mcp ..." or "revoke ...") in a
+        /// job that ends with this process, and passes its stdio through the capture guard
+        /// (McpRelay). Returns the driver's exit code.
+        /// </summary>
+        public int Relay(string[] arguments)
+        {
+            if (arguments.Length == 0 || (arguments[0] != "mcp" && arguments[0] != "revoke"))
+                throw new HelperException("bad_arguments", "The helper relays only Cua Driver's mcp and revoke commands.");
+            IntPtr relayJob = IntPtr.Zero;
+            IntPtr child = IntPtr.Zero;
+            try
+            {
+                lock (gate)
+                {
+                    RequireUsableSession();
+                    PinDriverFiles();
+                }
+                relayJob = CreateJob();
+                var security = Inheritable();
+                SafeFileHandle inRead, inWrite, outRead, outWrite;
+                if (!NativeMethods.CreatePipe(out inRead, out inWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
+                if (!NativeMethods.CreatePipe(out outRead, out outWrite, ref security, 0)) throw NativeMethods.LastError("CreatePipe");
+                NativeMethods.SetHandleInformation(inWrite, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+                NativeMethods.SetHandleInformation(outRead, NativeMethods.HANDLE_FLAG_INHERIT, 0);
+                int pid;
+                using (inRead)
+                using (outWrite)
+                    child = Launch(relayJob, new List<string>(arguments), DriverEnvironment(new Dictionary<string, object>()), inRead, outWrite, out pid);
+                var relay = new McpRelay(CaptureGuard.CaptureNative);
+                var toDriver = new FileStream(inWrite, FileAccess.Write);
+                Stream toAgent = Console.OpenStandardOutput();
+                var agentLock = new object();
+                var inbound = new Thread(delegate ()
+                {
+                    try
+                    {
+                        Pump(Console.OpenStandardInput(), delegate (string line)
+                        {
+                            string refusal;
+                            string forward = relay.Inbound(line, out refusal);
+                            if (forward != null) Write(toDriver, forward, null);
+                            else Write(toAgent, refusal, agentLock);
+                        });
+                    }
+                    finally { toDriver.Dispose(); }
+                });
+                inbound.IsBackground = true;
+                inbound.Start();
+                using (var fromDriver = new FileStream(outRead, FileAccess.Read))
+                    Pump(fromDriver, delegate (string line)
+                    {
+                        string forward = relay.Outbound(line);
+                        if (forward != null) Write(toAgent, forward, agentLock);
+                    });
+                uint code;
+                NativeMethods.WaitForSingleObject(child, 5000);
+                return NativeMethods.GetExitCodeProcess(child, out code) && code != 259 ? (int)code : 1;
+            }
+            finally
+            {
+                if (relayJob != IntPtr.Zero) { NativeMethods.TerminateJobObject(relayJob, 0); NativeMethods.CloseHandle(relayJob); }
+                if (child != IntPtr.Zero) NativeMethods.CloseHandle(child);
+                lock (gate) if (process == IntPtr.Zero) ReleasePins();
+            }
+        }
+
+        /// <summary>Hands each line to handle until the stream or a write closes.</summary>
+        static void Pump(Stream from, Action<string> handle)
+        {
+            try
+            {
+                var reader = new StreamReader(from, new UTF8Encoding(false));
+                string line;
+                while ((line = reader.ReadLine()) != null) handle(line);
+            }
+            catch (IOException) { }
+            catch (ObjectDisposedException) { }
+        }
+
+        static void Write(Stream to, string line, object gate)
+        {
+            byte[] bytes = new UTF8Encoding(false).GetBytes(line + "\n");
+            if (gate == null) { to.Write(bytes, 0, bytes.Length); to.Flush(); return; }
+            lock (gate) { to.Write(bytes, 0, bytes.Length); to.Flush(); }
         }
 
         static NativeMethods.SECURITY_ATTRIBUTES Inheritable()
@@ -544,3 +672,4 @@ namespace Goat.ComputerUse
         }
     }
 }
+

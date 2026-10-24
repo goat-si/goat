@@ -7,6 +7,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -15,6 +16,7 @@ import * as Option from "effect/Option";
 import * as ComputerUse from "./ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const mcp: CuaDriverMcpConfiguration = {
   command: "/driver/cua-driver",
@@ -58,6 +60,9 @@ const fakeLeases = (input: {
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
+    turnEnded: () => Effect.die("unused"),
+    settle: Effect.die("unused"),
+    disable: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
     detection: Effect.succeed(input.detection ?? { humanInput: true, privateMode: true }),
@@ -75,9 +80,16 @@ const interactiveControl = {
   expiresAt: DateTime.makeUnsafe("2026-10-21T13:00:00.000Z"),
 };
 
-const fakeDriver = (input: { readonly enabled: boolean; readonly running: boolean }) => {
+const fakeDriver = (input: {
+  readonly enabled: boolean;
+  readonly running: boolean;
+  readonly x11Display?: CuaDriver.CuaX11Display;
+}) => {
   const calls = { acquire: 0 };
   const service = CuaDriver.CuaDriver.of({
+    ...(input.x11Display === undefined
+      ? {}
+      : { x11Display: Effect.succeed(Option.some(input.x11Display)) }),
     enabled: Effect.succeed(input.enabled),
     acquire: Effect.sync(() => {
       calls.acquire++;
@@ -133,11 +145,61 @@ describe("computerUseAttachment", () => {
         proxy,
         // A cua-driver the person configured would skip Stop, pauses and app approvals.
         overrideUserConfig: true,
+        skills: ["computer-use"],
       });
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
       assert.deepEqual(leases.minted, [Option.none()]);
     }),
+  );
+
+  it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      const attached = yield* decide(driver, { leases: fakeLeases({}).leases }).pipe(
+        Effect.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            disabledBuiltInSkills: ["computer-use", "skill-from-a-newer-build"],
+          }),
+        ),
+      );
+      assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, []);
+      const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+      assert.isDefined(config.cuaDriver);
+      assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
+      const defaults = yield* decide(driver, { leases: fakeLeases({}).leases });
+      assert.isTrue(
+        McpProviderSession.carriesComputerUseSkill(
+          ComputerUse.withComputerUse(session, defaults, ROUTE),
+        ),
+      );
+    }),
+  );
+
+  it.effect.each([
+    { label: "interactive", origin: undefined, grant: undefined },
+    { label: "leased unattended", origin: unattended, grant: lease },
+  ])(
+    "loads the skill switched off in Settings on a $label turn that asked for @computer",
+    ({ origin, grant }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const skillsFor = (requested: ReadonlyArray<"computer-use" | "browser">) =>
+          decide(driver, {
+            leases: fakeLeases(grant === undefined ? {} : { grant }).leases,
+            requested,
+            ...(origin === undefined ? {} : { origin }),
+          }).pipe(
+            Effect.map((attached) => (attached._tag === "proxied" ? attached.skills : null)),
+            Effect.provide(
+              ServerSettings.ServerSettingsService.layerTest({
+                disabledBuiltInSkills: ["computer-use"],
+              }),
+            ),
+          );
+        assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use"]);
+        assert.deepEqual(yield* skillsFor(["browser"]), []);
+      }),
   );
 
   it.effect(
@@ -259,6 +321,7 @@ describe("computerUseAttachment", () => {
         },
         proxy,
         overrideUserConfig: true,
+        skills: ["computer-use"],
       });
       assert.deepEqual(leased.minted, [Option.some(lease)]);
       assert.deepEqual(
@@ -282,7 +345,14 @@ describe("computerUseAttachment", () => {
     assert.isFalse("cuaDriverBlocked" in detached);
     const attached = ComputerUse.withComputerUse(
       detached,
-      { _tag: "proxied", mcp, control: interactiveControl, proxy, overrideUserConfig: true },
+      {
+        _tag: "proxied",
+        mcp,
+        control: interactiveControl,
+        proxy,
+        overrideUserConfig: true,
+        skills: ["computer-use"],
+      },
       ROUTE,
     );
     assert.equal(attached.cuaDriver?.command, "/goat/node");
@@ -296,6 +366,22 @@ describe("computerUseAttachment", () => {
     assert.isTrue(blocked.cuaDriverBlocked);
   });
 
+  it.effect(
+    "tells the proxy the X display the driver was started on, so it can check every window",
+    () =>
+      Effect.gen(function* () {
+        const display = { DISPLAY: ":96", XAUTHORITY: "/run/user/1000/xauth" };
+        const driver = fakeDriver({ enabled: true, running: true, x11Display: display });
+        const attached = yield* decide(driver, { leases: fakeLeases({}).leases });
+        assert.deepInclude(attached, { _tag: "proxied", x11Display: display });
+        const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+        assert.deepInclude(config.cuaDriver?.environment ?? [], {
+          name: "GOAT_CUA_X11_DISPLAY",
+          value: JSON.stringify(display),
+        });
+      }),
+  );
+
   it("hands a turn the proxy with its control, credential and driver, never the raw driver", () => {
     const leased = ComputerUse.withComputerUse(
       session,
@@ -305,6 +391,7 @@ describe("computerUseAttachment", () => {
         control: { ...interactiveControl, controlId: "control:unattended" },
         proxy,
         overrideUserConfig: true,
+        skills: ["computer-use"],
       },
       ROUTE,
     );

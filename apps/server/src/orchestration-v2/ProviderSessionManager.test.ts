@@ -104,6 +104,7 @@ import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
+import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -5988,6 +5989,9 @@ it.effect(
           (yield* turn({ ...runtimePolicy, sandboxPolicy: "read-only" }))?.cuaDriver,
         );
         assert.equal(yield* Ref.get(acquires), 1);
+        // Settings switched the skill off, and a turn that asks for @computer still loads it.
+        yield* askComputer(manager, { threadId, providerSessionId, modelSelection, runtimePolicy });
+        assert.isTrue(carriesSkill(yield* mcpSessions.read(threadId)));
         // Disabled again: the next turn drops it.
         yield* Ref.set(enabled, false);
         assert.isUndefined((yield* turn(runtimePolicy))?.cuaDriver);

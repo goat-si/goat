@@ -387,6 +387,11 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   service is `unavailable`), a non-empty UI Automation tree and a non-blank Windows Graphics
   Capture frame. Elevated windows are out of reach of a non-elevated helper; they return
   `targetRefused` and the helper is never elevated to reach them.
+  Agents reach Cua Driver through the helper's MCP relay, because the driver copies the window's
+  rectangle off the screen when Windows Graphics Capture fails and does not say so. Checking for
+  covering windows around the call cannot see one that came and went during the copy, so no
+  driver pixel reaches the agent: the relay replaces window screenshots and zooms with its own
+  PrintWindow capture and withholds every other image (#1329).
 - **Linux.** X11 needs a reachable display, a session bus and an AT-SPI bus that answer (the
   existing probe). Background input on X11 also needs an Xorg server that accepts hotplugged
   devices and a writable `/dev/uinput`; without them readiness reports `partial`, and input falls
@@ -418,9 +423,13 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   designated requirement and the protocol version range the host supports, and it never installs
   over a generation that is running. Leases are drained or revoked and active sessions end
   through the normal Stop path with their cleanup report; the host then switches to the new
-  generation in one step, keeps the previous one for rollback, and rechecks all four readiness
-  answers before agents get the new helper; a failed check switches back. A GOAT update that
-  carries a newer seed goes through the same switch. TCC keys
+  generation in one step, keeps the previous one for rollback, and rechecks the grants. A
+  generation that lost a grant its predecessor holds is switched back, if the predecessor still
+  answers hello and carries a byte-identical driver, and is not retried until GOAT carries
+  another one. The other readiness answers come from the host's normal check before
+  agents get the helper. A GOAT update that carries a newer seed goes through the same switch
+  (`apps/desktop/src/cua/ComputerUseHelperInstall.ts`). Ad-hoc and development helpers run in
+  place, because an ad-hoc signature has no team a copy could be checked against. TCC keys
   grants to the designated requirement, not the path, so grants should survive a switch; that,
   and a revoked grant being noticed, are negative qualification cases (#1162).
 - The Windows helper is signed through the existing Windows signing path and staged beside the

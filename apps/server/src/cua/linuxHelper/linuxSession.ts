@@ -128,32 +128,37 @@ export const readGnomeShellVersion = (environment: NodeJS.ProcessEnv): string | 
   }
 };
 
-/** Methods this helper does not serve yet: the safety-signal watch (#1235). */
-const NOT_YET: ReadonlySet<string> = new Set(["watch", "unwatch"]);
-
-export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilities {
+export function linuxCapabilities(
+  session: LinuxSession,
+  /** Whether the helper can see a person's own input devices on this desktop. */
+  personInput: boolean,
+): ComputerUseCapabilities {
+  const usable = session.unavailable === undefined && session.unsupported === undefined;
   return {
     protocol: COMPUTER_USE_PROTOCOL_VERSION,
     platform: "linux",
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
-        NOT_YET.has(method) ||
-        (session.unsupported !== undefined && method !== "capabilities" && method !== "permissions")
+        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
           ? "unsupported"
           : "supported",
       ]),
     ) as ComputerUseCapabilities["methods"],
-    backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
-    // No watch yet, so neither signal; the server refuses unattended use until both are here.
-    signals: { privateMode: "unsupported", humanInput: "unsupported" },
+    backgroundDelivery: usable,
+    signals: {
+      // AT-SPI focus, read the same way observation reads it.
+      privateMode: usable ? "supported" : "unsupported",
+      humanInput: usable && personInput ? "supported" : "unsupported",
+    },
   };
 }
 
 /**
  * Readiness as the contract's separate steps (D10). Linux has no OS grant for AT-SPI or for X11
- * capture, so those read as granted; whether they work is the tree and capture steps, proven by
- * a real read. Wayland screen capture needs the desktop's consent, pending until a capture
+ * capture. AT-SPI reads as granted only once a real read of a window's app answered (#1392);
+ * until then it is unknown, never granted on faith. X11 capture reads as granted, and whether it
+ * works is the capture step, proven by a real read. Wayland screen capture needs the desktop's consent, pending until a capture
  * proves it. The helper answers only after its hello, so it is always authenticated here.
  */
 export interface ReadinessFacts {
@@ -167,6 +172,8 @@ export interface ReadinessFacts {
   /** A real AT-SPI read of the captured window's app: windows found, none, or no answer. */
   readonly tree: "ready" | "empty" | "unavailable";
   readonly uinputWritable: boolean;
+  /** Why a window capture here would not be the window's own pixels (#1328). */
+  readonly captureRefused: string | undefined;
 }
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
@@ -192,26 +199,31 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const tree = facts.driver.atspi ? facts.tree : "unavailable";
   if (tree === "unavailable")
     reasons.push(
-      "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
+      facts.driver.atspi && facts.capture === "noWindow"
+        ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
+        : "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
     );
   if (tree === "empty") reasons.push("The app that was checked shows no windows to AT-SPI.");
   const capture =
-    facts.capture === "varied"
-      ? "ready"
-      : facts.capture === "uniform"
-        ? "blank"
-        : facts.capture === "noWindow"
-          ? "noWindow"
-          : wayland
-            ? "pending"
-            : "unavailable";
+    facts.captureRefused !== undefined
+      ? "unavailable"
+      : facts.capture === "varied"
+        ? "ready"
+        : facts.capture === "uniform"
+          ? "blank"
+          : facts.capture === "noWindow"
+            ? "noWindow"
+            : wayland
+              ? "pending"
+              : "unavailable";
   if (capture === "blank") reasons.push("A window capture came back as one solid color.");
   if (capture === "noWindow") reasons.push("No window is open to prove capture with.");
   if (capture === "pending")
     reasons.push(
       "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
     );
-  if (capture === "unavailable") reasons.push("The driver could not capture a window.");
+  if (capture === "unavailable")
+    reasons.push(facts.captureRefused ?? "The driver could not capture a window.");
   const input = wayland ? "foregroundOnly" : facts.uinputWritable ? "background" : "foregroundOnly";
   if (input === "foregroundOnly")
     reasons.push(
@@ -221,8 +233,15 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     );
   return {
     grants: {
-      accessibility: "granted",
-      screenCapture: wayland ? (capture === "ready" ? "granted" : "pending") : "granted",
+      accessibility: tree === "unavailable" ? "unknown" : "granted",
+      // No consent can make a cropped capture one window's own, so nothing is pending on it.
+      screenCapture: !wayland
+        ? "granted"
+        : capture === "ready"
+          ? "granted"
+          : facts.captureRefused !== undefined
+            ? "unknown"
+            : "pending",
     },
     helper: "authenticated",
     capture,

@@ -1,360 +1,34 @@
-// @effect-diagnostics nodeBuiltinImport:off -- The helper's channel is a Node stream; the test feeds it one.
-import * as NodeCrypto from "node:crypto";
-import * as NodeStream from "node:stream";
-import * as NodeZlib from "node:zlib";
-
 import {
   COMPUTER_USE_METHODS,
   COMPUTER_USE_PROTOCOL_VERSION,
-  ComputerUseActionResult,
-  ComputerUseHelloReply,
-  ComputerUseObservation,
-  ComputerUseReadiness,
   computerUseReady,
-  type ComputerUseActionRequest,
 } from "@goat/contracts";
-import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { SecureFocus } from "./atspiFocus.ts";
-import type { DriverClient, DriverToolResult } from "./CuaDriverMcp.ts";
-import { serveHelperChannel } from "./helperChannel.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import {
+  connect,
+  decodeHello,
+  decodeReadiness,
+  fixtureDriver,
+  isActionResult,
+  NOT_SECURE,
+  png,
+  SHOT,
+  X11,
+} from "./LinuxComputerUseHelper.testkit.ts";
+import { makeSignalMonitor } from "./linuxSignals.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
+  linuxReadiness,
   linuxSessionFacts,
   pngColors,
-  type LinuxSessionFacts,
+  type ReadinessFacts,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
-
-const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
-const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
-const decodeHello = Schema.decodeUnknownSync(ComputerUseHelloReply);
-const decodeReadiness = Schema.decodeUnknownSync(ComputerUseReadiness);
-const isActionResult = Schema.is(ComputerUseActionResult);
-
-const X11: LinuxSessionFacts = {
-  display: ":91",
-  waylandDisplay: undefined,
-  sessionBus: "unix:path=/run/user/1000/bus",
-  currentDesktop: "GNOME",
-  gnomeShellMajor: 46,
-};
-const SHOT = png(42, 32, true).toString("base64");
-const NOT_SECURE: SecureFocus = { known: true, secure: false, windows: 1 };
-
-/** A PNG of width x height: solid, striped, or noise that does not compress. */
-function png(width: number, height: number, fill: boolean | "noise") {
-  const raw = Buffer.alloc((width * 3 + 1) * height);
-  // Noise from a CSPRNG does not compress, so the PNG is about as large as its pixels.
-  const noise = fill === "noise" ? NodeCrypto.randomBytes(raw.length) : undefined;
-  for (let row = 0; row < height; row++)
-    for (let x = 0; x < width * 3; x++)
-      raw[row * (width * 3 + 1) + 1 + x] = noise
-        ? (noise[row * width * 3 + x] ?? 0)
-        : fill && x % 6 === 0
-          ? 255
-          : 10;
-  const chunk = (type: string, body: Buffer) => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(body.length);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(NodeZlib.crc32(Buffer.concat([Buffer.from(type), body])));
-    return Buffer.concat([length, Buffer.from(type), body, crc]);
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 2;
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk("IHDR", header),
-    chunk("IDAT", NodeZlib.deflateSync(raw)),
-    chunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-/**
- * The GOAT fixture window (fixtures/goat-cu-fixture.py) as Cua Driver 0.37.0 answers for it on
- * X11 under Xvfb: AT-SPI clicks and value writes land, keys need a uinput device it lacks.
- */
-function fixtureDriver() {
-  const state = {
-    count: 0,
-    name: "",
-    snapshot: 0,
-    onScreen: true,
-    sent: [] as string[],
-    // The driver says 420x320; the bytes are what the agent sees.
-    imageData: SHOT,
-    setValueEffect: "confirmed",
-    loseNext: false,
-    calls: [] as Array<{ tool: string; args: Readonly<Record<string, unknown>> }>,
-    /** Answers the next input call instead of the fixture's own behavior. */
-    nextAnswer: undefined as DriverToolResult | undefined,
-    readinessImage: png(8, 4, true).toString("base64"),
-  };
-  const exit = Promise.withResolvers<void>();
-  const ok = (structured: unknown, text = "", images: DriverToolResult["images"] = []) =>
-    ({ isError: false, text, structured, images }) satisfies DriverToolResult;
-  const refused = (code: string, text: string) =>
-    ({ isError: true, text, structured: { code }, images: [] }) satisfies DriverToolResult;
-  const tokenCurrent = (token: unknown) =>
-    typeof token === "string" && token.startsWith("s" + state.snapshot + ":");
-  const call: DriverClient["call"] = async (tool, args) => {
-    if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
-    if (tool === "list_windows")
-      return ok({
-        windows: [
-          {
-            pid: 10,
-            window_id: 20,
-            title: "GOAT CU Fixture",
-            app_name: "fixture.py",
-            is_on_screen: state.onScreen,
-          },
-        ],
-      });
-    if (tool === "get_window_state") {
-      if (args.include_accessibility_tree === false)
-        return ok({}, "", [{ mimeType: "image/png", data: state.readinessImage }]);
-      state.snapshot++;
-      const token = (index: number) => "s" + state.snapshot + ":" + index;
-      const shot = args.include_screenshot !== false;
-      const elements = [
-        {
-          element_index: 0,
-          element_token: token(0),
-          role: "text",
-          label: "Count",
-          value: String(state.count),
-          actions: ["activate"],
-        },
-        {
-          element_index: 1,
-          element_token: token(1),
-          role: "push button",
-          label: "Increment",
-          actions: ["click"],
-          screenshot_frame: { x: 12, y: 54, w: 396, h: 34 },
-        },
-        {
-          element_index: 2,
-          element_token: token(2),
-          role: "text",
-          label: "Name",
-          value: state.name,
-          actions: ["activate"],
-        },
-        {
-          element_index: 3,
-          element_token: token(3),
-          role: "password text",
-          label: "Password",
-          value: "hunter2",
-          actions: ["activate"],
-        },
-      ].filter((element) => typeof args.query !== "string" || element.label.includes(args.query));
-      return ok(
-        {
-          pid: 10,
-          window_id: 20,
-          window_bounds: { width: 420, height: 320 },
-          ...(shot
-            ? { screenshot_width: 420, screenshot_height: 320, screenshot_mime_type: "image/png" }
-            : {}),
-          elements,
-        },
-        "",
-        shot ? [{ mimeType: "image/png", data: state.imageData }] : [],
-      );
-    }
-    state.sent.push(tool);
-    state.calls.push({ tool, args });
-    if (state.loseNext) return "lost";
-    if (state.nextAnswer) {
-      const answer = state.nextAnswer;
-      state.nextAnswer = undefined;
-      return answer;
-    }
-    if (tool === "click") {
-      if (args.element_token === undefined)
-        return refused("background_unavailable", "Background delivery is not available.");
-      if (!tokenCurrent(args.element_token))
-        return refused("stale_element_token", "element_token is stale");
-      if (args.element_token === "s" + state.snapshot + ":1") state.count++;
-      return ok({ effect: "unverifiable", route: "accessibility" }, "Clicked element.");
-    }
-    if (tool === "set_value") {
-      state.name = String(args.value);
-      return ok({ effect: state.setValueEffect }, "Set value.");
-    }
-    if (tool === "press_key" || tool === "hotkey" || tool === "type_text")
-      return refused(
-        "background_unavailable",
-        "Background keyboard delivery on X11 needs a uinput device.",
-      );
-    return refused("invalid_arguments", "unknown tool " + tool);
-  };
-  const client: DriverClient = {
-    pid: 4242,
-    version: "0.37.0",
-    exited: exit.promise,
-    close: async () => undefined,
-    call,
-  };
-  return { state, client, exit: () => exit.resolve() };
-}
-
-/** An action as the agent writes it; the helper test fills in the target and observation. */
-type ActionInput = ComputerUseActionRequest extends infer Request
-  ? Request extends ComputerUseActionRequest
-    ? Omit<Request, "target" | "observationId" | "delivery"> & {
-        readonly delivery?: ComputerUseActionRequest["delivery"];
-      }
-    : never
-  : never;
-
-type Reply = { result: Record<string, unknown>; image?: { mimeType: string; data: string } };
-
-/** One helper behind its real channel, and a client that speaks the protocol to it. */
-async function connect(
-  options: {
-    readonly session?: LinuxSessionFacts;
-    readonly focus?: SecureFocus;
-    readonly clientApiVersion?: number;
-    readonly maxFrameBytes?: number;
-    readonly helloPadding?: number;
-  } = {},
-) {
-  const session = detectLinuxSession(options.session ?? X11);
-  const driver = fixtureDriver();
-  const focus = { current: options.focus ?? NOT_SECURE };
-  const clock = { now: 0 };
-  // Armed, the next focus check waits until released, so a test can act while a request is
-  // held inside the helper.
-  const gate = {
-    armed: false,
-    entered: Promise.withResolvers<void>(),
-    release: Promise.withResolvers<void>(),
-  };
-  let starts = 0;
-  let id = 0;
-  const helper = makeLinuxHelper({
-    session,
-    screen: ":91",
-    startDriver: async () => {
-      starts++;
-      return driver.client;
-    },
-    secureFocus: async () => {
-      if (gate.armed) {
-        gate.armed = false;
-        gate.entered.resolve();
-        await gate.release.promise;
-      }
-      return focus.current;
-    },
-    uinputWritable: async () => false,
-    settle: async () => undefined,
-    newId: () => "o" + ++id,
-    now: () => clock.now,
-  });
-  const input = new NodeStream.PassThrough();
-  const ended = new Promise<void>((resolve) => input.once("end", () => resolve()));
-  const replies = new Map<string, Reply>();
-  const sizes: number[] = [];
-  const lines: Array<Record<string, unknown>> = [];
-  let wake: () => void = () => undefined;
-  const served = serveHelperChannel({
-    input,
-    write: (line) => {
-      sizes.push(Buffer.byteLength(line));
-      const value = JSON.parse(line) as Record<string, unknown>;
-      if (typeof value.id === "string") replies.set(value.id, value as Reply);
-      else lines.push(value);
-      wake();
-    },
-    binding: { executable: "/opt/goat/goat-computer-use", pid: 77, generation: "g1" },
-    capabilities: linuxCapabilities(session),
-    maxFrameBytes: options.maxFrameBytes ?? 1024 * 1024,
-    helper,
-  });
-  const until = async <T>(read: () => T | undefined): Promise<T> => {
-    for (;;) {
-      const value = read();
-      if (value !== undefined) return value;
-      await new Promise<void>((resolve) => (wake = resolve));
-    }
-  };
-  input.write(
-    JSON.stringify({
-      clientApiVersion: options.clientApiVersion ?? COMPUTER_USE_PROTOCOL_VERSION,
-      ...(options.helloPadding ? { padding: "x".repeat(options.helloPadding) } : {}),
-    }) + "\n",
-  );
-  const hello = await until(() => lines.shift());
-  let serial = 0;
-  const send = (method: string, params: unknown = {}, generation = "g1", deadlineMs = 5_000) => {
-    const frameId = String(++serial);
-    input.write(JSON.stringify({ id: frameId, generation, method, deadlineMs, params }) + "\n");
-    return frameId;
-  };
-  const answer = (frameId: string) => until(() => replies.get(frameId));
-  const request = (method: string, params: unknown = {}, generation = "g1") =>
-    answer(send(method, params, generation));
-  const observe = async (extra: Record<string, unknown> = {}) => {
-    const reply = await request("observe", {
-      target: { pid: 10, windowId: 20 },
-      screenshot: true,
-      ...extra,
-    });
-    return { ...reply, observation: decodeObservation(reply.result) };
-  };
-  const actionParams = (action: ActionInput, from: ComputerUseObservation) => ({
-    delivery: "background",
-    ...action,
-    target: from.target,
-    observationId: from.observationId,
-  });
-  const act = async (action: ActionInput, from: ComputerUseObservation) =>
-    decodeResult((await request(action.action, actionParams(action, from))).result);
-  const ref = (observation: ComputerUseObservation, label: string) => {
-    const elements =
-      observation.kind === "full"
-        ? observation.elements
-        : [...observation.added, ...observation.changed];
-    const found = elements.find((element) => element.label === label);
-    if (!found) throw new Error("no element " + label);
-    return found.ref;
-  };
-  return {
-    hello,
-    send,
-    answer,
-    request,
-    observe,
-    act,
-    actionParams,
-    ref,
-    driver,
-    focus,
-    clock,
-    gate,
-    starts: () => starts,
-    sizes,
-    input,
-    /** Ends stdin and waits until the channel has seen it, as a launcher closing the pipe. */
-    end: () => {
-      input.end();
-      return ended;
-    },
-    close: async () => (input.end(), served),
-  };
-}
+import { CROPPED_CAPTURE } from "./windowCapture.ts";
+import { UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -377,6 +51,7 @@ describe("Linux session facts", () => {
         session: detectLinuxSession(facts),
         uinputWritable: async () => true,
         secureFocus: async () => NOT_SECURE,
+        capture: { route: "driver" },
         call: async (tool) => {
           calls.push(tool);
           return "unexpected";
@@ -395,6 +70,35 @@ describe("Linux session facts", () => {
   });
 });
 
+describe("Linux readiness grants (#1392)", () => {
+  const session = detectLinuxSession(
+    linuxSessionFacts({ DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/bus" }, () => ""),
+  );
+  const facts = (overrides: Partial<ReadinessFacts>): ReadinessFacts => ({
+    session,
+    driver: { x11: true, wayland: false, atspi: true },
+    capture: "varied",
+    tree: "ready",
+    uinputWritable: false,
+    captureRefused: undefined,
+    ...overrides,
+  });
+
+  it("AT-SPI is granted only after a real read answered, never while it does not answer", () => {
+    const silent = linuxReadiness(
+      facts({ driver: { x11: true, wayland: false, atspi: false }, tree: "unavailable" }),
+    );
+    expect(silent.grants.accessibility).toBe("unknown");
+    expect(silent.reasons.join(" ")).toMatch(/AT-SPI does not answer/);
+    // AT-SPI is up, but no window has been read through it yet.
+    const unread = linuxReadiness(facts({ capture: "noWindow", tree: "unavailable" }));
+    expect(unread.grants.accessibility).toBe("unknown");
+    expect(unread.reasons.join(" ")).toMatch(/No window is open to read app controls/);
+    expect(linuxReadiness(facts({})).grants.accessibility).toBe("granted");
+    expect(linuxReadiness(facts({ tree: "empty" })).grants.accessibility).toBe("granted");
+  });
+});
+
 describe("Linux computer use helper conformance", () => {
   it("hello binds the helper and names every protocol method as supported or unsupported", async () => {
     const helper = await connect();
@@ -408,27 +112,13 @@ describe("Linux computer use helper conformance", () => {
     expect(Object.keys(hello.capabilities.methods).toSorted()).toEqual(
       [...COMPUTER_USE_METHODS].toSorted(),
     );
-    expect(hello.capabilities).toMatchObject({ platform: "linux", backgroundDelivery: true });
-    await helper.close();
-  });
-
-  it("says it raises no safety signals yet, and refuses watch as typed unsupported", async () => {
-    const helper = await connect();
-    expect(helper.hello).toMatchObject({
-      capabilities: {
-        signals: { privateMode: "unsupported", humanInput: "unsupported" },
-        methods: { watch: "unsupported", unwatch: "unsupported" },
-      },
-    });
-    const reply = await helper.request("watch", {
-      watchId: "w1",
-      targets: [{ pid: 10, windowId: 20 }],
-    });
-    expect(reply.result).toMatchObject({
-      outcome: "refused",
-      reason: "unsupported",
-      method: "watch",
+    // watch and unwatch are served, and the signals they arm are named (#1235); the stopgap
+    // that marked them unsupported (#1294) is replaced by the real implementation.
+    expect(hello.capabilities).toMatchObject({
       platform: "linux",
+      backgroundDelivery: true,
+      methods: { watch: "supported", unwatch: "supported" },
+      signals: { privateMode: "supported", humanInput: "supported" },
     });
     await helper.close();
   });
@@ -762,6 +452,19 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("readiness does not let one window without accessibility or covered from view speak for the desktop", async () => {
+    const helper = await connect();
+    // Listed first: an app that never joined AT-SPI, whose covered window captures blank.
+    helper.driver.state.otherWindows = [
+      { pid: 30, window_id: 40, title: "Other", is_on_screen: true },
+    ];
+    helper.focusByPid.set(30, { known: false, secure: false, windows: 0 });
+    helper.driver.state.readinessImages.set(30, png(8, 4, false).toString("base64"));
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({ capture: "ready", tree: "ready" });
+    await helper.close();
+  });
+
   it("a capture whose bytes cannot be read does not prove capture", async () => {
     const helper = await connect();
     helper.driver.state.readinessImage = "UE5H";
@@ -842,6 +545,80 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("on X11 the screenshot is the window's own capture, at the size the driver's points are in", async () => {
+    const shots: DriverShot[] = [];
+    const helper = await connect({
+      capture: {
+        route: "own",
+        capture: async (_windowId, shot) => {
+          shots.push(shot);
+          return {
+            png: png(shot.width, shot.height, false),
+            width: shot.width,
+            height: shot.height,
+          };
+        },
+      },
+    });
+    const first = await helper.observe();
+    // The driver still took its screenshot, so its pointer scale is current; its image is not sent.
+    expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(true);
+    expect(shots).toEqual([{ width: 420, height: 320, windowWidth: 420, windowHeight: 320 }]);
+    expect(first.image?.data).not.toBe(SHOT);
+    expect(first.image?.data).toBe(png(420, 320, false).toString("base64"));
+    expect(first.observation.screenshot).toEqual({
+      mimeType: "image/png",
+      width: 420,
+      height: 320,
+    });
+    const increment =
+      first.observation.kind === "full"
+        ? first.observation.elements.find((element) => element.label === "Increment")
+        : undefined;
+    expect(increment?.frame).toEqual({ x: 12, y: 54, width: 396, height: 34 });
+    await helper.close();
+  });
+
+  it("a window whose own pixels cannot be proven gets no screenshot: observe and readiness say why", async () => {
+    const helper = await connect({
+      capture: { route: "own", capture: async () => ({ refused: UNREDIRECTED_CAPTURE }) },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
+    expect(shot.image).toBeUndefined();
+    const controls = await helper.observe({ screenshot: false });
+    expect(controls.observation.kind).toBe("full");
+    expect(controls.image).toBeUndefined();
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({ capture: "unavailable", tree: "ready" });
+    expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
+    expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("where the driver would crop the whole screen, nothing is captured and readiness says why", async () => {
+    const helper = await connect({
+      session: { ...X11, display: undefined, waylandDisplay: "wayland-0", gnomeShellMajor: 46 },
+      capture: { route: "refused", reason: CROPPED_CAPTURE },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
+    expect(helper.driver.state.reads).toEqual([]);
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({
+      grants: { screenCapture: "unknown" },
+      capture: "unavailable",
+    });
+    expect(readiness.reasons).toContain(CROPPED_CAPTURE);
+    await helper.close();
+  });
+
   it("readiness proves the tree and a non-blank capture, and says input is foreground only without uinput", async () => {
     const helper = await connect();
     const readiness = decodeReadiness((await helper.request("permissions", {})).result);
@@ -882,10 +659,23 @@ describe("makeLinuxHelper shutdown", () => {
       screen: ":91",
       startDriver: async () => ({ ...client, close: () => closing.promise }),
       secureFocus: async () => NOT_SECURE,
+      capture: { route: "driver" },
       uinputWritable: async () => false,
       settle: async () => undefined,
       newId: () => "o",
       now: () => 0,
+      signals: makeSignalMonitor({
+        secureFocus: async () => NOT_SECURE,
+        windowOpen: async () => undefined,
+        input: undefined,
+        inputLost: () => undefined,
+        delay: () => new Promise<void>(() => undefined),
+        now: () => 0,
+        every: () => () => undefined,
+        afterReply: () => undefined,
+        emit: () => undefined,
+      }),
+      capabilities: linuxCapabilities(detectLinuxSession(X11), false),
     });
     await helper.handle("listWindows", {}, 1_000);
     let done = 0;

@@ -24,6 +24,7 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
+  type ComputerUseOverlayCommand,
   type ComputerUseControlEnd,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
@@ -42,10 +43,21 @@ import * as Stream from "effect/Stream";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
+import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
+import {
+  initialOverlayState,
+  type OverlayEvent,
+  overlayStep,
+  replyImageSize,
+} from "./ComputerUseOverlay.ts";
+import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
-export type LeaseEnd = ComputerUseControlEnd | "lost";
+export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wrong_display";
 
 const REQUEST = goatCallText("computer_use.request");
+
+const DESKTOP_CAPTURE_OFF =
+  "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -57,6 +69,11 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   stopped: "A person pressed Stop on this thread. Do not continue on the screen in this turn.",
   stopped_all: "A person stopped computer use for every thread on this host.",
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
+  helper_restarted:
+    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
+  // The driver answered about another display than the one GOAT gave it (#1358).
+  wrong_display:
+    "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",
 };
 
 export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
@@ -83,6 +100,11 @@ export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
   readonly lines: Stream.Stream<string>;
   readonly kill: Effect.Effect<void>;
+  /**
+   * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
+   * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
+   */
+  readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
 }
 
 export interface LeaseProxyOptions<EU, ED> {
@@ -97,7 +119,77 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+  /**
+   * Where the windows the driver names are, against the X display GOAT gave it (#1358); absent
+   * where there is no X display to check. Anything but "same" refuses.
+   */
+  readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
 }
+
+const WRONG_DISPLAY =
+  "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
+const UNCONFIRMED_DISPLAY =
+  "GOAT could not confirm that computer use is on the screen GOAT gave it, so this did not run. Call list_windows, then try again.";
+
+/**
+ * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
+ * other tool waits for that proof (#1358).
+ */
+const PROOF_FREE: ReadonlySet<string> = new Set([
+  "check_permissions",
+  "get_guide",
+  "list_apps",
+  "list_windows",
+  "get_screen_size",
+  "get_cursor_position",
+  "start_session",
+  "get_session",
+  "list_sessions",
+  "get_agent_cursor_state",
+]);
+
+const MAX_NAMED_NODES = 4_096;
+
+/**
+ * Every window a driver reply or request names, wherever it sits (a list, a nested target, a
+ * popup). A window_id without its own pid belongs to the nearest enclosing pid. Undefined when
+ * the value is too large to read whole, or names a window with no pid at all.
+ */
+const namedWindows = (value: unknown): ReadonlyArray<NamedWindow> | undefined => {
+  const found: Array<NamedWindow> = [];
+  let nodes = 0;
+  let complete = true;
+  const visit = (entry: unknown, owner: number | undefined, depth: number) => {
+    if (typeof entry !== "object" || entry === null) return;
+    if (++nodes > MAX_NAMED_NODES || depth > 16) {
+      complete = false;
+      return;
+    }
+    if (Array.isArray(entry)) {
+      for (const item of entry) visit(item, owner, depth + 1);
+      return;
+    }
+    const record = entry as { pid?: unknown; window_id?: unknown; bounds?: unknown };
+    const pid = typeof record.pid === "number" ? record.pid : owner;
+    if (typeof record.window_id === "number") {
+      if (pid === undefined) complete = false;
+      else {
+        const bounds = record.bounds as Record<string, unknown> | undefined;
+        const box =
+          typeof bounds?.x === "number" &&
+          typeof bounds.y === "number" &&
+          typeof bounds.width === "number" &&
+          typeof bounds.height === "number"
+            ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
+            : undefined;
+        found.push({ pid, windowId: record.window_id, ...(box ? { bounds: box } : {}) });
+      }
+    }
+    for (const child of Object.values(record)) visit(child, pid, depth + 1);
+  };
+  visit(value, undefined, 0);
+  return complete ? found : undefined;
+};
 
 type JsonRpcId = string | number;
 interface Envelope {
@@ -107,7 +199,10 @@ interface Envelope {
     readonly name?: unknown;
     readonly arguments?: { readonly session?: unknown };
   };
-  readonly result?: { readonly structuredContent?: { readonly session?: unknown } };
+  readonly result?: {
+    readonly structuredContent?: { readonly session?: unknown };
+    readonly isError?: unknown;
+  };
   readonly error?: unknown;
 }
 
@@ -169,16 +264,65 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
-  const outstanding = new Map<string, { readonly id: JsonRpcId; readonly method: string }>();
-  const ownAnswers = new Map<string, Deferred.Deferred<void>>();
+  const outstanding = new Map<
+    string,
+    {
+      readonly id: JsonRpcId;
+      readonly method: string;
+      readonly tool?: string;
+      readonly unfiltered?: boolean;
+    }
+  >();
+  /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
+  let proven: Running | undefined;
+  /**
+   * Where a reply's windows are. "proof" is a reply that shows the driver is on GOAT's screen:
+   * windows it names are all there, or an unfiltered list_windows saw none (a filtered one that
+   * finds nothing says nothing about the screen).
+   */
+  const checkReply = Effect.fnUntraced(function* (
+    message: Envelope,
+    tool: string | undefined,
+    unfiltered: boolean,
+  ) {
+    if (options.placement === undefined || message.result?.isError === true) return "same";
+    const content = message.result?.structuredContent;
+    const windows = namedWindows(content);
+    if (windows === undefined) return "unknown";
+    const placement = yield* options.placement(windows);
+    if (placement !== "same") return placement;
+    const listed =
+      tool === "list_windows" &&
+      unfiltered &&
+      Array.isArray((content as { windows?: unknown })?.windows);
+    return windows.length > 0 || listed ? "proof" : "same";
+  });
+  const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
+  let overlay = initialOverlayState;
+
+  /** Updates what the overlay shows and waits until the helper has drawn it. */
+  const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
+    const [next, commands] = overlayStep(overlay, event);
+    overlay = next;
+    const sink = running?.driver.overlay;
+    if (sink === undefined) return;
+    for (const command of commands) yield* sink(command);
+  });
+
+  /** Why the last child was cut off, for a call that was waiting when it happened. */
+  let lastInterruption: { readonly reason: ComputerUseRefusalDetail; readonly message: string } = {
+    reason: "helper_restarted",
+    message: LEASE_END_MESSAGES.helper_restarted,
+  };
 
   /** Cancels and answers every outstanding call, then kills the child. */
   const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (
     reason: ComputerUseRefusalDetail,
     message: string,
   ) {
+    lastInterruption = { reason, message };
     const current = running;
     running = undefined;
     const pending = [...outstanding.values()];
@@ -197,6 +341,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* Scope.close(current.scope, Exit.void);
     }
     for (const waiter of ownAnswers.values()) yield* Deferred.succeed(waiter, undefined);
+    proven = undefined;
     ownAnswers.clear();
     for (const request of pending)
       yield* options.output(refusal(request.id, request.method, reason, message));
@@ -206,6 +351,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (finished !== undefined) return;
     finished = reason;
     yield* Deferred.succeed(ended, reason);
+    yield* drawOverlay({ type: "end" });
     yield* interrupt(reason, LEASE_END_MESSAGES[reason]);
     // Best effort and deny-only; a slow or stuck revoke cannot hold anything up.
     if (sessions.size > 0)
@@ -223,20 +369,71 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (typeof message.id === "string" && message.id.startsWith(OWN_ID)) {
               const waiter = ownAnswers.get(message.id);
               ownAnswers.delete(message.id);
-              if (waiter !== undefined) yield* Deferred.succeed(waiter, undefined);
+              if (waiter !== undefined) yield* Deferred.succeed(waiter, message);
               return;
             }
-            const request = outstanding.get(JSON.stringify(message.id));
-            outstanding.delete(JSON.stringify(message.id));
+            const key = JSON.stringify(message.id);
+            const request = outstanding.get(key);
+            // A reply to a request the provider cancelled, or never made, is stale.
+            if (request === undefined) return;
             const session = message.result?.structuredContent?.session;
-            if (request?.method === "tools/call" && typeof session === "string")
+            if (request.method === "tools/call" && typeof session === "string")
               sessions.add(session);
+            if (request.method === "tools/call") {
+              const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
+              // Stopped, paused or cancelled while it was checked: that already answered it.
+              if (finished !== undefined || running !== current || !outstanding.has(key)) return;
+              // Every answered call updates the overlay; a display refusal counts as failed. It is
+              // drawn while the call is still outstanding, so a stop or pause that lands during
+              // the draw answers the call itself, and the check below drops this reply. A pause
+              // still hiding the overlay has not answered it yet, but will.
+              const failed =
+                message.error !== undefined ||
+                message.result?.isError === true ||
+                verdict === "other" ||
+                verdict === "unknown";
+              const image = failed ? undefined : replyImageSize(message.result);
+              yield* drawOverlay({
+                type: "reply",
+                id: key,
+                ...(image ? { image } : {}),
+                ...(failed ? { failed: true } : {}),
+              });
+              if (
+                finished !== undefined ||
+                paused !== undefined ||
+                running !== current ||
+                !outstanding.has(key)
+              )
+                return;
+              outstanding.delete(key);
+              if (verdict === "other") {
+                yield* options.output(
+                  refusal(
+                    request.id,
+                    request.method,
+                    "wrong_display",
+                    LEASE_END_MESSAGES.wrong_display,
+                  ),
+                );
+                return yield* end("wrong_display");
+              }
+              if (verdict === "unknown")
+                return yield* options.output(
+                  refusal(request.id, request.method, "wrong_display", UNCONFIRMED_DISPLAY),
+                );
+              if (verdict === "proof") proven = current;
+            } else outstanding.delete(key);
           }
-          yield* options.output(line);
+          yield* options.output(admitDriverReplyScreenshots(line));
         }),
       ),
-      // A driver that exits on its own cannot be trusted with the rest of the control.
-      Effect.andThen(Effect.suspend(() => (running === current ? end("lost") : Effect.void))),
+      // A driver that exits on its own cannot be trusted with the rest of the control. A helper
+      // restart also invalidates its route; either way this proxy stays ended (#1348), and the
+      // agent hears why instead of an approval failure (#1233).
+      Effect.andThen(
+        Effect.suspend(() => (running === current ? end("helper_restarted") : Effect.void)),
+      ),
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
@@ -244,6 +441,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
     const current: Running = { driver, scope: child };
     running = current;
+    // A new helper draws nothing yet.
+    overlay = initialOverlayState;
     // A fresh child after a pause hears the provider's handshake again; its answers are dropped.
     for (const line of handshake) {
       const message = parse(line);
@@ -263,8 +462,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     reason: ComputerUsePauseReason,
   ) {
     if (finished !== undefined) return;
-    if (paused === undefined) yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
+    const wasPaused = paused !== undefined;
+    // Recorded first: a call that was drawing while this pause stopped its driver refuses
+    // with this reason.
     paused = reason;
+    if (!wasPaused) {
+      yield* drawOverlay({ type: "pause", reason });
+      yield* interrupt(pausedDetail(reason), PAUSE_MESSAGES[reason]);
+    }
     // A proxy told it is paused before it was ever active refuses its waiting calls now.
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
@@ -340,7 +545,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const listApps = Effect.fn("ComputerUseLeaseProxy.listApps")(function* () {
     if (running === undefined) return;
     const id = `${OWN_ID}apps:${ownRequests++}`;
-    const answered = yield* Deferred.make<void>();
+    const answered = yield* Deferred.make<Envelope | undefined>();
     ownAnswers.set(id, answered);
     yield* running.driver.send(
       JSON.stringify({
@@ -351,6 +556,32 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }),
     );
     yield* Effect.raceFirst(Deferred.await(answered), Deferred.await(ended).pipe(Effect.asVoid));
+  });
+
+  /** Asks the driver for its windows, to show it is on GOAT's screen before anything acts. */
+  const proveDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")(function* () {
+    const current = running;
+    if (current === undefined || proven === current) return;
+    const id = `${OWN_ID}windows:${ownRequests++}`;
+    const answered = yield* Deferred.make<Envelope | undefined>();
+    ownAnswers.set(id, answered);
+    yield* current.driver.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name: "list_windows", arguments: {} },
+      }),
+    );
+    const answer = yield* Effect.raceFirst(
+      Deferred.await(answered),
+      Deferred.await(ended).pipe(Effect.as(undefined)),
+    );
+    if (answer === undefined || finished !== undefined || running !== current) return;
+    const verdict = yield* checkReply(answer, "list_windows", true);
+    if (finished !== undefined || running !== current) return;
+    if (verdict === "other") return yield* end("wrong_display");
+    if (verdict === "proof") proven = current;
   });
 
   /** The refusal line for a confirmed tools/call that cannot run now; undefined forwards it. */
@@ -376,6 +607,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return refusal(id, message.method, finished, LEASE_END_MESSAGES[finished]);
     if (paused !== undefined)
       return refusal(id, message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    // The driver no longer lists it (cuaDriverManifest.ts); a stale tool list still gets a reason.
+    if (message.params?.name === "get_desktop_state")
+      return refusal(id, message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
     if (verdict._tag === "resolve")
       return refusal(
         id,
@@ -407,8 +641,39 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && message?.method === "tools/call") {
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
+      // The child this call was admitted under. A pause, takeover or narrowed approval while it
+      // waits replaces the child, and the call belongs to what was cut off, never to the next one.
+      const admitted = running;
+      const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
+      const needsProof =
+        options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));
+      if (options.placement !== undefined && finished === undefined && paused === undefined) {
+        // A window that is not on GOAT's screen is never acted on, whatever the driver would do.
+        const targets = namedWindows(message.params?.arguments);
+        if (targets === undefined)
+          return yield* options.output(
+            refusal(id, message.method, "wrong_display", UNCONFIRMED_DISPLAY),
+          );
+        if (targets.length > 0 && (yield* options.placement(targets)) !== "same")
+          return yield* options.output(refusal(id, message.method, "wrong_display", WRONG_DISPLAY));
+        if (needsProof) yield* proveDisplay();
+      }
+      // The last wait before the driver hears the call: it judges the control as it is now.
       const refused = yield* refuseCall(id, message);
       if (refused !== undefined) return yield* options.output(refused);
+      if (admitted !== undefined && running !== admitted)
+        return yield* options.output(
+          refusal(id, message.method, lastInterruption.reason, lastInterruption.message),
+        );
+      if (needsProof && (running === undefined || proven !== running))
+        return yield* options.output(
+          refusal(
+            id,
+            message.method,
+            "wrong_display",
+            finished === "wrong_display" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
+          ),
+        );
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }
@@ -425,7 +690,38 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         );
       return;
     }
-    if (isRequest) outstanding.set(JSON.stringify(id), { id, method: message!.method! });
+    // Before the call reaches the driver: a capture must not see the overlay (#1321).
+    if (isRequest && message?.method === "tools/call") {
+      const current = running;
+      yield* drawOverlay({
+        type: "call",
+        id: JSON.stringify(id),
+        name: typeof message.params?.name === "string" ? message.params.name : "",
+        args: message.params?.arguments,
+      });
+      // A pause or end that came while drawing: refuse, whether or not it has stopped the
+      // driver yet. This call never ran.
+      if (running !== current || paused !== undefined || finished !== undefined)
+        return yield* options.output(
+          finished !== undefined
+            ? refusal(id, message.method, finished, LEASE_END_MESSAGES[finished])
+            : refusal(
+                id,
+                message.method,
+                pausedDetail(paused ?? "human_input"),
+                PAUSE_MESSAGES[paused ?? "human_input"],
+              ),
+        );
+    }
+    if (isRequest)
+      outstanding.set(JSON.stringify(id), {
+        id,
+        method: message!.method!,
+        ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+        unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
+      });
+    const cancelled = cancelledRequestKey(line);
+    if (cancelled !== undefined) outstanding.delete(cancelled);
     yield* running.driver.send(line);
   });
 

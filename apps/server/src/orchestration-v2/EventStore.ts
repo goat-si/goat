@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import type * as SqlClient from "effect/sql/SqlClient";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
+import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 
 export class EventStoreAppendEventsError extends Schema.TaggedError<EventStoreAppendEventsError>()(
   "EventStoreAppendEventsError",
@@ -107,19 +108,23 @@ const layerBase: Layer.Layer<EventStoreV2, never, OrchestrationEventStore.Orches
           );
 
       return EventStoreV2.of({
+        // Every event the log keeps, projects and publishes passes here, and agent output in any of
+        // them may carry the agent's GOAT credential.
         append: (input) =>
-          applicationEvents.appendAgentEvents(input).pipe(
-            Effect.mapError(
-              (cause) =>
-                new EventStoreAppendEventsError({
-                  eventCount: input.events.length,
-                  cause,
-                }),
+          applicationEvents
+            .appendAgentEvents({ ...input, events: redactGoatCredentialsDeep(input.events) })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new EventStoreAppendEventsError({
+                    eventCount: input.events.length,
+                    cause,
+                  }),
+              ),
             ),
-          ),
         appendProjectEvent: (event) =>
           applicationEvents
-            .appendProjectEvent(event)
+            .appendProjectEvent(redactGoatCredentialsDeep(event))
             .pipe(
               Effect.mapError((cause) => new EventStoreAppendEventsError({ eventCount: 1, cause })),
             ),

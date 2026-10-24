@@ -1,6 +1,5 @@
 import { assert } from "@effect/vitest";
 import type { ProviderReplayTranscript } from "@goat/contracts";
-import * as HostProcess from "@goat/shared/HostProcess";
 import { normalizeTerminalOutput, terminalOutputPlainText } from "@goat/shared/terminalOutput";
 
 import type { OrchestratorV2ScenarioResult } from "../../OrchestratorScenario.ts";
@@ -39,13 +38,7 @@ export function assertCommandOutputStreamingOutput(
   assert.notInclude(final, '"stdout"');
 
   const streamed = result.commandOutput?.get(command.id);
-  if (transcript.provider === "claudeAgent" && HostProcess.Platform.defaultValue() === "win32") {
-    // Claude's live output comes from Claude Code's task files, which have no known
-    // Windows location (ClaudeTaskOutputTail.ts, #1165), so the row gets only its final output.
-    assert.isUndefined(streamed, "Claude streams no live command output on Windows");
-  } else {
-    assertLiveTailMatchesFinal(streamed, final);
-  }
+  assertLiveTailMatchesFinal(streamed, final);
 
   // Never persisted while running: no event carries partial command output.
   const commandEvents = result.domainEvents.flatMap((event) =>

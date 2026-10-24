@@ -1,6 +1,8 @@
 import {
   ComputerUseActionRequest,
   ComputerUseObserveRequest,
+  ComputerUseWatchRequest,
+  type ComputerUseCapabilities,
   computerUseDeadlineResult,
   computerUseImageInfo,
   type ComputerUseElement,
@@ -8,6 +10,7 @@ import {
   type ComputerUseRefusal,
   type ComputerUseRefusalReason,
   type ComputerUseWindow,
+  type ComputerUseWindowTarget,
   COMPUTER_USE_ACTIONS,
   type ComputerUseMethod,
   unsupportedComputerUseMethod,
@@ -23,7 +26,9 @@ import { readLinuxReadiness } from "./readiness.ts";
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp.ts";
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
-import { linuxCapabilities, type LinuxSession } from "./linuxSession.ts";
+import type { SignalMonitor } from "./linuxSignals.ts";
+import type { LinuxSession } from "./linuxSession.ts";
+import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -38,11 +43,15 @@ export interface LinuxHelperDependencies {
   readonly screen: string;
   readonly startDriver: () => Promise<DriverClient>;
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+  readonly capture: CaptureRoute;
   readonly uinputWritable: () => Promise<boolean>;
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
   readonly newId: () => string;
   readonly now: () => number;
+  /** The safety signals; watch and unwatch arm and disarm it for an agent session. */
+  readonly signals: SignalMonitor;
+  readonly capabilities: ComputerUseCapabilities;
 }
 
 export interface HelperAnswer {
@@ -57,6 +66,8 @@ export interface LinuxHelper {
     params: unknown,
     deadlineMs: number,
   ) => Promise<HelperAnswer>;
+  /** Whether a watched window is still open, for the safety signals; undefined if unknown. */
+  readonly windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined>;
   /** Ends the driver; its runtime, input devices and held keys go with it. */
   readonly close: () => Promise<void>;
 }
@@ -75,6 +86,7 @@ const field = (value: unknown, key: string): unknown =>
 
 const decodeObserve = Schema.decodeUnknownOption(ComputerUseObserveRequest);
 const decodeAction = Schema.decodeUnknownOption(ComputerUseActionRequest);
+const decodeWatch = Schema.decodeUnknownOption(ComputerUseWatchRequest);
 const decodeRead = Schema.decodeUnknownOption(DriverWindowState);
 
 interface DriverWindow {
@@ -161,7 +173,13 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     if (answer === "lost") return refusal("helperUnavailable", "Cua Driver exited.");
     if (isRefusal(answer)) return answer;
     const list = field(answer.structured, "windows");
-    return Array.isArray(list) ? (list as DriverWindow[]) : [];
+    // An error or an answer without a list says nothing about which windows exist.
+    if (answer.isError || !Array.isArray(list))
+      return refusal(
+        "helperUnavailable",
+        answer.text.split("\n", 1)[0] || "Cua Driver did not list windows.",
+      );
+    return list as DriverWindow[];
   };
 
   /** The window as it is now, with the epoch every ref and point is read against. */
@@ -212,13 +230,22 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     readonly maxElements: number | undefined;
     readonly deadlineMs: number;
   }): Promise<HelperAnswer & { readonly result: ComputerUseObservation | ComputerUseRefusal }> => {
+    // A screenshot holds only the window's own pixels, or is refused (#1328; windowCapture.ts).
+    const route = input.screenshot ? deps.capture : undefined;
+    const refuseShot = (reason: string) => ({
+      result: {
+        ...unsupportedComputerUseMethod("observe", "linux"),
+        message: reason + " Observe again without a screenshot to read the window's controls.",
+      },
+    });
+    if (route?.route === "refused") return refuseShot(route.reason);
     const answer = await call(
       "get_window_state",
       {
         pid: input.pid,
         window_id: input.windowId,
         tree_format: "elements",
-        include_screenshot: input.screenshot,
+        include_screenshot: route !== undefined,
         ...(input.query === undefined ? {} : { query: input.query }),
         ...(input.maxElements === undefined ? {} : { max_elements: input.maxElements }),
       },
@@ -240,9 +267,21 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     }
+    // On X11 the driver's own image is never sent; the window's own capture replaces it at the
+    // driver's screenshot size, which the driver's frames and its pointer scale are in.
+    let offered: DriverImage | undefined;
+    if (route?.route === "own") {
+      const shot = driverShot(answer.structured);
+      if (!shot)
+        return refuseShot(
+          answer.text.split("\n", 1)[0] || "Cua Driver could not capture this window.",
+        );
+      const own = await route.capture(input.windowId, shot);
+      if ("refused" in own) return refuseShot(own.refused);
+      offered = { mimeType: "image/png", data: Buffer.from(own.png).toString("base64") };
+    } else if (route?.route === "driver") offered = answer.images[0];
     // The screenshot is declared from its own bytes, so the size the agent points in is the
     // size of the image it sees; an image those bytes do not describe is not declared at all.
-    const offered = input.screenshot ? answer.images[0] : undefined;
     const info = offered ? computerUseImageInfo(offered.data) : undefined;
     const {
       screenshot_width: _width,
@@ -386,7 +425,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     if (left() <= 0)
       return { result: refusal("busy", "The deadline passed while the request waited.") };
     const deadlineMs = left();
-    if (method === "capabilities") return { result: linuxCapabilities(deps.session) };
+    if (method === "capabilities") return { result: deps.capabilities };
     if (method === "permissions") return { result: await readiness(deadlineMs) };
     if (deps.session.unsupported !== undefined)
       return {
@@ -432,13 +471,31 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         deadlineMs,
       });
     }
-    if (method === "watch" || method === "unwatch")
-      return { result: unsupportedComputerUseMethod(method, "linux") };
+    if (method === "watch") {
+      const decoded = decodeWatch(params);
+      if (decoded._tag === "None")
+        return { result: refusal("invalidRequest", "watch needs at least one window target.") };
+      await deps.signals.watch(decoded.value.watchId, decoded.value.targets);
+      return {
+        result: { watchId: decoded.value.watchId, watching: deps.signals.watching() },
+      };
+    }
+    if (method === "unwatch") {
+      await deps.signals.unwatch();
+      return { result: { watching: [] } };
+    }
     if (ACTIONS.has(method)) return act(method, params, left);
     return { result: refusal("invalidRequest", method + " is not a computer use method.") };
   };
 
   return {
+    windowOpen: async (target) => {
+      if (closed) return undefined;
+      const list = await windows(2_000);
+      return isRefusal(list)
+        ? undefined
+        : list.some((entry) => entry.window_id === target.windowId && entry.pid === target.pid);
+    },
     handle: (method, params, deadlineMs) => {
       // One expiry from receipt: time spent queued behind other requests counts against it.
       const expiry = deps.now() + deadlineMs;
@@ -456,6 +513,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     close: () =>
       (closing ??= (async () => {
         closed = true;
+        await deps.signals.unwatch();
         const current = driver;
         driver = undefined;
         driverGeneration++;

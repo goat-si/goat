@@ -2295,7 +2295,10 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             buildRuntimeInstructions({
               harness: "Cursor",
               model: turnInput.modelSelection.model,
-              computerUse: agent !== null && agent.cuaDriverKey !== "",
+              computerUse:
+                agent !== null &&
+                agent.cuaDriverKey !== "" &&
+                McpProviderSession.carriesComputerUseSkill(config),
             }),
             announceMemoryTools
               ? `GOAT memory tools: read=${availability.read}, write=${availability.write}, source=${availability.source}. Unavailable or denied tools must not be claimed.`

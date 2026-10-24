@@ -53,6 +53,7 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           cuaWatch: Stream.empty,
           publishCuaReport: () => Effect.void,
           publishCuaReadiness: () => Effect.void,
+          publishCuaSafety: () => Effect.void,
           handleControlForSource: () => Effect.void,
           removeControlSource: () => Effect.void,
           publishUpdateReport: () => Effect.void,

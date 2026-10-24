@@ -1,16 +1,21 @@
 import {
+  BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
   type ThreadId,
+  type TurnCapability,
 } from "@goat/contracts";
+import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
+import * as ServerSettings from "../serverSettings.ts";
 import type * as CuaDriver from "./CuaDriver.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
@@ -45,6 +50,9 @@ export type ComputerUseAttachment =
       readonly proxy: SelfInvocation;
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
+      readonly skills: ReadonlyArray<BuiltInSkillName>;
+      /** The X display the driver was started on; the proxy checks its windows against it. */
+      readonly x11Display?: CuaDriver.CuaX11Display;
     };
 
 export interface ComputerUseAttachmentInput {
@@ -55,6 +63,8 @@ export interface ComputerUseAttachmentInput {
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
   readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
+  /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
+  readonly requested?: ReadonlyArray<TurnCapability> | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
@@ -92,13 +102,29 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
   if (Option.isNone(mcp)) return none("unavailable", unattended);
+  const x11Display =
+    cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
+  // Names this build does not know are ignored; unreadable settings keep the default on.
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const disabled = Option.isNone(settings)
+    ? []
+    : yield* settings.value.getSettings.pipe(
+        Effect.map((value) => value.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName))),
+        Effect.orElseSucceed(() => []),
+      );
   return {
     _tag: "proxied",
     mcp: mcp.value,
+    ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
     control: yield* leases.value.control(input.threadId, lease),
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
+    skills: resolveBuiltInSkills({
+      attached: ["computer-use"],
+      ...(input.requested === undefined ? {} : { requested: input.requested }),
+      disabled,
+    }).active,
   } as const;
 });
 
@@ -108,6 +134,7 @@ export const LEASE_PROXY_ENV = {
   url: "GOAT_CUA_LEASE_URL",
   authorization: "GOAT_CUA_LEASE_AUTHORIZATION",
   driver: "GOAT_CUA_DRIVER_MCP",
+  x11Display: "GOAT_CUA_X11_DISPLAY",
 } as const;
 
 /**
@@ -137,6 +164,9 @@ function leaseProxyDescriptor(
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
       { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
+      ...(attachment.x11Display === undefined
+        ? []
+        : [{ name: LEASE_PROXY_ENV.x11Display, value: JSON.stringify(attachment.x11Display) }]),
     ],
     ...(attachment.mcp.socketPath === undefined ? {} : { socketPath: attachment.mcp.socketPath }),
   };
@@ -152,6 +182,7 @@ export function withComputerUse(
     cuaDriver: _previous,
     cuaDriverOverridesUserConfig: _previousOverride,
     cuaDriverBlocked: _previousBlock,
+    builtInSkills: _previousSkills,
     ...rest
   } = config;
   switch (attachment._tag) {
@@ -162,6 +193,7 @@ export function withComputerUse(
         ...rest,
         cuaDriver: leaseProxyDescriptor(config, attachment, leaseRoute),
         ...(attachment.overrideUserConfig ? { cuaDriverOverridesUserConfig: true } : {}),
+        builtInSkills: attachment.skills,
       };
   }
 }

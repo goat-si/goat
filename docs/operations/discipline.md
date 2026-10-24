@@ -84,7 +84,8 @@ is proven with captures, and CI owns the full suite.
   gives it) and must fit your role; a local commit needs neither.
 - Pass generated text (commit messages, pull request bodies, comments, file contents) through a
   file, a quoted heredoc (`<<'EOF'`), or `--body-file`. Backticks and `$()` execute inside
-  double-quoted shell strings.
+  double-quoted shell strings. Make that file with `mktemp`; parallel agents share the machine's
+  temporary directory, and a fixed name such as `/tmp/pr-body.md` can carry a sibling's text.
 - Keep private material out of the repository, fixtures, pull requests, and logs: user
   transcripts, personal data, credentials, pairing URLs, and `GOAT_DEV_AUTH_TOKEN`. Fixtures use
   invented data. Before the first push of a branch, search its commits for names and numbers that

@@ -138,6 +138,26 @@ export const DesktopCuaVerification = Schema.Struct({
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
 
 /**
+ * The macOS grants of whichever app computer use runs as. helper: GOAT Computer Use.app, read
+ * from a fresh helper process; app: GOAT itself, for builds without the helper; unusable: the
+ * helper ships and cannot run, so no other app may stand in for it.
+ */
+export const DesktopCuaGrants = Schema.Union([
+  Schema.Struct({
+    principal: Schema.Literals(["helper", "app"]),
+    /** The name the app has in System Settings' lists. */
+    name: Schema.String,
+    /** Where the app that needs the grants lives, so the person can tell it from older copies. */
+    bundlePath: Schema.optionalKey(Schema.String),
+    bundleId: Schema.String,
+    accessibility: Schema.Boolean,
+    screenRecording: Schema.Boolean,
+  }),
+  Schema.Struct({ principal: Schema.Literal("unusable"), message: Schema.String }),
+]);
+export type DesktopCuaGrants = typeof DesktopCuaGrants.Type;
+
+/**
  * Why a computer use control stopped. stopped: a person pressed Stop on the thread's turn.
  * stopped_all: a person used the kill switch for every thread on the host.
  */
@@ -195,10 +215,16 @@ export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 export const ComputerUseRefusalDetail = Schema.Literals([
   "app_not_approved",
   "desktop_not_approved",
+  /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
+  "desktop_capture_off",
   "waiting_for_human",
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
+  "helper_restarted",
+  /** The driver named a window that is not on the screen GOAT gave it (#1358). */
+  "wrong_display",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -213,6 +239,8 @@ export const computerUseRefusalReason = (
       return "userIntervened";
     case "app_not_approved":
       return "appNotAllowed";
+    case "helper_restarted":
+      return "helperUnavailable";
     default:
       return "targetRefused";
   }

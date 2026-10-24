@@ -50,6 +50,25 @@ it.each(ComputerUseGrant.literals)(
   },
 );
 
+it("gives a Linux host its setup guide, with the commands a person runs at that machine", () => {
+  const result = computerUseReadinessSteps({
+    readiness: { ...ready, tree: "unavailable", platform: { linux: { displayServer: "x11" } } },
+    platform: "linux",
+    tools: "available",
+    machine: "lab-box",
+  });
+  expect(result.linuxSetup?.steps[0]?.detail).toContain("lab-box");
+  expect(
+    result.linuxSetup?.steps.find((step) => step.id === "accessibility")?.guidance,
+  ).toContainEqual({
+    kind: "command",
+    text: "gsettings set org.gnome.desktop.interface toolkit-accessibility true",
+  });
+  // Other platforms, and a Linux host whose helper has not reported, have no guide to show.
+  expect(view(ready, "darwin").linuxSetup).toBeUndefined();
+  expect(view(undefined, "linux").linuxSetup).toBeUndefined();
+});
+
 it("uses typed readiness and server tools only, independently of reasons and optional detection signals", () => {
   expect(view(ready).ready).toBe(true);
   expect(view({ ...ready, reasons: ["An informational warning."] }).ready).toBe(true);
@@ -150,6 +169,35 @@ it("keeps Linux probe explanations with capture and tree even while portal conse
   );
 });
 
+it("tells Windows users about the security prompt, administrator apps and a blocked helper", () => {
+  const locked = view({ ...ready, blockers: ["screenLocked"] }, "win32");
+  expect(locked.steps[2]?.state).toBe("blocked");
+  expect(locked.steps[2]?.detail.join(" ")).toContain(
+    "Windows security prompt (User Account Control)",
+  );
+  expect(view({ ...ready, blockers: ["screenLocked"] }).steps[2]?.detail.join(" ")).not.toContain(
+    "User Account Control",
+  );
+  const healthy = view(ready, "win32");
+  expect(healthy.ready).toBe(true);
+  expect(healthy.steps[2]?.detail.join(" ")).toContain(
+    "Apps running as administrator stay out of reach",
+  );
+  expect(healthy.steps[1]?.detail.join(" ")).not.toContain("Smart App Control");
+  const blocked = {
+    ...ready,
+    helper: "unauthenticated",
+    capture: "unavailable",
+    tree: "unavailable",
+  } as const;
+  expect(view(blocked, "win32").steps[1]?.detail.join(" ")).toContain("Smart App Control");
+  // Stopped after reading a real window: it ran, so nothing blocked it.
+  expect(
+    view({ ...ready, helper: "unauthenticated" }, "win32").steps[1]?.detail.join(" "),
+  ).not.toContain("Smart App Control");
+  expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
+});
+
 it("uses host-specific names and reports the Linux display server", () => {
   expect(view(ready).steps[0]?.grants[1]?.title).toBe("Screen & System Audio Recording");
   expect(view(ready, "win32").steps[0]?.grants[0]?.title).toBe("UI Automation");
@@ -240,4 +288,55 @@ describe.each(platforms)("%s platform parity", (platform) => {
     }
     expect([...states].sort()).toEqual(["blocked", "ok", "pending", "unknown", "unsupported"]);
   });
+});
+
+it("on Linux, unproven Wayland capture does not claim a consent prompt is waiting", () => {
+  // The Linux helper reports pending both before consent and when the compositor cannot
+  // capture one window, so neither the steps nor the guide promise a prompt.
+  const unproven = computerUseReadinessSteps({
+    readiness: {
+      ...ready,
+      grants: { accessibility: "granted", screenCapture: "pending" },
+      capture: "pending",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "wayland" } },
+    },
+    platform: "linux",
+    tools: "available",
+  });
+  const words = [
+    ...unproven.steps.flatMap((step) => [
+      ...step.detail,
+      ...step.grants.flatMap((row) => row.detail),
+    ]),
+    ...(unproven.linuxSetup?.steps ?? []).flatMap((step) => [
+      step.detail,
+      ...step.guidance.map((line) => line.text),
+    ]),
+  ].join(" ");
+  expect(words).not.toContain("Waiting for your answer");
+  expect(words).not.toContain("Waiting for screen capture consent");
+  // macOS still waits on its prompt.
+  const mac = view({
+    ...ready,
+    grants: { accessibility: "granted", screenCapture: "pending" },
+    capture: "pending",
+  });
+  expect(mac.steps[0]?.grants[1]?.detail.join(" ")).toContain("Waiting for your answer");
+});
+
+it("does not call input unsupported while the helper has not confirmed itself yet", () => {
+  const unconfirmed = view({
+    ...ready,
+    helper: "unauthenticated",
+    capture: "pending",
+    tree: "unavailable",
+    input: "unavailable",
+  });
+  const capture = unconfirmed.steps[2];
+  expect(capture?.state).not.toBe("unsupported");
+  expect(capture?.detail.join(" ")).not.toContain("Input is unavailable");
+  expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
+  // A confirmed helper in a session without input still says so.
+  expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
 });

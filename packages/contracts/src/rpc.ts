@@ -600,6 +600,7 @@ export const WS_METHODS = {
 
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
+  computerUseStatusChanges: "computerUse.statusChanges",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
   computerUseResume: "computerUse.resume",
@@ -780,6 +781,13 @@ const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, 
   payload: Schema.Struct({}),
   success: CuaHostStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseStatusChangesRpc = Rpc.make(WS_METHODS.computerUseStatusChanges, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ revision: NonNegativeInt }),
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 /** Ends one thread's control of this host's screen, killing its driver transport. */
@@ -2370,6 +2378,7 @@ export class RpcScopeAuthorization extends RpcMiddleware.Service<RpcScopeAuthori
 export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
+  WsComputerUseStatusChangesRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
   WsComputerUseResumeRpc,

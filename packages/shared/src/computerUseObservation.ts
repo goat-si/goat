@@ -27,7 +27,14 @@ const DriverElement = Schema.Struct({
   actions: Schema.optionalKey(Schema.Array(Schema.String)),
   enabled: Schema.optionalKey(Schema.Boolean),
   selected: Schema.optionalKey(Schema.Boolean),
+  // Not sent by the driver: a platform layer sets them where it knows better (computerUseWindows).
+  checked: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Literal("mixed")])),
+  expanded: Schema.optionalKey(Schema.Boolean),
   parent_index: Schema.optionalKey(Schema.Number),
+  /** Screen pixels; platform layers use it to join their own reads to the driver's. */
+  frame: Schema.optionalKey(
+    Schema.Struct({ x: Schema.Number, y: Schema.Number, w: Schema.Number, h: Schema.Number }),
+  ),
   screenshot_frame: Schema.optionalKey(
     Schema.Struct({ x: Schema.Number, y: Schema.Number, w: Schema.Number, h: Schema.Number }),
   ),
@@ -237,13 +244,17 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
           ...(element.label === undefined ? {} : { label: element.label }),
           ...(element.value === undefined ? {} : { value: element.value }),
           actions: [...(element.actions ?? [])],
-          // The driver reports a checked box as selected; state carries it as the driver says.
-          ...(element.enabled === undefined && element.selected === undefined
+          ...(element.enabled === undefined &&
+          element.selected === undefined &&
+          element.checked === undefined &&
+          element.expanded === undefined
             ? {}
             : {
                 state: {
                   ...(element.enabled === undefined ? {} : { enabled: element.enabled }),
                   ...(element.selected === undefined ? {} : { selected: element.selected }),
+                  ...(element.checked === undefined ? {} : { checked: element.checked }),
+                  ...(element.expanded === undefined ? {} : { expanded: element.expanded }),
                 },
               }),
           ...(frame ? { frame: { x: frame.x, y: frame.y, width: frame.w, height: frame.h } } : {}),

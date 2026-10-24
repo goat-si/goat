@@ -8,6 +8,8 @@ import {
   type CuaToolsAvailability,
 } from "@goat/contracts";
 
+import { linuxComputerUseSetup } from "../computerUseLinuxSetup.ts";
+
 export type ReadinessStepState = "ok" | "pending" | "blocked" | "unsupported" | "unknown";
 type GrantId = keyof ComputerUseReadiness["grants"];
 type StepId = "grants" | "helper" | "capture" | "tools";
@@ -52,7 +54,8 @@ const helperCopy = {
   authenticated: { state: "ok", detail: "The helper is authenticated." },
   unauthenticated: {
     state: "blocked",
-    detail: "The helper is not authenticated. Reconnect or restart GOAT on this computer.",
+    detail:
+      "The helper has not been confirmed yet. Run the readiness check; if it fails, restart GOAT on this computer.",
   },
   incompatible: {
     state: "unsupported",
@@ -120,6 +123,11 @@ const toolsCopy = {
   },
 } as const satisfies Record<CuaToolsAvailability, { state: ReadinessStepState; detail: string }>;
 
+// The Linux helper reports pending both before a Wayland desktop's consent and when its
+// compositor cannot capture one window, so it is not described as a prompt to answer.
+const LINUX_CAPTURE_UNPROVEN =
+  "Screen capture is not proven yet. A Wayland desktop may be waiting for consent, or may not capture one window at all.";
+
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
   userIntervened: { step: "capture", remedy: "Computer use resumes when the person's input ends." },
@@ -138,6 +146,18 @@ const blockerRemedies = {
   },
 } as const satisfies Record<Blocker, { step: StepId; remedy: string }>;
 
+// Windows has no permission prompt to walk through; what stops computer use there is the
+// session, the secure desktop, elevation and app control (#1137, D14).
+const windowsRemedies: Partial<Record<Blocker, string>> = {
+  screenLocked:
+    "Unlock the screen, or answer the Windows security prompt (User Account Control) on this computer. Computer use waits while either is shown.",
+};
+const WINDOWS_ELEVATED =
+  "Apps running as administrator stay out of reach: GOAT never runs its helper as administrator.";
+// Smart App Control has no per-app exceptions, so only a signed build gets past it.
+const WINDOWS_APP_CONTROL =
+  "If Windows blocked GOAT Computer Use: under your organization's app control policy, ask your administrator to allow it; under Smart App Control, which allows no exceptions, install a signed GOAT release. Then restart GOAT.";
+
 const combine = (states: ReadonlyArray<ReadinessStepState>): ReadinessStepState => {
   for (const state of ["blocked", "unsupported", "unknown", "pending"] as const) {
     if (states.includes(state)) return state;
@@ -150,11 +170,14 @@ export function computerUseReadinessSteps({
   platform,
   tools,
   signals,
+  machine,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
   readonly tools?: CuaToolsAvailability | undefined;
   readonly signals?: ComputerUseCapabilities["signals"] | undefined;
+  /** The host's name in the Linux guide, which tells a person where to act. */
+  readonly machine?: string | undefined;
 }) {
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
@@ -174,6 +197,7 @@ export function computerUseReadinessSteps({
             ? "Screen capture / desktop portal"
             : "Screen capture",
   };
+  const linuxUnproven = platform === "linux";
   const grantIds = ["accessibility", "screenCapture"] as const;
   const current = grantIds.find((id) => readiness?.grants[id] !== "granted");
   const grants: ReadinessGrantRow[] = grantIds.map((grant) => {
@@ -183,14 +207,43 @@ export function computerUseReadinessSteps({
       state,
       status: readiness ? grantCopy[state].state : unavailable.state,
       title: titles[grant],
-      detail: [readiness ? grantCopy[state].detail : unavailable.detail],
+      detail: [
+        !readiness
+          ? unavailable.detail
+          : linuxUnproven && grant === "screenCapture" && state === "pending"
+            ? LINUX_CAPTURE_UNPROVEN
+            : grantCopy[state].detail,
+      ],
       isCurrent: grant === current,
     };
   });
-  const blockers = (readiness?.blockers ?? []).map((id) => ({ id, ...blockerRemedies[id] }));
+  const blockers = (readiness?.blockers ?? []).map((id) => ({
+    id,
+    ...blockerRemedies[id],
+    ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
+  }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
+  // The tree and input are read through a confirmed helper; before that they are unchecked,
+  // not unsupported.
+  const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
   const capture = readiness
-    ? [captureCopy[readiness.capture], treeCopy[readiness.tree], inputCopy[readiness.input]]
+    ? [
+        linuxUnproven && readiness.capture === "pending"
+          ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
+          : captureCopy[readiness.capture],
+        unconfirmed && readiness.tree === "unavailable"
+          ? ({
+              state: "unknown",
+              detail: "The accessibility tree is read once the helper is confirmed.",
+            } as const)
+          : treeCopy[readiness.tree],
+        unconfirmed && readiness.input === "unavailable"
+          ? ({
+              state: "unknown",
+              detail: "Input is checked once the helper is confirmed.",
+            } as const)
+          : inputCopy[readiness.input],
+      ]
     : [unavailable];
   const toolsStatus = tools
     ? toolsCopy[tools]
@@ -267,11 +320,27 @@ export function computerUseReadinessSteps({
       ...captureStep,
       detail: [...captureStep.detail, `Linux display server: ${linux.displayServer}.`],
     };
+  if (platform === "win32" && readiness) {
+    const [, helperNow, captureNow] = steps;
+    // A helper that read a real window ran; only one that never got that far may be blocked.
+    const neverRan =
+      readiness.helper !== "authenticated" &&
+      readiness.capture !== "ready" &&
+      readiness.tree !== "ready";
+    if (helperNow && neverRan)
+      steps[1] = { ...helperNow, detail: [...helperNow.detail, WINDOWS_APP_CONTROL] };
+    if (captureNow) steps[2] = { ...captureNow, detail: [...captureNow.detail, WINDOWS_ELEVATED] };
+  }
   return {
     ready: readiness !== undefined && computerUseReady(readiness) && tools === "available",
     report,
     steps,
     blockers,
+    // What each step means on a Linux desktop and what to do there, with copyable commands.
+    linuxSetup:
+      platform === "linux" && readiness !== undefined
+        ? linuxComputerUseSetup(readiness, machine ?? "this computer")
+        : undefined,
   } as const;
 }
 
