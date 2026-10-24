@@ -12,8 +12,10 @@ import {
   type Page,
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import { inputFence } from "./PreviewInputFence.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
 // `chromium.executablePath()` is the full Chrome build, so it stays missing
@@ -129,6 +131,42 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "WRONG" }),
     ).rejects.toMatchObject({ tag: "PreviewAutomationTargetNotEditableError" });
     expect(await page.evaluate("[target.value, other.value]")).toEqual(["old", "keep"]);
+
+    await page.evaluate("target.disabled = false");
+    await ServerBrowserPage.type(page, { locator: "#target", clear: true, text: "NEW" });
+    expect(await page.evaluate("[target.value, other.value]")).toEqual(["NEW", "keep"]);
+  });
+
+  it("clears a single select when given no values", async () => {
+    await page.setContent(
+      '<select id="s"><option value="a">A</option><option value="b" selected>B</option></select>',
+    );
+    expect(await ServerBrowserPage.select(page, { locator: "#s", values: [] })).toEqual({
+      selected: [],
+    });
+    expect(await page.evaluate("s.selectedIndex")).toBe(-1);
+  });
+
+  it("holds a click that passed its gate when Stop arrives, and lets input through after", async () => {
+    await page.setContent(
+      '<button id="b" onclick="window.clicks = (window.clicks || 0) + 1">Send</button>',
+    );
+    const control = new SessionControl("agent");
+    control.onDispatchCut(inputFence(cdp));
+    const clicking = control.agent("agent", () => {
+      const gate = control.dispatchGate();
+      return ServerBrowserPage.click(page, { locator: "#b" }, undefined, () => {
+        gate();
+        // Stop lands after the gate, while Playwright still has the click to send.
+        control.stopAgents();
+      });
+    });
+    await expect(clicking).rejects.toMatchObject({ reason: "stopped" });
+    // Drains the stopped action, which releases the fence.
+    await control.system(async () => {});
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
+    await page.locator("#b").click();
+    expect(await page.evaluate("window.clicks")).toBe(1);
   });
 
   it("does not click an element that covered the target after Playwright's check", async () => {
@@ -154,9 +192,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
               })
           : Reflect.get(target, key, target),
     });
-    await expect(
-      ServerBrowserPage.click(coveredAfterCheck, { locator: "#b" }),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationExecutionError" });
+    await expect(ServerBrowserPage.click(coveredAfterCheck, { locator: "#b" })).rejects.toThrow();
     expect(await page.evaluate("window.hits")).toEqual([]);
   });
 

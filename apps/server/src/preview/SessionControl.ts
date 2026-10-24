@@ -39,6 +39,10 @@ export class SessionControl {
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
+  /** The running agent action's work, and whether its input already passed the gate. */
+  private activeAgentWork: Promise<unknown> | undefined;
+  private activeAgentDispatching = false;
+  private readonly dispatchCutListeners = new Set<(work: Promise<unknown>) => void>();
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
     this.agentId = agentId;
@@ -94,8 +98,17 @@ export class SessionControl {
   }
 
   private cut(reason: BrowserControlInterrupted) {
+    // Input already past its gate cannot be recalled, so the page must ignore it until it ends.
+    if (this.activeAgentDispatching && this.activeAgentWork)
+      for (const listener of this.dispatchCutListeners) listener(this.activeAgentWork);
     this.activeAgentAction?.abort(reason);
     this.activeAgentCut?.abort(reason);
+  }
+
+  /** Calls back when Stop or a secret cuts an action whose input already passed its gate. */
+  onDispatchCut(listener: (work: Promise<unknown>) => void) {
+    this.dispatchCutListeners.add(listener);
+    return () => void this.dispatchCutListeners.delete(listener);
   }
 
   resumeAgents() {
@@ -125,6 +138,7 @@ export class SessionControl {
     return () => {
       this.assertAgentMayDispatch();
       if (this.epoch !== epoch) throw new BrowserControlInterrupted();
+      this.activeAgentDispatching = true;
     };
   }
 
@@ -217,6 +231,8 @@ export class SessionControl {
         this.activeAgentAction = action;
         this.activeAgentCut = cut;
         const work = run(action.signal);
+        this.activeAgentWork = work;
+        this.activeAgentDispatching = false;
         // Later actions still wait for it, even after its caller has been answered.
         this.track(work);
         const aborted = new Promise<never>((_, reject) =>
@@ -228,6 +244,8 @@ export class SessionControl {
         } finally {
           this.activeAgentAction = undefined;
           this.activeAgentCut = undefined;
+          this.activeAgentWork = undefined;
+          this.activeAgentDispatching = false;
           void aborted.catch(() => undefined);
         }
       },

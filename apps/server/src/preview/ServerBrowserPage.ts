@@ -174,61 +174,27 @@ const noPointer: PointerReporter = async () => {};
 
 /**
  * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
- * action waited. Called after every wait, right before input leaves. Playwright's own actions
- * wait for their target after any check made before them, and `force` skips the check that the
- * target still receives the input, so they only run as trials; the input itself is raw mouse,
- * keyboard or element calls that do not wait for the page.
+ * action waited. Every wait for the target runs before it, as a Playwright trial; after it, the
+ * action gets only DISPATCH_TIMEOUT_MS. If control is cut after the gate, the tab ignores input
+ * until that action ends (SessionControl.onDispatchCut), so a late click or key never lands.
  */
 export type DispatchGate = () => void;
 const open: DispatchGate = () => {};
 
+/** How long an action that passed its gate may still wait for Playwright's own checks. */
+const DISPATCH_TIMEOUT_MS = 1_000;
+
 const targetChanged = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationExecutionError",
-    "The target moved, was covered or was disabled before the input landed. Take a fresh snapshot and try again.",
+    "The target changed or was disabled before the input landed. Take a fresh snapshot and try again.",
   );
 
-/**
- * The viewport point where raw input lands on the target now: its centre, provided it is enabled
- * and nothing covers it there. Call it after the trial's waits, right before the gate.
- */
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
 const elementOf = async (locator: Locator, timeout: number) => {
   const handle = await locator.elementHandle({ timeout });
   if (handle === null) throw targetChanged();
   return handle;
-};
-
-const landing = async (locator: Locator, timeout: number) => {
-  const handle = await elementOf(locator, timeout);
-  try {
-    const [box, owned] = await Promise.all([
-      handle.boundingBox(),
-      handle.evaluate((element) => {
-        type Hit = { readonly parentNode: Hit | null; readonly host?: Hit } | null | undefined;
-        const target = element as unknown as {
-          matches(selector: string): boolean;
-          getBoundingClientRect(): { left: number; top: number; width: number; height: number };
-          getRootNode(): { elementFromPoint?(x: number, y: number): Hit };
-        };
-        if (target.matches(":disabled")) return false;
-        const rect = target.getBoundingClientRect();
-        // Hits inside a shadow root resolve to its host, so climb through hosts too.
-        let hit = target
-          .getRootNode()
-          .elementFromPoint?.(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        while (hit) {
-          if (hit === (element as unknown)) return true;
-          hit = hit.parentNode ?? hit.host;
-        }
-        return false;
-      }),
-    ]);
-    if (!box || !owned) throw targetChanged();
-    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  } finally {
-    void handle.dispose().catch(constVoid);
-  }
 };
 
 const targetPoint = async (
@@ -839,9 +805,11 @@ export const click = async (
   await pointer(point, "click");
   const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
   if (locator !== null) await locator.click({ ...options, timeout, trial: true });
-  const at = locator === null ? point : await landing(locator, timeout);
   gate();
-  const clicked = page.mouse.click(at.x, at.y, options);
+  const clicked =
+    locator === null
+      ? page.mouse.click(point.x, point.y, options)
+      : locator.click({ ...options, timeout: DISPATCH_TIMEOUT_MS });
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
@@ -852,7 +820,7 @@ export const click = async (
   } finally {
     page.off("dialog", onDialog);
   }
-  return at;
+  return point;
 };
 
 export const type = async (
@@ -868,7 +836,7 @@ export const type = async (
   const focused =
     (locator !== null || (await target.count()) > 0) &&
     (await target.evaluate(
-      (element) => {
+      (element, clear) => {
         // Like the desktop host: an enabled text control or contenteditable
         // that actually takes focus. Anything else would swallow the text or
         // send it to whichever field had focus before.
@@ -900,9 +868,22 @@ export const type = async (
         control.focus?.();
         const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
         const active = root.activeElement;
-        return active != null && (active === element || element.contains(active));
+        const owned = active != null && (active === element || element.contains(active));
+        // Selected here, the old text is replaced by the one input sent after the gate.
+        if (owned && clear) {
+          if (textControl) (element as unknown as { select(): void }).select();
+          else
+            (
+              globalThis as unknown as {
+                getSelection(): { selectAllChildren(node: unknown): void } | null;
+              }
+            )
+              .getSelection()
+              ?.selectAllChildren(element);
+        }
+        return owned;
       },
-      undefined,
+      input.clear === true,
       { timeout },
     ));
   if (focused !== true) {
@@ -912,9 +893,11 @@ export const type = async (
     );
   }
   gate();
-  if (input.clear) {
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.press("Delete");
+  // One input after the gate: a key press is held off by the input fence; inserted text is a
+  // single call with nothing to wait for.
+  if (input.text === "") {
+    if (input.clear) await page.keyboard.press("Delete");
+    return;
   }
   await page.keyboard.insertText(input.text);
 };
@@ -934,9 +917,8 @@ export const hover = async (
     return;
   }
   await locator.hover({ timeout, trial: true });
-  const at = await landing(locator, timeout);
   gate();
-  await page.mouse.move(at.x, at.y);
+  await locator.hover({ timeout: DISPATCH_TIMEOUT_MS });
 };
 
 export const select = async (
@@ -985,11 +967,13 @@ export const select = async (
     // What Playwright's selectOption does once the options exist, without its wait for them.
     const selected = await handle.evaluate((element, chosen) => {
       const select = element as unknown as {
+        selectedIndex: number;
         readonly options: ArrayLike<{ value: string; selected: boolean }>;
         readonly selectedOptions: ArrayLike<{ value: string }>;
         dispatchEvent(event: unknown): boolean;
       };
-      for (const option of Array.from(select.options)) option.selected = false;
+      // No values clears the selection, single select included (selectOption's contract).
+      select.selectedIndex = -1;
       for (const value of chosen) {
         const option = Array.from(select.options).find((entry) => entry.value === value);
         if (option) option.selected = true;
@@ -1020,14 +1004,8 @@ export const drag = async (
   await source.dragTo(target, { timeout, trial: true });
   const end = await target.boundingBox({ timeout }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
-  const from = await landing(source, timeout);
-  const to = await landing(target, timeout);
   gate();
-  // The gesture runs whole once it starts: a button left down would outlast the agent.
-  await page.mouse.move(from.x, from.y);
-  await page.mouse.down();
-  await page.mouse.move(to.x, to.y);
-  await page.mouse.up();
+  await source.dragTo(target, { timeout: DISPATCH_TIMEOUT_MS });
 };
 
 export const setInputFiles = async (
@@ -1062,14 +1040,20 @@ export const scroll = async (
   gate: DispatchGate = open,
 ) => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
-  gate();
   const locator = targetLocator(page, input);
   if (locator === null) {
+    gate();
     // Page-side code is passed as source: the server compiles without DOM types.
     await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
     return;
   }
-  await locator.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
+  try {
+    gate();
+    await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
 };
 
 /**

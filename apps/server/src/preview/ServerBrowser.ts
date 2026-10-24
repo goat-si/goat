@@ -91,6 +91,7 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { inputFence } from "./PreviewInputFence.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
@@ -692,6 +693,7 @@ const make = Effect.gen(function* () {
       ServerBrowserPage.invalidateRefs(page),
     );
     void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
+    control.onDispatchCut(inputFence(cdp));
     const diagnostics = new ServerBrowserDiagnostics(page);
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
@@ -1002,6 +1004,14 @@ const make = Effect.gen(function* () {
         `Upload paths must be absolute: ${relative}`,
       );
     const gate = gateFor(tab);
+    // Checked before the gate, so all that can follow it is Playwright's recheck of these files.
+    for (const path of input.paths)
+      await NodeFSP.access(path).catch(() => {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `Upload file not found or not readable: ${path}`,
+        );
+      });
     if (await ServerBrowserPage.setInputFiles(tab.page, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)
