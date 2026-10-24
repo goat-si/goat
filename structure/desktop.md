@@ -70,7 +70,9 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 When the server asks for a Cua Driver host on the private control pipe, the Electron main process
 owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
 "GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
-packaged builds look in `Contents/Helpers`, development builds need `GOAT_CUA_HELPER_PATH` to a
+packaged builds look in `Contents/Helpers` and, when GOAT.app is Developer ID signed, run a
+verified installed generation of it from the state directory
+(`apps/desktop/src/cua/ComputerUseHelperInstall.ts`), development builds need `GOAT_CUA_HELPER_PATH` to a
 helper built by `scripts/build-computer-use-helper.ts`, and a helper that is present but unusable
 keeps computer use off. A release helper (`apps/desktop/native/computer-use-helper/main.swift`)
 serves only a parent signed by GOAT's team with the GOAT app identifier; a development helper,
