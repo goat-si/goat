@@ -390,7 +390,7 @@ it.effect(
           commitCloudTask: () => Effect.void,
         });
         yield* Deferred.await(completed);
-        assert.deepEqual(calls, expected);
+        assert.deepEqual(calls, [...expected]);
       }
     }),
 );
