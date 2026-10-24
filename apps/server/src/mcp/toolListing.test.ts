@@ -3,14 +3,19 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
+import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { HttpBody } from "effect/http";
 
+import * as Settings from "../serverSettings.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { filterToolsListBody } from "./toolListing.ts";
+import { filterToolsListBody, listingChanges } from "./toolListing.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
 const base = {
@@ -200,4 +205,33 @@ it.effect("filters a tools/list whose method JSON spells with unicode escapes", 
       listed((entry) => "listing" in entry && entry.listing === "core"),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "asks clients to list tools again when the goatclaw policy changes, not on every save",
+  () =>
+    Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+      const settings = yield* Settings.ServerSettingsService.pipe(
+        Effect.provide(
+          Layer.mock(Settings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            streamChanges: Stream.fromQueue(changes),
+          }),
+        ),
+      );
+      const goatclaw = DEFAULT_SERVER_SETTINGS.goatclaw;
+      const unchanged = { ...DEFAULT_SERVER_SETTINGS };
+      const policy = {
+        ...DEFAULT_SERVER_SETTINGS,
+        goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
+      };
+      const listing = { ...policy, agentToolListing: "core" as const };
+      yield* Queue.offerAll(changes, [unchanged, policy, listing]);
+      const relisted = yield* listingChanges(Option.some(settings)).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      expect(relisted).toEqual([policy, listing]);
+    }),
 );
