@@ -6,6 +6,7 @@
 import {
   DesktopBrowserCommand,
   DesktopBrowserEvent,
+  PREVIEW_AGENT_INPUT_HELD_GLOBAL,
   type DesktopBrowserEvent as DesktopBrowserEventType,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -238,6 +239,23 @@ export const make = Effect.gen(function* () {
     emit({ type: "attached", ...key });
   };
 
+  /**
+   * A relay the server let go of can no longer release an input hold it set (the server's
+   * PreviewInputFence), and nothing that relay sent is still on its way, so the hold ends with it.
+   */
+  const dropRelay = (tab: {
+    relay: unknown;
+    readonly debuggee: { readonly debugger: Electron.Debugger };
+  }) => {
+    tab.relay = null;
+    const release = (method: string, params: Record<string, unknown>) =>
+      void tab.debuggee.debugger.sendCommand(method, params).catch(() => undefined);
+    release("Input.setIgnoreInputEvents", { ignore: false });
+    release("Runtime.evaluate", {
+      expression: `globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} = 0`,
+    });
+  };
+
   const handleCommandLine = (line: string) =>
     Effect.sync(() => {
       const command = decodeCommand(line);
@@ -250,7 +268,7 @@ export const make = Effect.gen(function* () {
         return;
       }
       if (command.value.type === "release") {
-        tab.relay = null;
+        dropRelay(tab);
         return;
       }
       if (AGENT_INPUT_COMMAND.test(command.value.message)) tab.agentInputAt = performance.now();
@@ -266,7 +284,7 @@ export const make = Effect.gen(function* () {
     Effect.forEach(
       [...tabs.values()],
       (tab) => {
-        tab.relay = null;
+        dropRelay(tab);
         return PubSub.publish(outbox, { type: "attached", ...tab.key });
       },
       { discard: true },
