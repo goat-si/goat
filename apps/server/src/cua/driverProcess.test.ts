@@ -44,39 +44,30 @@ describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
     "a group whose leader was already reaped is never signalled, so a recycled id is safe",
     () =>
       Effect.gen(function* () {
-        // The grandchild prints its PID, then names the first signal that reaches it: TERM through
-        // the group, or USR1 sent straight to it by this test. Both are pending together if the
-        // group was signalled, and TERM, posted first, runs first.
+        // The grandchild names what ends it first: TERM through the group, or the end of its
+        // input, which this test closes. If the group was signalled, TERM is already pending when
+        // the input ends; the shell may defer it past `read`, but runs it as `wait` starts, before
+        // "direct". No PID is ever signalled here, only the leader the test started, and the
+        // grandchild ends on its own within a minute if nothing ends it.
         const script =
-          "trap 'echo group; exit' TERM; trap 'echo direct; exit' USR1; echo $$; " +
-          // Bounded, like pairLike's child: at most a minute even if nothing ends it.
-          "i=0; while [ $i -lt 60 ]; do i=$((i+1)); sleep 1 & wait $!; done";
+          "trap 'echo group; exit' TERM; echo started; i=0; " +
+          "while [ $i -lt 60 ]; do i=$((i+1)); read -t 1 _; " +
+          "[ $? -gt 128 ] || { sleep 1 >/dev/null & wait $!; echo direct; exit; }; done";
         const leaderOnly = spawnDriverProcess(
           platform,
           "/bin/sh",
-          ["-c", '/bin/sh -c "$GRANDCHILD" & wait'],
+          // An explicit redirect: a background job's input would otherwise be /dev/null.
+          ["-c", '/bin/sh -c "$GRANDCHILD" <&0 & wait'],
           { PATH: "/bin:/usr/bin", GRANDCHILD: script },
         );
-        onTestFinished(() => killDriverGroup(platform, leaderOnly, "SIGKILL"));
+        onTestFinished(() => {
+          killDriverGroup(platform, leaderOnly, "SIGKILL");
+          // A failed test still ends the grandchild through its input.
+          leaderOnly.stdin.end();
+        });
         let output = "";
         leaderOnly.stdout.on("data", (chunk: Buffer) => (output += String(chunk)));
-        const grandchild = yield* Effect.promise(
-          () =>
-            new Promise<number>((resolve) =>
-              leaderOnly.stdout.once("data", (chunk: Buffer) =>
-                resolve(Number(String(chunk).trim())),
-              ),
-            ),
-        );
-        // The leader is reaped below, so its group can no longer be signalled; a failed test ends
-        // the grandchild by the PID it reported itself.
-        onTestFinished(() => {
-          try {
-            process.kill(grandchild, "SIGKILL");
-          } catch {
-            // Already gone.
-          }
-        });
+        yield* started(leaderOnly);
         const exited = Effect.promise(
           () => new Promise<void>((resolve) => leaderOnly.once("exit", () => resolve())),
         );
@@ -84,7 +75,7 @@ describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
         if (leaderOnly.pid !== undefined) process.kill(leaderOnly.pid, "SIGKILL");
         yield* exited;
         killDriverGroup(platform, leaderOnly, "SIGTERM");
-        process.kill(grandchild, "SIGUSR1");
+        leaderOnly.stdin.end();
         yield* closed(leaderOnly);
         assert.strictEqual(output.split("\n")[1], "direct");
       }),
