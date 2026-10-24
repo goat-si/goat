@@ -36,6 +36,8 @@ export const COMPUTER_USE_METHODS = [
   "permissions",
   "listWindows",
   "observe",
+  "watch",
+  "unwatch",
   ...COMPUTER_USE_ACTIONS,
 ] as const;
 export const ComputerUseMethod = Schema.Literals(COMPUTER_USE_METHODS);
@@ -54,6 +56,17 @@ export const ComputerUseCapabilities = Schema.Struct({
   ),
   /** Input that reaches a window without raising it; foreground input always needs a lease. */
   backgroundDelivery: Schema.Boolean,
+  /**
+   * The safety signals the helper can raise while watching (#1235). The server refuses
+   * unattended computer use on a host whose helper lacks either; interactive turns go ahead
+   * with the gap shown.
+   */
+  signals: Schema.Struct({
+    /** A secure field (password, passkey prompt) has focus in a watched window. */
+    privateMode: Support,
+    /** A person's own keyboard or pointer input reached the desktop. */
+    humanInput: Support,
+  }),
 });
 export type ComputerUseCapabilities = typeof ComputerUseCapabilities.Type;
 
@@ -106,6 +119,23 @@ export const ComputerUseReadiness = Schema.Struct({
   ),
   /** Written for the person setting it up, one per step that is not ready. */
   reasons: Schema.Array(Schema.String),
+  /**
+   * Who the helper is to the OS, for diagnosing a grant that shows on in System Settings but
+   * reads off (#1243): an entry left by an earlier build with another code identity, or a
+   * responsible process that is not the helper.
+   */
+  diagnostics: Schema.optionalKey(
+    Schema.Struct({
+      executable: TrimmedNonEmptyString,
+      pid: Schema.Int,
+      /** The process the OS charges grants to; the helper itself once it disclaimed. */
+      responsiblePid: Schema.optionalKey(Schema.Int),
+      /** The running code's designated requirement (macOS) or its equivalent. */
+      codeRequirement: Schema.optionalKey(Schema.String),
+      /** The raw accessibility trust answer for this process, before any interpretation. */
+      accessibilityTrusted: Schema.Boolean,
+    }),
+  ),
   platform: Schema.optionalKey(
     Schema.Struct({
       linux: Schema.optionalKey(
@@ -525,6 +555,52 @@ export const ComputerUseReplyFrame = Schema.Struct({
   ),
 });
 export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
+
+/** Which windows the helper watches for the safety signals; only while an agent session runs (D7). */
+export const ComputerUseWatchRequest = Schema.Struct({
+  targets: Schema.Array(ComputerUseWindowTarget).check(Schema.isMinLength(1)),
+});
+export type ComputerUseWatchRequest = typeof ComputerUseWatchRequest.Type;
+
+/**
+ * Something the helper noticed on its own, sent without a request id. The server maps
+ * privateMode to cuaPrivateMode and humanInput to cuaHumanInput. Events carry no content: not
+ * what was typed, not what the secure field holds.
+ */
+export const ComputerUseEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("privateMode"),
+    active: Schema.Boolean,
+    target: ComputerUseWindowTarget,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("humanInput"),
+    source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+  }),
+]);
+export type ComputerUseEvent = typeof ComputerUseEvent.Type;
+
+export const ComputerUseEventFrame = Schema.Struct({
+  generation: TrimmedNonEmptyString,
+  event: ComputerUseEvent,
+});
+export type ComputerUseEventFrame = typeof ComputerUseEventFrame.Type;
+
+/**
+ * Whether an event may reach the caller. Like replies, an event from another helper
+ * generation, such as one that was stopped or replaced, is quarantined, and so is an oversized
+ * frame.
+ */
+export function admitComputerUseEvent(input: {
+  readonly frame: ComputerUseEventFrame;
+  readonly frameBytes: number;
+  readonly maxFrameBytes: number;
+  readonly generation: string;
+}): "deliver" | "wrongGeneration" | "frameTooLarge" {
+  if (input.frameBytes > Math.min(input.maxFrameBytes, COMPUTER_USE_MAX_FRAME_BYTES))
+    return "frameTooLarge";
+  return input.frame.generation === input.generation ? "deliver" : "wrongGeneration";
+}
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
 

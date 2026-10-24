@@ -7,6 +7,8 @@ import {
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseActionResult,
   ComputerUseCapabilities,
+  ComputerUseEventFrame,
+  ComputerUseWatchRequest,
   ComputerUseActionRequest,
   ComputerUseHelloReply,
   ComputerUseKey,
@@ -14,6 +16,7 @@ import {
   ComputerUseReadiness,
   ComputerUseRequestFrame,
   admitComputerUseReply,
+  admitComputerUseEvent,
   computerUseDeadlineResult,
   computerUseNextStep,
   computerUseImageInfo,
@@ -38,6 +41,7 @@ describe("computer use helper protocol", () => {
       platform: "linux",
       methods: allMethods("unsupported"),
       backgroundDelivery: false,
+      signals: { privateMode: "unsupported", humanInput: "unsupported" },
     };
     expect(decodeCapabilities(complete)._tag).toBe("Success");
     const { drag: _drag, ...missing } = allMethods("supported");
@@ -196,6 +200,7 @@ describe("computer use protocol values", () => {
         platform: "mac",
         methods: allMethods("supported"),
         backgroundDelivery: true,
+        signals: { privateMode: "supported", humanInput: "supported" },
       },
     };
     expect(decodes(ComputerUseHelloReply, { ...hello, maxFrameBytes: 1024 * 1024 })).toBe(true);
@@ -330,5 +335,79 @@ describe("computer use readiness and reply images", () => {
         png,
       ),
     ).toMatch(/private/);
+  });
+});
+
+describe("computer use safety signals", () => {
+  const decodes = (schema: Schema.Codec<unknown, unknown>, value: unknown) =>
+    Schema.decodeUnknownExit(schema)(value)._tag === "Success";
+  const capabilities = {
+    protocol: 1,
+    platform: "linux",
+    methods: Object.fromEntries(COMPUTER_USE_METHODS.map((method) => [method, "supported"])),
+    backgroundDelivery: true,
+    signals: { privateMode: "supported", humanInput: "unsupported" },
+  };
+
+  it("makes every helper say whether it can raise each safety signal", () => {
+    expect(decodes(ComputerUseCapabilities, capabilities)).toBe(true);
+    const { signals: _signals, ...silent } = capabilities;
+    expect(decodes(ComputerUseCapabilities, silent)).toBe(false);
+    expect(
+      decodes(ComputerUseCapabilities, { ...capabilities, signals: { privateMode: "supported" } }),
+    ).toBe(false);
+  });
+
+  it("accepts events only from the current helper generation and within the frame limit", () => {
+    const frame = Schema.decodeUnknownSync(ComputerUseEventFrame)({
+      generation: "g2",
+      event: { type: "privateMode", active: true, target: { pid: 10, windowId: 20 } },
+    });
+    const admit = (generation: string, frameBytes = 120) =>
+      admitComputerUseEvent({ frame, frameBytes, maxFrameBytes: 64 * 1024, generation });
+    expect(admit("g2")).toBe("deliver");
+    expect(admit("g3")).toBe("wrongGeneration");
+    expect(admit("g2", 70 * 1024)).toBe("frameTooLarge");
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        event: { type: "humanInput", source: "pointer" },
+      }),
+    ).toBe(true);
+    expect(
+      decodes(ComputerUseEventFrame, {
+        generation: "g2",
+        event: { type: "humanInput", source: "touch" },
+      }),
+    ).toBe(false);
+    // Events carry no content: a typed-text field does not survive decoding.
+    const typed = Schema.decodeUnknownSync(ComputerUseEventFrame)({
+      generation: "g2",
+      event: { type: "humanInput", source: "keyboard", text: "hunter2" },
+    });
+    expect(JSON.stringify(typed)).not.toContain("hunter2");
+  });
+
+  it("watches at least one window, and reports who the helper is to the OS", () => {
+    expect(decodes(ComputerUseWatchRequest, { targets: [{ pid: 1, windowId: 2 }] })).toBe(true);
+    expect(decodes(ComputerUseWatchRequest, { targets: [] })).toBe(false);
+    const diagnosed = {
+      grants: { accessibility: "denied", screenCapture: "granted" },
+      helper: "authenticated",
+      capture: "ready",
+      tree: "unavailable",
+      input: "background",
+      blockers: [],
+      reasons: ["Accessibility is off for GOAT Computer Use."],
+      diagnostics: {
+        executable:
+          "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        pid: 4100,
+        responsiblePid: 4100,
+        codeRequirement: 'identifier "si.goat.desktop.computer-use" and anchor apple generic',
+        accessibilityTrusted: false,
+      },
+    };
+    expect(decodes(ComputerUseReadiness, diagnosed)).toBe(true);
   });
 });
