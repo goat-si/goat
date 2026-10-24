@@ -131,6 +131,8 @@ export interface DesktopCuaDriverDependencies {
     readonly platform: NodeJS.Platform;
   }) => Promise<string>;
   readonly processId: number;
+  /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
+  readonly executablePath: string;
 }
 
 /** A capture of a locked or unauthorized screen is all black; real content varies. */
@@ -234,6 +236,7 @@ const dependencies: DesktopCuaDriverDependencies = {
         });
   },
   processId: process.pid,
+  executablePath: process.execPath,
 };
 
 interface OwnedHost {
@@ -462,6 +465,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const hostBundleIds = (engine: Engine) => [
     environment.appUserModelId,
     ...(environment.isPackaged ? [] : ["com.github.Electron"]),
+    ...(environment.platform === "win32" ? [native.executablePath] : []),
     ...(engine.kind === "helper" ? [engine.bundle.bundleId] : []),
   ];
 

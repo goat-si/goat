@@ -75,6 +75,11 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
             verified: true,
             steps: VERIFICATION_IDS.map((id) => ({ id, ok: true })),
           });
+          // The driver matches Windows apps by executable path; only that admits GOAT's window.
+          assert.include(
+            test.launches[0]?.hostBundleIds ?? [],
+            "C:\\Program Files\\GOAT\\GOAT.exe",
+          );
           // health_report has no bundle identity on Windows; the helper's admission stands in.
           assert.notInclude(
             test.toolCalls.map(({ name }) => name),

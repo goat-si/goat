@@ -206,6 +206,7 @@ export const fixture = Effect.fn(function* (
       return path;
     },
     processId: HOST_PID,
+    executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
     loadElectron: async () => ({
       requestMacOSPermissions: () => ({ accessibility: allowed, screenRecording: allowed }),
       hasRequiredMacOSPermissions: (permissions) =>
