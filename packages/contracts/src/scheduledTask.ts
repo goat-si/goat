@@ -245,6 +245,8 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
   /** Set when url is null and the cause is known. */
   urlUnavailableReason: Schema.optional(ScheduledTaskWebhookUrlUnavailableReason),
   hasSecret: Schema.Boolean,
+  /** The secretRef the stored signing secret came from; absent for an inline secret. */
+  secretRef: Schema.optional(SecretRef),
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 

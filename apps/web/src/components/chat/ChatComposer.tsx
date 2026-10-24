@@ -357,6 +357,7 @@ export interface ChatComposerHandle {
     previewAnnotations: PreviewAnnotationPayload[];
     reviewComments: ReviewCommentContext[];
     threadContexts: ThreadContextRecord[];
+    threadContextRoutingEnvironmentId: EnvironmentId;
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
     selectedModelSelection: ModelSelection;
@@ -2058,7 +2059,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (trigger.kind !== "path") return;
       const shell = readThreadShell(item.thread);
       if (!shell) return;
-      const record = threadContextRecord(item.thread, shell.title);
+      const [record] = routeThreadContexts([threadContextRecord(item.thread, shell.title)]);
+      if (!record) return;
       const replacement = `${formatInlineContextReference(threadContextReference(record))} `;
       const applied = replaceTriggerWith(replacement);
       if (applied) {
@@ -3358,6 +3360,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             isDesktopRenderer: window.desktopBridge !== undefined,
           }),
         ],
+        threadContextRoutingEnvironmentId: environmentId,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
         selectedModelSelection,

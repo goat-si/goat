@@ -123,6 +123,8 @@ const fixture = Effect.fnUntraced(function* (
     controlState: () => unused,
     stop: () => unused,
     setTarget: () => unused,
+    humanInput: () => unused,
+    agentInput: () => unused,
     stopAll: unused,
     turnEnded: () => unused,
     settle: unused,

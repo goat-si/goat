@@ -162,8 +162,11 @@ Use **Go to thread** for more context or to
 resume stays listed with answering turned off.
 
 For durable requests with a recommendation and an expiry, open **Settings → Decision Inbox**.
-It includes pending thread requests from the selected environments. Choose an option and explain your
-answer; the asking thread receives the result. Expired requests never choose an option automatically.
+It includes pending thread requests from the selected environments and decisions from threads
+those environments launched on connected or linked hosts. Remote rows show their host; unavailable
+hosts and incomplete lists are reported so a partial list is not mistaken for an empty inbox. Choose an option and explain your
+answer; the asking host delivers the result to its thread. Person-only questions must be answered
+from a client connected to the asking host; linked hosts cannot forward approvals. Expired requests never choose an option automatically.
 Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
 questions can still be answered in their asking thread.
 
