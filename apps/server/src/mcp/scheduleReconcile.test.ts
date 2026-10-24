@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ScheduledTaskId,
+  type ScheduledTaskUpsertInput,
   ThreadId,
   type ScheduledTask,
 } from "@goat/contracts";
@@ -25,7 +26,6 @@ import * as Projects from "../project/ProjectService.ts";
 import * as Providers from "../provider/ProviderRegistry.ts";
 import * as RemoteDispatch from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
-import type { ScheduledTaskUpsertInput } from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";

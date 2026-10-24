@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - the origin side hashes its read key with node:crypto.
-import * as NodeCrypto_ from "node:crypto";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeCrypto from "node:crypto";
+import * as PlatformCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
@@ -145,7 +145,7 @@ const reportFixture = () => {
       Layer.mergeAll(
         layerPermissionProfilesOff,
         ServerSettings.layerTest(),
-        NodeCrypto.layer,
+        PlatformCrypto.layer,
         Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
         Layer.mock(Threads.ThreadManagementService)({
           getThreadShell: (id) => Effect.succeed(liveThreadShell(id)),
@@ -185,7 +185,7 @@ it.effect(
         correlationId: "correlation-remote",
         originLabel: "origin laptop",
         originThreadId: ThreadId.make("origin-thread"),
-        readKeyHash: NodeCrypto_.createHash("sha256").update(readKey, "utf8").digest("hex"),
+        readKeyHash: NodeCrypto.createHash("sha256").update(readKey, "utf8").digest("hex"),
       });
       const args = { status: "progress", summary: "Halfway.", clientRequestId: "remote-1" };
       expect(yield* receipt("remote-1")).toEqual({ receipt: null });

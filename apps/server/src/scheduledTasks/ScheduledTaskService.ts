@@ -5,7 +5,6 @@ import {
   ScheduledTask,
   ScheduledTaskError,
   ScheduledTaskId,
-  SecretRef,
   ScheduledTaskWebhookDeliveryId,
   ThreadId,
   type MemoryTaskGrantCeiling,
@@ -71,8 +70,9 @@ import {
   type WebhookRequest,
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
+import { webhookEndpoint } from "./webhookEndpoint.ts";
 
-export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
+export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const PROMPT_TOO_LONG = "The filled-in prompt is too long.";
 const WEBHOOK_DELIVERY_RETENTION = 50;
@@ -94,7 +94,7 @@ const LEGACY_DELIVERY_OUTCOMES: ReadonlySet<string> = new Set([
   "expired",
 ]);
 
-interface WebhookOrigin {
+export interface WebhookOrigin {
   readonly relayHookBaseUrl: string | null;
   /** Why relayHookBaseUrl is null, when the link state could be read. */
   readonly unavailableReason?: ScheduledTaskWebhookUrlUnavailableReason | undefined;
@@ -317,31 +317,6 @@ function errorMessage(error: unknown): string {
   if (Cause.isCause(error)) return Cause.pretty(error);
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-function webhookPath(taskId: string, token: string): string {
-  return `${WEBHOOK_ROUTE_PREFIX}/${encodeURIComponent(taskId)}/${token}`;
-}
-
-function webhookEndpoint(
-  row: Pick<
-    ScheduledTaskRow,
-    "task_id" | "webhook_token" | "webhook_secret" | "webhook_secret_ref"
-  >,
-  origin: WebhookOrigin | null,
-): ScheduledTask["webhook"] {
-  if (row.webhook_token === null) return undefined;
-  const base = origin?.relayHookBaseUrl ?? null;
-  const reason = base === null ? origin?.unavailableReason : undefined;
-  return {
-    path: webhookPath(row.task_id, row.webhook_token),
-    url: base === null ? null : `${base}/${encodeURIComponent(row.task_id)}/${row.webhook_token}`,
-    ...(reason === undefined ? {} : { urlUnavailableReason: reason }),
-    hasSecret: row.webhook_secret !== null,
-    ...(row.webhook_secret === null || row.webhook_secret_ref === null
-      ? {}
-      : { secretRef: SecretRef.make(row.webhook_secret_ref) }),
-  };
 }
 
 // Runs per task row; list and lookup operations already own the span.

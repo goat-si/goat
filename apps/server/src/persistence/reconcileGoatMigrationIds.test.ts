@@ -85,6 +85,9 @@ const laterGoatMigrations = [
   [100, "HumanStepRecords"],
   [101, "McpRequestReservations"],
   [102, "RemoteReportInboxRunId"],
+  [103, "RemoteReportReceipts"],
+  [104, "PendingAttachmentUploads"],
+  [105, "ScheduledTaskWebhookSecretRef"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -344,6 +347,9 @@ const NIGHTLY_256_GOAT_LEDGER = [
   [99, "HumanStepRecords"],
   [100, "McpRequestReservations"],
   [101, "RemoteReportInboxRunId"],
+  [102, "RemoteReportReceipts"],
+  [103, "PendingAttachmentUploads"],
+  [104, "ScheduledTaskWebhookSecretRef"],
 ] as const;
 
 /** Upstream 1-67 as this build runs them, then the given 256-era GOAT rows under their old ids. */
