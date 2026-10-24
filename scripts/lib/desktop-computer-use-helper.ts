@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcess } from "effect/process";
 import { requireReleaseCommand } from "./release-verify.ts";
 
 export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseHelper")(
@@ -12,7 +12,6 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
   }) {
     if (!input.signed) return undefined;
     const path = yield* Path.Path;
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const args = [
       path.join(input.repoRoot, "scripts/build-computer-use-helper.ts"),
       "--channel",
