@@ -1,12 +1,8 @@
 import * as Schema from "effect/Schema";
 
-/**
- * Capabilities a turn can carry. Settings attach them to every eligible turn; a composer chip
- * (`@computer`, `@browser`) or the matching agent service method requests one for a single
- * turn (D13, #1238).
- */
-export const TurnCapability = Schema.Literals(["computer", "browser"]);
-export type TurnCapability = typeof TurnCapability.Type;
+// The capabilities a turn can carry are the composer's: Settings attach them to every eligible
+// turn, and an `@computer`/`@browser` chip requests one for a single turn (D13, #1238).
+import { TurnCapability } from "./composerContext.ts";
 
 /** `ServerProviderSkill.scope` of skills GOAT ships itself rather than a provider discovers. */
 export const BUILTIN_SKILL_SCOPE = "builtin";
@@ -29,7 +25,7 @@ export const BUILTIN_SKILLS: ReadonlyArray<BuiltInSkillListing> = [
     displayName: "Computer Use",
     description:
       "Operate app windows on the computer that runs GOAT: observe one window, act once, verify. Loads on every turn that has computer use.",
-    capability: "computer",
+    capability: "computer-use",
   },
 ];
 

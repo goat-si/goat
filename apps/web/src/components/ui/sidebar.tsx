@@ -606,6 +606,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
         className,
       )}
       data-slot="sidebar-inset"
+      data-native-material-band
       {...props}
     />
   );
