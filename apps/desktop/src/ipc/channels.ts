@@ -128,6 +128,10 @@ export const MAC_PERMISSION_HELPER_CHANNEL = "desktop:mac-permission-helper";
 
 export const RESTART_CUA_DRIVER_CHANNEL = "desktop:restart-cua-driver";
 export const VERIFY_CUA_DRIVER_CHANNEL = "desktop:verify-cua-driver";
+export const CHECK_CUA_GRANTS_CHANNEL = "desktop:check-cua-grants";
+export const OPEN_CUA_PERMISSION_GUIDE_CHANNEL = "desktop:open-cua-permission-guide";
+export const RELAUNCH_FOR_CUA_GRANTS_CHANNEL = "desktop:relaunch-for-cua-grants";
+export const REVEAL_CUA_GRANT_TARGET_CHANNEL = "desktop:reveal-cua-grant-target";
 
 export const CHECK_SYSTEM_PERMISSION_CHANNEL = "desktop:check-system-permission";
 

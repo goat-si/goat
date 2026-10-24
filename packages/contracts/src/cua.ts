@@ -106,6 +106,26 @@ export const DesktopCuaVerification = Schema.Struct({
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
 
 /**
+ * The macOS grants of whichever app computer use runs as. helper: GOAT Computer Use.app, read
+ * from a fresh helper process; app: GOAT itself, for builds without the helper; unusable: the
+ * helper ships and cannot run, so no other app may stand in for it.
+ */
+export const DesktopCuaGrants = Schema.Union([
+  Schema.Struct({
+    principal: Schema.Literals(["helper", "app"]),
+    /** The name the app has in System Settings' lists. */
+    name: Schema.String,
+    /** Where the app that needs the grants lives, so the person can tell it from older copies. */
+    bundlePath: Schema.optionalKey(Schema.String),
+    bundleId: Schema.String,
+    accessibility: Schema.Boolean,
+    screenRecording: Schema.Boolean,
+  }),
+  Schema.Struct({ principal: Schema.Literal("unusable"), message: Schema.String }),
+]);
+export type DesktopCuaGrants = typeof DesktopCuaGrants.Type;
+
+/**
  * What the computer use lease proxy hears from its own server about the lease it was started
  * for, one JSON object per line. Anything other than "active" for that handoff ends it.
  */

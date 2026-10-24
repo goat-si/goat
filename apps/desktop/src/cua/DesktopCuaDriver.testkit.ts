@@ -320,6 +320,7 @@ export const fixture = Effect.fn(function* (
   return {
     restart: driver.restart,
     verify: driver.verify,
+    grants: driver.grants,
     toolCalls,
     clientsOpen: () => clientsOpen,
     request: (requestId: string, enabled = true) =>

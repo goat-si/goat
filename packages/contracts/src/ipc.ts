@@ -19,7 +19,7 @@ import {
   SshRuntimeUpdateMode,
 } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import type { DesktopCuaVerification } from "./cua.ts";
+import type { DesktopCuaGrants, DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
@@ -1308,6 +1308,17 @@ export interface DesktopBridge {
   restartCuaDriver?: () => Promise<void>;
   /** Restarts the local driver and proves its macOS grants from inside the driver. */
   verifyCuaDriver?: () => Promise<DesktopCuaVerification>;
+  /** The grants of the app computer use runs as, read without prompting. */
+  checkCuaGrants?: () => Promise<DesktopCuaGrants>;
+  /**
+   * Opens the pane and, beside System Settings, a panel to drag the app computer use runs as
+   * into its list. Resolves false when System Settings did not open.
+   */
+  openCuaPermissionGuide?: (pane: "accessibility" | "screen-recording") => Promise<boolean>;
+  /** Shows the app computer use runs as in Finder, to drag by hand. */
+  revealCuaGrantTarget?: () => Promise<void>;
+  /** Quits and reopens GOAT, for grants macOS applies only to a new process. */
+  relaunchForCuaGrants?: () => Promise<void>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
    */

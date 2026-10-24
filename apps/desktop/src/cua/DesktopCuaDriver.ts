@@ -3,6 +3,7 @@ import {
   type CuaVerificationStep,
   type CuaVerificationStepId,
   type DesktopCuaDriverRequest,
+  type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
 import {
@@ -34,6 +35,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
   classifyHelperBundle,
+  ComputerUseHelperError,
   helperBundle,
   makeHelperHost,
   probeHelperGrants,
@@ -74,6 +76,21 @@ type Grants = { accessibility: boolean; screenRecording: boolean; readonly detai
 type Engine =
   | { readonly kind: "helper"; readonly bundle: HelperBundle }
   | { readonly kind: "embedded"; readonly driverPath: string };
+
+/**
+ * The app that must hold the macOS grants and how to read them now. Onboarding drags this app
+ * into System Settings and polls it, so it can never name GOAT while a helper ships.
+ */
+export type CuaGrantTarget =
+  | {
+      readonly kind: "helper";
+      readonly bundlePath: string;
+      readonly name: string;
+      readonly bundleId: string;
+      readonly read: () => Promise<Grants>;
+    }
+  | { readonly kind: "app"; readonly bundleId: string; readonly read: () => Promise<Grants> }
+  | { readonly kind: "unusable"; readonly message: string };
 
 /**
  * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
@@ -248,6 +265,9 @@ export class DesktopCuaDriver extends Context.Service<
     readonly listen: Effect.Effect<void, never, import("effect/Scope").Scope>;
     readonly restart: Effect.Effect<void>;
     readonly verify: Effect.Effect<DesktopCuaVerification>;
+    readonly grantTarget: Effect.Effect<CuaGrantTarget>;
+    /** The target's grants without prompting; each call asks a fresh helper process. */
+    readonly grants: Effect.Effect<DesktopCuaGrants, ComputerUseHelperError>;
   }
 >()("@goat/desktop/cua/DesktopCuaDriver") {}
 
@@ -814,9 +834,61 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }),
   );
 
+  const grantTarget = Effect.gen(function* () {
+    if (environment.platform !== "darwin")
+      return {
+        kind: "unusable",
+        message: "Accessibility and Screen Recording are macOS permissions.",
+      } satisfies CuaGrantTarget;
+    const chosen = yield* engine();
+    if (typeof chosen === "string")
+      return { kind: "unusable", message: chosen } satisfies CuaGrantTarget;
+    if (chosen?.kind === "helper") {
+      const bundle = chosen.bundle;
+      return {
+        kind: "helper",
+        bundlePath: bundle.bundlePath,
+        name: COMPUTER_USE_HELPER_NAME,
+        bundleId: bundle.bundleId,
+        read: () => engineGrants(chosen, false),
+      } satisfies CuaGrantTarget;
+    }
+    return {
+      kind: "app",
+      bundleId: environment.appUserModelId,
+      read: native.checkGrants,
+    } satisfies CuaGrantTarget;
+  }).pipe(Effect.withSpan("desktop.cua.grantTarget"));
+
+  const grants = Effect.gen(function* () {
+    const target = yield* grantTarget;
+    if (target.kind === "unusable")
+      return { principal: "unusable", message: target.message } satisfies DesktopCuaGrants;
+    const read = yield* Effect.tryPromise({
+      try: target.read,
+      catch: (cause) =>
+        cause instanceof ComputerUseHelperError
+          ? cause
+          : new ComputerUseHelperError(
+              "grantsUnreadable",
+              cause instanceof Error ? cause.message : "Could not read the permissions.",
+            ),
+    });
+    return {
+      principal: target.kind,
+      name: target.kind === "helper" ? target.name : environment.displayName,
+      ...(target.kind === "helper" ? { bundlePath: target.bundlePath } : {}),
+      bundleId: target.bundleId,
+      accessibility: read.accessibility,
+      screenRecording: read.screenRecording,
+    } satisfies DesktopCuaGrants;
+  }).pipe(Effect.withSpan("desktop.cua.grants"));
+
   return DesktopCuaDriver.of({
     restart,
     verify,
+    grantTarget,
+    grants,
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
       yield* Effect.forever(

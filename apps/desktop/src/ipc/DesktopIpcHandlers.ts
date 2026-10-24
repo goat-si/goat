@@ -1,7 +1,14 @@
 import * as Effect from "effect/Effect";
 
 import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./methods/providerAuth.ts";
-import { restartCuaDriver, verifyCuaDriver } from "./methods/cua.ts";
+import {
+  checkCuaGrants,
+  openCuaPermissionGuide,
+  relaunchForCuaGrants,
+  restartCuaDriver,
+  revealCuaGrantTarget,
+  verifyCuaDriver,
+} from "./methods/cua.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
@@ -162,6 +169,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(checkSystemPermission);
   yield* ipc.handle(restartCuaDriver);
   yield* ipc.handle(verifyCuaDriver);
+  yield* ipc.handle(checkCuaGrants);
+  yield* ipc.handle(openCuaPermissionGuide);
+  yield* ipc.handle(relaunchForCuaGrants);
+  yield* ipc.handle(revealCuaGrantTarget);
   yield* ipc.handle(pasteAsText);
   yield* ipc.handle(revealWindow);
   yield* ipc.handle(probeRemoteEditors);
