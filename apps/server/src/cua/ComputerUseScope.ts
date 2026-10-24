@@ -113,10 +113,11 @@ export function learnApps(value: unknown, into: Map<number, ListedApp>, depth = 
   const id = bundle ?? name;
   if (typeof pid === "number" && Number.isInteger(pid) && id !== undefined) {
     const known = into.get(pid);
-    // Replies such as get_window_state name the app without its bundle id; the bundle id a
-    // listing gave stays, or every grant naming it would refuse the app it names.
-    if (bundle !== undefined || known === undefined || known.name !== name)
-      into.set(pid, { id, name });
+    // Replies such as get_window_state name the app without its bundle id. A name cannot tell
+    // the listed app from another that reused its pid, and keeping the name as its id would
+    // refuse every grant naming the bundle id, so the pid is listed again before it is judged.
+    if (bundle === undefined && known !== undefined && known.id !== known.name) into.delete(pid);
+    else into.set(pid, { id, name });
   }
   for (const nested of Object.values(object))
     if (typeof nested === "object" && nested !== null) learnApps(nested, into, depth + 1);

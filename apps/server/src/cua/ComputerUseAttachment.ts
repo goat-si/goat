@@ -28,6 +28,8 @@ export type ComputerUseRefusal =
   | "read-only"
   | "unavailable"
   | "needs-approval"
+  /** Another thread holds the screen for unattended work; one does at a time. */
+  | "held"
   /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
   | "detection-unsupported";
 
@@ -102,6 +104,12 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       ? yield* leases.value.active(input.threadId).pipe(Effect.orElseSucceed(() => Option.none()))
       : Option.none<ComputerUseLeases.ComputerUseLease>();
   if (unattended && !everyApp && Option.isNone(lease)) return none("needs-approval", true);
+  if (unattended && everyApp && Option.isSome(leases)) {
+    const held = yield* leases.value
+      .holder(input.threadId)
+      .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
+    if (Option.isSome(held)) return none("held", true);
+  }
   if (unattended && Option.isSome(leases)) {
     const detection = yield* leases.value.detection;
     if (!detection.humanInput || !detection.privateMode) return none("detection-unsupported", true);
@@ -115,11 +123,19 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
   // Names this build does not know are ignored.
   const disabled = current?.disabledBuiltInSkills.filter(Schema.is(BuiltInSkillName)) ?? [];
+  // Claimed only now, so a turn that cannot get the driver holds nothing; the claim itself
+  // refuses unattended work that lost a race for the screen.
+  const control = everyApp
+    ? yield* leases.value
+        .everyAppControl(input.threadId, unattended)
+        .pipe(Effect.orElseSucceed(() => Option.none()))
+    : Option.some(yield* leases.value.control(input.threadId, lease));
+  if (Option.isNone(control)) return none("held", unattended);
   return {
     _tag: "proxied",
     mcp: mcp.value,
     ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
-    control: yield* leases.value.control(input.threadId, lease, everyApp),
+    control: control.value,
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,

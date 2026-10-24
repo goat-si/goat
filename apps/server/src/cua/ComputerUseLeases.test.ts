@@ -574,39 +574,92 @@ it.effect(
     }),
 );
 
+/** `threadId` in the projection, in `runtimeMode`. */
+const threadIn = (threadId: ThreadId, runtimeMode: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+         created_at, updated_at, payload_json)
+      VALUES (${threadId}, 'project', 'thread', 'codex', ${runtimeMode}, 'default',
+        '2026-01-01', '2026-01-01', '{}')
+      ON CONFLICT (thread_id) DO UPDATE SET runtime_mode = excluded.runtime_mode
+    `;
+  });
+
+const everyAppLayer = ComputerUseLeases.layer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      database,
+      NodeServices.layer,
+      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+    ),
+  ),
+);
+
 it.effect(
-  "gives a full access control every app while the host allows it, and ends it when that is turned off",
+  "gives a full access thread every app until it leaves full access or the host stops allowing it",
   () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
       const auto = ThreadId.make("thread-auto");
-      const control = yield* leases.control(auto, Option.none(), true);
-      const state = yield* leases.controlState(auto, control.controlId);
+      yield* threadIn(auto, "full-access");
+      const claim = () =>
+        leases
+          .everyAppControl(auto, false)
+          .pipe(Effect.map((control) => Option.getOrThrow(control)));
+      const first = yield* claim();
+      const state = yield* leases.controlState(auto, first.controlId);
       assert.equal(state._tag, "active");
       assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // A turn of the same thread outside full access gets a control of its own.
+      // A turn outside full access gets a control of its own, limited to its grants.
       const scoped = yield* leases.control(auto, Option.none());
-      assert.notEqual(scoped.controlId, control.controlId);
-      const again = yield* leases.control(auto, Option.none(), true);
+      assert.notEqual(scoped.controlId, first.controlId);
 
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      assert.deepEqual(yield* leases.controlState(auto, again.controlId), {
+      // Leaving full access ends it, with the provider session and its proxy still alive.
+      const second = yield* claim();
+      yield* threadIn(auto, "auto");
+      assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
         _tag: "ended",
         reason: "revoked",
       });
-    }).pipe(
-      Effect.provide(
-        ComputerUseLeases.layer.pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              database,
-              NodeServices.layer,
-              ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
-            ),
-          ),
-        ),
-      ),
-    ),
+
+      yield* threadIn(auto, "full-access");
+      const third = yield* claim();
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
+      assert.deepEqual(yield* leases.controlState(auto, third.controlId), {
+        _tag: "ended",
+        reason: "revoked",
+      });
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("lets one unattended thread at a time hold the screen without a grant", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const first = ThreadId.make("thread-scheduled-1");
+    const second = ThreadId.make("thread-scheduled-2");
+    const person = ThreadId.make("thread-directed");
+    for (const id of [first, second, person]) yield* threadIn(id, "full-access");
+
+    const held = yield* leases.everyAppControl(first, true);
+    assert.isTrue(Option.isSome(held));
+    assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
+    // Requests and approvals see it as the holder, as they see a grant.
+    assert.equal(Option.getOrThrow(yield* leases.holder(second)).threadId, first);
+    assert.isTrue(Option.isNone(yield* leases.holder(first)));
+    // A person directing a thread can still use the screen meanwhile.
+    assert.isTrue(Option.isSome(yield* leases.everyAppControl(person, false)));
+
+    // Once the first one stops, the next can have it; a grant held elsewhere still keeps it out.
+    yield* leases.stop(first);
+    yield* grant(person, "handoff:person-screen");
+    assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
+    yield* leases.stopAll;
+  }).pipe(Effect.provide(everyAppLayer)),
 );

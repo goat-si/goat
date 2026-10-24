@@ -28,6 +28,7 @@ const fixture = Effect.fnUntraced(function* () {
     channelOrigin: () => Effect.succeed(undefined),
     state: () => Effect.die("unused"),
     control: () => Effect.die("unused"),
+    everyAppControl: () => Effect.die("unused"),
     controlState: () =>
       Effect.gen(function* () {
         if (yield* Ref.get(revoked)) return { _tag: "ended", reason: "revoked" } as const;

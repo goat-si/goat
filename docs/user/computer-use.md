@@ -53,8 +53,10 @@ apps you approved.
 To skip approvals on a computer you trust, turn on **Full access without
 approval** under **Computer use**. Threads in full access mode then use every
 app without asking, including GOAT Bot, scheduled tasks and other work that
-runs on its own. Threads in other modes still ask. Stop, **Stop all** and
-turning the setting or computer use off still end their computer use.
+runs on its own. Threads in other modes still ask, and a thread that leaves full
+access stops at once. Work that runs on its own still uses the screen one thread
+at a time. Stop, **Stop all** and turning the setting or computer use off still
+end their computer use.
 
 ## Watching agents
 

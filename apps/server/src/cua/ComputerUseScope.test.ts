@@ -13,25 +13,27 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
-  it("keeps the bundle id a listing gave when a later reply names the app only", () => {
+  it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
     // get_window_state answers with the app's name and pid but no bundle id.
     learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid, window_id: 57000 }, listed);
-    assert.deepEqual(listed.get(KAKAO.pid), { id: KAKAO.bundle_id, name: "KakaoTalk" });
+    assert.deepEqual(verdict(listed), { _tag: "resolve", pid: KAKAO.pid });
+    // The listing the proxy asks for then judges the call by bundle id again.
+    learnApps({ apps: [KAKAO] }, listed);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });
 
-  it("forgets a pid's bundle id once a reply shows another app on it", () => {
+  it("does not let a same-named app that reused the pid inherit the approved bundle id", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed);
-    learnApps({ app_name: "Calculator", pid: KAKAO.pid }, listed);
-    assert.deepEqual(listed.get(KAKAO.pid), { id: "Calculator", name: "Calculator" });
+    learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid }, listed);
+    learnApps({ apps: [{ ...KAKAO, bundle_id: "com.example.KakaoTalk" }] }, listed);
     assert.deepEqual(verdict(listed), {
       _tag: "refuse",
       reason: "app_not_approved",
-      app: "Calculator",
+      app: "com.example.KakaoTalk",
     });
   });
 });
