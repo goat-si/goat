@@ -247,7 +247,7 @@ function pullRequestWatchMessage(input: {
   readonly report: PullRequestWatchReport;
   /** Lines kept as context since the last wake, told with this one. */
   readonly heldContext?: ReadonlyArray<string>;
-}): { readonly text: string; readonly notification: OrchestrationV2Notification } {
+}): PullRequestWatchWake {
   const { changes, exhausted } = input.report;
   const context = {
     baseBranch: input.baseBranch,
@@ -271,8 +271,12 @@ function pullRequestWatchMessage(input: {
   );
   const summary = changes.map((change) => SUMMARY[change.kind]);
   if (exhausted) summary.push("stopped watching");
+  const checksOnly = changes.every(
+    (change) => change.kind === "checks-failed" || change.kind === "checks-passed",
+  );
   return {
     text,
+    ...(checksOnly && input.headSha !== null ? { checksOn: input.headSha } : {}),
     notification: {
       source: { kind: "monitor" },
       outcome: failed
@@ -283,6 +287,13 @@ function pullRequestWatchMessage(input: {
       summary: `#${input.number}: ${summary.join(", ")}`,
     },
   };
+}
+
+export interface PullRequestWatchWake {
+  readonly text: string;
+  readonly notification: OrchestrationV2Notification;
+  /** The head this wake reports only check results for; a push makes them stale. */
+  readonly checksOn?: string;
 }
 
 /**
@@ -299,7 +310,7 @@ export function pullRequestWatchOutcome(input: {
   readonly next: ThreadPullRequestWatch | null;
   /** An ending watch keeps what this pass saw, so watching again starts from it. */
   readonly endedWatch?: ThreadPullRequestWatch;
-  readonly wake?: { readonly text: string; readonly notification: OrchestrationV2Notification };
+  readonly wake?: PullRequestWatchWake;
   readonly note?: OrchestrationV2Notification;
 } {
   const { report } = input;

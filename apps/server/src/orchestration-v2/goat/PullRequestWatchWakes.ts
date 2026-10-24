@@ -2,7 +2,8 @@
  * A watch wake is a queued message, so it starts its own turn only when the thread's current turn
  * ends, which can be hours later. Its id names the pull request, so when the watch is stopped or
  * the pull request merges or closes, the wakes it left queued can be dropped instead of reporting
- * a stale conflict or check (#926).
+ * a stale conflict or check (#926). A wake that reports only check results also names the head they
+ * ran on, so a push drops it: the new head's checks are reported on their own (#1056).
  *
  * @module PullRequestWatchWakes
  */
@@ -23,18 +24,48 @@ import * as Effect from "effect/Effect";
 /** A link as the thread stores it, so both sides normalize the same key. */
 type WatchedLink = Parameters<typeof threadPullRequestKeyOf>[0];
 
+export const PULL_REQUEST_WAKE_MESSAGE_PREFIX = "message:pr-watch:";
+
 const wakePrefix = (key: WatchedLink) =>
-  `message:pr-watch:${encodeURIComponent(threadPullRequestKeyOf(key))}:`;
+  `${PULL_REQUEST_WAKE_MESSAGE_PREFIX}${encodeURIComponent(threadPullRequestKeyOf(key))}:`;
 
-export const pullRequestWakeMessageId = (key: WatchedLink, unique: string) =>
-  MessageId.make(wakePrefix(key) + unique);
+const CHECKS_ON = "checks@";
 
-const queuedPullRequestWakes = (runs: ReadonlyArray<OrchestrationV2Run>, key: WatchedLink) => {
-  const prefix = wakePrefix(key);
-  return runs.filter((run) => run.status === "queued" && run.userMessageId.startsWith(prefix));
+/** `checksOn` is the head a wake reports nothing but check results for. */
+export const pullRequestWakeMessageId = (
+  key: WatchedLink,
+  unique: string,
+  checksOn?: string | null,
+) =>
+  MessageId.make(
+    wakePrefix(key) + (checksOn ? `${CHECKS_ON}${encodeURIComponent(checksOn)}:` : "") + unique,
+  );
+
+/** The head a wake's check results ran on, or null when it reports anything else. */
+const checksHead = (id: string, prefix: string) => {
+  const rest = id.slice(prefix.length);
+  if (!rest.startsWith(CHECKS_ON)) return null;
+  return decodeURIComponent(rest.slice(CHECKS_ON.length, rest.indexOf(":")));
 };
 
-/** Cancels the wakes queued for the pull request a stopped or merged or closed watch named. */
+const queuedPullRequestWakes = (
+  runs: ReadonlyArray<OrchestrationV2Run>,
+  key: WatchedLink,
+  headSha: string | undefined,
+) => {
+  const prefix = wakePrefix(key);
+  return runs.filter((run) => {
+    if (run.status !== "queued" || !run.userMessageId.startsWith(prefix)) return false;
+    if (headSha === undefined) return true;
+    const ranOn = checksHead(run.userMessageId, prefix);
+    return ranOn !== null && ranOn !== headSha;
+  });
+};
+
+/**
+ * Cancels the wakes queued for the pull request a stopped or merged or closed watch named. Given
+ * the pull request's new head, it cancels only the check results of other heads.
+ */
 export const dropQueuedPullRequestWakes = Effect.fn("PullRequestWatchWakes.dropQueued")(function* <
   E,
   R,
@@ -51,6 +82,7 @@ export const dropQueuedPullRequestWakes = Effect.fn("PullRequestWatchWakes.dropQ
     R
   >,
   cancel: (runId: RunId) => Effect.Effect<void, E2, R2>,
+  headSha?: string,
 ) {
   const { thread, runs } = yield* records;
   const normalized = normalizeThreadPullRequestKey(key);
@@ -59,5 +91,5 @@ export const dropQueuedPullRequestWakes = Effect.fn("PullRequestWatchWakes.dropQ
     threadPullRequestsOf(thread).find((candidate) =>
       threadPullRequestKeysEqual(candidate, normalized),
     ) ?? normalized;
-  for (const run of queuedPullRequestWakes(runs, link)) yield* cancel(run.id);
+  for (const run of queuedPullRequestWakes(runs, link, headSha)) yield* cancel(run.id);
 });

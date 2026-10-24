@@ -331,6 +331,19 @@ describe("pull request watch policy", () => {
     assert.isUndefined(woken.next?.heldContext);
   });
 
+  it("names the head of a wake that reports only check results, so a push can drop it", () => {
+    const outcome = (remarks: ReadonlyArray<PullRequestComment>) =>
+      pullRequestWatchOutcome({
+        number: 7,
+        url: "https://github.com/o/r/pull/7",
+        baseBranch: "main",
+        report: evaluate(watch(), detail({ checks: [check("lint", "failure")] }), remarks),
+      }).wake;
+    assert.equal(outcome(noRemarks)?.checksOn, "aaaaaaaaaa");
+    // A comment stays news after a push, so a wake that carries one is kept.
+    assert.isUndefined(outcome([remark("reviewer", "2026-10-02T12:10:00Z")])?.checksOn);
+  });
+
   it("drops ignored changes but records them", () => {
     const policy: PullRequestWatchPolicy = { ...DEFAULT_POLICY, checksFailed: "ignore" };
     const report = evaluate(

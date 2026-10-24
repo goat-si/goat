@@ -2734,6 +2734,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       yield* dispatchThreadMutation(command, events, effects);
       if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
+      else if (command.watch?.headSha != null && command.watch.headSha !== link.watch.headSha)
+        yield* dropQueuedPullRequestWakes(command, events, command.watch.headSha);
       if (command.wake === undefined) {
         if (command.note === undefined) return;
         // Kept as context: the timeline shows it, and no turn starts.
@@ -2792,10 +2794,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926).
+  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926);
+  // a push drops only the check results of earlier heads (#1056).
   const dropQueuedPullRequestWakes = (
     command: ThreadPullRequestKey & { readonly commandId: CommandId; readonly threadId: ThreadId },
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    headSha?: string,
   ) =>
     dropQueuedWakes(
       command,
@@ -2816,6 +2820,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
           events,
         ),
+      headSha,
     );
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({

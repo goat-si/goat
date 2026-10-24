@@ -39,6 +39,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   evaluatePullRequestWatch,
   pullRequestWatchOutcome,
+  type PullRequestWatchWake,
   withHeldContext,
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
@@ -279,7 +280,7 @@ export const make = Effect.gen(function* () {
   const record = Effect.fn("PullRequestWatchReactor.record")(function* (
     target: WatchTarget,
     next: ThreadPullRequestWatch | null,
-    wake?: { readonly text: string; readonly notification: OrchestrationV2Notification },
+    wake?: PullRequestWatchWake,
     note?: OrchestrationV2Notification,
     endedWatch?: ThreadPullRequestWatch,
     dropQueuedWakes?: true,
@@ -295,7 +296,13 @@ export const make = Effect.gen(function* () {
       ...(endedWatch === undefined ? {} : { endedWatch }),
       ...(wake === undefined
         ? {}
-        : { wake: { ...wake, messageId: pullRequestWakeMessageId(target.link, uuid) } }),
+        : {
+            wake: {
+              text: wake.text,
+              notification: wake.notification,
+              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn),
+            },
+          }),
       ...(note === undefined ? {} : { note }),
       ...(dropQueuedWakes === undefined ? {} : { dropQueuedWakes }),
     });

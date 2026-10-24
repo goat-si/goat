@@ -345,4 +345,48 @@ describe("pull request watch wakes", () => {
       expect(yield* statusOf("second")).toBe("queued");
     }).pipe(Effect.provide(layerTest)),
   );
+
+  it.effect("a push drops the queued check result for the head it replaced (#1056)", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, link, watch } = yield* watchWithQueuedWake("pushed");
+      const old = { ...watch, headSha: "1111111aaaa" };
+      for (const [name, checksOn] of [
+        ["old-checks", "1111111aaaa"],
+        ["old-comment", undefined],
+      ] as const)
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request-watch.sync",
+          commandId: CommandId.make(`pr-wakes-pushed-${name}`),
+          threadId,
+          ...key,
+          startedAt: watch.startedAt,
+          watch: old,
+          wake: {
+            messageId: pullRequestWakeMessageId(link, `pushed-${name}`, checksOn),
+            text: checksOn === undefined ? "1 new comment." : "Checks failed on 1111111.",
+            notification,
+          },
+        });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-watch.sync",
+        commandId: CommandId.make("pr-wakes-pushed-new-head"),
+        threadId,
+        ...key,
+        startedAt: watch.startedAt,
+        watch: { ...watch, headSha: "2222222bbbb" },
+      });
+      const { runs, messages } = yield* orchestrator.getThreadRecords(threadId, [
+        "runs",
+        "messages",
+      ]);
+      const queued = runs.filter((run) => run.status === "queued");
+      const texts = queued.map(
+        (run) => messages.find((message) => message.id === run.userMessageId)?.text ?? "",
+      );
+      // The conflict and the comment still hold on the new head; the old head's checks do not.
+      expect(texts.join("\n")).not.toContain("Checks failed on 1111111.");
+      expect(texts.join("\n")).toContain("1 new comment.");
+      expect(texts.join("\n")).toContain("The branch now conflicts with dev.");
+    }).pipe(Effect.provide(layerTest)),
+  );
 });
