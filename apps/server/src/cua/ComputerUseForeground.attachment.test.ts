@@ -57,7 +57,7 @@ const layer = (fullAccess: boolean) =>
 const attach = Effect.fn("foreground.attachFixture")(function* (fullAccess: boolean) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
-  yield* sql`INSERT INTO orchestration_v2_projection_threads
+  yield* sql`INSERT OR IGNORE INTO orchestration_v2_projection_threads
     (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
     VALUES (${threadId}, 'project', 'foreground fixture', 'codex', ${fullAccess ? "full-access" : "auto"}, 'default', '2026-01-01', '2026-01-01', '{}')`;
   const driver = CuaDriver.CuaDriver.of({
@@ -96,6 +96,49 @@ const attach = Effect.fn("foreground.attachFixture")(function* (fullAccess: bool
 });
 
 describe("foreground through real computer-use attachment", () => {
+  it.effect.each(["none", "pause", "stop"] as const)(
+    "binds a new foreground admission after an existing background control unless interrupted by %s",
+    (interruption) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        yield* foregroundGrant(threadId, "handoff:background-first", {
+          foreground: false,
+          minutes: 10,
+        });
+        const first = yield* attach(false);
+        const grant = yield* foregroundGrant(threadId, "handoff:foreground-next");
+        assert.isTrue(yield* first.leases.foregroundAvailable(threadId, "Check the build status"));
+        if (interruption === "pause") {
+          yield* first.leases.pause("takeover");
+          yield* first.leases.resume;
+        } else if (interruption === "stop") yield* first.leases.stop(threadId);
+        const next = yield* attach(false);
+        assert.notEqual(next.attachment.control.controlId, first.attachment.control.controlId);
+        assert.equal(next.attachment.control.handoffId, grant.handoffId);
+        assert.equal(
+          yield* next.leases.foregroundAvailable(threadId, "Check the build status"),
+          interruption === "none",
+        );
+        const decision = yield* next.leases.callReservation(threadId, {
+          action: "reserve",
+          controlId: next.attachment.control.controlId,
+          connectionId: "driver:next-attachment",
+          callId: "focus",
+          interruptions: interruption === "pause" ? 1 : 0,
+          idleEpoch: 0,
+          foregroundGrantId: grant.handoffId,
+          name: "bring_to_front",
+          args: { pid: 42, window_id: 7 },
+        });
+        assert.deepEqual(
+          decision.status === "admitted" ? { status: decision.status } : decision,
+          interruption === "none"
+            ? { status: "admitted" }
+            : { status: "refused", detail: "foreground_not_approved" },
+        );
+      }).pipe(Effect.provide(layer(false))),
+  );
+
   it.effect.each([false, true])(
     "binds first unattended approval before its first control (full access %s)",
     (fullAccess) =>

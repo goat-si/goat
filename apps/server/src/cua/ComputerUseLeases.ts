@@ -759,11 +759,20 @@ const make = Effect.gen(function* () {
     foregroundApprovalEpoch: Effect.sync(() => foreground.revision()),
     approveForeground: Effect.fn("ComputerUseLeases.approveForeground")(
       function* (handoff, observedEpoch) {
+        const selected = (yield* live(handoff.requestedBy.threadId).pipe(Effect.orDie))[0];
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const current = controls.get(handoff.requestedBy.threadId);
+        // A newly selected unattended admission mints a different control on the next attachment.
+        // Only this new approval waits for that mint; existing authority never follows it.
+        const awaitingAdmission =
+          current?.everyApp === undefined &&
+          current?.handoffId !== undefined &&
+          selected?.handoffId === handoff.handoffId &&
+          current.handoffId !== selected.handoffId;
         const controlId =
           current !== undefined &&
           current.ended === undefined &&
+          !awaitingAdmission &&
           DateTime.toEpochMillis(current.expiresAt) > now
             ? current.controlId
             : undefined;

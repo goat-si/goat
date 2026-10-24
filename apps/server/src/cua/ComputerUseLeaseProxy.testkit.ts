@@ -49,6 +49,8 @@ export interface FakeDriver {
   readonly toDriver: Queue.Queue<string>;
   readonly fromDriver: Queue.Queue<string, Cause.Done>;
   readonly killed: Deferred.Deferred<void>;
+  readonly closed: Deferred.Deferred<void>;
+  readonly observed: Deferred.Deferred<"reading" | "closed">;
 }
 
 /** A proxy over in-memory stdio, lease stream and drivers, on the TestClock (epoch 0). */
@@ -73,7 +75,8 @@ export const harness = Effect.fn(function* (
     readonly reservation?: (
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission>;
-    readonly kill?: Effect.Effect<void>;
+    readonly kill?: Effect.Effect<void> | ((index: number) => Effect.Effect<void>);
+    readonly acquire?: (index: number) => Effect.Effect<void>;
     readonly restartFailure?: string;
     /**
      * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
@@ -88,6 +91,7 @@ export const harness = Effect.fn(function* (
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
   const drivers: Array<FakeDriver> = [];
   const started = yield* Queue.unbounded<FakeDriver>();
+  const dispatched = yield* Queue.unbounded<{ index: number; line: string }>();
   const revokeCalled = yield* Deferred.make<void>();
   const revoked: Array<ReadonlyArray<string>> = [];
   const log: Array<string> = [];
@@ -138,21 +142,42 @@ export const harness = Effect.fn(function* (
         toDriver: yield* Queue.unbounded<string>(),
         fromDriver: yield* Queue.unbounded<string, Cause.Done>(),
         killed: yield* Deferred.make<void>(),
+        closed: yield* Deferred.make<void>(),
+        observed: yield* Deferred.make<"reading" | "closed">(),
       };
+      const index = drivers.length;
       drivers.push(driver);
+      yield* Effect.addFinalizer(() =>
+        Deferred.succeed(driver.closed, undefined).pipe(
+          Effect.andThen(Deferred.succeed(driver.observed, "closed")),
+        ),
+      );
       yield* Queue.offer(started, driver);
       const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; at: number }>();
       hidFeeds.push(hid);
+      yield* options.acquire?.(index) ?? Effect.void;
       return {
         ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
         send: (line: string) =>
           Effect.sync(() => {
             const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
             if (typeof params?.name === "string") log.push("send " + params.name);
-          }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
-        lines: Stream.fromQueue(driver.fromDriver),
+          }).pipe(
+            Effect.andThen(Queue.offer(dispatched, { index, line })),
+            Effect.andThen(Queue.offer(driver.toDriver, line)),
+            Effect.asVoid,
+          ),
+        lines: Stream.unwrap(
+          Deferred.succeed(driver.observed, "reading").pipe(
+            Effect.as(Stream.fromQueue(driver.fromDriver)),
+          ),
+        ),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
-          Effect.andThen(options.kill ?? Effect.void),
+          Effect.andThen(
+            typeof options.kill === "function"
+              ? options.kill(index)
+              : (options.kill ?? Effect.void),
+          ),
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
         ...(options.overlay
@@ -211,6 +236,10 @@ export const harness = Effect.fn(function* (
     killed: Effect.suspend(() => Deferred.await(first.killed)),
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
+    drivers,
+    nextDispatch: Queue.take(dispatched).pipe(
+      Effect.map(({ index, line }) => ({ index, message: json(line) })),
+    ),
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),

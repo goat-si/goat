@@ -386,8 +386,12 @@ const make = Effect.gen(function* () {
     }
     return session!.client.label ?? "GOAT client";
   });
-  const respond = Effect.fn("Handoffs.respond")(
-    function* (input: HandoffRespondInput, sessionId: AuthSessionId) {
+  const respondLocked = Effect.fn("Handoffs.respondLocked")(
+    function* (
+      input: HandoffRespondInput,
+      sessionId: AuthSessionId,
+      foregroundEpoch: number | undefined,
+    ) {
       const label = yield* clientLabel(input, sessionId);
       const record = yield* read(input);
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
@@ -418,18 +422,12 @@ const make = Effect.gen(function* () {
           true,
         );
       }
-      // Capture before the durable transition so a concurrent pause or Stop fences this approval.
-      const foregroundEpoch =
-        isComputerUseGrant &&
-        input.action === "completed" &&
-        isHandoffPending(record.state) &&
-        record.computerUseForeground !== undefined &&
-        Option.isSome(computerUseLeases)
-          ? yield* computerUseLeases.value.foregroundApprovalEpoch
-          : undefined;
       const result = yield* transition(input, input.action, { type: "client", label });
       if (
         foregroundEpoch !== undefined &&
+        isComputerUseGrant &&
+        isHandoffPending(record.state) &&
+        record.computerUseForeground !== undefined &&
         result.state === "completed" &&
         Option.isSome(computerUseLeases)
       )
@@ -447,6 +445,17 @@ const make = Effect.gen(function* () {
         ? computerUseLeases.value.serializeAdmission(effect)
         : effect,
   );
+  const respond = Effect.fn("Handoffs.respond")(function* (
+    input: HandoffRespondInput,
+    sessionId: AuthSessionId,
+  ) {
+    // Authorization, holder reads and lock acquisition can all overlap a person's Stop.
+    const foregroundEpoch =
+      input.action === "completed" && Option.isSome(computerUseLeases)
+        ? yield* computerUseLeases.value.foregroundApprovalEpoch
+        : undefined;
+    return yield* respondLocked(input, sessionId, foregroundEpoch);
+  });
   const open = Effect.fn("Handoffs.open")(function* (
     input: HandoffReadInput,
     sessionId: AuthSessionId,
