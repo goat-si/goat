@@ -58,6 +58,8 @@ export const harness = Effect.fn(function* (
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
+    /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
+    readonly manifestStamp?: Effect.Effect<string | undefined>;
     readonly acceptHuman?: () => boolean;
   } = {},
 ) {
@@ -147,6 +149,7 @@ export const harness = Effect.fn(function* (
               ),
             ),
         }),
+    ...(options.manifestStamp === undefined ? {} : { manifestStamp: options.manifestStamp }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
         Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
