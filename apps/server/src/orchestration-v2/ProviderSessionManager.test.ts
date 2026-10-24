@@ -10,6 +10,7 @@ import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapter
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ChannelDispatcher from "../channels/ChannelDispatcher.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
@@ -5246,6 +5247,7 @@ it.effect.each(turnStartMemoryCases)(
                   }),
                   Layer.mock(ProjectStore.ProjectStoreV2)({}),
                   Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+                  Layer.mock(ChannelChildWork.ChannelChildWork)({}),
                   Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({}),
                   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
                   Layer.mock(SlackChannelSettings.SlackChannelSettings)({}),

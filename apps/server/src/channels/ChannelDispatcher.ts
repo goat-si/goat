@@ -55,6 +55,7 @@ import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import { type ChannelBotFiles, channelBotFilesFor } from "./channelBotNotes.ts";
@@ -77,7 +78,7 @@ import {
   GOAT_BOT_SUPERVISOR_RULE,
   workerHeader,
 } from "./channelWorkerBrief.ts";
-import { isThreadMissing } from "./channelWorkerObservation.ts";
+import { ENDED_RUN_STATUSES, isThreadMissing } from "./channelWorkerObservation.ts";
 import { derivePendingBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 
@@ -128,15 +129,6 @@ const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {
   return next;
 };
 
-/** Run states that have ended; anything else may still start or run. */
-const ENDED_RUN_STATUSES = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-  "rolled_back",
-]);
-
 /** How long a stop keeps looking for a worker whose launch was in flight when it was asked. */
 const STOP_LAUNCH_GRACE_MS = 120_000;
 
@@ -179,6 +171,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const childWork = yield* ChannelChildWork.ChannelChildWork;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const usageSources = yield* UsageLimitSources.UsageLimitSources;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -1283,6 +1276,23 @@ const make = Effect.gen(function* () {
         yield* Effect.logWarning("channel subagent stop failed; retrying", {
           taskId: task.taskId,
           cause: subagents.failure,
+        });
+        return;
+      }
+      // Launched thread children sit outside the delegated-task cascade; the ownership records
+      // drive their stop. Anything incomplete keeps the stop pending for the next pass.
+      const children = yield* childWork
+        .cancelForTask({
+          taskId: task.taskId,
+          generation: task.generation,
+          stopEventId: pending.event.eventId,
+          attempt,
+          reason: "Stopped from GOAT Bot.",
+        })
+        .pipe(Effect.result);
+      if (children._tag === "Failure" || children.success === "retry") {
+        yield* Effect.logWarning("channel child-work stop incomplete; retrying", {
+          taskId: task.taskId,
         });
         return;
       }
