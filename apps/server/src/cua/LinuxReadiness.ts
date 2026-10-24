@@ -5,6 +5,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -22,8 +23,9 @@ import { captureX11Window } from "./linuxHelper/x11WindowCapture.ts";
 const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const requireDriver = NodeModule.createRequire(import.meta.url);
-type ClientModule = {
+export type DriverClientModule = {
   readonly CuaDriver: {
     readonly connect: (socketPath: string) => {
       readonly callTool: (
@@ -35,6 +37,42 @@ type ClientModule = {
     };
   };
 };
+
+/** The driver's own client library, from where the server resolves its packages. */
+export const loadDriverSdk = Effect.fnUntraced(function* (
+  fs: FileSystem.FileSystem,
+  path: Path.Path,
+) {
+  for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
+    const directory = path.join(lookup, "@trycua", "cua-driver");
+    if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
+    return Option.some(
+      yield* Effect.try(
+        () => requireDriver(path.join(directory, "dist", "index.js")) as DriverClientModule,
+      ),
+    );
+  }
+  return Option.none<DriverClientModule>();
+});
+
+/** One driver tool's structured answer over the daemon socket; undefined when it errs. */
+export const callDriverTool = (
+  sdk: DriverClientModule,
+  socketPath: string,
+  name: string,
+  args: object,
+) =>
+  Effect.tryPromise(async (signal) => {
+    const client = sdk.CuaDriver.connect(socketPath);
+    try {
+      const result = await client.callTool(name, encodeJson(args), { signal });
+      return result.isError || result.structuredJson === undefined
+        ? undefined
+        : decodeJson(result.structuredJson);
+    } finally {
+      client.uniffiDestroy();
+    }
+  });
 
 export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -67,12 +105,9 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
         driverEnvironment: {},
         captureX11: (windowId, shot) => captureX11Window(sessionEnvironment, windowId, shot),
       });
-      for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
-        const directory = path.join(lookup, "@trycua", "cua-driver");
-        if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
-        const sdk = yield* Effect.try(
-          () => requireDriver(path.join(directory, "dist", "index.js")) as ClientModule,
-        );
+      const found = yield* loadDriverSdk(fs, path);
+      if (Option.isSome(found)) {
+        const sdk = found.value;
         const writable = yield* fs.access("/dev/uinput", { writable: true }).pipe(
           Effect.as(true),
           Effect.orElseSucceed(() => false),

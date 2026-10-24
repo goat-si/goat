@@ -5,6 +5,7 @@ import {
   DeviceId,
   type DeviceSummary,
   EnvironmentId,
+  type Project,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -17,6 +18,7 @@ import * as ServerConfig from "../config.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "./McpToolAccess.testkit.ts";
@@ -103,9 +105,22 @@ const readiness = {
   helpers: { serveSimAxSettings: null, serveSimCli: null },
   agentDevice: null,
 };
-const layerProjectsMock = Layer.mock(ProjectService.ProjectService)({
-  getById: () => Effect.succeed(Option.none()),
-});
+// The thread's project exists and Agent device access is on.
+const layerProjectAccess = Layer.mock(ProjectService.ProjectService)({
+  getById: (id) =>
+    Effect.succeed(
+      Option.some({
+        id,
+        title: "Device test project",
+        workspaceRoot: process.cwd(),
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        deletedAt: null,
+      } as Project),
+    ),
+}).pipe(Layer.merge(ServerSettings.layerTest({ enableAgentDeviceAccess: true })));
 
 const layerDeviceServiceMock = (
   opened: Array<unknown> = [],
@@ -166,7 +181,7 @@ const layerTest = (opened?: Array<unknown>, target?: DeviceSummary, bootedTarget
     Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
     Layer.provideMerge(layerDeviceServiceMock(opened, target, bootedTarget)),
     Layer.provideMerge(Sqlite.layerMemory),
-    Layer.provide(layerProjectsMock),
+    Layer.provide(layerProjectAccess),
     Layer.provide(
       ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" }),
     ),
@@ -289,7 +304,7 @@ it.effect("rejects unavailable agent access before booting or opening a device",
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerUnavailable),
-        Layer.provide(layerProjectsMock),
+        Layer.provide(layerProjectAccess),
         Layer.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-device-toolkit-test-" }),
         ),

@@ -12,7 +12,7 @@ import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as DeviceService from "../../../device/DeviceService.ts";
-import { catalog, client, dependencies } from "../../agentSurface.testkit.ts";
+import { catalog, client, dependencies, deviceAccessGranted } from "../../agentSurface.testkit.ts";
 import { McpInvocationContext } from "../../McpInvocationContext.ts";
 
 const png = new Uint8Array([
@@ -44,7 +44,7 @@ const device = Layer.mock(DeviceService.DeviceService)({
     }),
 });
 const registered = catalog.pipe(
-  Layer.provide(Layer.mergeAll(dependencies, device)),
+  Layer.provide(Layer.mergeAll(dependencies, deviceAccessGranted, device)),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
