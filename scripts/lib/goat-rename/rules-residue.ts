@@ -182,7 +182,11 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   ),
   keep(
     "legacy-cli-discovery",
-    ["apps/server/src/cli/invocation.ts", "scripts/build-npm-launcher.ts"],
+    [
+      "apps/server/src/cli/invocation.ts",
+      "scripts/build-npm-launcher.ts",
+      "scripts/lib/release-verify.ts",
+    ],
     /\bt3(?=:)|goat\|t3/g,
     "D4/D12: package bin metadata and discovery accept the retained CLI alias.",
   ),

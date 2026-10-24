@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The `goat` npm package. Downloads this version's CLI archive from the GitHub
+// GOAT's private release tarball. Downloads this version's CLI archive from the GitHub
 // Release into <GOAT home>/runtime/goat/versions/<version> (the folder the install
 // scripts and `goat update` use), verifies it against the release's SHA256SUMS,
 // then runs it. `dist/bin.mjs` re-enters here for background services

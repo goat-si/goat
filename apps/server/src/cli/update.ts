@@ -38,6 +38,7 @@ import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntim
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 import * as CliService from "./service.ts";
 import { createUpdateProgress } from "./updateProgress.ts";
+import { resolveNpmUpdateCommand } from "./invocation.ts";
 
 export class CliUpdateError extends Schema.TaggedError<CliUpdateError>()("CliUpdateError", {
   reason: Schema.String,
@@ -676,6 +677,12 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   }
 
   progress.success(`Installed GOAT ${targetVersion}`);
+  const npmUpdate = yield* resolveNpmUpdateCommand(targetVersion);
+  if (npmUpdate !== undefined) {
+    yield* Console.log(
+      `  The npm launcher remains pinned to its installed version. To use GOAT ${targetVersion}:\n  ${npmUpdate}\n`,
+    );
+  }
   if (Option.isSome(repointed)) {
     yield* Console.log("  Run goat to get started.\n");
   } else {

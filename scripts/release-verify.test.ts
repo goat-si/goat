@@ -39,6 +39,7 @@ import {
 import { finalizeMacosDmgs, rewriteDmgManifest } from "./finalize-macos-dmg.ts";
 import { verifyMacPayload, verifyReleaseDirectory } from "./verify-release-artifacts.ts";
 import { mergeUpdateManifestFiles } from "./merge-update-manifests.ts";
+import { buildNpmLauncher } from "./build-npm-launcher.ts";
 import {
   parseUpdateManifest,
   serializeUpdateManifest,
@@ -246,6 +247,7 @@ describe("release payload helpers", () => {
   });
   it("checks required assets, explicit dry-run globs and unexpected files", () => {
     const names = requiredReleaseAssets(version);
+    expect(names).toContain("goat-npm.tgz");
     expect(checkReleaseAssetSet(names, version)).toEqual([]);
     expect(
       checkReleaseAssetSet(
@@ -605,6 +607,8 @@ it.effect.each(releaseChannels)(
         yield* fs.makeDirectory(reportsDir);
         for (const name of requiredReleaseAssets(version).filter((name) => !name.endsWith(".yml")))
           yield* fs.writeFileString(path.join(dir, name), `payload ${name}`);
+        const npm = yield* buildNpmLauncher({ version, outputDir: path.join(root, "npm") });
+        yield* fs.copyFile(npm.tarball, path.join(dir, "goat-npm.tgz"));
         const all = yield* releaseInputs(dir);
         for (const key of new Set(all.map((entry) => releaseAssetKey(entry.name)))) {
           const payloads = all.filter((entry) => releaseAssetKey(entry.name) === key);

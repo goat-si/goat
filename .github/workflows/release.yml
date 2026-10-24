@@ -946,10 +946,11 @@ jobs:
           fail_on_unmatched_files: true
           token: ${{ github.token }}
 
-  # The `t3` npm package is a launcher that downloads this version's CLI
+  # Upstream's `t3` npm package is a launcher that downloads this version's CLI
   # archive from the GitHub Release, so it publishes only once that release
   # exists. Preview publishes too, under the `preview` dist-tag, which
   # nothing resolves unless asked for by name.
+  # GOAT uses goat-nightly.yml and private goat-npm.tgz release assets instead.
   publish_cli:
     name: Publish CLI to npm
     needs: [preflight, release]
@@ -985,7 +986,7 @@ jobs:
       - name: Publish the npm launcher
         run: |
           if ! node apps/server/scripts/cli.ts publish --packages-dir npm-packages --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --provenance --verbose; then
-            echo "::error::npm publish failed. Make sure package t3 has a trusted publisher registered for .github/workflows/release.yml (see docs/operations/release.md)." >&2
+            echo "::error::Registry publishing is disabled in GOAT. Its private goat-npm.tgz ships through goat-nightly.yml; do not configure an upstream npm publisher (see docs/operations/release.md)." >&2
             exit 1
           fi
 

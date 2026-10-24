@@ -850,6 +850,11 @@ jobs:
           node scripts/render-third-party-notices.ts \
             --input apps/server/dist/client/third-party-licenses.json --output release/THIRD_PARTY_NOTICES.md
 
+      - name: Build the private npm-installable launcher
+        run: |
+          node scripts/build-npm-launcher.ts --version "$VERSION" --output-dir npm-packages
+          cp npm-packages/goat-npm.tgz release/
+
       - name: Write runtime compatibility manifest
         run: node scripts/release-runtime-manifest.ts --dir release --version "$VERSION"
 

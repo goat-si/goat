@@ -186,7 +186,7 @@ export const layer = Layer.effect(
         electronDialog
           .showErrorBox(
             "This GOAT home is unavailable",
-            "Another GOAT server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `goat update`. If the older launcher cannot update, run `goat service uninstall` and optionally reinstall with `goat service install` from a current CLI. Use `npx goat@latest` if `goat` is missing or outdated, and pass `--base-dir` with the service's GOAT home to each command. Then reopen GOAT. You can also set a separate GOAT_HOME and pair with the running server.",
+            "Another GOAT server, such as the background service, is using this data directory, or an older background service is set up for it. Stop that server or try `goat update`. If the older launcher cannot update, run `goat service uninstall` and optionally reinstall with `goat service install` from a current CLI. Install the CLI from https://github.com/goat-si/goat-releases/releases if `goat` is missing or outdated, and pass `--base-dir` with the service's GOAT home to each command. Then reopen GOAT. You can also set a separate GOAT_HOME and pair with the running server.",
           )
           .pipe(Effect.andThen(electronApp.quit)),
       onDatabaseAhead: () =>
