@@ -34,7 +34,10 @@ export const originEntries = {
       "Collect an origin correlation's reports with its read key. afterSequence deletes acknowledged reports, so advance it only after durable import. Drain hasMore and check run holds before settling; a terminal report alone does not prove settlement.",
     guide:
       "Pass the correlation's read key. Acknowledge only durably imported reports with afterSequence: the call deletes reports through that sequence and returns later reports. Each result contains up to 50 reports. Drain hasMore before settling.\n\nSet watchRunId to an exact run ID, or null for the latest run. observedRun lists pendingRequestIds for a live run and holds for a finished run: background tasks and a pending restart continuation. Do not settle while a hold remains.\n\nEcho the last observed run ID and status in knownRun. Echo pendingRequestIds and holds too so changes to them release the wait. Set timeoutMs from 0 through 600000. A terminal report is a claim; use the observed run state to assess settlement.",
-    effect: "read",
+    // Acknowledging deletes reports, so a read-only client must not advance another reader's cursor.
+    effect: "write",
+    capability: "none",
+    capabilityReason: "The correlation's read key authorizes it.",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
