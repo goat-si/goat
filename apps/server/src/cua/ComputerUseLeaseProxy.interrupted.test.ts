@@ -98,3 +98,48 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
     }),
   );
 });
+
+describe("ComputerUseLeaseProxy answers for sent calls whose reply it cannot show", () => {
+  const proveScreen = (h: Effect.Success<ReturnType<typeof harness>>) =>
+    Effect.gen(function* () {
+      const asked = yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: asked.id,
+          result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+        }),
+      );
+    });
+
+  it.effect.each([
+    ["names a window on another display", { windows: [{ pid: 900, window_id: 5 }] }],
+    ["names a window without its pid", { windows: [{ window_id: 5 }] }],
+  ] as const)("a click whose reply %s may have acted and is never retried", ([, content]) =>
+    Effect.gen(function* () {
+      const h = yield* harness({ elsewhere: new Set([900]) });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 10, window_id: 20, x: 1, y: 1 }));
+      yield* proveScreen(h);
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [], structuredContent: content },
+        }),
+      );
+      const answer = (yield* h.nextToProvider) as unknown as ToolAnswer;
+      assert.equal(answer.id, 1);
+      assert.deepEqual(answer.result.structuredContent, {
+        effect: "unverifiable",
+        code: "interrupted",
+        detail: "wrong_display",
+      });
+      const text = answer.result.content[0]?.text ?? "";
+      assert.include(text, "may already have acted");
+      assert.notInclude(text, "did not run");
+      assert.notInclude(text, "try again");
+    }),
+  );
+});

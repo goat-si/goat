@@ -182,6 +182,10 @@ const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
 const UNCONFIRMED_DISPLAY =
   "GOAT could not confirm that computer use is on the screen GOAT gave it, so this did not run. Call list_windows, then try again.";
+/** For a call that reached the driver: its answer is withheld, but it may have acted. */
+const REPLY_WITHHELD =
+  "This call reached the driver, so it may already have acted, but GOAT could not confirm its answer is about the screen GOAT gave it and withheld it. Never resend it unchanged.";
+const REPLY_UNCONFIRMED = `${REPLY_WITHHELD} Call list_windows and observe the window before any later action.`;
 
 /**
  * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
@@ -348,6 +352,45 @@ const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interruption) =>
   });
 };
 
+/**
+ * The answer for a call whose reply names windows GOAT cannot place on its screen. The driver
+ * already acted on it, so only a read keeps the refusal; anything else may have landed.
+ */
+const offScreenAnswer = (
+  id: JsonRpcId,
+  method: string,
+  tool: string | undefined,
+  verdict: "other" | "unknown",
+) =>
+  tool !== undefined && READ_ONLY_TOOLS.has(tool)
+    ? refusal(
+        id,
+        method,
+        "wrong_display",
+        verdict === "other" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
+      )
+    : JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [
+            {
+              type: "text",
+              text:
+                verdict === "other"
+                  ? `${REPLY_WITHHELD} ${LEASE_END_MESSAGES.wrong_display}`
+                  : REPLY_UNCONFIRMED,
+            },
+          ],
+          structuredContent: {
+            effect: "unverifiable",
+            code: "interrupted",
+            detail: "wrong_display",
+          },
+          isError: true,
+        },
+      });
+
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
 ) {
@@ -511,18 +554,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
               if (verdict === "other") {
                 yield* options.output(
-                  refusal(
-                    request.id,
-                    request.method,
-                    "wrong_display",
-                    LEASE_END_MESSAGES.wrong_display,
-                  ),
+                  offScreenAnswer(request.id, request.method, request.tool, "other"),
                 );
                 return yield* end("wrong_display");
               }
               if (verdict === "unknown")
                 return yield* options.output(
-                  refusal(request.id, request.method, "wrong_display", UNCONFIRMED_DISPLAY),
+                  offScreenAnswer(request.id, request.method, request.tool, "unknown"),
                 );
               if (verdict === "proof") proven = current;
             } else outstanding.delete(key);
