@@ -191,6 +191,12 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
   const isMixed = (key: keyof ServerSettings) =>
     reference === null ||
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
+  const skillOn = (entry: { settings: ServerSettings }) =>
+    !entry.settings.disabledBuiltInSkills.includes("computer-use");
+  const computerUseSkillOn =
+    reference !== null && displayTargets.every((entry) => skillOn(entry) === skillOn(reference))
+      ? skillOn(reference)
+      : null;
   const writeSettings = useSettingsWriter();
   const write = (patch: ServerSettingsPatch) => {
     if (writeInFlight.current) {
@@ -461,6 +467,21 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       value={uniform("enableCua")}
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
+                    />
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Computer Use skill"
+                      subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+                      value={computerUseSkillOn}
+                      disabled={disabledFor("disabledBuiltInSkills")}
+                      onValueChange={(value) => {
+                        const others = (reference?.settings.disabledBuiltInSkills ?? []).filter(
+                          (name) => name !== "computer-use",
+                        );
+                        write({
+                          disabledBuiltInSkills: value ? others : [...others, "computer-use"],
+                        });
+                      }}
                     />
                   </SettingsSection>
                   <SettingsSection

@@ -850,6 +850,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "computer-use-skill",
+    title: "Computer Use skill",
+    to: "/settings/integrations",
+    targetId: "computer",
+    searchTerms: ["built in builtin skill computer use instructions agents observe verify"],
+  },
+  {
     id: "goat-bot-home",
     title: "Runs on",
     to: "/settings/goat-bot",

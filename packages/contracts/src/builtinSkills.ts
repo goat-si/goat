@@ -11,6 +11,22 @@ export type TurnCapability = typeof TurnCapability.Type;
 /** `ServerProviderSkill.scope` of skills GOAT ships itself rather than a provider discovers. */
 export const BUILTIN_SKILL_SCOPE = "builtin";
 
+/**
+ * Providers whose agent process runs on the GOAT host and can spawn the driver's stdio MCP
+ * server. Cloud providers run elsewhere, and the driver would operate this host's desktop on
+ * their behalf; Muse only accepts HTTP session servers. See ADR-0020 for the per-adapter table.
+ */
+export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "grok",
+  "antigravity",
+  "acpRegistry",
+  "opencode",
+  "pi",
+]);
+
 export const BuiltInSkillName = Schema.Literals(["computer-use"]);
 export type BuiltInSkillName = typeof BuiltInSkillName.Type;
 
