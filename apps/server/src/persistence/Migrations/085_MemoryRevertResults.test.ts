@@ -100,6 +100,7 @@ it.effect(
         [100, "HumanStepRecords"],
         [101, "McpRequestReservations"],
         [102, "RemoteReportInboxRunId"],
+        [103, "RemoteReportFences"],
       ]);
       assert.deepStrictEqual(
         yield* sql`SELECT resolution_id,revert_operation_id,json_extract(revert_result_json,'$.status') AS status FROM memory_resolutions ORDER BY resolution_id`,

@@ -65,6 +65,7 @@ it.effect(
         [100, "HumanStepRecords"],
         [101, "McpRequestReservations"],
         [102, "RemoteReportInboxRunId"],
+        [103, "RemoteReportFences"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },
