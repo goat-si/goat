@@ -422,15 +422,15 @@ it.effect.each([
     });
     assert.deepEqual(yield* selected(options), []);
     assert.deepEqual(yield* selected({ ...options, autoResume: true }), [ids.usage_limit]);
-    assert.deepEqual(yield* selected({ ...options, fallbackTriggers: ["provider_error"] }), [
+    assert.deepEqual(yield* selected({ ...options, fallbackClasses: ["provider_error"] }), [
       ids.provider_error,
     ]);
-    assert.deepEqual(yield* selected({ ...options, fallbackTriggers: ["transport_error"] }), [
+    assert.deepEqual(yield* selected({ ...options, fallbackClasses: ["transport_error"] }), [
       ids.transport_error,
     ]);
     const fallbackOptions = {
       ...options,
-      fallbackTriggers: ["usage_limit", "provider_error", "transport_error"] as const,
+      fallbackClasses: ["usage_limit", "provider_error", "transport_error"] as const,
     };
     assert.deepEqual(
       yield* selected(fallbackOptions),
