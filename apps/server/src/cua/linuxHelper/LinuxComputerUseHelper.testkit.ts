@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverToolResult } from "./CuaDriverMcp.ts";
+import type { HumanInput } from "./humanInputSource.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
@@ -257,8 +258,8 @@ export async function connect(
     readonly clientApiVersion?: number;
     readonly maxFrameBytes?: number;
     readonly helloPadding?: number;
-    /** False: this desktop has no idle counter. */
-    readonly idleCounter?: boolean;
+    /** False: the helper cannot see a person's input devices on this desktop. */
+    readonly personInput?: boolean;
   } = {},
 ) {
   const session = detectLinuxSession(options.session ?? X11);
@@ -282,16 +283,25 @@ export async function connect(
   // Work the monitor defers until a reply is written, and its completions.
   const afterReply: Array<() => Promise<void>> = [];
   const afterReplyDone: Array<Promise<void>> = [];
-  const lastInput = { at: 0 };
-  const idleCounter = options.idleCounter ?? true;
+  /** What the person's devices report: the latest input, and whether the source broke. */
+  const personInput: { latest: HumanInput | undefined; lost: boolean; lostCalls: number } = {
+    latest: undefined,
+    lost: false,
+    lostCalls: 0,
+  };
+  const hasPersonInput = options.personInput ?? true;
   let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
     undefined;
   let write: (line: string) => void = () => undefined;
   const signals = makeSignalMonitor({
     secureFocus: async () => focus.current,
     windowOpen: (target) => windowOpen(target),
-    idle: idleCounter
-      ? { idleMs: async () => clock.now - lastInput.at, close: () => undefined }
+    input: hasPersonInput
+      ? {
+          latest: () => personInput.latest,
+          lost: () => personInput.lost,
+          close: () => undefined,
+        }
       : undefined,
     now: () => clock.now,
     every: (_ms, task) => {
@@ -300,8 +310,9 @@ export async function connect(
     },
     afterReply: (task) => void afterReply.push(task),
     emit: (watchId, event) => write(JSON.stringify({ generation: "g1", watchId, event }) + "\n"),
+    inputLost: () => void personInput.lostCalls++,
   });
-  const capabilities = linuxCapabilities(session, idleCounter);
+  const capabilities = linuxCapabilities(session, hasPersonInput);
   const helper = makeLinuxHelper({
     session,
     screen: ":91",
@@ -413,7 +424,7 @@ export async function connect(
     starts: () => starts,
     focusByPid,
     log,
-    lastInput,
+    personInput,
     /** Runs every armed signal check once, as its timer would. */
     tick: async () => {
       for (const task of Array.from(tasks)) await task();

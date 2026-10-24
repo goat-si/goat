@@ -85,8 +85,8 @@ export const parseGnomeShellMajor = (output: string): number | null => {
 
 export function linuxCapabilities(
   session: LinuxSession,
-  /** Whether the desktop has an idle counter the helper can read for human input. */
-  idleCounter: boolean,
+  /** Whether the helper can see a person's own input devices on this desktop. */
+  personInput: boolean,
 ): ComputerUseCapabilities {
   const usable = session.unavailable === undefined && session.unsupported === undefined;
   return {
@@ -104,7 +104,7 @@ export function linuxCapabilities(
     signals: {
       // AT-SPI focus, read the same way observation reads it.
       privateMode: usable ? "supported" : "unsupported",
-      humanInput: usable && idleCounter ? "supported" : "unsupported",
+      humanInput: usable && personInput ? "supported" : "unsupported",
     },
   };
 }

@@ -513,7 +513,8 @@ describe("makeLinuxHelper shutdown", () => {
       signals: makeSignalMonitor({
         secureFocus: async () => NOT_SECURE,
         windowOpen: async () => undefined,
-        idle: undefined,
+        input: undefined,
+        inputLost: () => undefined,
         now: () => 0,
         every: () => () => undefined,
         afterReply: () => undefined,

@@ -424,9 +424,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     if (left() <= 0)
       return { result: refusal("busy", "The deadline passed before anything was sent.") };
-    // The helper's own input may reset the desktop's idle counter; that is not a person.
-    const sent_ = deps.signals.dispatching();
-    const answer = await call(call_.tool, call_.args, left(), generation).finally(sent_);
+    const answer = await call(call_.tool, call_.args, left(), generation);
     if (answer === "deadline") return { result: computerUseDeadlineResult(request.delivery) };
     if (answer === "lost")
       return {

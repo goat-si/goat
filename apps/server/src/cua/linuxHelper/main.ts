@@ -19,7 +19,7 @@ import { cuaDriverListingEnvironment, cuaDriverRelease } from "@goat/shared/cuaD
 import { gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
 import { startDriver } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
-import { openGnomeIdle, openX11Idle } from "./idleSource.ts";
+import { openX11HumanInput } from "./humanInputSource.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import { detectLinuxSession, linuxCapabilities, parseGnomeShellMajor } from "./linuxSession.ts";
@@ -88,20 +88,16 @@ const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const driverPath =
   environment.GOAT_COMPUTER_USE_DRIVER?.trim() || NodePath.join(here, "cua-driver", "cua-driver");
 
-// The idle counter for human input must see all of the person's input. On X11 that is the X
-// server's. Under Wayland, XWayland only sees input to X clients, so only Mutter's counter
-// (GNOME) will do; other compositors have none GOAT can read. Opened once; without one,
-// humanInput is unsupported.
+// A person's input is read from XInput2 raw events, which name their device (X11 only). Under
+// Wayland, XWayland sees only input to X clients and the compositor names no devices, so
+// humanInput is unsupported there. Opened before the driver starts, so its devices are new.
 const gdbus = gdbusRunner(driverEnvironment);
-const gnome = /GNOME/iu.test(environment.XDG_CURRENT_DESKTOP ?? "");
-const idle =
-  session.unavailable !== undefined || session.unsupported !== undefined
-    ? undefined
-    : session.displayServer === "x11"
-      ? await openX11Idle(environment)
-      : gnome
-        ? await openGnomeIdle(gdbus)
-        : undefined;
+const input =
+  session.unavailable === undefined &&
+  session.unsupported === undefined &&
+  session.displayServer === "x11"
+    ? await openX11HumanInput(environment, () => Date.now())
+    : undefined;
 const generation = NodeCrypto.randomUUID();
 const secureFocus = makeSecureFocusProbe(gdbus);
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
@@ -109,7 +105,9 @@ let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined
 const signals = makeSignalMonitor({
   secureFocus,
   windowOpen: (target) => windowOpen(target),
-  idle,
+  input,
+  // The pause goes out first; then the helper ends so a restart reports humanInput unsupported.
+  inputLost: () => void setImmediate(() => end(1)),
   now: () => Date.now(),
   every: (ms, task) => {
     const timer = setInterval(() => void task(), ms);
@@ -120,7 +118,7 @@ const signals = makeSignalMonitor({
   emit: (watchId, event) =>
     process.stdout.write(JSON.stringify({ generation, watchId, event }) + "\n"),
 });
-const capabilities = linuxCapabilities(session, idle !== undefined);
+const capabilities = linuxCapabilities(session, input !== undefined);
 
 const helper = makeLinuxHelper({
   session,
@@ -150,7 +148,7 @@ const end = (code: number) => {
   if (ending) return;
   ending = true;
   void helper.close().finally(() => {
-    idle?.close();
+    input?.close();
     process.exit(code);
   });
 };

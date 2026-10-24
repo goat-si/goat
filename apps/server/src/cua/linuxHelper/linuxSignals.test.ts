@@ -11,13 +11,13 @@ describe("Linux safety signals", () => {
   const watch = (helper: Awaited<ReturnType<typeof connect>>, watchId: string) =>
     helper.request("watch", { watchId, targets: [target] });
 
-  it("names both signals in capabilities, and humanInput is unsupported without an idle counter", async () => {
+  it("names both signals in capabilities, and humanInput is unsupported when no person's input can be seen", async () => {
     const withIdle = await connect();
     expect(withIdle.hello).toMatchObject({
       capabilities: { signals: { privateMode: "supported", humanInput: "supported" } },
     });
     await withIdle.close();
-    const without = await connect({ idleCounter: false });
+    const without = await connect({ personInput: false });
     expect(without.hello).toMatchObject({
       capabilities: { signals: { privateMode: "supported", humanInput: "unsupported" } },
     });
@@ -114,34 +114,63 @@ describe("Linux safety signals", () => {
     await helper.close();
   });
 
-  it("reports a person's input, but not input inside the helper's own dispatch", async () => {
+  it("reports a person's input once per burst, with its device kind", async () => {
+    const helper = await connect();
+    helper.clock.now = 1_000;
+    await watch(helper, "w1");
+    await helper.events();
+    // Input before the watch started is not its concern.
+    helper.personInput.latest = { at: 500, source: "keyboard" };
+    await helper.tick();
+    helper.personInput.latest = { at: 1_100, source: "pointer" };
+    helper.clock.now = 1_200;
+    await helper.tick();
+    helper.personInput.latest = { at: 1_300, source: "keyboard" };
+    helper.clock.now = 1_400;
+    await helper.tick();
+    const inputs = (await helper.events()).filter(
+      (entry) => (entry.event as { type: string }).type === "humanInput",
+    );
+    expect(inputs).toEqual([
+      { generation: "g1", watchId: "w1", event: { type: "humanInput", source: "pointer" } },
+    ]);
+    await helper.close();
+  });
+
+  it("a person's input right after the helper's own action is still reported", async () => {
     const helper = await connect();
     const first = await helper.observe();
     await watch(helper, "w1");
     await helper.events();
-    // The helper's own click resets the counter while it is being sent.
     helper.clock.now = 1_000;
-    helper.lastInput.at = 1_000;
     await helper.act(
       { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
       first.observation,
     );
-    helper.clock.now = 1_200;
+    // The source already leaves out the helper's own devices; this is a person's.
+    helper.personInput.latest = { at: 1_200, source: "keyboard" };
+    helper.clock.now = 1_250;
     await helper.tick();
-    expect(
-      (await helper.events()).filter(
-        (entry) => (entry.event as { type: string }).type === "humanInput",
-      ),
-    ).toEqual([]);
-    // A person types two seconds later.
-    helper.clock.now = 3_200;
-    helper.lastInput.at = 3_100;
-    await helper.tick();
-    expect((await helper.events()).at(-1)).toEqual({
-      generation: "g1",
-      watchId: "w1",
-      event: { type: "humanInput", source: "unknown" },
+    expect((await helper.events()).at(-1)).toMatchObject({
+      event: { type: "humanInput", source: "keyboard" },
     });
+    await helper.close();
+  });
+
+  it("when the input source breaks, the watch pauses agents once and tells the helper", async () => {
+    const helper = await connect();
+    await watch(helper, "w1");
+    await helper.events();
+    helper.personInput.lost = true;
+    await helper.tick();
+    await helper.tick();
+    const inputs = (await helper.events()).filter(
+      (entry) => (entry.event as { type: string }).type === "humanInput",
+    );
+    expect(inputs).toEqual([
+      { generation: "g1", watchId: "w1", event: { type: "humanInput", source: "unknown" } },
+    ]);
+    expect(helper.personInput.lostCalls).toBe(1);
     await helper.close();
   });
 });
@@ -156,7 +185,8 @@ function monitor(options: { readonly windowOpen?: () => Promise<boolean | undefi
   const signals = makeSignalMonitor({
     secureFocus: async () => focus.current,
     windowOpen: options.windowOpen ?? (async () => true),
-    idle: undefined,
+    input: undefined,
+    inputLost: () => undefined,
     now: () => 0,
     every: (_ms, task) => {
       arming.count++;

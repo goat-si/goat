@@ -1,7 +1,7 @@
 import type { ComputerUseEvent, ComputerUseWindowTarget } from "@goat/contracts";
 
 import type { SecureFocus } from "./atspiFocus.ts";
-import type { IdleSource } from "./idleSource.ts";
+import type { HumanInputSource } from "./humanInputSource.ts";
 
 /**
  * The safety signals a Linux helper raises while an agent session watches windows (#1235, D6,
@@ -14,15 +14,14 @@ import type { IdleSource } from "./idleSource.ts";
  * it, or unwatch), an active one is reported inactive under the watch it belonged to, and the
  * new watch or unwatch is answered only after that.
  *
- * Human input comes from the desktop's idle counter: input newer than the last reading that
- * does not fall inside one of the helper's own dispatches was a person's. The counter cannot
- * tell keys from the pointer, so the source is "unknown".
+ * Human input comes from the person's own input devices (humanInputSource.ts), which already
+ * leaves out the helper's own input, so nothing here guesses by timing. If that source breaks,
+ * the watch cannot see a person any more: it reports human input once, which pauses agents,
+ * and tells the helper, which ends so a restart reports the signal unsupported.
  */
 
 const PRIVATE_MODE_EVERY_MS = 500;
 const HUMAN_INPUT_EVERY_MS = 250;
-/** Input from a dispatch can reach the idle counter a little after the driver answers. */
-const DISPATCH_TAIL_MS = 500;
 /** At most one human input event per this long; the server pauses on the first anyway. */
 const HUMAN_INPUT_QUIET_MS = 1_000;
 
@@ -30,8 +29,10 @@ export interface SignalMonitorDependencies {
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
   /** False once the window is gone; undefined when that cannot be told right now. */
   readonly windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined>;
-  /** Undefined when this desktop offers no idle counter: humanInput is unsupported. */
-  readonly idle: IdleSource | undefined;
+  /** Undefined when this desktop offers no way to see a person's input: humanInput is unsupported. */
+  readonly input: HumanInputSource | undefined;
+  /** The input source broke; the helper ends after the pause it caused goes out. */
+  readonly inputLost: () => void;
   readonly now: () => number;
   /** Runs task every ms until the returned function is called. */
   readonly every: (ms: number, task: () => Promise<void>) => () => void;
@@ -49,8 +50,6 @@ export interface SignalMonitor {
   /** Clears every active target, then stops reading. */
   readonly unwatch: () => Promise<void>;
   readonly watching: () => ReadonlyArray<ComputerUseWindowTarget>;
-  /** Marks a span in which input the helper sent may reset the idle counter. */
-  readonly dispatching: () => () => void;
 }
 
 const keyOf = (target: ComputerUseWindowTarget) => target.pid + ":" + target.windowId;
@@ -62,16 +61,11 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   let incarnation = 0;
   let targets: ComputerUseWindowTarget[] = [];
   const active = new Map<string, boolean>();
-  const spans: Array<{ start: number; end: number | undefined }> = [];
   let stops: Array<() => void> = [];
   let lastInputAt = 0;
+  let lostReported = false;
   let lastEventAt = -Infinity;
-  let busy = { focus: false, idle: false };
-
-  const ours = (at: number) =>
-    spans.some(
-      ({ start, end }) => at >= start && (end === undefined || at <= end + DISPATCH_TAIL_MS),
-    );
+  let busy = { focus: false };
 
   /** Reports a target inactive if it was active, and forgets it. */
   const release = (id: string, target: ComputerUseWindowTarget) => {
@@ -118,28 +112,25 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     }
   };
 
-  const checkIdle = async () => {
-    const idle = deps.idle;
+  const checkInput = async () => {
+    const input = deps.input;
     const id = watchId;
-    const mine = incarnation;
-    if (!idle || id === undefined || busy.idle) return;
-    busy.idle = true;
-    try {
-      const ms = await idle.idleMs();
-      if (ms === undefined || incarnation !== mine) return;
-      const now = deps.now();
-      const inputAt = now - ms;
-      // Readings jitter by a few milliseconds; only a clearly newer input counts.
-      if (inputAt <= lastInputAt + 20) return;
-      lastInputAt = inputAt;
-      while (spans.length > 0 && (spans[0]?.end ?? Infinity) < now - 5 * DISPATCH_TAIL_MS)
-        spans.shift();
-      if (ours(inputAt) || now - lastEventAt < HUMAN_INPUT_QUIET_MS) return;
-      lastEventAt = now;
+    if (!input || id === undefined) return;
+    if (input.lost()) {
+      if (lostReported) return;
+      lostReported = true;
+      // Unable to see a person, the watch fails closed: agents pause until someone hands back.
       deps.emit(id, { type: "humanInput", source: "unknown" });
-    } finally {
-      busy.idle = false;
+      deps.inputLost();
+      return;
     }
+    const latest = input.latest();
+    if (!latest || latest.at <= lastInputAt) return;
+    lastInputAt = latest.at;
+    const now = deps.now();
+    if (now - lastEventAt < HUMAN_INPUT_QUIET_MS) return;
+    lastEventAt = now;
+    deps.emit(id, { type: "humanInput", source: latest.source });
   };
 
   const stop = () => {
@@ -163,14 +154,14 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       // Input from before this watch is not its concern.
       lastInputAt = deps.now();
       lastEventAt = -Infinity;
-      busy = { focus: false, idle: false };
+      busy = { focus: false };
       deps.afterReply(async () => {
         if (incarnation !== mine) return;
         await Promise.all(targets.map((target) => readFocus(id, mine, target, true)));
         if (incarnation !== mine) return;
         stops = [
           deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
-          ...(deps.idle ? [deps.every(HUMAN_INPUT_EVERY_MS, checkIdle)] : []),
+          ...(deps.input ? [deps.every(HUMAN_INPUT_EVERY_MS, checkInput)] : []),
         ];
       });
     },
@@ -182,15 +173,5 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       targets = [];
     },
     watching: () => targets,
-    dispatching: () => {
-      const span: { start: number; end: number | undefined } = {
-        start: deps.now(),
-        end: undefined,
-      };
-      spans.push(span);
-      return () => {
-        span.end = deps.now();
-      };
-    },
   };
 }
