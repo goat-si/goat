@@ -1,52 +1,14 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as SharedObservability from "@goat/shared/observability";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
-import * as Redactable from "effect/Redactable";
 import * as References from "effect/References";
 import * as OtlpExporter from "effect/observability/OtlpExporter";
 import * as OtlpLogger from "effect/observability/OtlpLogger";
 
 import * as ServerConfig from "./config.ts";
-
-/**
- * `Logger.consolePretty` prints message objects with `util.inspect`, which
- * collapses a `Cause` passed as a field (`{ cause }`) to
- * `{ failures: [ [Object] ] }`. Render those fields with `Cause.pretty`, the
- * same text a `Cause` passed as its own log argument already gets.
- */
-const consolePretty = (): Logger.Logger<unknown, void> => {
-  const pretty = Logger.consolePretty();
-  return Logger.make((options) =>
-    pretty.log({
-      ...options,
-      message: Array.isArray(options.message)
-        ? options.message.map(prettyCauseFields)
-        : prettyCauseFields(options.message),
-    }),
-  );
-};
-
-function prettyCauseFields(value: unknown): unknown {
-  if (typeof value !== "object" || value === null) return value;
-  const prototype: unknown = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return value;
-  // A message with its own redaction hook already decides how it prints.
-  if (Redactable.isRedactable(value)) return value;
-  // Copy descriptors rather than entries so getters are never invoked and
-  // symbol keys survive the copy.
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  let changed = false;
-  for (const descriptor of Object.values(descriptors)) {
-    if ("value" in descriptor && Cause.isCause(descriptor.value)) {
-      descriptor.value = Cause.pretty(descriptor.value);
-      changed = true;
-    }
-  }
-  return changed ? Object.create(prototype, descriptors) : value;
-}
+import * as LogRedaction from "./observability/LogRedaction.ts";
 
 export const layer = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -71,10 +33,13 @@ export const layer = Effect.gen(function* () {
   // recorded span and files them under traces. The OTLP logger carries the same
   // messages as log records stamped with their trace and span ids, so it is a
   // superset: keeping both would export every in-span message twice.
+  // Every sink is wrapped so credentials never reach it (#1388); the wrapper also prints a Cause
+  // passed as a field as Cause.pretty text, which util.inspect would collapse to [Object].
+  const consoleLogger = LogRedaction.redacting(Logger.consolePretty());
   const layerLogger = Logger.layer(
     otlpLogger === undefined
-      ? [consolePretty(), Logger.tracerLogger]
-      : [consolePretty(), otlpLogger],
+      ? [consoleLogger, LogRedaction.redacting(Logger.tracerLogger)]
+      : [consoleLogger, LogRedaction.redactingEffect(otlpLogger)],
     { mergeWithExisting: false },
   ).pipe(
     Layer.provide(OtlpExporter.layerFlusher),

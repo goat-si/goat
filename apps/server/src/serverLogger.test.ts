@@ -11,7 +11,9 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Redactable from "effect/Redactable";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
+import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as TestConsole from "effect/testing/TestConsole";
@@ -20,6 +22,7 @@ import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 
 import * as ServerConfig from "./config.ts";
+import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ServerLogger from "./serverLogger.ts";
 import {
@@ -151,7 +154,159 @@ const printThroughConsole = (fields: object) =>
     return printed.join("\n");
   });
 
+/** Everything the server's console logger printed while `program` ran. */
+const printedBy = <E>(program: Effect.Effect<unknown, E>) =>
+  Effect.gen(function* () {
+    const printed: Array<string> = [];
+    const record = (...args: ReadonlyArray<unknown>) => {
+      printed.push(NodeUtil.format(...args));
+    };
+    const testConsole = {
+      ...globalThis.console,
+      log: record,
+      error: record,
+    } satisfies Console.Console;
+    yield* program.pipe(
+      Effect.provide(
+        ServerLogger.layer.pipe(Layer.provide(layerConfig({})), Layer.provide(layerCollector([]))),
+      ),
+      Effect.provideService(Console.Console, testConsole),
+    );
+    return printed.join("\n");
+  });
+
+// Synthetic canaries; none of them is a real credential.
+const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktand0In0.Y2FuYXJ5LWp3dC1zaWduYXR1cmU";
+const canaries = [
+  "canaryGoatEnvToken0123456789",
+  canaryJwt,
+  "canary-cookie-value",
+  "canary-set-cookie",
+  "canary-json-token",
+  "canary-field-token",
+  "canary-key-token",
+  "canary-annotation-cookie",
+  "canary-span-token",
+];
+
+/** An error whose message, own field and nested cause each carry a credential. */
+const leakyError = (label: string) =>
+  Object.assign(
+    new Error(`${label} failed with ${canaryJwt}`, {
+      cause: new Error('upstream echoed {"access_token":"canary-json-token"}'),
+    }),
+    {
+      headers: {
+        authorization: "Bearer canary-field-token-0123456789",
+        cookie: "sid=canary-cookie-value",
+      },
+    },
+  );
+
+const leakyLog = Effect.logError(
+  "tool handler died",
+  {
+    detail:
+      "Set-Cookie: sid=canary-set-cookie; Path=/ GOAT_MCP_BEARER_TOKEN=canaryGoatEnvToken0123456789",
+    error: leakyError("field"),
+    "Bearer canary-key-token-0123456789": "keyed",
+  },
+  Cause.fromReasons([
+    Cause.makeFailReason(leakyError("failure")),
+    Cause.makeDieReason(leakyError("defect")),
+  ]),
+).pipe(
+  Effect.annotateLogs({ request: "Cookie: sid=canary-annotation-cookie" }),
+  Effect.withLogSpan("token=canary-span-token"),
+);
+
+const assertRedacted = (output: string) => {
+  for (const canary of canaries) assert.notInclude(output, canary);
+};
+
+const DyingTool = Tool.make("dying_tool", { success: Schema.String });
+const DyingToolkit = Toolkit.make(DyingTool);
+const mcpClient = McpSchema.McpServerClient.of({
+  clientId: 1,
+  protocolVersion: "2025-06-18",
+  clientCapabilities: {},
+  clientInfo: { name: "server-logger-test", version: "1" },
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "server-logger-test", version: "1" },
+  },
+  getClient: Effect.die("unused"),
+});
+
 describe("ServerLoggerLive", () => {
+  describe("credential redaction (#1388)", () => {
+    it.effect("keeps credentials out of the console while keeping the error context", () =>
+      Effect.gen(function* () {
+        const output = yield* printedBy(leakyLog);
+
+        assert.include(output, "tool handler died");
+        assert.include(output, "detail");
+        assert.include(output, "defect failed with");
+        assert.include(output, "upstream echoed");
+        assertRedacted(output);
+      }),
+    );
+
+    it.effect("keeps credentials out of the span events the trace file records", () =>
+      Effect.gen(function* () {
+        const { spans } = yield* logInSpanThrough({}, leakyLog);
+
+        const events = JSON.stringify(
+          spans.flatMap((span) => span.events.map(([name, , attributes]) => [name, attributes])),
+        );
+        assert.include(events, "tool handler died");
+        assert.include(events, "defect failed with");
+        assertRedacted(events);
+      }).pipe(Effect.provide(TestConsole.layer)),
+    );
+
+    it.effect("keeps credentials out of exported OTLP log records", () =>
+      Effect.gen(function* () {
+        const { requests } = yield* logInSpanThrough(
+          { otlpLogsUrl: "https://collector.example.com/v1/logs" },
+          leakyLog,
+        );
+
+        const body = requests.map((request) => request.body).join("\n");
+        assert.include(body, "tool handler died");
+        assert.include(body, "failure failed with");
+        assertRedacted(body);
+      }).pipe(Effect.provide(TestConsole.layer)),
+    );
+
+    it.effect("logs a dying MCP tool handler's defect without its credentials", () =>
+      Effect.gen(function* () {
+        const registration = Layer.effectDiscard(McpServer.registerToolkit(DyingToolkit)).pipe(
+          Layer.provide(DyingToolkit.toLayer({ dying_tool: () => Effect.die(leakyError("tool")) })),
+          Layer.provide(DefectReporter.layer),
+          Layer.provideMerge(McpServer.McpServer.layer),
+        );
+        let isError: boolean | undefined;
+        const output = yield* printedBy(
+          Effect.gen(function* () {
+            const server = yield* McpServer.McpServer;
+            const result = yield* server
+              .callTool({ name: "dying_tool", arguments: {} })
+              .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient));
+            isError = result.isError;
+          }).pipe(Effect.provide(registration)),
+        );
+
+        assert.isTrue(isError);
+        // McpServer logs the cause, then reports it to DefectReporter, which logs it again.
+        assert.include(output, "tool failed with");
+        assert.include(output, "Unhandled defect");
+        assertRedacted(output);
+      }),
+    );
+  });
+
   it.effect("exports a resource that names whether the desktop app launched the server", () =>
     Effect.gen(function* () {
       const { requests } = yield* logInSpanThrough({
@@ -193,7 +348,7 @@ describe("ServerLoggerLive", () => {
     }),
   );
 
-  it.effect("leaves a message with its own redaction hook to that hook", () =>
+  it.effect("lets a message's redaction hook decide what it shows", () =>
     Effect.gen(function* () {
       const output = yield* printThroughConsole({
         token: "secret-token-value",
@@ -203,7 +358,8 @@ describe("ServerLoggerLive", () => {
         },
       });
 
-      assert.include(output, "token: '<redacted>'");
+      // The hook ran (cause is its own marker); its credential field still gets the mask.
+      assert.include(output, "token: '***'");
       assert.include(output, "cause: 'cause'");
       assert.notInclude(output, "secret-token-value");
     }),

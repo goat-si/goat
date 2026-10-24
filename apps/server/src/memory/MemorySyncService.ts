@@ -27,6 +27,7 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -755,9 +756,19 @@ const make = Effect.gen(function* () {
             TimeoutError: () => Effect.fail(new M.MemoryHubError({ code: "lease_expired" })),
           }),
         );
-        const trusted = yield* decodeGenerated(generated).pipe(
+        const decoded = yield* decodeGenerated(generated).pipe(
           Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
         );
+        // A model can repeat a GOAT credential it read; the resolution is submitted and signed
+        // with it redacted (#1297).
+        const trusted = {
+          ...decoded,
+          result: {
+            ...decoded.result,
+            text: redactGoatCredentials(decoded.result.text),
+            judgment: redactGoatCredentials(decoded.result.judgment),
+          },
+        };
         if (
           trusted.execution.environmentId !== local ||
           selectionKey(trusted.execution.requestedModelSelection) !==

@@ -24,6 +24,7 @@ import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -689,7 +690,7 @@ const make = Effect.gen(function* () {
               return yield* new MemoryWorkerError({ code: "unsupported_operation" });
             yield* renewClaim;
             const generate = generation.generateMemorySummary;
-            const output = yield* hold
+            const raw = yield* hold
               .guard(yield* hold.keyFor(meta.modelSelection), generate(input))
               .pipe(
                 Effect.mapError((cause) =>
@@ -698,6 +699,12 @@ const make = Effect.gen(function* () {
                     : new MemoryWorkerError({ code: safeCode(cause), cause }),
                 ),
               );
+            // A model can repeat a GOAT credential it read; it is redacted before the summary is
+            // reused, stored locally or committed for sync (#1297).
+            const output = {
+              ...raw,
+              result: { ...raw.result, text: redactGoatCredentials(raw.result.text) },
+            };
             if (!M.validateMemoryGenerationResult(input, output.result))
               return yield* new MemoryWorkerError({ code: "invalid_output" });
             if (scanMemoryValue(output.result).kind !== "allowed")

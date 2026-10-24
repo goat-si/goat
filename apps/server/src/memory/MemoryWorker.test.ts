@@ -84,6 +84,7 @@ const live = (
   local = false,
   elapsedPerCallMs = 0,
   unconfigured = false,
+  textOf?: (input: M.GenerateMemorySummaryInput) => string,
 ) =>
   Worker.layer.pipe(
     Layer.provideMerge(service),
@@ -121,12 +122,14 @@ const live = (
                 )
               : Effect.succeed({
                   result: {
-                    text: [
-                      input.previousSummary?.text,
-                      ...input.messages.map((message) => message.messageId),
-                    ]
-                      .filter(Boolean)
-                      .join(" "),
+                    text:
+                      textOf?.(input) ??
+                      [
+                        input.previousSummary?.text,
+                        ...input.messages.map((message) => message.messageId),
+                      ]
+                        .filter(Boolean)
+                        .join(" "),
                     assertionKind: "inference" as const,
                     evidence: [
                       ...(input.previousSummary?.evidence ?? []),
@@ -334,6 +337,40 @@ const seedRolledBackRegeneration = Effect.gen(function* () {
   yield* sql`INSERT INTO orchestration_events VALUES (106,${id(1600)},${threadId},'run.updated',${encodeRun({ ...run, id: nextRunId, userMessageId: M.MessageId.make("run-b-0"), status: "completed" })},${now},2,'thread')`;
 });
 describe("MemoryWorker", () => {
+  it.effect.each([false, true])(
+    "stores a generated summary with GOAT credentials redacted (local=%s, #1297)",
+    (local) => {
+      // A synthetic canary shaped like a registry token; not a real credential.
+      const secret = "canarySummaryToken".padEnd(43, "0");
+      return Effect.gen(function* () {
+        yield* seed;
+        const store = yield* Store.MemoryStore;
+        yield* (yield* Worker.MemoryWorker).sweepDue();
+        const target = M.MemoryId.make(
+          Service.memoryStableUuid(`${environmentId}:${threadId}:summary`),
+        );
+        const stored = local
+          ? yield* store.readLocalSummaryPayload(
+              environmentId,
+              `${environmentId}:${threadId}:summary`,
+            )
+          : (yield* store.loadAggregate(space, target)).revisions[0]?.payload;
+        assert.include(stored?.text, "GOAT_MCP_BEARER_TOKEN=[redacted]");
+        assert.notInclude(stored?.text, secret);
+      }).pipe(
+        Effect.provide(
+          live(
+            false,
+            undefined,
+            local,
+            0,
+            false,
+            () => `deploys with GOAT_MCP_BEARER_TOKEN=${secret}`,
+          ),
+        ),
+      );
+    },
+  );
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(
       Effect.gen(function* () {

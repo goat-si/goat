@@ -943,6 +943,62 @@ it.effect.each(["unavailable", "unauthorized"] as const)(
     }),
 );
 
+it.effect("submits a generated resolution with GOAT credentials redacted (#1297)", () =>
+  Effect.gen(function* () {
+    // A synthetic canary shaped like a registry token; not a real credential.
+    const secret = "canaryResolveToken".padEnd(43, "0");
+    const submitted = yield* Deferred.make<void>();
+    const submissions: M.MemoryHubApplyResolutionInput[] = [];
+    const client = peer({
+      applyResolution: (_c, input) =>
+        Effect.gen(function* () {
+          submissions.push(input);
+          yield* Deferred.succeed(submitted, undefined);
+          return yield* new M.MemoryHubError({ code: "unavailable" });
+        }),
+    });
+    const model = realGeneration({
+      resolveMemoryConflict: (input) =>
+        Effect.succeed({
+          result: {
+            text: `merged GOAT_MCP_BEARER_TOKEN=${secret}`,
+            assertionKind: "inference" as const,
+            evidence: [],
+            judgment: `kept Authorization: Bearer ${secret}`,
+          },
+          execution: {
+            requestedModelSelection: input.modelSelection,
+            effectiveProvider: M.ProviderDriverKind.make("codex"),
+            effectiveModel: input.modelSelection.model,
+            providerInstanceId: input.modelSelection.instanceId,
+            environmentId: local,
+          },
+        }),
+    });
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* ready;
+        yield* conflict();
+        const sync = yield* Sync.MemorySyncService;
+        yield* sync.syncOnce;
+        yield* Deferred.await(submitted);
+        yield* sync.shutdown;
+        const sent = JSON.stringify(submissions[0]);
+        assert.include(sent, "GOAT_MCP_BEARER_TOKEN=[redacted]");
+        assert.include(sent, "Bearer [redacted]");
+        assert.notInclude(sent, secret);
+        const store = yield* Store.MemoryStore;
+        const tickets = yield* store.readRecoverableResolutionTickets({
+          memorySpaceId: space,
+          now: 30000,
+          limit: 100,
+        });
+        assert.notInclude(JSON.stringify(tickets), secret);
+      }).pipe(Effect.provide(fixture(client, model))),
+    );
+  }),
+);
+
 it.effect(
   "actual Worker joint start never claims resolve work while registry owns generation",
   () =>

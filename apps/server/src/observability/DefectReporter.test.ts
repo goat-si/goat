@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as ErrorReporter from "effect/ErrorReporter";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -35,6 +36,24 @@ const withErrorLogs = <A, E, R>(
 const errorMessage = (cause: Cause.Cause<unknown>) => (Cause.squash(cause) as Error).message;
 
 describe("DefectReporter", () => {
+  it.effect("logs a defect's message without its credentials or fields (#1388)", () =>
+    withErrorLogs((logs) =>
+      Effect.gen(function* () {
+        // Synthetic canaries; neither is a real credential.
+        const defect = Object.assign(new Error("handler bug: Cookie: sid=canary-cookie-value"), {
+          headers: { authorization: "Bearer canary-field-token-0123456789" },
+        });
+        yield* ErrorReporter.report(Cause.die(defect)).pipe(Effect.provide(DefectReporter.layer));
+
+        const logged = yield* Queue.take(logs);
+        const printed = Cause.pretty(logged);
+        assert.include(printed, "handler bug");
+        assert.notInclude(printed, "canary-cookie-value");
+        assert.notProperty(Cause.squash(logged), "headers");
+      }),
+    ),
+  );
+
   it.effect("a dying RPC handler fails alone, and its defect is logged", () =>
     withErrorLogs((logs) =>
       Effect.gen(function* () {

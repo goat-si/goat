@@ -14,21 +14,8 @@ import * as Ref from "effect/Ref";
 
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
-import { redactGoatCredentials } from "../../goatCredentialRedaction.ts";
-import { redactLogLine } from "../../../orchestration-v2/preparationLog.ts";
+import { defectSummary } from "../../../observability/LogRedaction.ts";
 import { ForwardedContent } from "./forwardedContent.ts";
-
-const DEFECT_SUMMARY_MAX_CHARS = 2_000;
-
-/**
- * What a dying target was, for the log: an Error's name, message and stack with credentials
- * redacted, never its cause or other fields, which can hold request headers or tokens.
- */
-export const defectSummary = (defect: unknown): string => {
-  if (!(defect instanceof Error)) return `non-Error defect (${typeof defect})`;
-  const text = defect.stack ?? `${defect.name}: ${defect.message}`;
-  return redactGoatCredentials(redactLogLine(text)).slice(0, DEFECT_SUMMARY_MAX_CHARS);
-};
 
 /**
  * Reclassifies a direct failure by its declared literal; the text stays what a direct call shows.
