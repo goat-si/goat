@@ -452,60 +452,57 @@ const make = Effect.gen(function* () {
         const directory = yield* pinDirectory(name);
         yield* directory.verifyFile;
         yield* expectOnDisk(name, directory.absolute, expected);
-        // POSIX has no compare-and-unlink, so the file is renamed aside and checked again there.
-        // rename(2) takes whatever is at the path at that instant, so an edit landing after the
-        // check above is put back instead of deleted. A writer that keeps the file open and writes
-        // after the second check is the remaining window.
-        let keepAside = false;
+        // POSIX has no compare-and-unlink. rename(2) takes whatever is at the path at that instant,
+        // so an edit after the check above is caught and linked back; only a writer that keeps the
+        // file open past the second check still loses its edit. Captured bytes leave the disk only
+        // once they prove to be the expected revision or are linked back.
+        let captured = false;
         const aside = yield* Effect.acquireRelease(
           fs
             .makeTempDirectory({ directory: directory.parent, prefix: ".note-" })
             .pipe(Effect.mapError(() => storage)),
           (temporary) =>
-            keepAside
+            captured
               ? Effect.void
               : fs.remove(temporary, { recursive: true }).pipe(Effect.ignore({ log: true })),
         );
         yield* directory.pinTemporary(aside);
         const removed = path.join(aside, "removed.md");
-        // Never fall back to copy and unlink (EXDEV, EBUSY on a bind-mounted file): that reopens
-        // the window this rename closes. The note stays where it is.
-        yield* io(name, () => NodeFSP.rename(directory.absolute, removed)).pipe(
-          Effect.mapError((error) =>
-            error.reason === "storage"
-              ? new NoteError({
-                  reason: "storage",
-                  message: "The note was kept because it could not be moved aside for removal.",
-                  path: name,
-                })
-              : error,
-          ),
+        const unmoved = new NoteError({
+          reason: "storage",
+          message: "The note was kept because it could not be moved aside for removal.",
+          path: name,
+        });
+        // Stopping between the rename and its outcome would leave the note's path empty.
+        const changed = yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            // No copy-and-unlink fallback (EXDEV, EBUSY on a bind mount): the note stays put.
+            yield* io(name, () => NodeFSP.rename(directory.absolute, removed)).pipe(
+              Effect.mapError((error) => (error.reason === "storage" ? unmoved : error)),
+            );
+            captured = true;
+            const revision = yield* diskRevision(name, removed).pipe(
+              Effect.orElseSucceed(() => undefined),
+            );
+            if (revision === expected) return (captured = false);
+            // link(2) never replaces a file created at the path meanwhile, and unlike a copy the
+            // restored note is complete the moment it is visible.
+            captured = yield* Effect.tryPromise(() =>
+              NodeFSP.link(removed, directory.absolute),
+            ).pipe(
+              Effect.as(false),
+              Effect.orElseSucceed(() => true),
+            );
+            return true;
+          }),
         );
-        if ((yield* diskRevision(name, removed)) !== expected) {
-          // link(2) never replaces a file created at the path since the rename. That file is the
-          // later write, which would have replaced this one without the move, so it is kept.
-          yield* createExclusive(name, removed, directory.absolute).pipe(
-            Effect.catchTags({
-              NoteError: (error) =>
-                error.reason === "exists"
-                  ? Effect.void
-                  : Effect.sync(() => {
-                      keepAside = true;
-                    }).pipe(
-                      Effect.andThen(
-                        Effect.fail(
-                          new NoteError({
-                            reason: "storage",
-                            message: `The note changed while it was being removed and could not be put back. Its contents are in ${path.relative(root, removed)}.`,
-                            path: name,
-                          }),
-                        ),
-                      ),
-                    ),
-            }),
-          );
-          return yield* changedOnDisk(name, expected);
-        }
+        if (captured)
+          return yield* new NoteError({
+            reason: "storage",
+            message: `The note changed while it was being removed and could not be put back. Its contents are in ${path.relative(root, removed)}.`,
+            path: name,
+          });
+        if (changed) return yield* changedOnDisk(name, expected);
         forget(name);
         yield* directory.verify;
       }),
