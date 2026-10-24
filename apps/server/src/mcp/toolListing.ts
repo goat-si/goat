@@ -5,11 +5,9 @@ import {
 } from "@goat/contracts/agentSurface/listing";
 import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { McpServer } from "effect/ai";
 import { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import type * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -171,29 +169,32 @@ export const listingSetting = (
       );
 
 /**
- * Tells connected clients to list tools again (MCP list_changed) when the listing setting or the
- * goatclaw policy changes, since a thread's listing leaves out what its profile refuses.
+ * The settings changes after which clients should list tools again (MCP list_changed): the
+ * listing setting, or the goatclaw policy, since a thread's listing leaves out what its profile
+ * refuses. A save that changes neither is skipped.
  */
-export const layerListingChanges = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
-    if (Option.isNone(settings)) return;
-    const policyOf = (current: { readonly goatclaw: unknown }) => JSON.stringify(current.goatclaw);
-    // Changes carry no initial snapshot, so compare against the listing clients have now.
-    let listed = yield* listingSetting(settings);
-    let policy = yield* settings.value.getSettings.pipe(
-      Effect.map(policyOf),
-      Effect.catch(() => Effect.succeed(undefined)),
-    );
-    yield* settings.value.streamChanges.pipe(
-      Stream.runForEach((current) => {
-        if (current.agentToolListing === listed && policyOf(current) === policy) return Effect.void;
-        listed = current.agentToolListing;
-        policy = policyOf(current);
-        return server.notifications["notifications/tools/list_changed"]({});
-      }),
-      Effect.forkScoped,
-    );
-  }),
-);
+export const listingChanges = (
+  settings: Option.Option<Settings.ServerSettingsService["Service"]>,
+) => {
+  if (Option.isNone(settings)) return Stream.empty;
+  const service = settings.value;
+  const policyOf = (current: { readonly goatclaw: unknown }) => JSON.stringify(current.goatclaw);
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      // Changes carry no initial snapshot, so compare against what clients were listed from.
+      let listed = yield* listingSetting(settings);
+      let policy = yield* service.getSettings.pipe(
+        Effect.map(policyOf),
+        Effect.catch(() => Effect.succeed(undefined)),
+      );
+      return service.streamChanges.pipe(
+        Stream.filter((current) => {
+          if (current.agentToolListing === listed && policyOf(current) === policy) return false;
+          listed = current.agentToolListing;
+          policy = policyOf(current);
+          return true;
+        }),
+      );
+    }),
+  );
+};

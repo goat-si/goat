@@ -6,7 +6,11 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
-import { agentSurfaceRegistry, type AgentSurfaceRegistryEntry } from "@goat/contracts/agentSurface";
+import {
+  type AgentSurfaceEntry,
+  agentSurfaceRegistry,
+  type AgentSurfaceRegistryEntry,
+} from "@goat/contracts/agentSurface";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -65,7 +69,7 @@ const describeAll = Effect.fn(function* (http: Http, caller: "thread" | "outside
   const rows: Array<Row> = [];
   for (const resource of resources) {
     const result = yield* http.callTool(caller, "goat_describe", { path: resource });
-    rows.push(...(result.structuredContent as { entries: ReadonlyArray<Row> }).entries);
+    rows.push(...(result.structuredContent as unknown as { entries: ReadonlyArray<Row> }).entries);
   }
   return rows;
 });
@@ -95,7 +99,8 @@ it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
       let refused = 0;
       for (const row of yield* describeAll(http, "thread")) {
         if (row.available.reason === NOT_SERVED) continue;
-        const entry = agentSurfaceRegistry[row.path as keyof typeof agentSurfaceRegistry];
+        const entry: AgentSurfaceEntry =
+          agentSurfaceRegistry[row.path as keyof typeof agentSurfaceRegistry];
         if (listed.has(row.name) !== row.available.now)
           mismatches.push(
             `${row.path}: listed ${listed.has(row.name)}, available ${row.available.now}`,

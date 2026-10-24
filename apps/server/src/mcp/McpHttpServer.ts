@@ -1,4 +1,4 @@
-import { layerListingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
+import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
@@ -1364,6 +1364,17 @@ const layerDeviceScreenshotRegistration = catalogRegistrations.deviceScreenshot;
 export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceStandardToolkitRegistration,
   layerDeviceScreenshotRegistration,
+);
+
+/** Tells connected clients to list tools again when what tools/list shows them may have changed. */
+const layerListingChanges = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    yield* listingChanges(yield* Effect.serviceOption(Settings.ServerSettingsService)).pipe(
+      Stream.runForEach(() => server.notifications["notifications/tools/list_changed"]({})),
+      Effect.forkScoped,
+    );
+  }),
 );
 
 export const layerMcpTransport = McpServer.layerHttp({

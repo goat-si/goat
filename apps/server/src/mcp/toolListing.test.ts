@@ -5,18 +5,17 @@ import { ALWAYS_LOAD_META_KEY } from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import { NodeHttpServer } from "@effect/platform-node";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { McpServer } from "effect/ai";
 import { HttpBody } from "effect/http";
 
 import * as Settings from "../serverSettings.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { filterToolsListBody, layerListingChanges } from "./toolListing.ts";
+import { filterToolsListBody, listingChanges } from "./toolListing.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
 const base = {
@@ -150,46 +149,6 @@ it.effect("filters a tools/list whose method JSON spells with an escaped slash",
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
-it.effect(
-  "asks clients to list tools again when the goatclaw policy changes, not on every save",
-  () =>
-    Effect.gen(function* () {
-      const changes = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
-      const notified = yield* Deferred.make<void>();
-      let sent = 0;
-      yield* Layer.build(
-        layerListingChanges.pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              Layer.mock(McpServer.McpServer)({
-                notifications: {
-                  "notifications/tools/list_changed": () =>
-                    Effect.sync(() => {
-                      sent += 1;
-                    }).pipe(Effect.andThen(Deferred.succeed(notified, undefined)), Effect.asVoid),
-                } as unknown as McpServer.McpServer["Service"]["notifications"],
-              }),
-              Layer.mock(Settings.ServerSettingsService)({
-                getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
-                streamChanges: Stream.fromQueue(changes),
-              }),
-            ),
-          ),
-        ),
-      );
-      // A save that leaves the listing and the policy as they were, then a policy change.
-      yield* Queue.offer(changes, { ...DEFAULT_SERVER_SETTINGS });
-      const goatclaw = DEFAULT_SERVER_SETTINGS.goatclaw;
-      yield* Queue.offer(changes, {
-        ...DEFAULT_SERVER_SETTINGS,
-        goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
-      });
-      // Changes are handled in order, so a notification for the first save would count here too.
-      yield* Deferred.await(notified);
-      expect(sent).toBe(1);
-    }).pipe(Effect.scoped),
-);
-
 it.effect("filters a tools/list answer sent as SSE, buffered or streamed", () =>
   Effect.gen(function* () {
     const tools = entries.map((entry) => ({ name: listedToolName(entry) }));
@@ -217,4 +176,33 @@ it.effect("filters a tools/list whose method JSON spells with unicode escapes", 
       listed((entry) => "listing" in entry && entry.listing === "core"),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "asks clients to list tools again when the goatclaw policy changes, not on every save",
+  () =>
+    Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+      const settings = yield* Settings.ServerSettingsService.pipe(
+        Effect.provide(
+          Layer.mock(Settings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            streamChanges: Stream.fromQueue(changes),
+          }),
+        ),
+      );
+      const goatclaw = DEFAULT_SERVER_SETTINGS.goatclaw;
+      const unchanged = { ...DEFAULT_SERVER_SETTINGS };
+      const policy = {
+        ...DEFAULT_SERVER_SETTINGS,
+        goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
+      };
+      const listing = { ...policy, agentToolListing: "core" as const };
+      yield* Queue.offerAll(changes, [unchanged, policy, listing]);
+      const relisted = yield* listingChanges(Option.some(settings)).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      expect(relisted).toEqual([policy, listing]);
+    }),
 );
