@@ -148,7 +148,7 @@ export interface CuaDriverOptions {
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
-  ) => Effect.Effect<ComputerUseReadiness | undefined>;
+  ) => Effect.Effect<Pick<CuaHostStatus, "readiness" | "signals"> | undefined>;
   /** The verified install, run when computer use is turned on; absent where the driver ships. */
   readonly install?: Effect.Effect<void, CuaDriverHostError>;
   /** The running daemon's own view of the macOS grants; null when it does not say. */
@@ -347,10 +347,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       const display = yield* reported;
       // The helper's own report (desktop telemetry) wins; the server-run Linux helper is read
       // only when nothing reported.
-      const helper = yield* options.helperReadiness ?? Effect.succeedNone;
+      const reportedByHelper = options.helperReadiness ?? Effect.succeedNone;
+      const first = yield* reportedByHelper;
       const entry = active;
-      const readiness =
-        Option.isNone(helper) && options.observeReadiness && entry?.running && entry.mcp
+      const observed =
+        Option.isNone(first) && options.observeReadiness && entry?.running && entry.mcp
           ? yield* options.observeReadiness(entry.mcp, entry.displayEnvironment ?? []).pipe(
               Effect.timeoutOrElse({
                 duration: "15 seconds",
@@ -358,6 +359,8 @@ export const make = Effect.fn("CuaDriver.make")(function* (
               }),
             )
           : undefined;
+      // A report that arrived while the Linux helper was read is newer, so it still wins.
+      const helper = observed === undefined ? first : yield* reportedByHelper;
       const isEnabled = yield* enabled;
       return {
         platform:
@@ -366,7 +369,9 @@ export const make = Effect.fn("CuaDriver.make")(function* (
             : ("other" as const),
         running: running(),
         tools: !isEnabled ? "off" : running() ? "available" : "unavailable",
-        ...(isEnabled && entry === active && entry?.running && readiness ? { readiness } : {}),
+        ...(isEnabled && entry === active && entry?.running && observed && Option.isNone(helper)
+          ? observed
+          : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }

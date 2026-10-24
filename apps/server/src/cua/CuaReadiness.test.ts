@@ -1,10 +1,16 @@
 import { expect, it } from "@effect/vitest";
-import type { ComputerUseReadiness, CuaDriverMcpConfiguration } from "@goat/contracts";
+import type {
+  ComputerUseReadiness,
+  CuaDriverMcpConfiguration,
+  CuaHostStatus,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
@@ -19,6 +25,11 @@ const readiness: ComputerUseReadiness = {
   blockers: [],
   reasons: [],
 };
+/** What the server-run Linux helper answers: its readiness and the signals it raises. */
+const linuxReport = {
+  readiness,
+  signals: { privateMode: "unsupported", humanInput: "unsupported" },
+} as const;
 const fixture = Effect.fn("CuaReadiness.test.fixture")(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const changes = yield* PubSub.unbounded<AwaitedSettings>();
@@ -47,7 +58,7 @@ it.effect(
           }),
         Effect.succeed({ capability: "available", reason: "Desktop ready.", environment: [] }),
         {
-          observeReadiness: () => Effect.succeed(readiness),
+          observeReadiness: () => Effect.succeed(linuxReport),
         },
       ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, settings));
       expect(yield* service.status).toMatchObject({ tools: "off", running: false });
@@ -55,7 +66,12 @@ it.effect(
       yield* settings.updateSettings({ enableCua: true });
       expect(yield* service.status).toMatchObject({ tools: "unavailable", running: false });
       yield* service.acquire;
-      expect(yield* service.status).toMatchObject({ tools: "available", running: true, readiness });
+      expect(yield* service.status).toMatchObject({
+        tools: "available",
+        running: true,
+        readiness,
+        signals: linuxReport.signals,
+      });
       yield* settings.updateSettings({ enableCua: false });
       yield* Deferred.await(stopped);
       expect(yield* service.status).toMatchObject({ tools: "off", running: false });
@@ -72,7 +88,7 @@ it.effect("discards a helper answer from a driver retired while status was being
     const settings = yield* fixture();
     yield* settings.updateSettings({ enableCua: true });
     const requested = yield* Deferred.make<void>();
-    const answer = yield* Deferred.make<ComputerUseReadiness>();
+    const answer = yield* Deferred.make<typeof linuxReport>();
     const stopped = yield* Deferred.make<void>();
     const service = yield* CuaDriver.make(
       () =>
@@ -92,11 +108,50 @@ it.effect("discards a helper answer from a driver retired while status was being
     yield* Deferred.await(requested);
     yield* settings.updateSettings({ enableCua: false });
     yield* Deferred.await(stopped);
-    yield* Deferred.succeed(answer, readiness);
+    yield* Deferred.succeed(answer, linuxReport);
     const reported = yield* Fiber.join(status);
     expect(reported).toMatchObject({ tools: "off", running: false });
     expect(reported.readiness).toBeUndefined();
     expect((yield* service.status).readiness).toBeUndefined();
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest()),
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.scoped,
+  ),
+);
+
+it.effect("a helper report that arrives while the Linux helper is read still wins", () =>
+  Effect.gen(function* () {
+    const settings = yield* fixture();
+    yield* settings.updateSettings({ enableCua: true });
+    const requested = yield* Deferred.make<void>();
+    const answer = yield* Deferred.make<typeof linuxReport>();
+    const helperReport = yield* Ref.make(
+      Option.none<Pick<CuaHostStatus, "readiness" | "signals">>(),
+    );
+    const pending: ComputerUseReadiness = { ...readiness, capture: "pending" };
+    const service = yield* CuaDriver.make(
+      () =>
+        Effect.succeed({
+          start: Effect.succeed(mcp),
+          stop: Effect.void,
+          waitForExit: Effect.never,
+        }),
+      Effect.succeed({ capability: "available", reason: "Desktop ready.", environment: [] }),
+      {
+        helperReadiness: Ref.get(helperReport),
+        observeReadiness: () =>
+          Deferred.succeed(requested, undefined).pipe(Effect.andThen(Deferred.await(answer))),
+      },
+    ).pipe(Effect.provideService(ServerSettings.ServerSettingsService, settings));
+    yield* service.acquire;
+    const status = yield* service.status.pipe(Effect.forkChild);
+    yield* Deferred.await(requested);
+    // The helper reports a capture still pending while the Linux helper was being read.
+    yield* Ref.set(helperReport, Option.some({ readiness: pending }));
+    yield* Deferred.succeed(answer, linuxReport);
+    const reported = yield* Fiber.join(status);
+    expect(reported.readiness).toEqual(pending);
   }).pipe(
     Effect.provide(ServerSettings.layerTest()),
     Effect.provideService(HostProcess.Platform, "linux"),

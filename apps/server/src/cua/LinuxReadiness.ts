@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { gdbusRunner, makeSecureFocusProbe } from "./linuxHelper/atspiFocus.ts";
 import {
   detectLinuxSession,
+  linuxCapabilities,
   linuxSessionFacts,
   readGnomeShellVersion,
 } from "./linuxHelper/linuxSession.ts";
@@ -96,7 +97,11 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
           } finally {
             client.uniffiDestroy();
           }
-        }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(ComputerUseReadiness)));
+        }).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(ComputerUseReadiness)),
+          // The helper's own capability answer names the signals it raises.
+          Effect.map((readiness) => ({ readiness, signals: linuxCapabilities(session).signals })),
+        );
       }
       return undefined;
     },
