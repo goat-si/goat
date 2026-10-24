@@ -260,10 +260,6 @@ describe("build-computer-use-helper", () => {
       assert.match(render(channel), /GOATComputerUseAllowAnyParent<\/key>\s*<false\/>/);
     assert.match(render("dev"), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
     assert.match(render("stable", true), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
-    // GOAT still runs its own executable as Node, so a helper that required the node fuses off
-    // would refuse every signed nightly and stable parent; it only warns until #1352 is done.
-    for (const channel of ["stable", "nightly", "dev"] as const)
-      assert.match(render(channel), /GOATComputerUseRequireClosedNodeFuses<\/key>\s*<false\/>/);
   });
 
   it("a packaged app never embeds the dev helper, which skips its parent check", () => {

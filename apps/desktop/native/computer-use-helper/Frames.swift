@@ -72,14 +72,13 @@ final class FrameCapture {
       Int(ProcessInfo.processInfo.environment[HostIdentity.hostPidVariable] ?? ""),
       Int(getppid()), Int(getpid()),
     ].compactMap { $0 }.filter { $0 > 1 })
-  private let ownBundleIds = HostIdentity.ownBundleIds(helper: Bundle.main.bundleIdentifier ?? "")
 
   private func goatOwns(pid: Int, bundleId: String?) -> Bool {
     HostIdentity.ownsWindow(
       ownerPid: pid,
       ownerBundleId: bundleId
         ?? NSRunningApplication(processIdentifier: pid_t(clamping: pid))?.bundleIdentifier,
-      goatPids: goatPids, ownBundleIds: ownBundleIds)
+      goatPids: goatPids)
   }
 
   func frames(_ params: [String: Any]) throws -> [String: Any] {

@@ -4,7 +4,7 @@ import { macWithSwift, runSwiftChecks } from "./ComputerUseHelperSwift.testkit.t
 
 describe("computer use helper's view of GOAT itself (Swift)", () => {
   it.skipIf(!macWithSwift)(
-    "refuses a parent that can run as Node, and treats GOAT's own windows as never capturable",
+    "treats every GOAT channel's windows and the launching app's as never capturable",
     () => {
       const result = runSwiftChecks(["HostIdentity.swift"], "HostIdentityTests.swift");
       assert.isTrue(result.ok, result.output);

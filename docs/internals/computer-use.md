@@ -104,15 +104,15 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   `clientApiVersion` against `serverApiVersion`, with `incompatibleClientVersion` instead of a
   degraded session.
 - The parent check is only as strong as the parent. A signed GOAT whose Electron fuses let it run
-  a launcher's own JavaScript (`RunAsNode`, `NODE_OPTIONS`, Node inspect arguments) passes a
-  signature check for any same-user code (#1352). A release helper therefore also reads the
-  parent app's fuse wire, from the Electron framework it first verifies against the team. GOAT's
-  backend, CLI and lease proxy still run its executable as Node (`ELECTRON_RUN_AS_NODE`), so every
-  signed nightly and stable GOAT has those fuses on. Refusing such a parent (`parent_runs_node`)
-  waits behind the helper's `GOATComputerUseRequireClosedNodeFuses`, off in every build, and an
-  open fuse is only a warning on the helper's stderr. Until they run from a separately identified
-  runtime and the fuses are off, a same-user process can still pass the check by running code
-  under GOAT's signature; that is a blocker for treating the signed helper as a security boundary.
+  a launcher's own JavaScript (`RunAsNode`, `NODE_OPTIONS`, Node inspect arguments) passes it
+  for any same-user code, and every signed nightly and stable GOAT has them on, because its
+  backend, CLI and lease proxy run its executable as Node (`ELECTRON_RUN_AS_NODE`). The helper
+  does not read the fuses at launch: a check of the framework on disk cannot be tied to the image
+  the parent loaded without copying the whole framework (a same-user writer can swap the file
+  between the signature check and the read), it costs over half a second per launch, and today it
+  could only refuse every signed GOAT. The fix is a separately identified runtime for those
+  processes and the fuses off, checked when the app is packaged; until then the signed helper is
+  not a boundary against same-user code (#1352).
 - Replies are bound to the helper's executable, pid and generation from the hello.
   `admitComputerUseReply` quarantines replies from another generation, to a request a Stop or a
   deadline already ended, or over the frame limit; they never reach the agent.
