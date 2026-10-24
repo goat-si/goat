@@ -18,6 +18,7 @@ import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseControlEnd,
   type ComputerUsePauseReason,
+  type CuaAgentBlock,
   Handoff,
   type ThreadId,
   type TurnItemId,
@@ -206,6 +207,14 @@ export class ComputerUseLeases extends Context.Service<
         readonly state: ComputerUseControlState;
       }>
     >;
+    /**
+     * Records a turn the desktop gave no driver for want of a grant, so the session list can
+     * say so while the turn runs (#1399). A control for the thread or the turn's end clears it.
+     */
+    readonly blocked: (threadId: ThreadId, block: CuaAgentBlock) => Effect.Effect<void>;
+    readonly blockedTurns: Effect.Effect<
+      ReadonlyArray<{ readonly threadId: ThreadId; readonly block: CuaAgentBlock }>
+    >;
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly changed: Effect.Effect<void>;
@@ -275,6 +284,8 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  /** Turns the desktop gave no driver for want of a grant, while they run (#1399). */
+  const blockedTurns = new Map<ThreadId, CuaAgentBlock>();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
@@ -344,6 +355,8 @@ const make = Effect.gen(function* () {
     if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
       return undefined;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
+    // A driver started for this thread after all; the session list drops the blocked entry.
+    if (blockedTurns.delete(threadId)) yield* changed;
     const existing = controls.get(threadId);
     if (
       existing !== undefined &&
@@ -576,12 +589,12 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
-  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
-    const before = controls.get(threadId);
-    if (before === undefined || before.ended !== undefined) return false;
-    // Native subagents work through the parent's provider session, and so its control, on
-    // their own child threads; one can outlive a failed parent run. Delegated tasks hold
-    // controls of their own.
+  /**
+   * Whether the thread still has a run, provider turn or native subagent open. Native subagents
+   * work through the parent's provider session, and so its control, on their own child threads;
+   * one can outlive a failed parent run. Delegated tasks hold controls of their own.
+   */
+  const openWork = Effect.fn("ComputerUseLeases.openWork")(function* (threadId: ThreadId) {
     const open = yield* sql<{ readonly one: number }>`
       WITH RECURSIVE native(child_thread_id, status) AS (
         SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
@@ -602,7 +615,13 @@ const make = Effect.gen(function* () {
         AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
       LIMIT 1
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    if (open.length > 0) return false;
+    return open.length > 0;
+  });
+
+  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
+    const before = controls.get(threadId);
+    if (before === undefined || before.ended !== undefined) return false;
+    if (yield* openWork(threadId)) return false;
     // The read yields: a turn that minted or reused the control since then keeps it.
     const after = controls.get(threadId);
     if (
@@ -680,11 +699,34 @@ const make = Effect.gen(function* () {
             ),
           ),
         { discard: true },
+      ).pipe(
+        // A blocked turn has no control; it leaves the list once nothing of it is open.
+        Effect.andThen(
+          Effect.forEach(
+            [...blockedTurns.keys()],
+            (threadId) =>
+              openWork(threadId).pipe(
+                Effect.flatMap((open) =>
+                  open || !blockedTurns.delete(threadId) ? Effect.void : changed,
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("blocked computer use turn kept until the next end", {
+                    threadId,
+                    cause,
+                  }),
+                ),
+              ),
+            { discard: true },
+          ),
+        ),
       ),
     ),
-    disable: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "disabled"))).pipe(
-      Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void)),
-    ),
+    disable: Effect.sync(() => {
+      const listed = blockedTurns.size > 0;
+      blockedTurns.clear();
+      const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
+      return listed || ended.length > 0;
+    }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
     grants: live(),
     pause,
     detection,
@@ -711,6 +753,11 @@ const make = Effect.gen(function* () {
     subscribe: PubSub.subscribe(signals),
     changed,
     proxy,
+    blocked: (threadId, block) =>
+      Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
+    blockedTurns: Effect.sync(() =>
+      [...blockedTurns].map(([threadId, block]) => ({ threadId, block })),
+    ),
   });
 });
 

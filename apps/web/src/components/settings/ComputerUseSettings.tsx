@@ -240,6 +240,7 @@ function ComputerUseControls({
         readiness={withLiveGrants(host.status?.readiness, live)}
         tools={host.status?.tools}
         signals={host.status?.signals}
+        block={host.status?.block}
         {...(live
           ? {
               renderGrantAction: cuaReadinessGrantSlot({

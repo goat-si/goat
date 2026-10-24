@@ -105,8 +105,15 @@ describe("DesktopCuaDriver", () => {
         yield* test.request("denied");
         const denied = yield* test.next;
         assert.equal(denied.status, "unavailable");
-        if (denied.status !== "ready")
+        if (denied.status !== "ready") {
           assert.match(denied.message ?? "", /Accessibility|Screen Recording/);
+          // The typed reason the tile, Settings and the agent name (#1399).
+          assert.deepEqual(denied.block, {
+            reason: "permissionsNotGranted",
+            missing: ["accessibility", "screenRecording"],
+            holder: "app",
+          });
+        }
         assert.isEmpty(test.constructors);
         yield* test.grantPermissions;
         yield* test.restart;
