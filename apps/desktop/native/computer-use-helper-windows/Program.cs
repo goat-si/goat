@@ -9,6 +9,9 @@
 //
 // The helper runs exactly one embedded Cua Driver daemon from the files this build pinned, in
 // a job object that ends with the helper. stdin EOF means the host is gone.
+//
+// Started with arguments ("mcp ..." or "revoke ..."), it is instead the agent's way to the
+// driver: it runs the pinned driver with those arguments and relays its stdio (McpRelay.cs).
 
 using System;
 using System.Collections.Generic;
@@ -45,10 +48,25 @@ namespace Goat.ComputerUse
             return message;
         }
 
-        static int Main()
+        static int Main(string[] arguments)
         {
             string executable = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             string refusal = WindowsFacts.ParentRefusal(BuildInfo.AllowAnyParent, executable, BuildInfo.ParentExecutable);
+            if (arguments.Length > 0)
+            {
+                // Relay mode: stdout carries the driver's MCP lines, so problems go to stderr.
+                if (refusal != null)
+                {
+                    Console.Error.WriteLine(refusal);
+                    return 77;
+                }
+                try { return new DriverService(executable, delegate { }).Relay(arguments); }
+                catch (HelperException error)
+                {
+                    Console.Error.WriteLine(error.Message);
+                    return 78;
+                }
+            }
             if (refusal != null)
             {
                 var refused = Message("refused");

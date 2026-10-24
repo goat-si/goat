@@ -37,6 +37,7 @@
         "verify-windows-desktop-artifact.ts",
         // Run by hand on a Windows desktop against the built computer use helper.
         "computer-use-windows-smoke.ts",
+        "computer-use-windows-capture-guard-smoke.ts",
       ],
       "ignoreDependencies": ["esbuild"],
       // The `t3` npm package's files: copied into the package, never imported.

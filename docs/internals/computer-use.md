@@ -387,6 +387,10 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   service is `unavailable`), a non-empty UI Automation tree and a non-blank Windows Graphics
   Capture frame. Elevated windows are out of reach of a non-elevated helper; they return
   `targetRefused` and the helper is never elevated to reach them.
+  Agents reach Cua Driver through the helper's MCP relay, because the driver copies the window's
+  rectangle off the screen when Windows Graphics Capture fails and does not say so: the relay
+  replaces a covered window's screenshot with its own PrintWindow capture of that window, or
+  withholds it (#1329).
 - **Linux.** X11 needs a reachable display, a session bus and an AT-SPI bus that answer (the
   existing probe). Background input on X11 also needs an Xorg server that accepts hotplugged
   devices and a writable `/dev/uinput`; without them readiness reports `partial`, and input falls
