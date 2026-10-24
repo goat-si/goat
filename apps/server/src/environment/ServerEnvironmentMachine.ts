@@ -1,6 +1,8 @@
 import type { EnvironmentMachineKind } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 
 import * as ProcessRunner from "../processRunner.ts";
@@ -162,3 +164,53 @@ export const detectServerEnvironmentMachineKind = Effect.fn("detectServerEnviron
     }
   },
 );
+
+const readOsMachineIdentifier = Effect.fn("readOsMachineIdentifier")(function* () {
+  switch (yield* HostProcess.Platform) {
+    case "darwin": {
+      const ioreg = yield* runProbe({
+        command: "ioreg",
+        args: ["-rd1", "-c", "IOPlatformExpertDevice"],
+      });
+      return ioreg?.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/)?.[1] ?? null;
+    }
+    case "linux":
+      return (
+        (yield* readOptionalFile("/etc/machine-id")) ??
+        (yield* readOptionalFile("/var/lib/dbus/machine-id"))
+      );
+    case "win32": {
+      const reg = yield* runProbe({
+        command: "reg",
+        args: ["query", "HKLM\\SOFTWARE\\Microsoft\\Cryptography", "/v", "MachineGuid"],
+      });
+      return reg?.match(/MachineGuid\s+REG_SZ\s+(\S+)/)?.[1] ?? null;
+    }
+    default:
+      return null;
+  }
+});
+
+const hashIdentity = Effect.fn("hashServerMachineIdentity")(function* (value: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto
+    .digest("SHA-256", new TextEncoder().encode(value))
+    .pipe(Effect.orElseSucceed(() => null));
+  return digest === null ? null : Hex.encode(digest).slice(0, 32);
+});
+
+/**
+ * `machineId` is one value for every GOAT server on this machine, such as the desktop app's
+ * server and the headless server SSH launches start in ~/.goat. `machineUserId` narrows it to
+ * one OS account, whose servers read the same SSH config. Clients only compare them, so both
+ * are salted hashes: the OS identifier itself is not something a paired client needs to learn.
+ */
+export const detectServerMachineIdentity = Effect.fn("detectServerMachineIdentity")(function* () {
+  const identifier = (yield* readOsMachineIdentifier())?.toLowerCase() ?? null;
+  if (identifier === null) return { machineId: null, machineUserId: null };
+  const home = yield* HostProcess.HomeDirectory;
+  return {
+    machineId: yield* hashIdentity("goat-machine-id:v1:" + identifier),
+    machineUserId: yield* hashIdentity("goat-machine-user:v1:" + identifier + "\u0000" + home),
+  };
+});

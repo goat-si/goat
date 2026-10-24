@@ -310,11 +310,18 @@ export const readsOrReachesHost = <P, A, E, R>(
 export const readsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
   declare("read", (params: P) => requireThreadCaller.pipe(Effect.flatMap(() => handle(params))));
 
-export const actsAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const actsAsCaller = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.flatMap(() => writingCaller),
-      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
     ),
   );
 

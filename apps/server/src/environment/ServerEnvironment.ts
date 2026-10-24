@@ -32,7 +32,10 @@ import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
-import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
+import {
+  detectServerEnvironmentMachineKind,
+  detectServerMachineIdentity,
+} from "./ServerEnvironmentMachine.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedError<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -206,6 +209,7 @@ export const make = Effect.gen(function* () {
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
   const machine = yield* detectServerEnvironmentMachineKind();
+  const { machineId, machineUserId } = yield* detectServerMachineIdentity();
   const launcher = yield* resolveServiceLauncherMode();
   const serverSelfUpdate = resolveServerSelfUpdateCapability({
     desktopManaged: serverConfig.mode === "desktop",
@@ -229,6 +233,8 @@ export const make = Effect.gen(function* () {
     },
     serverVersion: packageJson.version,
     instanceId,
+    ...(machineId === null ? {} : { machineId }),
+    ...(machineUserId === null ? {} : { machineUserId }),
     protocol: servedRuntimeProtocolRanges(),
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,

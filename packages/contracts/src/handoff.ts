@@ -47,6 +47,8 @@ export const Handoff = Schema.Struct({
   resolvedAt: Schema.optional(Schema.DateTimeUtc),
   resolvedBy: Schema.optional(TrimmedNonEmptyString),
   actor: HandoffActor,
+  /** A computer use grant's approved apps; a grant without them admits every app. */
+  apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type Handoff = typeof Handoff.Type;
 
@@ -82,10 +84,10 @@ const PROVIDER_SETTINGS_HANDOFF_PATHS: ReadonlySet<string> = new Set([
 export const isProviderHandoffPath = (path: string) => PROVIDER_SETTINGS_HANDOFF_PATHS.has(path);
 
 /**
- * An unattended thread's request to use this host's screen. Approving it is admission for the
- * thread until the handoff's expiry, not approval of each action; ending it early moves the
- * approved handoff to cancelled. Like provider handoffs it expires on a clock, because the
- * person usually answers after the bot or scheduled turn that asked has ended.
+ * A thread's request to use this host's screen, or the listed apps on it. Approving it is
+ * admission for the thread until the handoff's expiry, not approval of each action; ending it
+ * early moves the approved handoff to cancelled. Like provider handoffs it expires on a clock,
+ * because the person often answers after the bot or scheduled turn that asked has ended.
  */
 export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
 
