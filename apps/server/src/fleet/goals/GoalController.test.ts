@@ -26,6 +26,7 @@ import { GoalRecovery } from "./GoalRecovery.ts";
 import { GoalStore, layer as goalStoreLayer, NOT_SENT } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 import {
+  GoalOwnerAuthorityLost,
   GoalWorkerRuntime,
   type LaunchRequest,
   type OwnerAccess,
@@ -48,6 +49,10 @@ interface Fake {
   owners: Array<OwnerAccess | { readonly unavailable: string }>;
   /** Runs once, inside the next launch, after the thread exists. */
   duringLaunch: Effect.Effect<void> | null;
+  /** Runs once, inside the next launch, follow-up or interrupt, right before its confirm. */
+  beforeConfirm: Effect.Effect<void> | null;
+  /** Makes the next launch create its thread and then lose its owner, as a refused first message does. */
+  loseAfterCreate: boolean;
   reading: (threadId: string) => WorkerReading;
   pullRequest: PullRequestObservation;
 }
@@ -90,11 +95,21 @@ const makeFake = (): Fake => {
     lookupFails: false,
     owners: [access()],
     duringLaunch: null,
+    beforeConfirm: null,
+    loseAfterCreate: false,
     reading: (threadId) => running(threadId, fake),
     pullRequest: { kind: "seen", state: "open", checks: "pending" },
   };
   return fake;
 };
+
+/** What the runtime does last before it hands a command over: the controller's confirm. */
+const confirmLast = <E>(fake: Fake, confirm: Effect.Effect<void, E>) =>
+  Effect.suspend(() => {
+    const before = fake.beforeConfirm ?? Effect.void;
+    fake.beforeConfirm = null;
+    return Effect.andThen(before, confirm);
+  });
 
 const runtimeFor = (fake: Fake) =>
   Layer.succeed(GoalWorkerRuntime, {
@@ -110,11 +125,16 @@ const runtimeFor = (fake: Fake) =>
             const threadId = fake.threads.get(actionId);
             return threadId === undefined ? null : { host: null, threadId, runId: null };
           }),
-    launch: (current, request) =>
+    launch: (current, request, confirm) =>
       Effect.gen(function* () {
+        yield* confirmLast(fake, confirm);
         fake.launches.push({ ...request, mode: current.runtimeMode });
         const threadId = ThreadId.make("thread:worker-" + fake.launches.length);
         fake.threads.set(request.actionId, threadId);
+        if (fake.loseAfterCreate) {
+          fake.loseAfterCreate = false;
+          return yield* new GoalOwnerAuthorityLost({ message: "revoked", goalChanged: false });
+        }
         if (fake.duringLaunch !== null) {
           const run = fake.duringLaunch;
           fake.duringLaunch = null;
@@ -133,20 +153,25 @@ const runtimeFor = (fake: Fake) =>
         }
         return { host: null, threadId, runId: RunId.make("run:1") };
       }),
-    followUp: (_access, _goal, _worker, message, actionId) =>
+    followUp: (_access, _goal, _worker, message, actionId, confirm) =>
       Effect.suspend(() => {
         if (fake.crashFollowUp) {
           fake.crashFollowUp = false;
           return Effect.die("server stopped before the send");
         }
-        fake.followUps.push({ actionId, message });
-        return Effect.void;
+        return confirmLast(fake, confirm).pipe(
+          Effect.andThen(Effect.sync(() => void fake.followUps.push({ actionId, message }))),
+        );
       }),
-    interrupt: (_access, worker) =>
-      Effect.sync(() => {
-        fake.interrupts.push(worker.threadId!);
-        fake.ended.add(worker.threadId!);
-      }),
+    interrupt: (_access, worker, _actionId, confirm) =>
+      confirmLast(fake, confirm).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            fake.interrupts.push(worker.threadId!);
+            fake.ended.add(worker.threadId!);
+          }),
+        ),
+      ),
   });
 
 /** This machine only, like the design's first release; SSH hosts are refused. */
@@ -381,6 +406,128 @@ describe("GoalController", () => {
       }).pipe(Effect.provide(layerFor(fake)));
     },
   );
+
+  describe("acts only with the authority its owner holds when the command goes out (#493)", () => {
+    const blocked = (id: string) =>
+      record(id).pipe(
+        Effect.map(({ goal }) => goal.status.conditions.find((c) => c.type === "Blocked")),
+      );
+
+    it.effect("stops a worker only if its owner can still act after the interrupt's claim", () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        yield* insert(withWorkers("goal_stop", 1));
+        yield* pass("goal_stop");
+        yield* setCount("goal_stop", 0);
+        // Live when the pass looks and plans, gone once the interrupt is claimed.
+        fake.owners = [access(), access(), { unavailable: "The session was revoked." }, access()];
+        yield* pass("goal_stop");
+        expect(fake.interrupts).toEqual([]);
+        const actionId = "goal:goal_stop:s0:a1:run:1:interrupt";
+        expect(yield* store.claimOf(actionId)).toMatchObject({ outcome: NOT_SENT });
+        expect(yield* blocked("goal_stop")).toMatchObject({
+          status: "True",
+          reason: "OwnerAuthorityLost",
+          message: "The session was revoked.",
+        });
+        // Once the owner can act again, the same interrupt goes out.
+        yield* pass("goal_stop");
+        expect(fake.interrupts).toEqual(["thread:worker-1"]);
+      }).pipe(Effect.provide(layerFor(fake)));
+    });
+
+    it.effect(
+      "sends nothing when the owner's mode drops below the plan right before the send",
+      () => {
+        const fake = makeFake();
+        return Effect.gen(function* () {
+          const store = yield* GoalStore;
+          // Full access through the claim; the last confirm finds the owner narrowed.
+          fake.owners = [access(), access(), access(), access("auto-accept-edits")];
+          yield* insert(withWorkers("goal_narrowed", 1));
+          yield* pass("goal_narrowed");
+          expect(fake.launches).toEqual([]);
+          const [claim] = yield* store.launches(FleetGoalId.make("goal_narrowed"));
+          expect(claim).toMatchObject({ outcome: NOT_SENT });
+          expect(yield* blocked("goal_narrowed")).toMatchObject({ reason: "OwnerAuthorityLost" });
+          // The next pass plans at the owner's mode as it is now and launches at that.
+          yield* pass("goal_narrowed");
+          expect(fake.launches.map((launch) => launch.mode)).toEqual(["auto-accept-edits"]);
+        }).pipe(Effect.provide(layerFor(fake)));
+      },
+    );
+
+    it.effect("sends nothing when the goal changes right before the send, and replans", () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        yield* insert(withWorkers("goal_moved", 1));
+        // An apply lowers the ceiling (a new generation) after the claim, before the send.
+        fake.beforeConfirm = Effect.gen(function* () {
+          const { goal } = yield* record("goal_moved");
+          yield* store.updateSpec(
+            {
+              ...goal,
+              owner: { ...goal.owner, runtimeModeCeiling: "auto-accept-edits" },
+              generation: goal.generation + 1,
+            },
+            goal.generation,
+          );
+        }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
+        yield* pass("goal_moved");
+        expect(fake.launches).toEqual([]);
+        const [claim] = yield* store.launches(FleetGoalId.make("goal_moved"));
+        expect(claim).toMatchObject({ outcome: NOT_SENT });
+        // A changed goal is replanned, not blocked.
+        expect(yield* blocked("goal_moved")).not.toMatchObject({ status: "True" });
+
+        // A follow-up whose goal is paused right before the send is not sent either.
+        yield* pass("goal_moved");
+        expect(fake.launches).toHaveLength(1);
+        fake.reading = () => ({
+          kind: "seen",
+          terminal: true,
+          runId: RunId.make("run:9"),
+          runStatus: "completed",
+          lastActivityAt: null,
+          result: { reported: false, pullRequest: null },
+        });
+        fake.beforeConfirm = Effect.gen(function* () {
+          const { goal } = yield* record("goal_moved");
+          yield* store.updateSpec(
+            { ...goal, spec: { ...goal.spec, paused: true }, generation: goal.generation + 1 },
+            goal.generation,
+          );
+        }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
+        yield* pass("goal_moved");
+        expect(fake.followUps).toEqual([]);
+      }).pipe(Effect.provide(layerFor(fake)));
+    });
+
+    it.effect(
+      "ends an attempt whose thread was created but whose first message was refused",
+      () => {
+        const fake = makeFake();
+        return Effect.gen(function* () {
+          const store = yield* GoalStore;
+          yield* insert(withWorkers("goal_half", 1));
+          fake.loseAfterCreate = true;
+          yield* pass("goal_half");
+          const [claim] = yield* store.launches(FleetGoalId.make("goal_half"));
+          expect(claim).toMatchObject({ outcome: "failed" });
+          expect(yield* blocked("goal_half")).toMatchObject({ reason: "OwnerAuthorityLost" });
+          expect((yield* record("goal_half")).workers[0]).toMatchObject({ attempt: 2 });
+          // The empty thread is left alone; the next pass starts attempt 2, never attempt 1 again.
+          yield* pass("goal_half");
+          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+            "goal:goal_half:s0:a1:launch",
+            "goal:goal_half:s0:a2:launch",
+          ]);
+        }).pipe(Effect.provide(layerFor(fake)));
+      },
+    );
+  });
 
   it.effect("does not delete a goal while a thread it launched may still run (P1-3)", () => {
     const fake = makeFake();

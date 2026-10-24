@@ -71,6 +71,8 @@ export interface CloudRunLaunch {
   readonly externalLauncher?: string;
   /** The caller already passed the cloud launch approval for this launch. */
   readonly approved?: true;
+  /** Asked right before the thread is created and before its first message; see ThreadLaunchInput. */
+  readonly confirm?: ThreadLaunch.ThreadLaunchInput["confirm"];
 }
 
 export class ThreadLaunchMcpService extends Context.Service<
@@ -583,6 +585,7 @@ const make = Effect.gen(function* () {
                   ...(cloudRun?.externalLauncher === undefined
                     ? {}
                     : { externalLauncher: cloudRun.externalLauncher }),
+                  ...(cloudRun?.confirm === undefined ? {} : { confirm: cloudRun.confirm }),
                   // The calling thread is the launcher. A launch forwarded over SSH has no
                   // calling thread here and names its launcher on the other machine instead.
                   ...(caller !== undefined
