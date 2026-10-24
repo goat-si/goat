@@ -34,6 +34,7 @@ import {
 } from "./claudeWorkflowProgress.ts";
 
 import { isWorkspaceImagePreviewPath } from "@goat/shared/filePreview";
+import { mcpToolResultWithRawImages } from "@goat/shared/toolOutput";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
@@ -5180,7 +5181,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
           const webSearchResults = webSearchResultsFromClaudeOutput(input.output);
           const webFetchUrl = firstStringInputField(input.toolInput, ["url"])?.trim();
-          const outputValue = claudeNativeToolOutputValue(input.output);
+          const outputValue =
+            input.toolName.startsWith("mcp__") && input.output.type === "structured_tool_use_result"
+              ? mcpToolResultWithRawImages(input.output.value, input.output.fallbackValue)
+              : claudeNativeToolOutputValue(input.output);
           const outputText =
             itemType === "command_execution"
               ? claudeCommandOutputText(input.output)

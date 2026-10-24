@@ -141,7 +141,8 @@ has no `clientRequestId`.
 ### Idempotency
 
 **Now.** Writes the registry marks `idempotency: "key"` (thread and SSH thread
-launch, provider add, update, link and remove, worktree remove, project delete)
+launch, provider add, update, link and remove, worktree remove, project delete,
+cloud machine create)
 reserve their key in `mcp_request_reservations` through
 [ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
 where the declaration admits the write, after every caller check, so direct calls
@@ -160,8 +161,23 @@ refusal that ran nothing frees the key, other failures replay, and a failure tha
 may have left effects, an interrupt, or a row an earlier server process left
 running stays `unknown` and never runs again; its refusal names the read that settles
 it, on the same host for a routed write. Only completed keys expire, after
-24 hours. Writes that already deduplicated in their own domain, such as
-`goat_thread_send` and `delegate_task`, keep those receipts for now.
+24 hours.
+
+Every other write records an `idempotencyReason` in the registry instead, and
+[idempotency.test.ts](../../packages/contracts/src/agentSurface/idempotency.test.ts)
+fails a write that has neither, apart from an allowlist of writes not yet
+converted (#1029) that only shrinks. A keyed write's reconcile read must be a
+registered read, host-routable when the write is. Writes that deduplicate in
+their own domain keep that store on purpose. Thread send, interrupt, retry and
+update, thread create-many, task create and cancel, review findings and
+schedule create turn the key into a stable orchestration command id: its
+receipt commits in the same transaction as the command, which the separate
+reservation statement cannot, and lives longer than 24 hours. Routed thread
+writes forward the key, so the host that runs them deduplicates it there. Goal
+apply stores the key with the goal it creates, channel ingest uses it as the
+message key in the channel ledger, and a secret request's key is how a later
+call collects the answer. Moving these onto the reservation would add a second,
+weaker record of the same request.
 
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
 settled on ([Stripe](https://docs.stripe.com/api/idempotent_requests),

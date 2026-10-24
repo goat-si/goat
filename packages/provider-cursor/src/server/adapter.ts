@@ -10,6 +10,7 @@ import type {
 } from "@cursor/sdk";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { cursorToolOutput } from "./toolOutput.ts";
 import {
   isOrchestrationV2WorkActive,
   defaultInstanceIdForDriver,
@@ -393,14 +394,6 @@ function cursorToolFailed(toolCall: ToolCall): boolean {
   return toolCall.type === "mcp" && toolCall.result?.status === "success"
     ? toolCall.result.value.isError
     : false;
-}
-
-function cursorToolOutput(toolCall: ToolCall): unknown {
-  const result = toolCall.result;
-  if (result === undefined) {
-    return undefined;
-  }
-  return result.status === "success" ? result.value : result.error;
 }
 
 function cursorToolOutputText(toolCall: ToolCall): string {

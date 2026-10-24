@@ -18,6 +18,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "clientRequestId is required and is the inbound message's key in the channel ledger, which ingests each message once.",
     annotations: {
       title: "Message GOAT's front desk",
       idempotentHint: true,
@@ -163,6 +165,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "ChannelRemoteWorkers.move serializes by taskId: a committed move advances generation, making the old worker state stale; once the destination starts, another move there is refused as same_host.",
     annotations: {
       title: "Continue a GOAT task on another machine",
       idempotentHint: false,
@@ -186,6 +190,8 @@ export const channelEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "ChannelWorkerReports.report checks the caller and generation, then deduplicates the required eventId in the channel ledger before committing a transition or notification.",
     annotations: {
       title: "Report on a GOAT ledger task",
       idempotentHint: true,

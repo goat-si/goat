@@ -241,6 +241,14 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
 export const MAC_GRANTS_REASON = "Accessibility and Screen Recording must be granted at this Mac.";
 
 /**
+ * macOS grants Accessibility and Screen Recording to the app at the top of the driver's launch
+ * chain. Under a standalone server that is whatever terminal or launchd job started GOAT, so the
+ * grants would land on the wrong app; the desktop app runs the driver under its own helper.
+ */
+export const MAC_STANDALONE_REASON =
+  "On a Mac, computer use runs through the GOAT desktop app. Open GOAT on this Mac to use it.";
+
+/**
  * The driver needs this user's GUI session, which exists only while they own the console. The
  * grants can only be read by the driver itself, so owning the console is partial until
  * `withMacGrants` sees the running driver report both.
@@ -249,7 +257,11 @@ export function classifyDarwin(input: {
   readonly uid: number | undefined;
   readonly consoleUid: number | null;
   readonly user: string;
+  /** A server without the desktop app, such as `goat serve` started from a terminal. */
+  readonly standalone?: boolean;
 }): CuaDisplayProbe {
+  if (input.standalone)
+    return { capability: "unavailable", reason: MAC_STANDALONE_REASON, environment: [] };
   if (input.consoleUid === null || input.uid === undefined)
     return {
       capability: "partial",
@@ -561,13 +573,14 @@ const probeLinux = Effect.fnUntraced(function* () {
   });
 });
 
-const probeDarwin = Effect.fnUntraced(function* () {
+const probeDarwin = Effect.fnUntraced(function* (standalone: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const info = yield* fs.stat("/dev/console").pipe(Effect.orElseSucceed(() => null));
   return classifyDarwin({
     uid: yield* HostProcess.UserId,
     consoleUid: info?.uid._tag === "Some" ? info.uid.value : null,
     user: (yield* HostProcess.Username) ?? "this user",
+    standalone,
   });
 });
 
@@ -587,11 +600,16 @@ const probeWindows = Effect.fnUntraced(function* () {
   return classifyWindows(tasklistSession(output));
 });
 
-/** Checks this host's screen now. Results go stale, so callers probe again before each start. */
-export const probeDisplay = Effect.fn("CuaDisplayCapability.probe")(function* () {
+/**
+ * Checks this host's screen now. Results go stale, so callers probe again before each start.
+ * `server` says whether the desktop app hosts this server; only it can run the Mac driver.
+ */
+export const probeDisplay = Effect.fn("CuaDisplayCapability.probe")(function* (
+  server: "desktop" | "standalone",
+) {
   const platform = yield* HostProcess.Platform;
   if (platform === "linux") return yield* probeLinux();
-  if (platform === "darwin") return yield* probeDarwin();
+  if (platform === "darwin") return yield* probeDarwin(server === "standalone");
   if (platform === "win32") return yield* probeWindows();
   return {
     capability: "unavailable",

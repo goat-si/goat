@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { MEMORY_OPERATION_ID } from "../idempotencyReasons.ts";
 
 export const memoryEntries = {
   "memory.search": entry({
@@ -110,6 +111,7 @@ export const memoryEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: MEMORY_OPERATION_ID,
     annotations: {
       idempotentHint: false,
       openWorldHint: false,
@@ -129,6 +131,7 @@ export const memoryEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: MEMORY_OPERATION_ID,
     annotations: {
       idempotentHint: false,
       openWorldHint: false,
@@ -149,6 +152,7 @@ export const memoryEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: MEMORY_OPERATION_ID,
     annotations: {
       idempotentHint: false,
       openWorldHint: false,
@@ -189,6 +193,8 @@ export const memoryEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Requires requestId, which the hub admin record replays, and expectedVersion, which refuses the change once applied.",
     annotations: {
       idempotentHint: false,
       openWorldHint: false,
@@ -225,6 +231,8 @@ export const memoryEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Sets values, so a repeat leaves the same settings; a hub sync change also carries requestId and expectedVersion, which refuse it once applied.",
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
 } as const;

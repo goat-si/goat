@@ -9,7 +9,7 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Request approval for a Codex Home route",
     description:
-      "Request a person's approval to change a Codex instance's OpenCodex Home route. Disconnect removes GOAT's override; it leaves OpenCodex linked to Home.",
+      "Request a person's approval to change a Codex instance's OpenCodex Home route. Disconnect removes GOAT's override; OpenCodex stays linked. Retry with the same clientRequestId.",
     guide:
       "Ask from an active thread in the target environment; this request has no SSH-host forwarding. A person's client needs providers:manage and orchestration:operate to act on the handoff. The request grants no new authority to the agent. Connecting requires a Codex instance using its existing CLI, a valid Home endpoint, and an available route when the approval is applied. The person sets up or removes the OpenCodex link separately; unlinking uses ocx disconnect on that machine. After approval, call goat_provider_diagnose to verify the result. The approval expires after fifteen minutes and applies only if the captured instance and settings revision still match.",
     effect: "write",
@@ -19,6 +19,8 @@ export const providerSurfaceEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotency: "key",
+    reconcile: "provider.diagnose",
     annotations: { idempotentHint: false, openWorldHint: false },
   },
   host_matrix: {
@@ -46,7 +48,7 @@ export const providerSurfaceEntries = {
     operation: "provider_sync",
     summary: "Install and sign in to a provider CLI on other machines",
     description:
-      "Install a provider CLI and start its sign-in on the selected machines. Cursor installers always install latest despite a requested version. After a thread approval, check goat_provider_host_matrix; for a started sync, follow goat_provider_sync_read.",
+      "Install a provider CLI and start sign-in on selected machines. Cursor installs latest despite a requested version. Follow goat_provider_sync_read; after approval check goat_provider_host_matrix. Retry with the same clientRequestId.",
     guide:
       "Installation uses fixed vendor npm packages or OS-specific installer scripts. With no hosts, setup runs on this machine. The default version comes from this machine's installed version when parseable, otherwise latest. Sign-in is enabled by default and is skipped when the CLI is already signed in. A thread agent receives needs_human; a person approves and the sync runs under that person's session. A client with providers:manage can start directly and receives a sync ID. Each machine runs its own sign-in: show the person a device code or relayable vendor page, or ask them to finish in GOAT on that host or run the terminal instruction there. Ask the person to use their own account; do not sign in for them or transfer credential files. Results expose parsed login instructions and fixed failure messages, not tokens or raw installer output. After approval, goat_provider_sync_read can also resolve the operation by its handoff ID. A finished sync may still carry a terminal sign-in instruction for a person to complete.",
     effect: "write",
@@ -57,6 +59,8 @@ export const providerSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["approval", "sign_in"],
+    idempotency: "key",
+    reconcile: "provider.sync_read",
     annotations: { idempotentHint: false, openWorldHint: true },
   },
   sync_read: {
@@ -93,6 +97,8 @@ export const providerSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "syncId selects one existing operation; cancellation interrupts its workers and selects only unfinished host tasks, so repeating cannot start another sync or uninstall anything.",
     annotations: { idempotentHint: true, openWorldHint: true },
   },
   diagnose: {
@@ -136,7 +142,7 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Ask a person to add or sign in to a provider in the app",
     description:
-      "Create a handoff asking a person to add or sign in to a provider. The call itself opens no window. Approval for an existing instance also enables it; check goat_provider_addable_list after setup.",
+      "Ask a person to add or sign in to a provider. Opens no window. Approval for an existing instance also enables it; check goat_provider_addable_list. Retry with the same clientRequestId.",
     guide:
       "driver selects the provider to add; instanceId targets an existing instance's sign-in. A live active thread is required to create the handoff. The person opens it in GOAT's add-provider window and installs or signs in there; their client needs providers:manage and orchestration:operate. Credential handling depends on the driver: vendor flows may keep their own credentials, while Grok's in-app API key is stored on the GOAT server. The agent-facing handoff and sign-in results do not expose those credentials. A caller allowed to manage providers can change settings directly with goat_provider_update, goat_provider_add, goat_provider_link, or goat_provider_remove.",
     effect: "write",
@@ -146,6 +152,8 @@ export const providerSurfaceEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval", "sign_in"],
+    idempotency: "key",
+    reconcile: "provider.addable_list",
     annotations: { idempotentHint: false, openWorldHint: false },
   },
   login_start: {
@@ -155,7 +163,7 @@ export const providerSurfaceEntries = {
     toolkit: "provider",
     summary: "Start a provider sign-in",
     description:
-      "Start a provider sign-in or create a handoff for a person to finish it. Sign-in can stop active sessions sharing its credentials. After a handoff, check goat_provider_addable_list; use goat_provider_login_status only for a returned flow.",
+      "Start provider sign-in or ask a person to finish it. Can stop sessions sharing credentials. After a handoff check goat_provider_addable_list; use goat_provider_login_status for a returned flow. Retry with the same clientRequestId.",
     guide:
       "A thread without a managing client session receives needs_human and the person continues with the provider's flow in GOAT. A writable client with live providers:manage can start a flow owned by that auth session. Show the person a safe device code and verification URL, or let them continue in GOAT when the browser, terminal, or credentials form requires it. After a direct flow starts, goat_provider_login_status reads it and goat_provider_login_cancel stops it. Results project safe flow state and omit tokens, authorization and callback URLs, terminal output, and entered keys. When the provider lacks in-app auth, the error includes a vendor command if one is known, otherwise general sign-in instructions. Session shutdown can include other instances with the same credential binding.",
     effect: "write",
@@ -166,6 +174,8 @@ export const providerSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["sign_in"],
+    idempotency: "key",
+    reconcile: "provider.addable_list",
     annotations: { idempotentHint: false, openWorldHint: true },
   },
   login_status: {
@@ -201,6 +211,8 @@ export const providerSurfaceEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "The auth controller checks the owning session, instanceId and flowId, then detaches that flow before stopping it; a later repeat is refused instead of cancelling a newer flow.",
     annotations: { idempotentHint: true, openWorldHint: false },
   },
   update: {

@@ -59,6 +59,8 @@ export const pendingRequestEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotencyReason:
+      "The serialized orchestrator commits the request's pending-to-resolved transition with its response effect (or async-answer message keyed by requestId); any later response to that request is rejected before another effect is added, on local and routed hosts.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,

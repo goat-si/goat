@@ -1,6 +1,7 @@
 import { makeTempDir, removePath, makeDirectory } from "./testkit/fileFixtures.ts";
 import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
 import { SourceControlProviderKind } from "@goat/contracts";
+import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -194,6 +195,7 @@ function normalizeFakePullRequestSummary(raw: unknown): FakePullRequestSummary |
 function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
   const result = NodeChildProcess.spawnSync("git", args, {
     cwd,
+    env: isolatedGitEnv(),
     encoding: "utf8",
   });
   if (result.status === 0) {

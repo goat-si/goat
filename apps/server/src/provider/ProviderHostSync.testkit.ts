@@ -95,6 +95,9 @@ export const harness = (options: {
   /** The person's live grants, read on every check, so a test can revoke them. */
   readonly personScopes?: () => ReadonlyArray<AuthEnvironmentScope>;
   readonly hub?: boolean;
+  /** Managed sign-in: the auth service and the provider instances it signs in. */
+  readonly auth?: Partial<ProviderAuth.ProviderAuthService["Service"]>;
+  readonly instances?: ReadonlyArray<{ readonly instanceId: string; readonly driverKind: string }>;
   readonly cloud?: Partial<
     Record<
       "claudeCloud" | "cursorCloud" | "devinCloud",
@@ -180,9 +183,9 @@ export const harness = (options: {
           },
         }),
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
-          listInstances: Effect.succeed([]),
+          listInstances: Effect.succeed((options.instances ?? []) as never),
         }),
-        Layer.mock(ProviderAuth.ProviderAuthService)({}),
+        Layer.mock(ProviderAuth.ProviderAuthService)(options.auth ?? {}),
         Layer.mock(ServerSettings.ServerSettingsService)({
           getSettings: Effect.succeed({
             ...DEFAULT_SERVER_SETTINGS,

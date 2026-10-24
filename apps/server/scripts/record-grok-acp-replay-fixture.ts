@@ -34,6 +34,11 @@ import * as ProviderReplayHarness from "../src/orchestration-v2/testkit/Provider
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import { makeGrokAcpRuntime } from "@goat/provider-grok/testing";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// Started from a git hook, this run inherits GIT_DIR, which would point git in its fixture
+// workspace, and in every server or provider child it starts, at the developer's checkout (#1114).
+removeInheritedGitEnv(process.env);
 
 const wallClock = Clock.Clock.defaultValue();
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
