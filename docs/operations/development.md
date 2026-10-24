@@ -29,6 +29,13 @@ Git reads the hook from the checkout that runs `git worktree add`, so that check
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
 
+Create worktrees by hand with `node scripts/worktree-add.ts <path> [git worktree add arguments]`.
+When GOAT is checked out as a submodule with `extensions.worktreeConfig` on, a plain
+`git worktree add` inherits the submodule's `core.worktree`: the new worktree resolves to the git
+directory, the hook finds no setup script there, and `git status` reports the git directory's
+files. The script gives the new worktree its own `core.worktree` before checking out and running
+the hook, as GOAT does for its thread worktrees, and runs a plain `git worktree add` everywhere else.
+
 GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
 same script as the `goat.json` setup action, with its output in the launch view. They also leave
 `.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
