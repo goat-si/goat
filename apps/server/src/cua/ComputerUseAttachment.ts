@@ -62,7 +62,7 @@ export interface ComputerUseAttachmentInput {
   /** Absent only in test assemblies, where no turn gets computer use. */
   readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
   /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
-  readonly requested?: ReadonlyArray<TurnCapability>;
+  readonly requested?: ReadonlyArray<TurnCapability> | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
