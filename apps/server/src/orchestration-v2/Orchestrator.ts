@@ -171,7 +171,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-import { makeThreadPromotion } from "./goat/ThreadPromotion.ts";
+import { isOwnedDelegatedTask, makeThreadPromotion } from "./goat/ThreadPromotion.ts";
 import {
   OrchestratorQuestionAlreadyAnsweredError,
   questionAlreadyAnswered,
@@ -626,6 +626,24 @@ function pendingThreadTitleGenerationEffect(
     commandId,
     threadId,
     request: { type: "thread-title.generate", kind },
+  };
+}
+
+function delegatedTasksStopEffect(command: {
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly reason?: string | undefined;
+  readonly childThreadIds?: ReadonlyArray<ThreadId>;
+}): PendingOrchestrationEffectV2 {
+  return {
+    id: `effect:${command.commandId}:delegated-tasks.stop`,
+    commandId: command.commandId,
+    threadId: command.threadId,
+    request: {
+      type: "delegated-tasks.stop",
+      ...(command.childThreadIds === undefined ? {} : { childThreadIds: command.childThreadIds }),
+      ...(command.reason === undefined ? {} : { reason: command.reason }),
+    },
   };
 }
 
@@ -10307,16 +10325,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             // Runs after commit: a command holds only its own thread's lock.
             yield* Ref.update(effects, (existing) => [
               ...existing,
-              {
-                id: `effect:${command.commandId}:delegated-tasks.stop`,
-                commandId: command.commandId,
-                threadId: command.threadId,
-                request: {
-                  type: "delegated-tasks.stop",
-                  childThreadIds: waitChildThreadIds,
-                  ...(command.reason === undefined ? {} : { reason: command.reason }),
-                },
-              } satisfies PendingOrchestrationEffectV2,
+              delegatedTasksStopEffect({ ...command, childThreadIds: waitChildThreadIds }),
             ]);
           });
 
@@ -10789,6 +10798,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       return undefined;
     }
+    // Queued after the interrupt, since a thread's effects run in order.
+    const stopDelegatedTasks =
+      command.stopDelegatedTasks === false || !projection.subagents.some(isOwnedDelegatedTask)
+        ? Effect.void
+        : Ref.update(effects, (existing) => [...existing, delegatedTasksStopEffect(command)]);
     const latestRun = projection.runs.findLast((run) => run.status !== "queued");
     let target =
       projection.runs.findLast(
@@ -10871,6 +10885,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         yield* Ref.update(events, (existing) => [...existing, ...written]);
         yield* Ref.update(effects, (existing) => [...existing, ...enqueued]);
         yield* cancelIdleOrphans({ command, events, projection });
+        yield* stopDelegatedTasks;
         return interrupted.value;
       }
       // A recorded remote task can still run while its status is unknown or its result
@@ -10901,6 +10916,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       now,
     });
     yield* cancelIdleOrphans({ command, events, projection });
+    yield* stopDelegatedTasks;
     return undefined;
   });
 
@@ -12501,7 +12517,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-    if (plan.events.length === 0) {
+    if (plan.events.length === 0 && plan.effects.length === 0) {
       // A settle that ended nothing still records its receipt: a replayed Stop
       // effect then finds it instead of settling work that appeared since.
       const resultSequence = yield* Effect.gen(function* () {
@@ -12537,6 +12553,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         acceptedAt,
         events: plan.events,
         effects: plan.effects,
+        allowEffectOnly: command.type === "thread.stop",
         ...(plan.cancelUnsettledEffects === undefined
           ? {}
           : { cancelUnsettledEffects: plan.cancelUnsettledEffects }),

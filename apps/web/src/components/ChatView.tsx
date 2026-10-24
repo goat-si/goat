@@ -1,5 +1,6 @@
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
+import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
 import {
   deriveAvailableRevertTurnCounts,
   deriveThreadPendingBackgroundTasks,
@@ -1834,9 +1835,15 @@ export default function ChatView(props: ChatViewProps) {
     activeTurnInProgress: isWorking || !latestRunSettled,
     isCompacting,
     awaitingUser:
-      activePendingApproval !== null ||
-      activePendingUserInput !== null ||
-      activeThreadShell?.hasPendingUserInput === true,
+      activePendingApproval !== null
+        ? ("approval" as const)
+        : activePendingUserInput !== null ||
+            // A secret request has no runtime request; the shell carries it.
+            activeThreadShell?.hasPendingUserInput === true
+          ? ("input" as const)
+          : null,
+    awaitingRequestId:
+      activePendingApproval?.requestId ?? activePendingUserInput?.requestId ?? null,
     activeTurnStartedAt: activeWorkStartedAt,
     latestRun: activeActivityRun,
     runningRunId: activeRuntime?.activeRunId ?? null,
@@ -3664,6 +3671,15 @@ export default function ChatView(props: ChatViewProps) {
                 listRef={legendListRef}
                 runs={paintOnlyDisplayedTimeline ? [] : (serverProjection?.runs ?? [])}
                 latestRun={paintOnlyDisplayedTimeline ? null : activeActivityRun}
+                announcedRun={
+                  paintOnlyDisplayedTimeline
+                    ? null
+                    : announcedRun(activeActivityRun, serverProjection?.runs ?? [])
+                }
+                detailBehindShell={
+                  !paintOnlyDisplayedTimeline &&
+                  isDetailBehindShell(activeLatestRun, activeThreadShell?.latestRun ?? null)
+                }
                 runningRunId={paintOnlyDisplayedTimeline ? null : activeRunningTurnId}
                 turnDiffSummaries={
                   paintOnlyDisplayedTimeline ? EMPTY_HELD_TURN_DIFF_SUMMARIES : turnDiffSummaries
@@ -3674,6 +3690,7 @@ export default function ChatView(props: ChatViewProps) {
                 routeThreadKey={displayedTimelineKey}
                 displayThreadKey={displayedTimelineKey}
                 paintOnly={paintOnlyDisplayedTimeline}
+                announceTurnStatus={!isProviderSubagent}
                 onOpenTurnDiff={
                   paintOnlyDisplayedTimeline ? noopHeldTurnDiff : onOpenTurnDiffStable
                 }

@@ -1232,7 +1232,13 @@ const make = Effect.gen(function* () {
         (background || cloud ? latestRun : undefined);
       const stopThread = (commandId: CommandId) =>
         threads
-          .dispatch({ type: "thread.stop", commandId, threadId, reason: "Stopped from GOAT Bot." })
+          .dispatch({
+            type: "thread.stop",
+            commandId,
+            threadId,
+            stopDelegatedTasks: false,
+            reason: "Stopped from GOAT Bot.",
+          })
           .pipe(Effect.result);
       const refusedFor = (failure: unknown) => {
         const tag = (failure as { readonly _tag?: string })._tag;
