@@ -1001,7 +1001,8 @@ const make = Effect.gen(function* () {
         "PreviewAutomationExecutionError",
         `Upload paths must be absolute: ${relative}`,
       );
-    if (await ServerBrowserPage.setInputFiles(tab.page, input, gateFor(tab))) return undefined;
+    const gate = gateFor(tab);
+    if (await ServerBrowserPage.setInputFiles(tab.page, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)
       throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1013,6 +1014,7 @@ const make = Effect.gen(function* () {
         "PreviewAutomationExecutionError",
         "This file picker accepts one file.",
       );
+    gate();
     if (input.paths.length > 0)
       await open.chooser.setFiles([...input.paths], {
         timeout: input.timeoutMs ?? NAVIGATION_TIMEOUT_MS,
@@ -1550,10 +1552,8 @@ const make = Effect.gen(function* () {
     });
 
   let pointerSequence = 0;
-  const gateFor =
-    (tab: ServerTab): ServerBrowserPage.DispatchGate =>
-    () =>
-      tab.control.assertAgentMayDispatch();
+  /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
+  const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
 
   const pointerFor =
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>

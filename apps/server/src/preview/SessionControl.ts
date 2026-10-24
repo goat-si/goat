@@ -116,6 +116,18 @@ export class SessionControl {
       throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
   }
 
+  /**
+   * The gate for one agent action, taken when it starts. Any change of control since then shuts it
+   * for good: an input cancelled by a secret field or a takeover stays cancelled after it ends.
+   */
+  dispatchGate() {
+    const epoch = this.epoch;
+    return () => {
+      this.assertAgentMayDispatch();
+      if (this.epoch !== epoch) throw new BrowserControlInterrupted();
+    };
+  }
+
   private agentBlocked() {
     if (this.privateMode) return new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
     if (this.agentStopped) return new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");

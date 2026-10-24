@@ -212,7 +212,9 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   by the desktop host (`cuaHumanInput`) or a takeover pauses every control on the host until
   `computerUse.resume`; a pause with no agent on the screen does nothing. A secret field the host
   reports (`cuaPrivateMode`, window only, never its content) pauses every control as `private`
-  until it loses focus. Narrowing a thread's approved apps ends the call in flight. Interactive
+  until it loses focus. The control counts these pauses, so a proxy that only sees the state after a
+  pause has already ended still ends the call it overlapped. Narrowing a thread's approved apps ends
+  the call in flight. Interactive
   turns run where the helper cannot report these yet, with the gap shown as unsupported; unattended
   ones do not. Controls and pauses are
   in memory, ended by a restart like the provider processes they serve.

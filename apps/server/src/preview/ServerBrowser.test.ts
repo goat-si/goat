@@ -132,6 +132,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     locator: vi.fn(() => {
       throw new Error("Unexpected locator action");
     }),
+    mouse: { click: vi.fn(async () => {}) },
     isClosed: () => closed,
     close: vi.fn(async () => {
       if (!closed) {
@@ -475,10 +476,16 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.evaluate).not.toHaveBeenCalled();
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
+      const box = { x: 0, y: 0, width: 10, height: 10 };
       const locator = {
         scrollIntoViewIfNeeded: async () => {},
-        boundingBox: async () => null,
+        boundingBox: async () => box,
         click: vi.fn(async () => {}),
+        elementHandle: async () => ({
+          boundingBox: async () => box,
+          evaluate: async () => true,
+          dispose: async () => {},
+        }),
       };
       page.locator.mockImplementationOnce(() => locator as never);
       yield* broker.invoke({
@@ -487,7 +494,7 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
-      expect(locator.click).toHaveBeenCalledTimes(2);
+      expect(locator.click).toHaveBeenCalledTimes(1);
     }),
   ).pipe(Effect.provide(layer)),
 );

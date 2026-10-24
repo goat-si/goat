@@ -440,6 +440,40 @@ describe("ComputerUseLeaseProxy", () => {
     }),
   );
 
+  it.effect(
+    "ends the call a secret overlapped even when the pause and its end arrive as one update",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { text: "hello", target: { kind: "window", pid: 4 } }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        // The route read the control only after the secret field had already lost focus.
+        yield* h.push({
+          ...active(),
+          interruptions: { count: 1, last: "private" },
+        } as ComputerUseLeaseUpdate);
+        yield* h.killed;
+        assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 1);
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            detail: "private_mode",
+          },
+        );
+        yield* h.restarted;
+        // The same count again is no new pause.
+        yield* h.push({
+          ...active(),
+          interruptions: { count: 1, last: "private" },
+        } as ComputerUseLeaseUpdate);
+        yield* h.send(call(2, "list_windows"));
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
   it.effect("reads NDJSON lease lines and drops ones it cannot decode", () =>
     Effect.gen(function* () {
       const updates = yield* Stream.runCollect(

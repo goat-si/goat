@@ -212,6 +212,25 @@ it.effect(
         });
         yield* PubSub.take(signals);
         assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        // A secret that comes and goes before anyone reads the control still counts as a pause.
+        const before = yield* leases.controlState(thread, control.controlId);
+        for (const active of [true, false])
+          yield* Queue.offer(reports, {
+            version: 1,
+            type: "cuaPrivateMode",
+            active,
+            target: { pid: 7, windowId: 3 },
+          });
+        yield* PubSub.take(signals);
+        yield* PubSub.take(signals);
+        const after = yield* leases.controlState(thread, control.controlId);
+        assert.equal(
+          after._tag === "active" && before._tag === "active"
+            ? after.interruptions.count - before.interruptions.count
+            : -1,
+          1,
+        );
+        assert.deepInclude(after, { interruptions: { count: 2, last: "private" } });
         // A person's input the helper cannot attribute to a device still pauses the agents.
         yield* Queue.offer(reports, { version: 1, type: "cuaHumanInput", source: "unknown" });
         yield* PubSub.take(signals);
