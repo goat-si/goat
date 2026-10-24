@@ -37,6 +37,7 @@ import {
   catalog,
   client,
   dependencies,
+  deviceAccessGranted,
   entries,
   serveCatalogOverHttp,
   toolkits,
@@ -836,7 +837,7 @@ const failingDevice = Layer.mock(DeviceService.DeviceService)({
     Effect.fail(new DeviceHostUnavailableError({ hostId: "local", reason: SECRET })),
 });
 const registeredWithFailingDevice = catalog.pipe(
-  Layer.provide(Layer.mergeAll(dependencies, failingDevice)),
+  Layer.provide(Layer.mergeAll(dependencies, deviceAccessGranted, failingDevice)),
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 

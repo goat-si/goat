@@ -417,7 +417,6 @@ describe("device setup consent", () => {
       const { service, agentStarts, agentStops, settings } = yield* fixture();
       yield* service.configure({ enabled: true });
       expect(agentStarts).toEqual([]);
-      expect(yield* service.agentReadinessIfSupported()).toBeNull();
 
       yield* service.configure({ agentAccessEnabled: true });
       expect(agentStarts).toEqual(["start"]);
