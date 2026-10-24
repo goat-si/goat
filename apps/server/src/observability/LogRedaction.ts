@@ -49,7 +49,7 @@ function diagnostic(error: Error, key: "name" | "message" | "stack"): string | u
   }
 }
 
-const MAX_CAUSE_DEPTH = 3;
+const MAX_CAUSE_DEPTH = 16;
 const MAX_REASONS = 16;
 const MAX_NAME_CHARS = 200;
 const MAX_MESSAGE_CHARS = 4_000;
@@ -70,18 +70,47 @@ export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> =
 
 /**
  * Each Die reason of a reported cause as its own redacted cause, skipping defects Effect marks as
- * ignored (an own ErrorReporter.ignore field set to true). A reason whose kind cannot be read is
- * reported as an uninspectable defect rather than dropped. Read like {@link redactCause}.
+ * ignored (an ErrorReporter.ignore data property set to true, own or inherited, as Effect checks
+ * it). Every reason is visited, read through descriptors; a reason whose kind cannot be read is
+ * reported as an uninspectable defect, and defects past the first few are counted, not dropped.
  */
-export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<unknown>> =>
-  reasonSnapshot(cause).reasons.flatMap((reason) => {
+export const redactedDefects = (cause: Cause.Cause<unknown>): Array<Cause.Cause<unknown>> => {
+  const listed = dataProperty(cause, "reasons");
+  const total = listLength(listed);
+  const defects: Array<Cause.Cause<unknown>> = [];
+  let omitted = 0;
+  for (let index = 0; index < total; index++) {
+    const reason = dataProperty(listed, index);
     const tag = dataProperty(reason, "_tag");
-    return tag === "Fail" ||
-      tag === "Interrupt" ||
-      dataProperty(dataProperty(reason, "defect"), ErrorReporter.ignore) === true
-      ? []
-      : [Cause.fromReasons([redactReason(reason)])];
-  });
+    if (tag === "Fail" || tag === "Interrupt") continue;
+    if (inheritedData(dataProperty(reason, "defect"), ErrorReporter.ignore) === true) continue;
+    if (defects.length < MAX_REASONS) defects.push(Cause.fromReasons([redactReason(reason)]));
+    else omitted += 1;
+  }
+  if (omitted > 0) defects.push(Cause.die(new Error(`${omitted} more defects omitted`)));
+  return defects;
+};
+
+function listLength(listed: unknown): number {
+  return guarded(
+    () =>
+      Array.isArray(listed) ? Number(Object.getOwnPropertyDescriptor(listed, "length")?.value) : 0,
+    0,
+  );
+}
+
+/** A data property's value found on the object or its prototypes; getters give nothing. */
+function inheritedData(target: unknown, key: PropertyKey): unknown {
+  return guarded(() => {
+    let current: unknown = target;
+    for (let depth = 0; depth < 32 && typeof current === "object" && current !== null; depth++) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor !== undefined) return "value" in descriptor ? descriptor.value : undefined;
+      current = Object.getPrototypeOf(current);
+    }
+    return undefined;
+  }, undefined);
+}
 
 /**
  * A cause's first reasons and their count, read once through descriptors: neither the cause nor
@@ -92,11 +121,7 @@ function reasonSnapshot(cause: Cause.Cause<unknown>): {
   readonly total: number;
 } {
   const listed = dataProperty(cause, "reasons");
-  const total = guarded(
-    () =>
-      Array.isArray(listed) ? Number(Object.getOwnPropertyDescriptor(listed, "length")?.value) : 0,
-    0,
-  );
+  const total = listLength(listed);
   const reasons: Array<unknown> = [];
   for (let index = 0; index < Math.min(total, MAX_REASONS); index++)
     reasons.push(dataProperty(listed, index));
@@ -159,8 +184,12 @@ function sanitizedError(
 }
 
 function uninspectable(): Error {
-  const error = new Error("[uninspectable]");
-  error.stack = "Error: [uninspectable]";
+  return marker("[uninspectable]");
+}
+
+function marker(text: string): Error {
+  const error = new Error(text);
+  error.stack = `Error: ${text}`;
   return error;
 }
 
@@ -189,8 +218,11 @@ function inspectError(
   const nested = causeOf(value);
   let cause: Error | undefined;
   try {
-    if (nested instanceof Error && !seen.has(nested) && depth < MAX_CAUSE_DEPTH)
-      cause = sanitizedError(nested, undefined, seen, depth + 1);
+    if (nested instanceof Error && !seen.has(nested))
+      cause =
+        depth < MAX_CAUSE_DEPTH
+          ? sanitizedError(nested, undefined, seen, depth + 1)
+          : marker("[deeper causes omitted]");
   } catch {
     // A revoked Proxy as a cause throws on instanceof; the outer error still shows.
     cause = uninspectable();
@@ -404,11 +436,7 @@ function dateText(date: Date): string {
  * snapshot cannot be taken, the sink sees no annotations or spans rather than the live ones.
  */
 function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknown, unknown> {
-  const annotations = guarded(
-    () => redactLogMessage(fiber.getRef(References.CurrentLogAnnotations)),
-    {},
-  );
-  const spans = guarded(() => spanSnapshot(fiber.getRef(References.CurrentLogSpans)), []);
+  const { annotations, spans } = redactedLogContext(fiber);
   return new Proxy(fiber, {
     get(target, key) {
       if (key === "getRef")
@@ -423,6 +451,44 @@ function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknow
     },
   });
 }
+
+/** A fiber's log annotations and log spans as a redacted snapshot; empty when it cannot be taken. */
+function redactedLogContext(fiber: Fiber.Fiber<unknown, unknown>): {
+  readonly annotations: Record<string, unknown>;
+  readonly spans: Array<[string, number]>;
+} {
+  const projected = guarded(
+    () => redactLogMessage(fiber.getRef(References.CurrentLogAnnotations)),
+    {},
+  );
+  return {
+    annotations:
+      typeof projected === "object" && projected !== null && !Array.isArray(projected)
+        ? Object.fromEntries(Object.entries(projected))
+        : {},
+    spans: guarded(
+      () =>
+        spanSnapshot(fiber.getRef(References.CurrentLogSpans)).map(
+          ([label, startTime]): [string, number] => [label, startTime],
+        ),
+      [],
+    ),
+  };
+}
+
+/**
+ * Effect.logError with the fiber's log annotations and spans redacted, for a log call made outside
+ * the sink wrapper's reach, such as DefectReporter's: whatever logger receives it sees no raw
+ * annotation or span label.
+ */
+export const logErrorRedacted = (message: string, cause: Cause.Cause<unknown>) =>
+  Effect.withFiber((fiber) => {
+    const { annotations, spans } = redactedLogContext(fiber);
+    return Effect.logError(message, cause).pipe(
+      Effect.provideService(References.CurrentLogAnnotations, annotations),
+      Effect.provideService(References.CurrentLogSpans, spans),
+    );
+  });
 
 const MAX_SPANS = 64;
 

@@ -269,6 +269,16 @@ describe("redactCause", () => {
     expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
   });
 
+  it("keeps a deep cause chain's root, and marks a chain deeper than it shows", () => {
+    const chain = (depth: number) =>
+      Array.from({ length: depth - 1 }, (_, index) => `wrapper${index}`).reduceRight(
+        (cause: Error, message) => new Error(message, { cause }),
+        new Error("ROOT"),
+      );
+    expect(Cause.pretty(redactCause(Cause.die(chain(5))))).toContain("ROOT");
+    expect(Cause.pretty(redactCause(Cause.die(chain(40))))).toContain("[deeper causes omitted]");
+  });
+
   it("keeps stack frames whatever the engine's stack format", () => {
     const error = new Error("boom");
     error.stack = "Error: boom\nfunction@file:///synthetic.ts:1:2";
