@@ -528,7 +528,7 @@ const make = Effect.gen(function* () {
       // What the desktop last heard; it starts out not watching. After a failed write it may
       // have heard either value, so the current one goes out until a write succeeds.
       let delivered = false;
-      let deliveredApps = "[]";
+      let deliveredApps: ReadonlyArray<string> = [];
       let unsure = false;
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
@@ -571,17 +571,19 @@ const make = Effect.gen(function* () {
           for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
         }
         const apps = [...approved].sort();
-        const appsKey = JSON.stringify(apps);
+        const appsChanged =
+          apps.length !== deliveredApps.length ||
+          apps.some((app, index) => app !== deliveredApps[index]);
         const active = current.length > 0;
         let retry = false;
-        if (active !== delivered || appsKey !== deliveredApps || unsure) {
+        if (active !== delivered || appsChanged || unsure) {
           const sent = yield* receiver.setCuaWatch(active, apps).pipe(
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
           if (sent) {
             delivered = active;
-            deliveredApps = appsKey;
+            deliveredApps = apps;
             unsure = false;
           } else {
             unsure = true;
