@@ -394,11 +394,24 @@ try {
   failed = true;
   log("FAIL exception", { message: error instanceof Error ? error.stack : String(error) });
 } finally {
-  for (const child of started.toReversed())
-    if (child.pid !== undefined && child.exitCode === null) child.kill("SIGTERM");
-  await sleep(500);
-  const left = started.filter((child) => child.pid !== undefined && alive(child.pid));
-  log("cleanup", { left: left.map((child) => child.pid) });
+  // Each child is waited on through its own handle, so a reused pid never passes for it.
+  const running = (child: NodeChildProcess.ChildProcess) =>
+    child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  const exited = (child: NodeChildProcess.ChildProcess, ms: number) =>
+    running(child)
+      ? Promise.race([
+          new Promise<void>((resolve) => child.once("exit", () => resolve())),
+          sleep(ms),
+        ])
+      : Promise.resolve();
+  for (const child of started.toReversed()) if (running(child)) child.kill("SIGTERM");
+  await Promise.all(started.map((child) => exited(child, 3_000)));
+  for (const child of started) if (running(child)) child.kill("SIGKILL");
+  await Promise.all(started.map((child) => exited(child, 2_000)));
+  const left = started.filter(running);
+  check("cleanup stops everything the run started", left.length === 0, {
+    left: left.map((child) => child.pid),
+  });
   await NodeFSP.writeFile(
     NodePath.join(evidence, "transcript.json"),
     JSON.stringify(transcript, null, 2) + "\n",
