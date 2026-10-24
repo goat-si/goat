@@ -6,10 +6,17 @@ import type * as React from "react";
 import { cn } from "~/lib/utils";
 
 const contextChipVariants = cva(
-  "inline-flex h-[1.41em] max-w-full items-center gap-[0.33em] rounded-[0.5em] border px-[0.5em] align-middle font-medium text-[0.86em] leading-none [&_svg]:block [&_svg]:size-[1.17em] [&_svg]:shrink-0 [&_svg]:self-center [button&,a&,[data-popup-open]&]:cursor-pointer [button&,a&]:transition-colors [button&,a&]:motion-reduce:transition-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground disabled:cursor-default",
+  "inline-flex max-w-full font-medium [&_svg]:block [&_svg]:shrink-0 [&_svg]:self-center [button&,a&,[data-popup-open]&]:cursor-pointer focus-visible:outline-2 focus-visible:outline-foreground disabled:cursor-default",
   {
-    defaultVariants: { kind: "neutral" },
+    defaultVariants: { kind: "neutral", appearance: "pill" },
     variants: {
+      appearance: {
+        pill: "h-[1.41em] items-center gap-[0.33em] rounded-[0.5em] border px-[0.5em] align-middle text-[0.86em] leading-none [&_svg]:size-[1.17em] [button&,a&]:transition-colors [button&,a&]:motion-reduce:transition-none focus-visible:-outline-offset-2",
+        // A reference reads as a link inside the sentence: the text's own size and
+        // baseline, the link color, and an underline only where it does something.
+        // The label sets the baseline; the icon centers on the label's line.
+        link: "items-baseline gap-[0.25em] rounded-[0.25em] px-[0.125em] align-baseline text-info-foreground no-underline decoration-dashed decoration-[0.5px] underline-offset-2 [&_svg]:size-[1em] [button:enabled&,a&,[tabindex]&]:hover:underline focus-visible:outline-offset-1",
+      },
       kind: {
         neutral: "border-border/70 bg-accent/40 text-foreground",
         image: "[--context-chip-accent:oklch(0.62_0.16_16)]",
@@ -37,11 +44,11 @@ const contextChipVariants = cva(
     },
     compoundVariants: [
       {
+        appearance: "pill",
         kind: [
           "image",
           "video",
           "file",
-          "mention",
           "terminal",
           "element",
           "preview-annotation",
@@ -51,21 +58,33 @@ const contextChipVariants = cva(
           "pr-draft",
           "pr-merged",
           "pr-closed",
-          "skill",
-          "thread",
-          "capability",
           "citation",
         ],
         className:
           "[--context-chip-border:color-mix(in_oklab,var(--context-chip-accent)_34%,var(--contrast-border))] [--context-chip-border-hover:color-mix(in_oklab,var(--context-chip-accent)_48%,var(--contrast-border))] [--context-chip-foreground:color-mix(in_oklab,var(--context-chip-accent)_22%,var(--contrast-foreground))] border-(--context-chip-border) bg-(--context-chip-accent)/11 text-(--context-chip-foreground) [button:enabled&,a&]:hover:border-(--context-chip-border-hover) [button:enabled&,a&]:hover:bg-(--context-chip-accent)/17",
       },
-      { state: "unresolved", className: "text-foreground" },
-      { state: "invalid", className: "border-destructive/35 bg-destructive/8 text-destructive" },
+      { appearance: "pill", state: "unresolved", className: "text-foreground" },
+      { appearance: "link", state: "unresolved", className: "text-muted-foreground" },
+      {
+        appearance: "pill",
+        state: "invalid",
+        className: "border-destructive/35 bg-destructive/8 text-destructive",
+      },
+      { appearance: "link", state: "invalid", className: "text-destructive" },
     ],
   },
 );
 
 type ContextChipKind = NonNullable<VariantProps<typeof contextChipVariants>["kind"]>;
+
+/** Named references (a skill, a capability, a file, a thread) read as links in the text;
+ *  attached or quoted context keeps the pill. */
+const LINK_KINDS: ReadonlySet<ContextChipKind> = new Set([
+  "skill",
+  "capability",
+  "mention",
+  "thread",
+]);
 
 interface ContextChipProps extends useRender.ComponentProps<"span"> {
   kind?: ContextChipKind;
@@ -73,9 +92,12 @@ interface ContextChipProps extends useRender.ComponentProps<"span"> {
 }
 
 function ContextChip({ className, kind, state, render, ...props }: ContextChipProps) {
+  const appearance = kind && LINK_KINDS.has(kind) ? "link" : "pill";
   const defaultProps = {
-    className: cn(contextChipVariants({ kind, state }), className),
+    className: cn(contextChipVariants({ appearance, kind, state }), className),
     "data-slot": "context-chip",
+    // Wrappers such as tooltip triggers replace data-slot, so styling keys on this.
+    "data-context-chip-appearance": appearance,
     "data-state": state,
   };
   return useRender({
@@ -88,7 +110,7 @@ function ContextChip({ className, kind, state, render, ...props }: ContextChipPr
 function ContextChipLabel({ className, ...props }: React.ComponentProps<"span">) {
   return (
     <span
-      className={cn("block min-w-0 self-center truncate leading-tight", className)}
+      className={cn("block min-w-0 truncate leading-tight", className)}
       data-slot="context-chip-label"
       {...props}
     />
