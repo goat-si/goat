@@ -28,12 +28,12 @@ const DEFECT_SUMMARY_MAX_CHARS = 2_000;
 
 /** What died, for one log line: an Error's stack or message, never its fields. */
 export const defectSummary = (defect: unknown): string => {
-  // A revoked Proxy throws on instanceof; it is then named by its type like any non-Error.
-  if (!guarded(() => defect instanceof Error, false) || !(defect instanceof Error))
-    return `non-Error defect (${typeof defect})`;
+  // Classified once, behind a guard: a Proxy's prototype lookup can throw, now or on a second try.
+  const error = guarded(() => (defect instanceof Error ? defect : undefined), undefined);
+  if (error === undefined) return `non-Error defect (${typeof defect})`;
   const text =
-    diagnostic(defect, "stack") ??
-    `${diagnostic(defect, "name") ?? "Error"}: ${diagnostic(defect, "message") ?? ""}`;
+    diagnostic(error, "stack") ??
+    `${diagnostic(error, "name") ?? "Error"}: ${diagnostic(error, "message") ?? ""}`;
   return redactLogText(text).slice(0, DEFECT_SUMMARY_MAX_CHARS);
 };
 

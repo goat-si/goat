@@ -199,6 +199,16 @@ describe("defectSummary", () => {
     const revoked = Proxy.revocable(new Error("canary-revoked"), {});
     revoked.revoke();
     expect(defectSummary(revoked.proxy)).toBe("non-Error defect (object)");
+    // A Proxy whose prototype lookup throws on a second try is classified once.
+    let lookups = 0;
+    const flaky = new Proxy(new Error("original failure"), {
+      getPrototypeOf: (target) => {
+        lookups += 1;
+        if (lookups > 1) throw new Error("second prototype lookup");
+        return Reflect.getPrototypeOf(target);
+      },
+    });
+    expect(defectSummary(flaky)).toContain("original failure");
     // A thrown value that is not an Error is named by its type only.
     expect(defectSummary({ token: "canary-object-token" })).toBe("non-Error defect (object)");
   });
