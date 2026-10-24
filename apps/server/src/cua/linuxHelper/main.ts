@@ -20,6 +20,7 @@ import { serveHelperChannel } from "./helperChannel.ts";
 import { openX11HumanInput } from "./humanInputSource.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import { makeWindowCaptureCheck, readProcessFacts } from "./windowCapture.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
@@ -86,6 +87,13 @@ const generation = NodeCrypto.randomUUID();
 // Deadlines and event spacing need a clock that never steps back when the system time changes.
 const monotonic = () => performance.now();
 const secureFocus = makeSecureFocusProbe(gdbus);
+const windowCapture = makeWindowCaptureCheck({
+  session,
+  environment,
+  gdbus,
+  processFacts: readProcessFacts,
+  uid: process.getuid?.() ?? -1,
+});
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
   undefined;
 const signals = makeSignalMonitor({
@@ -117,6 +125,7 @@ const helper = makeLinuxHelper({
       expectedVersion: driverVersion,
     }),
   secureFocus,
+  windowCapture,
   uinputWritable: () =>
     NodeFS.promises.access("/dev/uinput", NodeFS.constants.W_OK).then(
       () => true,

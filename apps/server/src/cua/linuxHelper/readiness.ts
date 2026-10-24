@@ -9,6 +9,7 @@ import {
   type LinuxSession,
   type ReadinessFacts,
 } from "./linuxSession.ts";
+import type { WindowCaptureCheck } from "./windowCapture.ts";
 
 const Permissions = Schema.Struct({
   x11: Schema.Boolean,
@@ -39,6 +40,7 @@ export async function readLinuxReadiness(
     readonly session: LinuxSession;
     readonly uinputWritable: () => Promise<boolean>;
     readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+    readonly windowCapture: WindowCaptureCheck;
     readonly call: (
       tool: string,
       args: Readonly<Record<string, unknown>>,
@@ -53,6 +55,7 @@ export async function readLinuxReadiness(
     capture: "unproven",
     tree: "unavailable",
     uinputWritable: await deps.uinputWritable(),
+    captureRefused: undefined,
   };
   const call = async (tool: string, args: Readonly<Record<string, unknown>>) => {
     const answer = await deps.call(tool, args, deadlineMs);
@@ -63,6 +66,8 @@ export async function readLinuxReadiness(
     const decoded = decodePermissions(permissions?.structured);
     if (decoded._tag === "Some") {
       facts.driver = decoded.value;
+      // A cropped capture proves nothing about one window, so it is not even taken.
+      facts.captureRefused = await deps.windowCapture();
       const list = await call("list_windows", {});
       const windows = decodeWindows(list?.structured);
       const shown =
@@ -75,7 +80,7 @@ export async function readLinuxReadiness(
       // One window does not speak for the desktop: an app without accessibility, or a covered
       // window that captures blank. The best answer among a few shown windows wins.
       for (const window of shown) {
-        if (facts.capture !== "varied") {
+        if (facts.capture !== "varied" && facts.captureRefused === undefined) {
           // display_only preserves the snapshot the agent's element tokens belong to.
           const capture = await call("get_window_state", {
             pid: window.pid,

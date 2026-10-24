@@ -28,6 +28,7 @@ import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
 import type { LinuxSession } from "./linuxSession.ts";
+import type { WindowCaptureCheck } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -42,6 +43,7 @@ export interface LinuxHelperDependencies {
   readonly screen: string;
   readonly startDriver: () => Promise<DriverClient>;
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+  readonly windowCapture: WindowCaptureCheck;
   readonly uinputWritable: () => Promise<boolean>;
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
@@ -228,6 +230,17 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     readonly maxElements: number | undefined;
     readonly deadlineMs: number;
   }): Promise<HelperAnswer & { readonly result: ComputerUseObservation | ComputerUseRefusal }> => {
+    // A screenshot that could hold other apps' windows is refused, before and after the read:
+    // the driver decides its route per capture, so a check that passed may no longer hold.
+    const cropped = async () => (input.screenshot ? await deps.windowCapture() : undefined);
+    const refuseCropped = (reason: string) => ({
+      result: {
+        ...unsupportedComputerUseMethod("observe", "linux"),
+        message: reason + " Observe again without a screenshot to read the window's controls.",
+      },
+    });
+    const before = await cropped();
+    if (before !== undefined) return refuseCropped(before);
     const answer = await call(
       "get_window_state",
       {
@@ -244,6 +257,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       return { result: refusal("busy", "Reading the window took too long.") };
     if (answer === "lost") return { result: refusal("helperUnavailable", "Cua Driver exited.") };
     if (isRefusal(answer)) return { result: answer };
+    const after = await cropped();
+    if (after !== undefined) return refuseCropped(after);
     const decoded = decodeRead(answer.structured);
     if (answer.isError || decoded._tag === "None") {
       const code = driverRefusalCode(answer.structured);

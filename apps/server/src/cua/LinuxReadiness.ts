@@ -16,6 +16,7 @@ import {
 } from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
+import { makeWindowCaptureCheck, readProcessFacts } from "./linuxHelper/windowCapture.ts";
 
 const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
@@ -50,15 +51,21 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
       const session = detectLinuxSession(
         linuxSessionFacts(sessionEnvironment, () => readGnomeShellVersion(sessionEnvironment)),
       );
-      const secureFocus = makeSecureFocusProbe(
-        gdbusRunner(
-          Object.fromEntries(
-            Object.entries(sessionEnvironment).filter(
-              (entry): entry is [string, string] => entry[1] !== undefined,
-            ),
+      const gdbus = gdbusRunner(
+        Object.fromEntries(
+          Object.entries(sessionEnvironment).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined,
           ),
         ),
       );
+      const secureFocus = makeSecureFocusProbe(gdbus);
+      const windowCapture = makeWindowCaptureCheck({
+        session,
+        environment: sessionEnvironment,
+        gdbus,
+        processFacts: readProcessFacts,
+        uid: process.getuid?.() ?? -1,
+      });
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");
         if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
@@ -76,6 +83,7 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
               {
                 session,
                 secureFocus,
+                windowCapture,
                 uinputWritable: async () => writable,
                 call: async (name, args) => {
                   const result = await client.callTool(name, JSON.stringify(args), { signal });

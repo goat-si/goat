@@ -260,6 +260,8 @@ export async function connect(
     readonly helloPadding?: number;
     /** False: the helper cannot see a person's input devices on this desktop. */
     readonly personInput?: boolean;
+    /** Why a window capture would be cropped from the whole output; undefined when it is not. */
+    readonly cropped?: string;
   } = {},
 ) {
   const session = detectLinuxSession(options.session ?? X11);
@@ -315,9 +317,15 @@ export async function connect(
     delay: () => new Promise<void>(() => undefined),
   });
   const capabilities = linuxCapabilities(session, hasPersonInput);
+  // Answers queued in next go first, one per check; then cropped answers every check.
+  const capture = { cropped: options.cropped, next: [] as Array<string | undefined>, checks: 0 };
   const helper = makeLinuxHelper({
     session,
     screen: ":91",
+    windowCapture: async () => {
+      capture.checks++;
+      return capture.next.length > 0 ? capture.next.shift() : capture.cropped;
+    },
     startDriver: async () => {
       starts++;
       return driver.client;
@@ -421,6 +429,7 @@ export async function connect(
     ref,
     driver,
     focus,
+    capture,
     clock,
     gate,
     starts: () => starts,
