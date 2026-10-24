@@ -38,8 +38,17 @@ describe("agentInputLog", () => {
     log.started("lost", 1_200);
     log.started("done", 1_300);
     log.ended("done", 1_400);
+    log.prune(5_000);
     assert.equal(log.size(), 3);
-    assert.isFalse(log.isAgents(20_000));
+    log.prune(20_000);
     assert.equal(log.size(), 0);
+  });
+
+  it("a call dated in the future erases nobody else's", () => {
+    const log = makeAgentInputLog();
+    log.started("A", 1_000);
+    log.started("B", 20_000);
+    log.prune(1_100);
+    assert.isTrue(log.isAgents(1_100));
   });
 });

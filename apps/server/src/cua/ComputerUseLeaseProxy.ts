@@ -345,6 +345,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       : options.onAgentInput({ call, state, at }).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   const inputStarted = Effect.fn("ComputerUseLeaseProxy.inputStarted")(function* (key: string) {
     const at = yield* Clock.currentTimeMillis;
+    agentInput.prune(at);
     agentInput.started(key, at);
     yield* tellAgentInput(key, "start", at);
   });

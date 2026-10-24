@@ -312,6 +312,15 @@ layer("ComputerUseLeases controls", (it) => {
           yield* leases.agentInput(thread, bots.controlId, { call: "7", state: "start", at: 0 }),
         );
         assert.isTrue(yield* call("start", 1_000));
+        // A report dated far from the server's clock is refused and records nothing.
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
+        assert.isFalse(
+          yield* leases.agentInput(other, bots.controlId, {
+            call: "8",
+            state: "start",
+            at: 10 * 60_000,
+          }),
+        );
         // The bot's click, seen by my helper while it runs and just after it answered.
         assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
         yield* call("end", 1_200);

@@ -58,21 +58,20 @@ export function makeAgentInputLog() {
   let done: Array<{ readonly start: number; readonly end: number }> = [];
   /**
    * Forgets what can no longer cover an event near now: finished calls after KEEP_MS, open ones
-   * after OPEN_MS. A start whose end never arrives, or arrives first, is gone by then too.
+   * after OPEN_MS. A start whose end never arrives, or arrives first, is gone by then too. now
+   * must come from the owner's own clock, never from a report, so a report dated in the future
+   * cannot erase another agent's calls.
    */
   const prune = (now: number) => {
     done = done.filter((call) => now - call.end < KEEP_MS);
     for (const [key, start] of open) if (now - start > OPEN_MS) open.delete(key);
   };
-  const finish = (start: number, now: number) => {
-    prune(now);
-    done = [...done, { start, end: now }];
+  const finish = (start: number, end: number) => {
+    done = [...done, { start, end }];
   };
   return {
-    started: (key: string, now: number) => {
-      prune(now);
-      open.set(key, now);
-    },
+    prune,
+    started: (key: string, at: number) => void open.set(key, at),
     /** A call answered, cancelled or cut off; true when it was open. */
     ended: (key: string, now: number) => {
       const start = open.get(key);
@@ -92,14 +91,10 @@ export function makeAgentInputLog() {
      * Whether an event at `at` falls inside an agent's input. `live` says which open calls still
      * count, so a call of a control that has ended covers nothing.
      */
-    isAgents: (at: number, live: (key: string) => boolean = () => true) => {
-      prune(at);
-      return (
-        [...open].some(
-          ([key, start]) => live(key) && at >= start - BEFORE_MS && at <= start + OPEN_MS,
-        ) || done.some((call) => at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS)
-      );
-    },
+    isAgents: (at: number, live: (key: string) => boolean = () => true) =>
+      [...open].some(
+        ([key, start]) => live(key) && at >= start - BEFORE_MS && at <= start + OPEN_MS,
+      ) || done.some((call) => at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS),
     /** How many calls the log still holds, open or finished. */
     size: () => open.size + done.length,
   };

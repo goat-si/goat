@@ -116,7 +116,7 @@ const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(ComputerUs
  * report for a control that is not the thread's live one, such as an old proxy's after its
  * control was replaced, changes nothing.
  */
-const reportLayer = HttpRouter.add(
+export const reportLayer = HttpRouter.add(
   "POST",
   COMPUTER_USE_LEASE_ROUTE,
   Effect.gen(function* () {

@@ -24,6 +24,7 @@ import {
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- control ids are minted inside a sync map update.
 import * as NodeCrypto from "node:crypto";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -118,6 +119,8 @@ const INTERACTIVE_CONTROL_MINUTES = 60;
 const WATCH_RETRY_MS = 1_000;
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
+/** How far a proxy's input report time may be from this server's clock. */
+const REPORT_SKEW_MS = 60_000;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -502,6 +505,17 @@ const make = Effect.gen(function* () {
 
   /** Every agent's input calls on this host, keyed by control id and call (#1235). */
   const agentInputs = makeAgentInputLog();
+  /**
+   * Whether a proxy's report time is close to this server's clock, which the proxy shares on
+   * the same host. A report far off is refused, and the log is pruned by this clock alone.
+   */
+  const nearNow = (at: number) =>
+    Clock.currentTimeMillis.pipe(
+      Effect.map((now) => {
+        agentInputs.prune(now);
+        return Math.abs(now - at) <= REPORT_SKEW_MS;
+      }),
+    );
   /** The thread's control when it is the live one this report names, expiry included. */
   const liveControl = Effect.fn("ComputerUseLeases.liveControl")(function* (
     threadId: ThreadId,
@@ -707,6 +721,7 @@ const make = Effect.gen(function* () {
       at: number,
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
+      if (!(yield* nearNow(at))) return "refused" as const;
       // Another agent's input on this host shows up in every helper; only a live control's
       // calls count.
       const live = new Set(
@@ -725,6 +740,7 @@ const make = Effect.gen(function* () {
       report: { readonly call: string; readonly state: "start" | "end"; readonly at: number },
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return false;
+      if (!(yield* nearNow(report.at))) return false;
       const key = controlId + CALL_KEY + report.call;
       if (report.state === "start") agentInputs.started(key, report.at);
       else agentInputs.ended(key, report.at);
