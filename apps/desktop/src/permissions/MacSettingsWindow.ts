@@ -28,7 +28,6 @@ function run() {
     let result = null;
     if (apps.count > 0) {
       const pid = apps.objectAtIndex(0).processIdentifier;
-      const front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
       const list = $.CGWindowListCopyWindowInfo(
         $.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements,
         $.kCGNullWindowID
@@ -36,12 +35,17 @@ function run() {
       if (list) {
         $.CFMakeCollectable(list);
         const count = $.CFArrayGetCount(list);
+        // The list runs front to back, so the first normal window belongs to the frontmost app.
+        // NSWorkspace's frontmostApplication would stay frozen here: this loop never runs the
+        // run loop that delivers its updates.
+        let frontPid = null;
         for (let i = 0; i < count; i++) {
           const w = ObjC.castRefToObject($.CFArrayGetValueAtIndex(list, i));
+          if (frontPid === null && w.objectForKey("kCGWindowLayer").js === 0) frontPid = w.objectForKey("kCGWindowOwnerPID").js;
           if (w.objectForKey("kCGWindowOwnerPID").js !== pid || w.objectForKey("kCGWindowLayer").js !== 0) continue;
           const b = ObjC.deepUnwrap(w.objectForKey("kCGWindowBounds"));
           if (b.Width < 500 || b.Height < 350) continue;
-          result = { x: b.X, y: b.Y, width: b.Width, height: b.Height, frontmost: !front.isNil() && front.processIdentifier === pid };
+          result = { x: b.X, y: b.Y, width: b.Width, height: b.Height, frontmost: frontPid === pid };
           break;
         }
       }
