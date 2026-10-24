@@ -203,8 +203,9 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
   `list_apps` reports (the bundle id, or the app name where there is none) without case; the
   proxy never approves an app by its display name, which would let two grants naming one app
   differently both reach it. It learns a pid's app only from a pending `list_apps` answer's
-  `apps` entries, and on macOS launches an app only by its bundle id, since the system resolves a
-  name. A grant without apps overlaps every other, because under it the driver
+  `apps` entries, and under a list launches an app only on macOS and only by its bundle id: a name is
+  resolved by the system, and on Linux and Windows the driver opens a launch path, AUMID or
+  URL before any id a grant names. A grant without apps overlaps every other, because under it the driver
   acts on the whole desktop and runs scripts, and unattended full access work counts as one. An
   overlapping request is refused naming the holder and its apps in the way, and so is an
   overlapping approval. Grants on different apps coexist: the proxy forwards only calls aimed at

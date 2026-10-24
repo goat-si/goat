@@ -49,8 +49,11 @@ export type ScopeVerdict =
       readonly reason: "app_not_approved" | "desktop_not_approved";
       readonly app?: string;
       readonly opaque?: boolean;
-      /** A launch that names its app other than by bundle id, where apps have one. */
-      readonly unnamed?: boolean;
+      /**
+       * A launch the proxy cannot tie to an approved app: on macOS one not named by bundle id
+       * alone, elsewhere any launch.
+       */
+      readonly launch?: "bundle_id" | "unverifiable";
     };
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
@@ -101,16 +104,18 @@ export function scopeVerdict(input: {
     return { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
   const args = record(input.args);
   if (name === "launch_app") {
+    // The driver picks what to open from a name, a path, an AUMID or URLs before any id a grant
+    // names (cua-driver v0.37.0); on Linux and Windows those can open an app another thread's
+    // grant holds, so only macOS, where a bundle id picks exactly one app, launches under a list.
+    if (!input.bundleIds)
+      return { _tag: "refuse", reason: "app_not_approved", launch: "unverifiable" };
     const bundle = text(args?.bundle_id);
     const named = text(args?.name) ?? text(args?.app_name);
-    // The driver opens a named app as the system resolves the name, which can be an app another
-    // thread's grant names by bundle id; where apps have one, only it says which app launches.
-    if (input.bundleIds && (bundle === undefined || named !== undefined))
-      return { _tag: "refuse", reason: "app_not_approved", unnamed: true };
-    const app = bundle ?? named;
-    return app !== undefined && approves(input.apps, app)
+    if (bundle === undefined || named !== undefined)
+      return { _tag: "refuse", reason: "app_not_approved", launch: "bundle_id" };
+    return approves(input.apps, bundle)
       ? { _tag: "allow" }
-      : { _tag: "refuse", reason: "app_not_approved", ...(app === undefined ? {} : { app }) };
+      : { _tag: "refuse", reason: "app_not_approved", app: bundle };
   }
   const pid = targetPid(args);
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };

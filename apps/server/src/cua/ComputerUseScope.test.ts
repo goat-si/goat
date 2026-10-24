@@ -116,7 +116,7 @@ describe("scopeVerdict", () => {
     assert.deepEqual(listed.get(42), { id: "org.example.Editor", name: "Editor" });
   });
 
-  it("launches an app only by an approved bundle id where apps have one, and by name elsewhere", () => {
+  it("launches an app under a list only by an approved bundle id on macOS, and never elsewhere", () => {
     const launch = (args: object, bundleIds: boolean, apps: ReadonlyArray<string>) =>
       scopeVerdict({
         name: "launch_app",
@@ -130,16 +130,26 @@ describe("scopeVerdict", () => {
       launch({ name: "Safari", urls: ["https://example.com"] }, true, ["Safari"]),
       {
         _tag: "refuse",
-        unnamed: true,
+        launch: "bundle_id",
       },
     );
     assert.deepInclude(
       launch({ bundle_id: "com.apple.Safari", name: "Safari" }, true, ["com.apple.Safari"]),
-      { _tag: "refuse", unnamed: true },
+      { _tag: "refuse", launch: "bundle_id" },
     );
     assert.deepEqual(launch({ bundle_id: "com.apple.Safari" }, true, ["com.apple.Safari"]), {
       _tag: "allow",
     });
-    assert.deepEqual(launch({ name: "gedit" }, false, ["gedit"]), { _tag: "allow" });
+    // Linux runs launch_path (or opens urls) whatever bundle_id says, and Windows prefers a path
+    // or AUMID over it, so no argument there proves which app opens.
+    for (const args of [
+      { bundle_id: "org.gnome.gedit", launch_path: "firefox" },
+      { name: "gedit" },
+      { bundle_id: "org.gnome.gedit", urls: ["https://example.com"] },
+    ])
+      assert.deepInclude(launch(args, false, ["org.gnome.gedit", "gedit"]), {
+        _tag: "refuse",
+        launch: "unverifiable",
+      });
   });
 });
