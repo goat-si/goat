@@ -14,6 +14,16 @@ import {
   resolveServerInstallation,
 } from "./invocation.ts";
 
+const joinWindowsPath = (...segments: ReadonlyArray<string>) =>
+  segments
+    .join("\\")
+    .split(/[\\/]+/)
+    .reduce<ReadonlyArray<string>>(
+      (parts, part) => (part === ".." ? parts.slice(0, -1) : [...parts, part]),
+      [],
+    )
+    .join("\\");
+
 it.layer(NodeServices.layer)("root CLI commands", (it) => {
   const rootCommand = (input: {
     readonly node: string;
@@ -101,10 +111,13 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
+      const root = yield* fs
+        .makeTempDirectoryScoped()
+        .pipe(Effect.flatMap((directory) => fs.realPath(directory)));
       const prefix = path.join(root, "Windows npm prefix");
       const launcher = path.join(prefix, "node_modules/@goat-si/goat/bin/goat.mjs");
       yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.writeFileString(launcher, "");
       yield* fs.writeFileString(
         path.join(path.dirname(launcher), "../package.json"),
         JSON.stringify({
@@ -219,6 +232,67 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
 });
 
 it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
+  it.effect("proves a Windows npm-global install through its goat.cmd shim", () =>
+    Effect.gen(function* () {
+      const prefix = "C:\\Users\\Jane Doe\\AppData\\Roaming\\npm";
+      const packageRoot = `${prefix}\\node_modules\\@goat-si\\goat`;
+      const launcher = `${packageRoot}\\bin\\goat.mjs`;
+      const manifest = JSON.stringify({
+        name: "@goat-si/goat",
+        version: packageJson.version,
+        bin: { goat: "./bin/goat.mjs" },
+      });
+      // npm's generated shim, with its CRLF line endings.
+      const shim = `@ECHO off\r\nGOTO start\r\n:start\r\nSETLOCAL\r\nSET dp0=%~dp0\r\n"%_prog%"  "%dp0%\\node_modules\\@goat-si\\goat\\bin\\goat.mjs" %*\r\n`;
+      const resolve = (files: Record<string, string>, entry = launcher) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const noop = FileSystem.makeNoop({});
+          return yield* resolveServerInstallation.pipe(
+            Effect.provideService(
+              FileSystem.FileSystem,
+              FileSystem.makeNoop({
+                realPath: (file) => Effect.succeed(file),
+                readFileString: (file) =>
+                  file in files ? Effect.succeed(files[file] ?? "") : noop.readFileString(file),
+              }),
+            ),
+            // Windows separators on any host: resolution only joins paths.
+            Effect.provideService(Path.Path, { ...path, join: joinWindowsPath }),
+            Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: entry }),
+            Effect.provideService(HostProcess.IsExecutable, true),
+            Effect.provideService(
+              HostProcess.ExecutablePath,
+              "C:\\Users\\Jane Doe\\.goat\\runtime\\goat.exe",
+            ),
+            Effect.provideService(HostProcess.Platform, "win32"),
+          );
+        });
+      const installed = {
+        [`${packageRoot}\\package.json`]: manifest,
+        [`${prefix}\\goat.cmd`]: shim,
+      };
+
+      expect(yield* resolve(installed)).toEqual({ kind: "npm-global", prefix });
+      // Without a shim naming this script, the launcher is not a global install.
+      expect(
+        yield* resolve({ ...installed, [`${prefix}\\goat.cmd`]: "@ECHO unrelated\r\n" }),
+      ).toBeNull();
+      // A package nested in a project's node_modules is not the global prefix.
+      const nestedPrefix = `${prefix}\\node_modules\\tool`;
+      const nestedRoot = `${nestedPrefix}\\node_modules\\@goat-si\\goat`;
+      expect(
+        yield* resolve(
+          {
+            [`${nestedRoot}\\package.json`]: manifest,
+            [`${nestedPrefix}\\goat.cmd`]: shim,
+          },
+          `${nestedRoot}\\bin\\goat.mjs`,
+        ),
+      ).toBeNull();
+    }),
+  );
+
   it.effect("recognizes runner caches for script packages and the npm launcher", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
