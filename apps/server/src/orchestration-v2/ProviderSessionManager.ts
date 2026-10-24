@@ -753,6 +753,7 @@ export const layerWithOptions = (
                   readOnly,
                   origin: computerUseOrigin,
                   leases: computerUseLeases,
+                  requested: preparedInput.turnCapabilities,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {

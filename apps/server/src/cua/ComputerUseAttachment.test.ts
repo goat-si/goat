@@ -7,6 +7,7 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
+import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -15,6 +16,7 @@ import * as Option from "effect/Option";
 import * as ComputerUse from "./ComputerUseAttachment.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const mcp: CuaDriverMcpConfiguration = {
   command: "/driver/cua-driver",
@@ -133,11 +135,61 @@ describe("computerUseAttachment", () => {
         proxy,
         // A cua-driver the person configured would skip Stop, pauses and app approvals.
         overrideUserConfig: true,
+        skills: ["computer-use"],
       });
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
       assert.deepEqual(leases.minted, [Option.none()]);
     }),
+  );
+
+  it.effect("keeps the tools but drops the skill the person switched off in Settings", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      const attached = yield* decide(driver, { leases: fakeLeases({}).leases }).pipe(
+        Effect.provide(
+          ServerSettings.ServerSettingsService.layerTest({
+            disabledBuiltInSkills: ["computer-use", "skill-from-a-newer-build"],
+          }),
+        ),
+      );
+      assert.deepEqual(attached._tag === "proxied" ? attached.skills : null, []);
+      const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+      assert.isDefined(config.cuaDriver);
+      assert.isFalse(McpProviderSession.carriesComputerUseSkill(config));
+      const defaults = yield* decide(driver, { leases: fakeLeases({}).leases });
+      assert.isTrue(
+        McpProviderSession.carriesComputerUseSkill(
+          ComputerUse.withComputerUse(session, defaults, ROUTE),
+        ),
+      );
+    }),
+  );
+
+  it.effect.each([
+    { label: "interactive", origin: undefined, grant: undefined },
+    { label: "leased unattended", origin: unattended, grant: lease },
+  ])(
+    "loads the skill switched off in Settings on a $label turn that asked for @computer",
+    ({ origin, grant }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const skillsFor = (requested: ReadonlyArray<"computer-use" | "browser">) =>
+          decide(driver, {
+            leases: fakeLeases(grant === undefined ? {} : { grant }).leases,
+            requested,
+            ...(origin === undefined ? {} : { origin }),
+          }).pipe(
+            Effect.map((attached) => (attached._tag === "proxied" ? attached.skills : null)),
+            Effect.provide(
+              ServerSettings.ServerSettingsService.layerTest({
+                disabledBuiltInSkills: ["computer-use"],
+              }),
+            ),
+          );
+        assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use"]);
+        assert.deepEqual(yield* skillsFor(["browser"]), []);
+      }),
   );
 
   it.effect(
@@ -259,6 +311,7 @@ describe("computerUseAttachment", () => {
         },
         proxy,
         overrideUserConfig: true,
+        skills: ["computer-use"],
       });
       assert.deepEqual(leased.minted, [Option.some(lease)]);
       assert.deepEqual(
@@ -282,7 +335,14 @@ describe("computerUseAttachment", () => {
     assert.isFalse("cuaDriverBlocked" in detached);
     const attached = ComputerUse.withComputerUse(
       detached,
-      { _tag: "proxied", mcp, control: interactiveControl, proxy, overrideUserConfig: true },
+      {
+        _tag: "proxied",
+        mcp,
+        control: interactiveControl,
+        proxy,
+        overrideUserConfig: true,
+        skills: ["computer-use"],
+      },
       ROUTE,
     );
     assert.equal(attached.cuaDriver?.command, "/goat/node");
@@ -305,6 +365,7 @@ describe("computerUseAttachment", () => {
         control: { ...interactiveControl, controlId: "control:unattended" },
         proxy,
         overrideUserConfig: true,
+        skills: ["computer-use"],
       },
       ROUTE,
     );

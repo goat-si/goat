@@ -1,6 +1,7 @@
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import type {
   AuthEnvironmentScope,
+  BuiltInSkillName,
   CuaDriverMcpConfiguration,
   EnvironmentId,
   ProviderInstanceId,
@@ -46,6 +47,11 @@ export interface McpProviderSessionConfig {
    * user-defined server off do so.
    */
   readonly cuaDriverBlocked?: boolean;
+  /**
+   * Built-in skills this thread's turns carry, from `resolveBuiltInSkills`. Set with
+   * `cuaDriver`; absent means every skill of what is attached.
+   */
+  readonly builtInSkills?: ReadonlyArray<BuiltInSkillName>;
   /**
    * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
    * while goatclaw is off, which leaves the provider's own limits in place.
@@ -136,6 +142,16 @@ export function cuaDriverKey(descriptor: CuaDriverMcpConfiguration | undefined):
   return descriptor === undefined
     ? ""
     : JSON.stringify([descriptor.command, descriptor.args, descriptor.socketPath ?? null]);
+}
+
+/**
+ * Whether a turn with the driver attached also carries the computer use skill. The person can
+ * switch the skill off in Settings while keeping the tools.
+ */
+export function carriesComputerUseSkill(
+  config: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined,
+): boolean {
+  return config?.builtInSkills?.includes("computer-use") ?? true;
 }
 
 export function withAgentDeviceEnvironment(
