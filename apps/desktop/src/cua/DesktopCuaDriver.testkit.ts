@@ -97,6 +97,8 @@ export const fixture = Effect.fn(function* (
     failFirstStart?: boolean;
     hold?: "start" | "stop" | "monitor";
     tools?: Record<string, ToolResult>;
+    /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
+    withdrawIdentityAfter?: string;
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
@@ -154,6 +156,7 @@ export const fixture = Effect.fn(function* (
   let destroys = 0;
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   let clientsOpen = 0;
+  let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
@@ -165,21 +168,28 @@ export const fixture = Effect.fn(function* (
     manifestPath: string;
     environment: ReadonlyArray<{ name: string; value: string }>;
     direct: boolean;
+    verify: boolean;
   }> = [];
+  let identityWithdrawn = false;
+  const createClient = (): Awaited<ReturnType<DesktopCuaDriverDependencies["connect"]>> => {
+    clientsOpen++;
+    return {
+      callTool: async (name, input) => {
+        toolCalls.push({ name, input: JSON.parse(input) });
+        const result = (options.tools ?? healthyTools())[name];
+        if (!result) throw new Error(`unexpected tool ${name}`);
+        if (name === options.withdrawIdentityAfter) identityWithdrawn = true;
+        return result;
+      },
+      uniffiDestroy: () => {
+        clientsOpen--;
+      },
+    };
+  };
   const dependencies: DesktopCuaDriverDependencies = {
     connect: async () => {
-      clientsOpen++;
-      return {
-        callTool: async (name, input) => {
-          toolCalls.push({ name, input: JSON.parse(input) });
-          const result = (options.tools ?? healthyTools())[name];
-          if (!result) throw new Error(`unexpected tool ${name}`);
-          return result;
-        },
-        uniffiDestroy: () => {
-          clientsOpen--;
-        },
-      };
+      socketConnections++;
+      return createClient();
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
@@ -206,6 +216,7 @@ export const fixture = Effect.fn(function* (
         manifestPath: helper.capabilityManifestPath,
         environment: helper.environment,
         direct: helper.direct === true,
+        verify: helper.verify === true,
       });
       const manifest = prepared.get(helper.capabilityManifestPath);
       launches.push({
@@ -217,6 +228,7 @@ export const fixture = Effect.fn(function* (
       });
       const exit = Promise.withResolvers<void>();
       let running = false;
+      let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
         canWatch: options.helperWithoutWatch !== true,
@@ -241,11 +253,26 @@ export const fixture = Effect.fn(function* (
         },
       };
       return {
-        servicePid: () => (running ? HELPER_PID : undefined),
+        servicePid: () => (running && !identityWithdrawn ? HELPER_PID : undefined),
+        readinessPeer: () => readinessClient,
         session: () => (running ? session : undefined),
         start: async () => {
           starts++;
           running = true;
+          if (helper.verify) {
+            const peer = createClient();
+            let closed = false;
+            readinessClient = {
+              ...peer,
+              uniffiDestroy: () => {
+                if (closed) return;
+                closed = true;
+                peer.uniffiDestroy?.();
+                running = false;
+                exit.resolve();
+              },
+            };
+          }
           Deferred.doneUnsafe(starting, Exit.void);
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
@@ -279,6 +306,8 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          readinessClient?.uniffiDestroy?.();
+          readinessClient = undefined;
           exit.resolve();
         },
         waitForExit: (_generation, operation) => {
@@ -479,6 +508,7 @@ export const fixture = Effect.fn(function* (
     grants: driver.grants,
     toolCalls,
     clientsOpen: () => clientsOpen,
+    socketConnections: () => socketConnections,
     request: (requestId: string, enabled = true) =>
       Queue.offer(requests, { version: 1, type: "cuaDriverRequest", requestId, enabled }),
     next: Queue.take(reports),
