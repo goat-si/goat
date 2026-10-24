@@ -4,6 +4,7 @@ import {
   ProviderThreadId,
   NodeId,
   EventId,
+  type OrchestrationV2DomainEvent,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -22,6 +23,7 @@ import {
   projectTurnItemForWire,
   projectTurnItemForDetail,
   projectDomainEventForWire,
+  projectTranscriptRowForClient,
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
 import {
@@ -55,6 +57,31 @@ const base = {
 };
 
 describe("orchestration V2 wire projection", () => {
+  it("never sends a client typed computer-use text, including an ACP child's call envelope", () => {
+    const typed = {
+      ...base,
+      toolName: "cua-driver.type_text",
+      input: { pid: 1, text: "hunter2" },
+    } as OrchestrationV2TurnItem;
+    const child = {
+      ...typed,
+      input: { server: "cua-driver", tool: "type_text", arguments: { pid: 1, text: "hunter2" } },
+    } as OrchestrationV2TurnItem;
+    for (const item of [typed, child]) {
+      const event = projectDomainEventForWire({
+        id: EventId.make("typed"),
+        type: "turn-item.updated",
+        threadId: item.threadId,
+        occurredAt: item.updatedAt,
+        payload: item,
+      } as OrchestrationV2DomainEvent);
+      const row = projectTranscriptRowForClient({ position: 0, item });
+      for (const sent of [projectTurnItemForWire(item), projectTurnItemForDetail(item), event, row])
+        expect(JSON.stringify(sent)).not.toContain("hunter2");
+      expect(JSON.stringify(row)).toContain('"text":"7 characters"');
+    }
+  });
+
   it("keeps copied handoff transcripts out of activity items and live events", () => {
     const item = {
       ...base,

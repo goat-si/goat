@@ -43,6 +43,65 @@ export function cuaDriverToolName(toolName: string | null | undefined): string |
   return toolName ? CUA_DRIVER_TOOL.exec(toolName)?.[1] : undefined;
 }
 
+/** The input field that holds what a computer-use tool types into the screen. */
+const TYPED_TEXT_FIELDS: Readonly<Record<string, string>> = {
+  type_text: "text",
+  set_value: "value",
+};
+const REDACTED_TYPED_TEXT = /^(\d+) characters?$/u;
+
+/** Where a computer-use call keeps its typed text: its input, or ACP's {server, tool, arguments}. */
+function typedTextSlot(toolName: string | null | undefined, input: unknown) {
+  const record = asRecord(input);
+  if (record === undefined) return undefined;
+  const tool =
+    cuaDriverToolName(toolName) ??
+    (record.server === "cua-driver" && typeof record.tool === "string" ? record.tool : undefined);
+  const field = tool === undefined ? undefined : TYPED_TEXT_FIELDS[tool];
+  if (field === undefined) return undefined;
+  if (typeof record[field] === "string") return { record, field, nested: false } as const;
+  const nested = asRecord(record.arguments);
+  return typeof nested?.[field] === "string"
+    ? ({ record, field, nested: true } as const)
+    : undefined;
+}
+
+const typedLength = (text: string) => {
+  const redacted = REDACTED_TYPED_TEXT.exec(text);
+  return redacted ? Number(redacted[1]) : text.length;
+};
+
+/** How many characters a computer-use call typed, read from its raw or redacted input. */
+export function computerUseTypedTextLength(
+  toolName: string | null | undefined,
+  input: unknown,
+): number | undefined {
+  const slot = typedTextSlot(toolName, input);
+  if (slot === undefined) return undefined;
+  const holder = slot.nested ? asRecord(slot.record.arguments) : slot.record;
+  return typedLength(String(holder?.[slot.field]));
+}
+
+/**
+ * A computer-use call's input with its typed text replaced by "N characters" (#1186). The text
+ * can be a password, so nothing a client receives or exports carries it. Already redacted input
+ * comes back unchanged.
+ */
+export function redactComputerUseTypedText(
+  toolName: string | null | undefined,
+  input: unknown,
+): unknown {
+  const slot = typedTextSlot(toolName, input);
+  const length = computerUseTypedTextLength(toolName, input);
+  if (slot === undefined || length === undefined) return input;
+  const redacted = `${length} character${length === 1 ? "" : "s"}`;
+  const holder = slot.nested ? asRecord(slot.record.arguments) : slot.record;
+  if (holder?.[slot.field] === redacted) return input;
+  return slot.nested
+    ? { ...slot.record, arguments: { ...holder, [slot.field]: redacted } }
+    : { ...slot.record, [slot.field]: redacted };
+}
+
 export function dynamicToolSurface(toolName: string | null | undefined, input: unknown) {
   if (toolName === "cua_repl.js" || cuaDriverToolName(toolName) !== undefined) {
     return "computer" as const;

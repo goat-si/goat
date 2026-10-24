@@ -1,5 +1,9 @@
 import type { OrchestrationV2TurnItem } from "@goat/contracts";
-import { cuaDriverToolName } from "@goat/shared/toolActivity";
+import {
+  computerUseTypedTextLength,
+  cuaDriverToolName,
+  redactComputerUseTypedText,
+} from "@goat/shared/toolActivity";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
@@ -65,28 +69,12 @@ function keys(value: unknown): ReadonlyArray<string> {
 
 const characters = (length: number) => `${length} character${length === 1 ? "" : "s"}`;
 
-/** The input field that holds what a computer-use tool types into the screen. */
-const TYPED_TEXT_FIELDS: Readonly<Record<string, string>> = {
-  type_text: "text",
-  set_value: "value",
-};
-
 /**
  * A computer-use call's input with its typed text replaced by the text's length. The text can be
- * a password, so the expanded row, its copy text and every client show only how long it was.
+ * a password, so the expanded row, its copy text and every client show only how long it was. The
+ * server already sends it redacted; this covers items from a server that did not.
  */
-export function computerUseDisplayInput(
-  toolName: string | null | undefined,
-  input: unknown,
-): unknown {
-  const tool = cuaDriverToolName(toolName);
-  const field = tool === undefined ? undefined : TYPED_TEXT_FIELDS[tool];
-  const args = record(input);
-  const typed = field === undefined ? undefined : args?.[field];
-  return field === undefined || typeof typed !== "string"
-    ? input
-    : { ...args, [field]: characters(typed.length) };
-}
+export const computerUseDisplayInput = redactComputerUseTypedText;
 
 function summary(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
@@ -102,7 +90,7 @@ function summary(tool: string, input: Record<string, unknown>): string {
     }
     case "type_text": {
       // Typed text can be a password, so the card shows only how long it was.
-      const length = typeof input.text === "string" ? input.text.length : 0;
+      const length = computerUseTypedTextLength("cua-driver.type_text", input) ?? 0;
       return length === 0 ? "Type text" : `Type ${characters(length)}`;
     }
     case "press_key": {
@@ -141,7 +129,9 @@ export function computerUseRun(
   if (item?.type !== "dynamic_tool") return undefined;
   const tool = cuaDriverToolName(item.toolName);
   if (tool === undefined) return undefined;
-  const input = record(item.input) ?? {};
+  const raw = record(item.input);
+  // ACP children keep the call in its {server, tool, arguments} envelope.
+  const input = (raw?.server === "cua-driver" ? record(raw.arguments) : raw) ?? {};
   return {
     tool,
     summary: summary(tool, input),

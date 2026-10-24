@@ -7,6 +7,7 @@ import {
   computerUseRun,
   computerUseRunStatus,
 } from "./computerUse.ts";
+import { toolCallLines } from "./itemDetail.ts";
 import { toolItemForDisplay } from "./presentation.ts";
 
 const call = (toolName: string, input: unknown) =>
@@ -107,5 +108,22 @@ describe("computerUseDisplayInput", () => {
     // Mobile's full detail and long-press copy serialize this display item.
     const shown = toolItemForDisplay(call("cua-driver.type_text", { pid: 1, text: "hunter2" }));
     expect(JSON.stringify(shown)).not.toContain("hunter2");
+  });
+
+  it("masks an ACP child's enveloped call and reads the server's redacted input", () => {
+    const envelope = { server: "cua-driver", tool: "type_text", arguments: { text: "hunter2" } };
+    const child = call("cua-driver.type_text", envelope);
+    expect(JSON.stringify(toolItemForDisplay(child))).not.toContain("hunter2");
+    const lines = toolCallLines({
+      args: computerUseDisplayInput("cua-driver.type_text", envelope),
+    });
+    expect(JSON.stringify(lines)).not.toContain("hunter2");
+    expect(computerUseRun(child)?.summary).toBe("Type 7 characters");
+    // The server already sent "7 characters": the card and row keep the real length.
+    const redacted = call("cua-driver.type_text", { pid: 1, text: "7 characters" });
+    expect(computerUseRun(redacted)?.summary).toBe("Type 7 characters");
+    expect(computerUseDisplayInput("cua-driver.type_text", { text: "7 characters" })).toEqual({
+      text: "7 characters",
+    });
   });
 });
