@@ -6,6 +6,8 @@ import {
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
+  RemoteResolveBindingInput,
+  RemoteResolveBindingResult,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
@@ -33,4 +35,10 @@ const WaitTool = Tool.make(agentSurfaceRegistry["origin.report_wait"].name, {
   parameters: RemoteOriginReportsWaitInput,
   success: RemoteOriginReportsWaitResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report_wait"]));
-export const RemoteReportToolkit = Toolkit.make(ReportTool, WaitTool);
+const ResolveBindingTool = Tool.make(agentSurfaceRegistry["origin.resolve_binding"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["origin.resolve_binding"].description,
+  parameters: RemoteResolveBindingInput,
+  success: RemoteResolveBindingResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.resolve_binding"]));
+export const RemoteReportToolkit = Toolkit.make(ReportTool, WaitTool, ResolveBindingTool);

@@ -21,7 +21,9 @@ export const remoteReportFailure = (error: RemoteReportService.RemoteReportError
             ? "capability_denied"
             : error.reason === "run_not_found"
               ? "run_not_found"
-              : "invalid_request",
+              : error.reason === "fenced"
+                ? "conflict"
+                : "invalid_request",
     message:
       error.reason === "not_bound"
         ? "This thread has no origin to report to: it was not launched from another machine or by a thread on this machine."
@@ -31,7 +33,9 @@ export const remoteReportFailure = (error: RemoteReportService.RemoteReportError
             ? "The report correlation or read key is invalid."
             : error.reason === "run_not_found"
               ? "The watched run was not found."
-              : error.message,
+              : error.reason === "fenced"
+                ? "The origin fenced this correlation id after losing its launch; it can no longer bind."
+                : error.message,
   });
 export const layer = McpToolAccess.toLayer(RemoteReportToolkit, {
   goat_origin_report: McpToolAccess.actsAsCaller((input) =>
@@ -49,6 +53,13 @@ export const layer = McpToolAccess.toLayer(RemoteReportToolkit, {
     Effect.gen(function* () {
       const reports = yield* RemoteReportService.RemoteReportService;
       return yield* reports.wait(input).pipe(Effect.mapError(remoteReportFailure));
+    }),
+  ),
+  // Fencing is a durable write; the correlation's read key is the capability.
+  goat_origin_resolve_binding: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const reports = yield* RemoteReportService.RemoteReportService;
+      return yield* reports.resolveBinding(input).pipe(Effect.mapError(remoteReportFailure));
     }),
   ),
 });

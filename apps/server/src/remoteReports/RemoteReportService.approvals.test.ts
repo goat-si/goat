@@ -29,6 +29,7 @@ import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts
 import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunResults.ts";
 import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
 import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
+import fencesMigration from "../persistence/Migrations/103_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const threadId = ThreadId.make("remote-thread");
@@ -74,6 +75,7 @@ const setup = Effect.gen(function* () {
   yield* threadRunResultsMigration;
   yield* observedChecksMigration;
   yield* relayMigration;
+  yield* fencesMigration;
   const childEvents = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
   const childStreamOpened = yield* Deferred.make<void>();
   const childEventSeen = yield* Deferred.make<string>();
