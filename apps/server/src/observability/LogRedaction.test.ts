@@ -1,5 +1,5 @@
 import * as NodeUtil from "node:util";
-import * as NodeVm from "node:vm";
+import * as NodeVM from "node:vm";
 
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -221,7 +221,7 @@ describe("defectSummary", () => {
 describe("errors from another realm", () => {
   // vm contexts and workers build Errors whose prototype is not this realm's Error.prototype.
   const foreign = () =>
-    NodeVm.runInNewContext(
+    NodeVM.runInNewContext(
       'Object.assign(new TypeError("cross-realm failure"), { requestBody: "canary-realm-extra" })',
     ) as unknown;
 
