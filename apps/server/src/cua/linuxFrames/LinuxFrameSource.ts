@@ -209,12 +209,14 @@ const make = Effect.gen(function* () {
       Effect.forever,
     );
 
-  const setTargets = (seq: number, targets: ReadonlyArray<Target>) =>
-    Effect.gen(function* () {
-      yield* FiberMap.clear(loops);
-      if (platform !== "linux") return;
-      for (const target of targets) yield* FiberMap.run(loops, target.key, loop(seq, target));
-    });
+  const setTargets = Effect.fn("LinuxFrameSource.setTargets")(function* (
+    seq: number,
+    targets: ReadonlyArray<Target>,
+  ) {
+    yield* FiberMap.clear(loops);
+    if (platform !== "linux") return;
+    for (const target of targets) yield* FiberMap.run(loops, target.key, loop(seq, target));
+  });
 
   return LinuxFrameSource.of({
     supported,
