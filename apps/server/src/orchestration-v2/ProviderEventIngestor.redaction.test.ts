@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  MessageId,
   type ModelSelection,
   NodeId,
   type OrchestrationV2AppThread,
@@ -23,6 +24,7 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 
 const layerTestDatabase = SqlitePersistence.layerMemory;
 const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pipe(
@@ -54,6 +56,7 @@ const modelSelection = {
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 // Synthetic, shaped like an issued MCP credential.
 const TOKEN = "testtag0SyntheticMcpTokenNotARealCredential00000000";
+registerCredentialRunTag("testtag0");
 
 it.layer(layerTest)("ProviderEventIngestorV2 credential redaction", (it) => {
   it.effect("persists a command row's env dump without the GOAT MCP token", () =>
@@ -140,6 +143,48 @@ it.layer(layerTest)("ProviderEventIngestorV2 credential redaction", (it) => {
         persisted?.type === "command_execution" ? persisted.output : undefined,
         "HOME=/home/agent\nGOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\n",
       );
+    }),
+  );
+
+  it.effect("redacts every provider record, such as an agent message repeating the token", () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const idAllocator = yield* IdAllocator.IdAllocatorV2;
+      const projectId = yield* idAllocator.allocate.project({ fixtureName: "redaction-message" });
+      const threadId = yield* idAllocator.allocate.thread({
+        fixtureName: "redaction-message",
+        projectId,
+      });
+      const events = yield* ingestor.normalize({
+        providerSessionId: yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        }),
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+        event: {
+          type: "message.updated",
+          driver: CODEX_DRIVER,
+          message: {
+            createdBy: "agent",
+            creationSource: "provider",
+            id: MessageId.make("message:redaction"),
+            threadId,
+            runId: null,
+            nodeId: null,
+            role: "assistant",
+            text: `Your token is ${TOKEN}.`,
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      });
+
+      const payload = events[0]?.type === "message.updated" ? events[0].payload : undefined;
+      assert.equal(payload?.text, "Your token is [redacted].");
     }),
   );
 });

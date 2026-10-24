@@ -16,6 +16,7 @@ import * as NetAddress from "effect/net/NetAddress";
 
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { registerCredentialRunTag } from "./goatCredentialRedaction.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 export interface McpMemoryPolicy {
@@ -248,6 +249,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const runTag = yield* crypto.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
+  registerCredentialRunTag(runTag);
   const endpoint = NetAddress.isInetAddress(httpServer.address)
     ? "http://" +
       getHttpMcpEndpointHost(httpServer.address.address) +

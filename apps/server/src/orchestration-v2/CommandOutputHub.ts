@@ -24,7 +24,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as EventSink from "./EventSink.ts";
-import { redactGoatCredentialChunk, redactGoatCredentials } from "./goatCredentialRedaction.ts";
+import {
+  redactGoatCredentialChunk,
+  redactGoatCredentials,
+} from "../mcp/goatCredentialRedaction.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 /**
@@ -47,6 +50,11 @@ const COMMAND_OUTPUT_MAX_APPEND_CHARS = 16 * 1024;
 const MAX_LIVE_COMMANDS = 64;
 /** Finished tails kept for a settle that reports no output of its own (an interrupt). */
 const MAX_FINISHED_COMMANDS = 16;
+/**
+ * Commands with output held back as a possible credential. Kept apart from the display tails:
+ * evicting a tail must not forget that the next chunk may finish a token.
+ */
+const MAX_CARRIED_COMMANDS = 4 * MAX_LIVE_COMMANDS;
 /** Final output read from persistence is normalized from at most this many trailing chars. */
 const MAX_FINAL_SOURCE_CHARS = TERMINAL_OUTPUT_TAIL_CHARS * 4;
 
@@ -169,7 +177,7 @@ export const make = Effect.gen(function* () {
       if (chunk.length === 0) return Effect.void;
       const key = commandKey(target);
       const redacted = redactGoatCredentialChunk(carries.get(key) ?? "", chunk);
-      if (redacted.carry.length > 0) carries.set(key, redacted.carry);
+      if (redacted.carry.length > 0) setBounded(carries, key, redacted.carry, MAX_CARRIED_COMMANDS);
       else carries.delete(key);
       return appendRedacted(key, redacted.emit);
     });
@@ -179,7 +187,6 @@ export const make = Effect.gen(function* () {
       if (text.length === 0) return Effect.void;
       const tail = appendTerminalOutput(tails.get(key) ?? EMPTY_TERMINAL_OUTPUT, text);
       setBounded(tails, key, tail, MAX_LIVE_COMMANDS, (oldest) => {
-        carries.delete(oldest);
         // Its viewers no longer share the hub's state; resync them on the next frame.
         for (const subscriber of subscribers.get(oldest) ?? []) {
           subscriber.needsReplace = true;

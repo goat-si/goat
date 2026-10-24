@@ -256,6 +256,34 @@ layer("CommandOutputHub", (it) => {
     ),
   );
 
+  it.effect("a token split across chunks stays hidden after its tail is evicted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const hub = yield* CommandOutputHub.CommandOutputHub;
+        const threadId = yield* seedThread;
+        yield* writeCommandItem(threadId, { status: "running" });
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "before\nGOAT_ACP_MCP_AUTHORIZATION=Bearer ",
+        });
+        for (let index = 0; index < 64; index += 1) {
+          const itemId = TurnItemId.make(`turn-item:other-${index}`);
+          yield* hub.append({ threadId, itemId, chunk: "busy\n" });
+        }
+        yield* hub.append({
+          threadId,
+          itemId: ITEM_ID,
+          chunk: "otherrunSyntheticMcpTokenNotARealCredential00000000\n",
+        });
+
+        const frames = yield* subscribeFrames(threadId);
+        const client = applyFrame(EMPTY_TERMINAL_OUTPUT, yield* takeFrame(frames));
+        assert.equal(client.text, "GOAT_ACP_MCP_AUTHORIZATION=Bearer [redacted]\n");
+      }),
+    ),
+  );
+
   it.effect("a row that is not a known command fails instead of waiting forever", () =>
     Effect.gen(function* () {
       const hub = yield* CommandOutputHub.CommandOutputHub;
