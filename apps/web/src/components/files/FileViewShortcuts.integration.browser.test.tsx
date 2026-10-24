@@ -410,7 +410,7 @@ describe("go to line", () => {
 
 describe("tree and viewer focus", () => {
   /** Swaps its editor for each opened file, as FilePreviewPanel keys its editor by path. */
-  function SwitchingView() {
+  function SwitchingView(props: { loaded?: boolean }) {
     const [openPath, setOpenPath] = useState("src/index.ts");
     const surface = useRef<HTMLDivElement>(null);
     return (
@@ -420,15 +420,17 @@ describe("tree and viewer focus", () => {
         style={{ display: "flex", flexDirection: "column", height: 360 }}
       >
         <div ref={surface} style={{ display: "flex", height: 120 }}>
-          <EditProvider createEditor={(type, options, key) => new Editor(type, options, key)}>
-            <File
-              key={openPath}
-              file={{ name: openPath, contents: `// ${openPath}\n` }}
-              edit
-              editorOptions={{ onAttach: () => claimAwaitedEditorFocus(surface.current) }}
-              options={{ disableFileHeader: true }}
-            />
-          </EditProvider>
+          {props.loaded === false ? null : (
+            <EditProvider createEditor={(type, options, key) => new Editor(type, options, key)}>
+              <File
+                key={openPath}
+                file={{ name: openPath, contents: `// ${openPath}\n` }}
+                edit
+                editorOptions={{ onAttach: () => claimAwaitedEditorFocus(surface.current) }}
+                options={{ disableFileHeader: true }}
+              />
+            </EditProvider>
+          )}
         </div>
         <div style={{ display: "flex", flexDirection: "column", height: 160 }}>
           <FileBrowserPanel
@@ -465,6 +467,23 @@ describe("tree and viewer focus", () => {
     await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
     treeRow(screen.container, "src/index.ts")!.focus();
     await userEvent.keyboard(chord([MOD], "{ArrowDown}"));
+    await vi.waitFor(() => expect(editorRoot(screen.container).activeElement).toBe(content));
+  });
+
+  it.each([
+    ["Cmd/Ctrl+Down on the open file", [MOD]],
+    ["the focus toggle", [MOD, "Alt"]],
+  ] as const)("waits for an editor that is still loading after %s", async (_, modifiers) => {
+    setup();
+    await using screen = await render(<SwitchingView loaded={false} />, {
+      router: false /* nothing links */,
+    });
+    await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
+    treeRow(screen.container, "src/index.ts")!.focus();
+    await userEvent.keyboard(chord([...modifiers], modifiers.length === 1 ? "{ArrowDown}" : "e"));
+    await vi.waitFor(() => expect(document.activeElement).toBe(view(screen.container)));
+    await screen.rerender(<SwitchingView loaded />);
+    const content = await editorContent(screen.container);
     await vi.waitFor(() => expect(editorRoot(screen.container).activeElement).toBe(content));
   });
 

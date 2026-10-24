@@ -66,15 +66,15 @@ export function useFileTreeKeyboard(input: {
     if (path !== undefined) focusTreeRow(treeHost(), model, path);
   };
   // The source editor's text when the view has one, else the surface root (tabIndex -1).
-  // A file the viewer does not show yet gets its editor's focus once that editor attaches.
+  // A file the viewer does not show yet, or an editor still loading, gets the focus once
+  // its editor attaches.
   const focusViewer = (openedPath?: string) => {
     const view = panelRef.current?.closest<HTMLElement>("[data-file-view]");
     if (!view) return;
-    if (openedPath !== undefined && openedPath !== input.selectedPath) {
-      focusViewAwaitingEditor(view);
-    } else {
-      (sourceEditorContent(view) ?? view).focus();
-    }
+    const content = sourceEditorContent(view);
+    const replacing = openedPath !== undefined && openedPath !== input.selectedPath;
+    if (content && !replacing) content.focus();
+    else focusViewAwaitingEditor(view);
   };
   const shortcutContext = (): FileTreeShortcutContext => ({
     model,
