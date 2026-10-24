@@ -58,7 +58,6 @@ const askpassFileSystem = FileSystem.makeNoop({
 const advance = (total: Duration.Duration) =>
   Effect.gen(function* () {
     for (let elapsed = 0; elapsed < Duration.toMillis(total); elapsed += 100) {
-      yield* Effect.yieldNow;
       yield* TestClock.adjust(Duration.millis(100));
     }
   });

@@ -1898,7 +1898,7 @@ const make = Effect.gen(function* () {
             'A browser dialog is pending. Read goat_call {path:"preview.status"}.',
             "dialogPending",
           );
-        return executeTabOperation(tab, request);
+        return executeTabOperation(tab, request, deadlineMs);
       });
     }
     return tab.control.agent(
@@ -1913,7 +1913,7 @@ const make = Effect.gen(function* () {
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
         updateFileChooserInterception(tab);
         try {
-          return await executeTabOperation(tab, request, signal);
+          return await executeTabOperation(tab, request, deadlineMs, signal);
         } finally {
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
@@ -1927,6 +1927,7 @@ const make = Effect.gen(function* () {
   const executeTabOperation = async (
     tab: ServerTab,
     request: PreviewAutomationRequest,
+    deadlineMs: number,
     signal?: AbortSignal,
   ) => {
     const input = request.input;
@@ -2003,6 +2004,7 @@ const make = Effect.gen(function* () {
             ...tab,
             renderScale: tab.desktop ? "display" : RENDER_SCALE,
             fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+            timeoutMs: deadlineMs - performance.now(),
           }),
         );
       }

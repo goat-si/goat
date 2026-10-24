@@ -245,8 +245,6 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-// The broker waits 15s for the host; a snapshot, retry included, answers well before.
-const SNAPSHOT_TIMEOUT_MS = 10_000;
 // How long a frame in another process gets to answer; one that crashed never does.
 const FRAME_ANSWER_MS = 1_000;
 
@@ -620,6 +618,8 @@ type SnapshotInput = {
   readonly consoleEntries: ReadonlyArray<PreviewAutomationConsoleEntry>;
   readonly networkEntries: ReadonlyArray<PreviewAutomationNetworkEntry>;
   readonly actionTimeline: PreviewAutomationSnapshot["actionTimeline"];
+  /** What remains of the request's deadline, the one its timeout error names. */
+  readonly timeoutMs: number;
 };
 
 /** The scale a page renders at and its viewport in device-independent pixels, a clip's units. */
@@ -734,10 +734,10 @@ const capture = async (
 const snapshotTurns = new WeakMap<Page, number>();
 
 export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
-  const deadline = Date.now() + SNAPSHOT_TIMEOUT_MS;
+  const deadline = Date.now() + input.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), SNAPSHOT_TIMEOUT_MS);
+    timer = setTimeout(() => reject(tooBusy()), input.timeoutMs);
   });
   const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
   snapshotTurns.set(input.page, turn);

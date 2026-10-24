@@ -3612,12 +3612,14 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         }),
       ]);
       const turns: Array<OrchestrationV2ProviderTurn> = [];
+      const firstEnded = yield* Deferred.make<void>();
       const bothEnded = yield* Deferred.make<void>();
       yield* runtime.events.pipe(
         Stream.tap((event) =>
           Effect.gen(function* () {
             if (event.type === "provider_turn.updated" && event.providerTurn.status !== "running") {
               turns.push(event.providerTurn);
+              if (turns.length === 1) yield* Deferred.succeed(firstEnded, undefined);
               if (turns.length === 2) yield* Deferred.succeed(bothEnded, undefined);
             }
           }),
@@ -3626,9 +3628,7 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         Effect.forkScoped,
       );
       yield* runtime.startTurn(turnInput(thread));
-      yield* Effect.gen(function* () {
-        while (turns.length === 0) yield* Effect.yieldNow;
-      });
+      yield* Deferred.await(firstEnded);
       yield* runtime.startTurn(secondTurn(thread));
       yield* Deferred.await(bothEnded);
       const [first, second] = turns;
