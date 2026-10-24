@@ -59,6 +59,8 @@ export const harness = Effect.fn(function* (
      */
     readonly humanInput?: boolean;
     readonly acceptHuman?: () => boolean;
+    /** Holds every start report until it is done, as a slow server would. */
+    readonly agentInputGate?: Deferred.Deferred<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -90,7 +92,13 @@ export const harness = Effect.fn(function* (
           onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
             Queue.offer(people, input.source).pipe(Effect.as(options.acceptHuman?.() ?? true)),
           onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
-            Queue.offer(agentCalls, report.state + " " + report.call),
+            Queue.offer(agentCalls, report.state + " " + report.call).pipe(
+              Effect.andThen(
+                report.state === "start" && options.agentInputGate !== undefined
+                  ? Deferred.await(options.agentInputGate)
+                  : Effect.void,
+              ),
+            ),
         }
       : {}),
     leaseUpdates: Stream.fromQueue(updates),

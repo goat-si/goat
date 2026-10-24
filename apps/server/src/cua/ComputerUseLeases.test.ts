@@ -344,6 +344,51 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
+  it.effect("a person's key while another agent clicks pauses every agent", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.stopAll;
+      const mine = yield* leases.control(thread, Option.none());
+      const bots = yield* leases.control(other, Option.none());
+      // The bot's click posts pointer events only; a keyboard event during it is a person's.
+      assert.isTrue(
+        yield* leases.agentInput(other, bots.controlId, {
+          call: "7",
+          state: "start",
+          at: 1_000,
+          kinds: ["pointer"],
+        }),
+      );
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100, "pointer"), "agents");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_150, "keyboard"), "paused");
+      assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+        _tag: "paused",
+        reason: "human_input",
+      });
+    }),
+  );
+
+  it.effect("back-to-back agent calls hide a person's input for ten seconds at most", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.stopAll;
+      const mine = yield* leases.control(thread, Option.none());
+      const bots = yield* leases.control(other, Option.none());
+      // A click every 400 ms, each answered after 100 ms: its cover never lapses.
+      for (let call = 0; call < 30; call++) {
+        const at = 1_000 + call * 400;
+        const report = { call: String(call), kinds: ["pointer"] as const };
+        yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at });
+        yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: at + 100 });
+      }
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_000, "pointer"), "agents");
+      // Past ten seconds of unbroken cover, pointer input pauses the agents, erring toward a person.
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 12_100, "pointer"), "paused");
+    }),
+  );
+
   it.effect(
     "a proxy's report of a person's input pauses every agent, from its live control only",
     () =>
