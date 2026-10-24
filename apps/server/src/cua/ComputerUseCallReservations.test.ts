@@ -77,6 +77,38 @@ describe("server computer-use call reservations", () => {
   );
 
   it.effect(
+    "a foreground call admitted before another thread's grant keeps every other thread off the desktop until it ends",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        yield* grant(f.a, "grant:a", ["app.a"]);
+        const click = { pid: 42, window_id: 7, x: 1, y: 1 };
+        const first = yield* f.reserve(f.a, { ...click, dispatch: "Foreground" }, "click");
+        if (first.status !== "admitted" || first.reservationId === null)
+          return assert.fail("a foreground click reserves the desktop");
+        // B is approved while A's click is on its way: B acts on nothing until it ends.
+        yield* grant(f.b, "grant:b", ["app.b"]);
+        assert.deepEqual(yield* f.reserve(f.b, { pid: 9, window_id: 3, x: 1, y: 1 }, "click"), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        yield* f.release(f.a, first.reservationId);
+        // A's next call that would take the screen meets the shared screen.
+        assert.deepEqual(yield* f.reserve(f.a, { ...click, dispatch: "Foreground" }, "click"), {
+          status: "refused",
+          detail: "screen_shared",
+        });
+        assert.equal(
+          (yield* f.reserve(f.b, { pid: 9, window_id: 3, x: 1, y: 1 }, "click")).status,
+          "admitted",
+        );
+        yield* f.close(f.a);
+        yield* f.close(f.b);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
     "refuses competing window mutations and desktop mutations in both admission orders",
     () =>
       Effect.gen(function* () {

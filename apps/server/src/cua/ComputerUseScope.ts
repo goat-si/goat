@@ -9,6 +9,7 @@
  *
  * @module ComputerUseScope
  */
+import { foreground } from "./ComputerUseCallReservations.ts";
 
 /** Reads and session bookkeeping that touch no app's contents or input. */
 const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
@@ -76,13 +77,8 @@ const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
  */
 export function takesScreen(name: unknown, args: unknown): boolean {
   if (typeof name === "string" && (SCREEN_TOOLS.has(name) || OPAQUE_TOOLS.has(name))) return true;
-  const object = record(args);
-  const target = record(object?.target);
-  // The driver also reads the legacy dispatch alias and ignores case, so any of these that says
-  // foreground counts, whichever the driver would prefer.
-  return [object?.delivery_mode, object?.dispatch, target?.delivery_mode, target?.dispatch].some(
-    (mode) => typeof mode === "string" && mode.trim().toLowerCase() === "foreground",
-  );
+  // The same foreground test as window reservations (#1462), so both agree on what takes it.
+  return foreground(args);
 }
 
 const approves = (apps: ReadonlySet<string>, ...names: ReadonlyArray<string | undefined>) =>

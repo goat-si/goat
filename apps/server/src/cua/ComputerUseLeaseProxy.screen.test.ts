@@ -95,8 +95,10 @@ it.effect(
         // The driver also reads the legacy dispatch alias and ignores case.
         call(4, "click", { ...window, x: 5, y: 5, dispatch: "foreground" }),
         call(5, "click", { ...window, x: 5, y: 5, delivery_mode: "Foreground" }),
+        // A foreground flag nested in the arguments, as window reservations read it (#1462).
+        call(6, "click", { ...window, x: 5, y: 5, options: { use_foreground: true } }),
         // A batch can hold any of those, and the driver runs its steps itself.
-        call(6, "run_steps", { steps: [{ tool: "click", args: { ...window, x: 5, y: 5 } }] }),
+        call(7, "run_steps", { steps: [{ tool: "click", args: { ...window, x: 5, y: 5 } }] }),
       ];
       for (const [index, line] of screenTaking.entries()) {
         yield* h.send(line);
@@ -108,8 +110,8 @@ it.effect(
         });
       }
       assert.equal(yield* h.driverQueued, 0);
-      yield* h.send(call(7, "click", { ...window, x: 5, y: 5 }));
-      assert.equal(yield* h.sentToDriver, 7);
+      yield* h.send(call(8, "click", { ...window, x: 5, y: 5 }));
+      assert.equal(yield* h.sentToDriver, 8);
     }),
 );
 
