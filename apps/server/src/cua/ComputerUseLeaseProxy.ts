@@ -29,6 +29,8 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
+import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
+
 export type LeaseEnd = "expired" | "revoked" | "disabled" | "lost";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
@@ -175,12 +177,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const message = parse(line);
         if (message?.id !== undefined && message.id !== null && message.method === undefined) {
           const request = outstanding.get(JSON.stringify(message.id));
+          // A reply to a request the provider cancelled, or never made, is stale.
+          if (request === undefined) return;
           outstanding.delete(JSON.stringify(message.id));
           const session = message.result?.structuredContent?.session;
           if (request?.method === "tools/call" && typeof session === "string")
             sessions.add(session);
         }
-        yield* options.output(line);
+        yield* options.output(admitDriverReplyScreenshots(line));
       }),
     ),
     // A driver that exits on its own cannot be trusted with the rest of the lease.
@@ -207,6 +211,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }
     if (isRequest) outstanding.set(JSON.stringify(id), { id, method: message!.method! });
+    const cancelled = cancelledRequestKey(line);
+    if (cancelled !== undefined) outstanding.delete(cancelled);
     yield* driver.send(line);
   });
 
