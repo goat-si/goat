@@ -135,7 +135,7 @@ export interface DesktopCuaDriverDependencies {
     /** Lists apps through the helper, so the driver never runs outside its seal check. */
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
-  /** The apps the macOS helper's driver lists, after the helper verifies it (#1241). */
+  /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
   readonly helperApps: (
     bundle: HelperBundle,
     platform: NodeJS.Platform,
@@ -158,6 +158,33 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
     if (Math.max(bitmap[offset]!, bitmap[offset + 1]!, bitmap[offset + 2]!) > 16) lit++;
   }
   return lit / sampled >= 0.01;
+}
+
+/**
+ * The manifest for one daemon start. The grant check's admits only GOAT and needs no listing;
+ * the agents' lists apps through listApplications when the engine gives it one, so a helper
+ * that verifies its driver is the only thing that runs it.
+ */
+export async function prepareDesktopManifest(
+  input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
+): Promise<string> {
+  const { join } = await import("node:path");
+  return input.scope === "verify"
+    ? writeCuaDriverCapabilityManifest(
+        join(input.directory, "verify-manifest.yaml"),
+        cuaDriverCapabilityManifest({
+          applications: input.hostBundleIds,
+          tools: CUA_DRIVER_VERIFY_TOOLS,
+        }),
+      )
+    : prepareCuaDriverCapabilityManifest({
+        binaryPath: input.binaryPath,
+        platform: input.platform,
+        environment: cuaDriverListingEnvironment(process.env),
+        hostBundleIds: input.hostBundleIds,
+        path: join(input.directory, "capability-manifest.yaml"),
+        ...(input.listApplications ? { listApplications: input.listApplications } : {}),
+      });
 }
 
 const dependencies: DesktopCuaDriverDependencies = {
@@ -221,25 +248,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
-  prepareManifest: async (input) => {
-    const { join } = await import("node:path");
-    return input.scope === "verify"
-      ? writeCuaDriverCapabilityManifest(
-          join(input.directory, "verify-manifest.yaml"),
-          cuaDriverCapabilityManifest({
-            applications: input.hostBundleIds,
-            tools: CUA_DRIVER_VERIFY_TOOLS,
-          }),
-        )
-      : prepareCuaDriverCapabilityManifest({
-          binaryPath: input.binaryPath,
-          platform: input.platform,
-          environment: cuaDriverListingEnvironment(process.env),
-          hostBundleIds: input.hostBundleIds,
-          path: join(input.directory, "capability-manifest.yaml"),
-          ...(input.listApplications ? { listApplications: input.listApplications } : {}),
-        });
-  },
+  prepareManifest: prepareDesktopManifest,
   helperApps: (bundle, platform) =>
     listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
   processId: process.pid,

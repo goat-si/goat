@@ -1,4 +1,9 @@
-import { assert, describe, it } from "@effect/vitest";
+// @effect-diagnostics nodeBuiltinImport:off -- Manifest tests use a trap driver script on a real temporary directory.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -6,7 +11,7 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
-import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { bitmapHasContent, prepareDesktopManifest } from "./DesktopCuaDriver.ts";
 
 import {
   privacyEnvironment,
@@ -635,9 +640,70 @@ describe("DesktopCuaDriver app listing for the agents' manifest", () => {
         yield* test.next;
         assert.deepEqual(
           test.manifestListings.map(({ through }) => through),
-          test.manifestListings.length === 0 ? [] : ["driver"],
+          ["driver"],
         );
         assert.isEmpty(test.helperAppListings);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver manifest preparation", () => {
+  const trap = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "goat-cu-desktop-manifest-"),
+    );
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    const marker = NodePath.join(directory, "ran");
+    const binaryPath = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(binaryPath, "#!/bin/sh\ntouch '" + marker + "'\nexit 3\n", {
+      mode: 0o755,
+    });
+    return { directory, binaryPath, ran: () => NodeFS.existsSync(marker) };
+  };
+
+  it("hands the helper's listing to the shared manifest, so the driver never runs here", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "agents",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+      listApplications: async () => [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }],
+    });
+    expect(driver.ran()).toBe(false);
+    expect(NodeFS.readFileSync(path, "utf8")).toContain("com.apple.TextEdit");
+  });
+
+  it("writes the grant check's manifest without listing anything", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    await prepareDesktopManifest({
+      binaryPath: driver.binaryPath,
+      scope: "verify",
+      hostBundleIds: ["si.goat.desktop"],
+      directory: driver.directory,
+      platform: "darwin",
+    });
+    expect(driver.ran()).toBe(false);
+  });
+});
+
+describe("DesktopCuaDriver when the helper cannot list apps", () => {
+  it.effect("stays off instead of starting a driver or listing another way", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          helperAppsFail: true,
+        });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.isEmpty(test.helperLaunches);
+        assert.isEmpty(test.constructors);
       }),
     ),
   );
