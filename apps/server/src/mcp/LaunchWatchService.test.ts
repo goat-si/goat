@@ -912,10 +912,20 @@ describe("LaunchWatchService", () => {
             // Replaying the same retry request after its end was reported adds nothing.
             yield* service.rearmRetried(retry);
             expect(yield* pendingRuns(service)).toEqual([]);
+
+            // A newer retry is followed, and replaying the older one while it runs keeps its ids.
+            yield* service.rearmRetried({ ...retry, retryId: "retry-b" });
+            yield* service.rearmRetried(retry);
+            const [watch] = yield* service.list(launcher);
+            expect(watch?.retriedRuns[run1]?.at(-1)).toBe("retry-b");
+            yield* Queue.offer(world.waits, finished(run1, "failed"));
+            const second = yield* Queue.take(world.delivered);
+            expect(second.text).toContain("finished run run-1 with status failed");
+            expect(second.commandId).not.toBe(retried.commandId);
           }),
         );
-        expect(world.deliveredLog.map((wake) => wake.commandId)).toHaveLength(2);
-        expect(world.waitCalls.map((call) => call.runId)).toEqual([run1, run1]);
+        expect(world.deliveredLog).toHaveLength(3);
+        expect(world.waitCalls.map((call) => call.runId)).toEqual([run1, run1, run1]);
       }),
   );
 

@@ -915,7 +915,7 @@ export const make = Effect.gen(function* () {
             watch.recovery !== undefined ||
             watch.detached ||
             !watch.pendingRuns.includes(runId) ||
-            watch.retriedRuns[runId] !== retry
+            watch.retriedRuns[runId]?.at(-1) !== retry
           )
             return 0;
           const now = yield* Clock.currentTimeMillis;
@@ -1699,7 +1699,7 @@ export const make = Effect.gen(function* () {
           result._tag === "Terminal"
             ? yield* detailsFor(watch, result.runId, result.status)
             : noDetails;
-        const retry = watch.retriedRuns[runId];
+        const retry = watch.retriedRuns[runId]?.at(-1);
         const pause = yield* apply(watchId, incarnation, runId, result, details, retry).pipe(
           Effect.catch((error) =>
             Effect.logWarning("launch watch: state not saved, will retry", {

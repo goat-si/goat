@@ -105,10 +105,11 @@ export const LaunchWatch = Schema.Struct({
   /** The most recently reported runs, so a run is never reported twice. */
   reportedRuns: Schema.Array(RunId),
   /**
-   * The latest retry of each run retried in place, by run id. A retry reuses its run id,
-   * so the report of its end needs ids of its own, and a replayed retry adds nothing.
+   * The retries of each run retried in place, by run id, oldest first. A retry reuses its run
+   * id, so the report of its end takes ids from the latest; a replayed retry, even an older
+   * one returning early while a newer one runs, adds nothing.
    */
-  retriedRuns: Schema.Record(Schema.String, Schema.String).pipe(
+  retriedRuns: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   /** The most recently reported pending requests, keyed by questionKey. */
@@ -172,6 +173,8 @@ export const LaunchWatchDocument = Schema.Struct({
 export type LaunchWatchDocument = typeof LaunchWatchDocument.Type;
 
 const REPORTED_LIMIT = 20;
+/** Retries remembered per run, so a replay of any of them is recognized. */
+const RETRIES_KEPT = 20;
 /** Failed contacts in a row before the launcher hears that the host is unavailable. */
 export const OUTAGE_NOTICE_FAILURES = 3;
 const BACKOFF_BASE_MS = 30_000;
@@ -315,14 +318,18 @@ export function rearmRetriedRun(
   now: number,
 ): LaunchWatch {
   const followed = watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId);
-  if (!followed || watch.retriedRuns[runId] === retryId) return watch;
+  const retries = watch.retriedRuns[runId] ?? [];
+  if (!followed || retries.includes(retryId)) return watch;
   const pendingRuns = watch.pendingRuns.includes(runId)
     ? watch.pendingRuns
     : [...watch.pendingRuns, runId];
   const reportedRuns = watch.reportedRuns.filter((reported) => reported !== runId);
   const known: ReadonlySet<string> = new Set([...pendingRuns, ...reportedRuns]);
   const retriedRuns = Object.fromEntries(
-    Object.entries({ ...watch.retriedRuns, [runId]: retryId }).filter(([id]) => known.has(id)),
+    Object.entries({
+      ...watch.retriedRuns,
+      [runId]: [...retries, retryId].slice(-RETRIES_KEPT),
+    }).filter(([id]) => known.has(id)),
   );
   // An unqueued wake for the superseded end is never sent, so its attempts go with it.
   const { [runWakeIds(watch, runId).commandId]: _superseded, ...deliveryAttempts } =
@@ -485,9 +492,12 @@ const wakeIds = (watch: LaunchWatch, event: string) => ({
   messageId: MessageId.make(`${LAUNCH_WATCH_MESSAGE_PREFIX}${watch.id}:${event}`),
 });
 
+/** The retry a run's next report belongs to, if it was retried in place. */
+const latestRetry = (watch: LaunchWatch, runId: RunId) => watch.retriedRuns[runId]?.at(-1);
+
 /** A run's end. Each retry of a run retried in place ends under ids of its own. */
 const runWakeIds = (watch: LaunchWatch, runId: RunId) => {
-  const retry = watch.retriedRuns[runId];
+  const retry = latestRetry(watch, runId);
   return wakeIds(watch, retry === undefined ? `run:${runId}` : `run:${runId}:retry:${retry}`);
 };
 
