@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeZlib from "node:zlib";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -130,10 +131,11 @@ async function scriptedServer(
     /** How the app redraws when asked: all of it (default), half of it, or not at all. */
     readonly redraw?: "whole" | "half" | "none";
     /**
-     * The backing pixmap is replaced once this many names were taken, as when a compositor stops
-     * and starts redirecting the window; names after it read the replacement.
+     * The compositor stops and starts redirecting the frame right after the redraw, which
+     * replaces its backing pixmap with one filled red from behind, unless a client still
+     * redirects it meanwhile.
      */
-    readonly replacedBackingAfter?: number;
+    readonly compositorToggles?: boolean;
     /** Structure events the server sends right after the redraw: [code, watched, window]. */
     readonly afterRedraw?: ReadonlyArray<readonly [number, number, number]>;
   },
@@ -158,6 +160,8 @@ async function scriptedServer(
     /** Named pixmaps, each with the backing pixmap generation it names. */
     const named = new Map<number, number>();
     let damage: { readonly id: number; readonly drawable: number } | undefined;
+    let pinned = false;
+    let replaced = false;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
       head[0] = 1;
@@ -217,6 +221,7 @@ async function scriptedServer(
           // Creating it reports the whole window at once, which is not a redraw.
           if (found) damageNotify(damage.drawable, found.width, found.height);
         } else if (op === 25) {
+          if (options.compositorToggles && !pinned) replaced = true;
           const found = damage && windows[damage.drawable];
           const redraw = options.redraw ?? "whole";
           if (damage && found && redraw !== "none")
@@ -247,8 +252,12 @@ async function scriptedServer(
         } else if (op === COMPOSITE && minor === 6) {
           const target = body.readUInt32LE(4);
           if (options.redirected.includes(target))
-            named.set(body.readUInt32LE(8), options.replacedBackingAfter === named.size ? 1 : 0);
+            named.set(body.readUInt32LE(8), replaced ? 1 : 0);
           else error();
+        } else if (op === COMPOSITE && minor === 1) {
+          pinned = true;
+        } else if (op === 14 && named.has(body.readUInt32LE(4))) {
+          reply(Buffer.alloc(24), 24);
         } else if (op === 14) {
           geometries++;
           if (geometries === options.closeOnGeometry) return void socket.destroy();
@@ -341,6 +350,15 @@ const FRAMED: Record<number, FakeWindow> = {
   0x400001: { parent: ROOT, children: [0x200001], x: 10, y: 10, width: 100, height: 100 },
   0x200001: { parent: 0x400001, children: [], x: 10, y: 30, width: 100, height: 80 },
 };
+
+/** The first pixel of an unfiltered RGB PNG, as rgbToPng writes them. */
+function firstPixel(png: Uint8Array): ReadonlyArray<number> {
+  const bytes = Buffer.from(png);
+  const idat = bytes.indexOf("IDAT");
+  const length = bytes.readUInt32BE(idat - 4);
+  const raw = NodeZlib.inflateSync(bytes.subarray(idat + 4, idat + 4 + length));
+  return [raw[1] ?? -1, raw[2] ?? -1, raw[3] ?? -1];
+}
 
 describe("X11 window capture against a scripted server", () => {
   it("captures a window inside its redirected frame, at the driver's size", async () => {
@@ -522,16 +540,18 @@ describe("X11 window capture against a scripted server", () => {
     ).toMatchObject({ width: 100 });
   });
 
-  it("refuses when the backing pixmap read is not the one the app redrew into", async () => {
-    // A compositor that stopped and started redirecting the frame filled a new pixmap from
-    // what was behind it (#1390 review r4b).
+  it("a compositor toggling redirection cannot swap the pixmap read: the frame stays redirected while it is read", async () => {
+    // A replaced pixmap is filled from what is behind the frame (#1390 review r4b, #1400 r5).
     await using server = await scriptedServer(FRAMED, {
       redirected: [0x400001],
-      replacedBackingAfter: 1,
+      compositorToggles: true,
     });
-    expect(
-      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
-    ).toEqual({ refused: STILL_DRAWING, transient: true });
+    const capture = await captureX11Window(environment, 0x200001, shot, {
+      socketPath: server.path,
+    });
+    if (!("png" in capture)) throw new Error(JSON.stringify(capture));
+    // The app's own gray, never the red behind the frame.
+    expect(firstPixel(capture.png)).toEqual([0x80, 0x80, 0x80]);
   });
 
   it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {

@@ -742,14 +742,27 @@ async function exchange(
   const attributes = await getAttributes(x, topLevel);
   if (!attributes) return undefined;
   const visual = setup.visuals.get(u32(attributes, 8));
-  // The top-level's backing pixmap as the app redraws into it. A compositor that stops and
-  // starts redirecting the window meanwhile replaces it, and the replacement is filled from
-  // what is behind the window; reading both under the hold tells them apart.
-  const before = setup.idBase | 3;
+  // A compositor that stops and starts redirecting the window replaces its backing pixmap with
+  // one filled from what is behind it, and no event says so (#1400). A window stays redirected
+  // while any client redirects it, and its pixmap is replaced only when that changes, so this
+  // connection redirects the top-level itself (automatic: the screen looks the same) before
+  // asking for the redraw. Whatever the compositor does meanwhile, the redraw goes into the
+  // pixmap read under the hold; the redirect ends with this connection. Only a window that is
+  // already redirected is pinned, so one with no compositor is still refused, unchanged.
+  const probe = setup.idBase | 3;
   x.send(
     request(composite, 6, 3, (view) => {
       view.setUint32(4, topLevel, true);
-      view.setUint32(8, before, true);
+      view.setUint32(8, probe, true);
+    }),
+  );
+  // An unredirected top-level has no pixmap to name: the error ends the exchange as unredirected.
+  if (!(await x.ask(request(14, 0, 2, (view) => view.setUint32(4, probe, true))))) return undefined;
+  x.send(request(54, 0, 2, (view) => view.setUint32(4, probe, true)));
+  x.send(
+    request(composite, 1, 3, (view) => {
+      view.setUint32(4, topLevel, true);
+      view.setUint8(8, 0);
     }),
   );
   const redraw = await watchRedraw(x, setup, chain, u16(first, 16), u16(first, 18));
@@ -799,13 +812,8 @@ async function exchange(
         }),
       );
     const image = await readPixmap(pixmap);
-    const redrawnInto = await readPixmap(before);
     x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
-    if (!image || !redrawnInto) return undefined;
-    // Another pixmap than the one redrawn, unless both hold the same pixels.
-    if (Buffer.compare(image.subarray(32), redrawnInto.subarray(32)) !== 0)
-      return { refused: STILL_DRAWING, transient: true as const };
-    return { image, width, height };
+    return image ? { image, width, height } : undefined;
   };
   let limit: ReturnType<typeof setTimeout> | undefined;
   const started = performance.now();
@@ -823,7 +831,6 @@ async function exchange(
     return { refused: BUSY_CAPTURE, transient: true };
   }
   x.send(request(37, 0, 1, () => undefined));
-  x.send(request(54, 0, 2, (view) => view.setUint32(4, before, true)));
   hold.onGrab?.(performance.now() - started);
   if (!read) return undefined;
   if (read.refused !== undefined)
