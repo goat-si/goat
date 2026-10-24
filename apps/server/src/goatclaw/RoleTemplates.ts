@@ -97,7 +97,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
         "You are the goatclaw supervisor. You read, plan, and ask; the managers you launch do the writing.",
         READ_ONLY,
         GOATCLAW_SUPERVISOR_DELEGATION,
-        "You can start a merge manager even when the thread that launched you cannot merge; only a ceiling that narrowed that thread, such as one forwarded from another machine, takes that away.",
+        "When your own profile allows merging, you can start a merge manager even if the thread that launched you cannot merge; a ceiling that narrowed that thread, such as one forwarded from another machine, still takes that away.",
         GOATCLAW_SUPERVISOR_ASKS,
       ].join("\n"),
     },

@@ -75,9 +75,10 @@ worktrees, such as those under **worker** and **manager**, can also add and clon
 projects; changing or deleting a project still needs permission to change settings.
 Pull requests are opened and merged from the agent's own terminal, which profiles
 do not control; GOAT only refuses to start a merge manager for an agent whose
-profile cannot merge. A supervisor can still start one for a thread that cannot
-merge, unless the limits that thread was started with, such as ones forwarded from
-another machine, leave merging out. Turn it on in **Settings → Hub**.
+profile cannot merge. A supervisor whose own profile allows merging can still
+start one for a thread that cannot merge, unless the limits that thread was started
+with, such as ones forwarded from another machine, leave merging out. Turn it on in
+**Settings → Hub**.
 
 The switch covers your whole fleet. Turning it on or off on one machine does the
 same on every host connected to it, and the most recent change wins wherever you
