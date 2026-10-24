@@ -2397,10 +2397,12 @@ it.effect("emits run_interrupt_result when hard-stop finalizes the active attemp
     const { written, observed, committedEffects } = yield* captureRootRunTermination({
       key: "hard-stop",
       shouldFinalizeRun: () => Effect.succeed(true),
+      // The reason the Stop request recorded; an agent's Stop must not read as the user's.
+      loadRunInterruptReason: () => Effect.succeed("Stopped by an agent: done"),
     });
     assert.deepEqual(
-      written.map((item) => item.type),
-      ["run_interrupt_result"],
+      written.map((item) => [item.type, "message" in item ? item.message : undefined]),
+      [["run_interrupt_result", "Stopped by an agent: done"]],
     );
     assert.deepEqual(observed, ["run:interrupted", "pull-requests-refreshed"]);
     assert.deepEqual(
@@ -2778,6 +2780,7 @@ function captureRootRunTermination(input: {
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
+  readonly loadRunInterruptReason?: () => Effect.Effect<string | undefined, never>;
   readonly seedOpenSubagent?: boolean;
   readonly events?: (
     ids: BackgroundScenarioIds,
@@ -2959,6 +2962,9 @@ function captureRootRunTermination(input: {
           : {
               hasUnpairedRunInterruptRequest: input.hasUnpairedRunInterruptRequest,
             }),
+        ...(input.loadRunInterruptReason === undefined
+          ? {}
+          : { loadRunInterruptReason: input.loadRunInterruptReason }),
         message: {
           messageId: MessageId.make(`message:${input.key}`),
           text: "interrupt projection",
