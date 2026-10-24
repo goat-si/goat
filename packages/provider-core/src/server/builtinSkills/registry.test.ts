@@ -165,6 +165,17 @@ describe("computer use skill against what agents receive today", () => {
     expect(line).toMatch(/tab[^.]*Tab/);
   });
 
+  it("tells agents what to do when another thread holds the window or the turn has ended", () => {
+    // The proxy refuses a call another thread's reservation covers (target_busy) and a call after
+    // the thread's turn ended (control_idle); neither reached a driver, and each wants a different
+    // next step than a refusal about approvals.
+    for (const detail of ["target_busy", "control_idle"])
+      expect(
+        guidance.split("\n").find((entry) => entry.includes(`\`${detail}\``)),
+        detail,
+      ).toBeDefined();
+  });
+
   it("teaches no tool an approved-app turn refuses", () => {
     // ComputerUseScope refuses scripts and batches whenever a thread's control names apps.
     for (const tool of ["run_steps", "run_script"]) expect(codeSpans).not.toContain(tool);
