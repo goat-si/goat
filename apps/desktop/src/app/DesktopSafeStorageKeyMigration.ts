@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { bypassesOsKeyStore } from "./DesktopDevSecretStorage.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 /**
@@ -273,7 +274,9 @@ export const layer = (input: { readonly initialRuntimeName: string }) =>
     Effect.gen(function* () {
       const environment = yield* DesktopEnvironment.DesktopEnvironment;
       return yield* makeWith(
-        platformSafeStorageKeyStore,
+        // Unkeyed when bypassed: nothing is read and no marker is written, so the copy still runs
+        // on the first launch without the opt-in.
+        (yield* bypassesOsKeyStore(environment)) ? async () => null : platformSafeStorageKeyStore,
         environment.platform,
         input.initialRuntimeName,
       );
