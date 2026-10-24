@@ -169,7 +169,9 @@ it("keeps waiting while an older copy's switch is on, and says how to replace th
   await click("Open Settings");
   await refocus();
   expect(text()).toContain("Accessibility (waiting for you)");
-  expect(text()).toContain("Already on? Remove it with the − button and drag it in again.");
+  expect(text()).toContain(
+    "in both Accessibility and Screen & System Audio Recording, remove every GOAT Computer Use row with the − button",
+  );
   expect(button("Open again")).toBeDefined();
   expect(button("Turn on")?.disabled).toBe(true);
   // A helper is read fresh on every check, so waiting alone never calls for a restart.
@@ -178,6 +180,9 @@ it("keeps waiting while an older copy's switch is on, and says how to replace th
   await click("Still not allowed?");
   expect(text()).toContain("tccutil reset Accessibility si.goat.desktop.computer-use");
   expect(text()).toContain("Only the switch for GOAT Computer Use counts.");
+  expect(text()).toContain(
+    "In both Accessibility and Screen & System Audio Recording, select every GOAT Computer Use row",
+  );
   expect(text()).toContain(HELPER.bundlePath);
   await click("Show GOAT Computer Use in Finder");
   expect(f.onReveal).toHaveBeenCalledTimes(1);

@@ -1,4 +1,4 @@
-import type { DesktopCuaGrants } from "@goat/contracts";
+import type { ComputerUseGrant, DesktopCuaGrants } from "@goat/contracts";
 import { useEffect, useEffectEvent, useState, type ReactNode } from "react";
 
 import { ChevronRightIcon, CircleCheckIcon } from "~/components/solar";
@@ -6,6 +6,7 @@ import { MacAccessibilityIcon, MacScreenRecordingIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
+  cuaGranted,
   cuaGrantSteps,
   cuaGrantTroubleshooting,
   type CuaGrantHolder,
@@ -156,10 +157,9 @@ export function CuaGrantSteps({
               <CuaGrantAction step={step} busy={busy} onOpen={onOpen} />
             </div>
             {step.state === "waiting" ? (
-              <p role="status" className="mt-2 text-xs text-muted-foreground">
-                Drag {grants.name} from the panel into the list, then turn on its switch. Already
-                on? Remove it with the − button and drag it in again.
-              </p>
+              <div className="mt-2">
+                <CuaGrantWaitingHint name={grants.name} />
+              </div>
             ) : null}
           </li>
         ))}
@@ -194,4 +194,66 @@ export function CuaGrantSteps({
       </Collapsible>
     </div>
   );
+}
+
+/** The waiting hint under a grant whose pane is open, the same words as the setup steps. */
+function CuaGrantWaitingHint({ name }: { name: string }) {
+  return (
+    <p role="status" className="text-xs text-muted-foreground">
+      Drag {name} from the panel into the list, then turn on its switch. Already on but still
+      waiting? That row belongs to an older copy: in both Accessibility and Screen & System Audio
+      Recording, remove every {name} row with the − button, then drag this copy in again.
+    </p>
+  );
+}
+
+/**
+ * What a grant row of the shared readiness list offers on the Mac that runs the host: the System
+ * Settings guide for the next grant, and the waiting hint once its pane is open. The host's report
+ * trails this Mac's own read, so a grant this Mac already reads as on says so instead of asking,
+ * and the next grant is the first one this Mac reads as off. The report's own "current" grant can
+ * still be one this Mac has allowed, which would leave no row to act on.
+ */
+export function cuaReadinessGrantSlot(input: {
+  readonly live: CuaGrantHolder;
+  readonly opened: CuaPermission | null;
+  readonly busy: boolean;
+  readonly onOpen: (permission: CuaPermission) => void;
+}) {
+  return (
+    grant: "accessibility" | "screenCapture",
+    state: ComputerUseGrant,
+    _context: { isCurrent: boolean },
+  ): { action: ReactNode; detail?: ReactNode } => {
+    const permission: CuaPermission =
+      grant === "accessibility" ? "accessibility" : "screen-recording";
+    if (state === "granted") return { action: null };
+    if (cuaGranted(input.live, permission))
+      return {
+        action: (
+          <span className="flex items-center gap-1 text-xs text-success">
+            <CircleCheckIcon className="size-4" aria-hidden="true" />
+            Allowed on this Mac
+          </span>
+        ),
+      };
+    // withLiveGrants already demotes a reported grant this Mac reads as off, so this Mac's read
+    // alone picks the next step.
+    const next = cuaGranted(input.live, "accessibility") ? "screen-recording" : "accessibility";
+    if (permission !== next) return { action: null };
+    const waiting = input.opened === permission;
+    return {
+      action: (
+        <Button
+          size="xs"
+          variant={waiting ? "outline" : "default"}
+          disabled={input.busy}
+          onClick={() => input.onOpen(permission)}
+        >
+          {waiting ? "Open again" : "Open Settings"}
+        </Button>
+      ),
+      ...(waiting ? { detail: <CuaGrantWaitingHint name={input.live.name} /> } : {}),
+    };
+  };
 }

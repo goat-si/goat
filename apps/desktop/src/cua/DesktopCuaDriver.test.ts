@@ -587,25 +587,27 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
-  it.effect("reports grants the helper asked for as waiting, with neither safety signal", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
-        yield* test.request("agent");
-        yield* test.next;
-        const report = test.readiness.at(-1);
-        assert.deepEqual(report?.readiness.grants, {
-          accessibility: "pending",
-          screenCapture: "pending",
-        });
-        assert.equal(report?.readiness.helper, "unauthenticated");
-        assert.deepEqual(report?.signals, {
-          privateMode: "unsupported",
-          humanInput: "unsupported",
-        });
-        assert.isFalse(report ? computerUseReady(report.readiness) : true);
-      }),
-    ),
+  it.effect(
+    "reports grants the helper asked for as waiting, with no safety signal before a helper runs",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform: "darwin", helper: { granted: false } });
+          yield* test.request("agent");
+          yield* test.next;
+          const report = test.readiness.at(-1);
+          assert.deepEqual(report?.readiness.grants, {
+            accessibility: "pending",
+            screenCapture: "pending",
+          });
+          assert.equal(report?.readiness.helper, "unauthenticated");
+          assert.deepEqual(report?.signals, {
+            privateMode: "unsupported",
+            humanInput: "unsupported",
+          });
+          assert.isFalse(report ? computerUseReady(report.readiness) : true);
+        }),
+      ),
   );
 
   it.effect(

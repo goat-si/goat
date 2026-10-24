@@ -4,8 +4,7 @@ import { searchableSetting } from "./settingsSearch";
 
 // GOAT's own build (si.goat.mobile) has no store listing yet, and the store listings are
 // upstream's app, so this points at the guide that says what can be installed today.
-const MOBILE_INSTALL_GUIDE =
-  "https://github.com/goat-si/goat/blob/dev/docs/user/install.md#mobile-app";
+const MOBILE_INSTALL_GUIDE = "https://trygoat.ai/docs/user/install#mobile-app";
 
 export function MobileAppSettingsRow() {
   return (

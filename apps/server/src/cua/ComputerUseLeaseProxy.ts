@@ -44,9 +44,12 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 
-export type LeaseEnd = ComputerUseControlEnd | "lost";
+export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted";
 
 const REQUEST = goatCallText("computer_use.request");
+
+const DESKTOP_CAPTURE_OFF =
+  "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -58,6 +61,8 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   stopped: "A person pressed Stop on this thread. Do not continue on the screen in this turn.",
   stopped_all: "A person stopped computer use for every thread on this host.",
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
+  helper_restarted:
+    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
 };
 
 export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
@@ -238,8 +243,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           yield* options.output(admitDriverReplyScreenshots(line));
         }),
       ),
-      // A driver that exits on its own cannot be trusted with the rest of the control.
-      Effect.andThen(Effect.suspend(() => (running === current ? end("lost") : Effect.void))),
+      // A driver that exits on its own cannot be trusted with the rest of the control. A helper
+      // restart also invalidates its route; either way this proxy stays ended (#1348), and the
+      // agent hears why instead of an approval failure (#1233).
+      Effect.andThen(
+        Effect.suspend(() => (running === current ? end("helper_restarted") : Effect.void)),
+      ),
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
@@ -379,6 +388,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return refusal(id, message.method, finished, LEASE_END_MESSAGES[finished]);
     if (paused !== undefined)
       return refusal(id, message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    // The driver no longer lists it (cuaDriverManifest.ts); a stale tool list still gets a reason.
+    if (message.params?.name === "get_desktop_state")
+      return refusal(id, message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
     if (verdict._tag === "resolve")
       return refusal(
         id,

@@ -279,6 +279,43 @@ describe("DesktopTelemetryPublisher", () => {
       }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
 
+  it.effect(
+    "tells a reconnecting server about a secret field that still has focus, and nothing once it clears",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const privateMode = (active: boolean) =>
+          ({
+            version: 1,
+            type: "cuaPrivateMode",
+            active,
+            target: { pid: 7, windowId: 3 },
+          }) as const;
+        yield* publisher.publishCuaSafety(privateMode(true));
+        const reconnected = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        // The replay can land before the first snapshot that collectTelemetry waits for.
+        const replayed =
+          reconnected.received.find((message) => message.type === "cuaPrivateMode") ??
+          (yield* reconnected.next("cuaPrivateMode"));
+        assert.deepEqual(replayed, privateMode(true));
+        yield* publisher.publishCuaSafety(privateMode(false));
+        assert.deepEqual(yield* reconnected.next("cuaPrivateMode"), privateMode(false));
+        yield* Fiber.interrupt(reconnected.fiber);
+
+        const later = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* later.next("desktopTelemetry");
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(later.received.filter((message) => message.type === "cuaPrivateMode"));
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaPrivateMode"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
   it.effect("stops when its scope closes during an Electron telemetry sample", () =>
     Effect.gen(function* () {
       const pollStarted = yield* Deferred.make<void>();

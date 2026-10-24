@@ -8,15 +8,16 @@ import { useSyncExternalStore } from "react";
 import { LockIcon, MonitorIcon } from "~/components/solar";
 import { ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 
-const subscribeVisibility = (onChange: () => void) => {
-  document.addEventListener("visibilitychange", onChange);
-  return () => document.removeEventListener("visibilitychange", onChange);
-};
-const documentVisible = () => document.visibilityState === "visible";
-
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
-export function useDocumentVisible() {
-  return useSyncExternalStore(subscribeVisibility, documentVisible, () => true);
+export function useDocumentVisible(doc: Document = document) {
+  return useSyncExternalStore(
+    (onChange) => {
+      doc.addEventListener("visibilitychange", onChange);
+      return () => doc.removeEventListener("visibilitychange", onChange);
+    },
+    () => doc.visibilityState === "visible",
+    () => true,
+  );
 }
 
 function Placeholder(props: { readonly icon: "lock" | "monitor"; readonly text: string }) {
@@ -37,6 +38,9 @@ export function PreviewSessionThumbnail(props: {
   const { session } = props;
   if (session.owner === "private")
     return <Placeholder icon="lock" text="Private (paused) while a person enters a secret" />;
+  // A person who took over is working in their own view; other clients do not watch them.
+  if (session.owner === "human")
+    return <Placeholder icon="lock" text="A person is controlling this tab" />;
   if (session.target.kind === "browser" && session.capabilities.frames)
     return (
       // The built-in browser's own surface, so a tile and the full preview are one view.

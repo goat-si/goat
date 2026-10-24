@@ -21,7 +21,12 @@ const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
 /** A scripted helper on in-memory pipes: greets, then answers each request with reply(). */
 function fakeHelper(options: {
   readonly greeting?: object;
-  readonly reply?: (request: { id: string; method: string; params: unknown }) => object | undefined;
+  /** write sends an unrequested line before the reply goes out; after() runs once it has. */
+  readonly reply?: (
+    request: { id: string; method: string; params: unknown },
+    write: (line: object) => void,
+  ) => object | undefined;
+  readonly after?: (request: { id: string; method: string }, write: (line: object) => void) => void;
 }) {
   const stdin = new NodeStream.PassThrough();
   const stdout = new NodeStream.PassThrough();
@@ -37,11 +42,13 @@ function fakeHelper(options: {
     stdinEnded = true;
     die();
   });
+  const write = (line: object) => stdout.write(JSON.stringify(line) + "\n");
   NodeReadline.createInterface({ input: stdin }).on("line", (line) => {
     const request = JSON.parse(line) as { id: string; method: string; params: unknown };
     received.push({ method: request.method, params: request.params });
-    const answer = options.reply?.(request);
+    const answer = options.reply?.(request, write);
     if (answer) stdout.write(JSON.stringify({ id: request.id, ...answer }) + "\n");
+    options.after?.(request, write);
   });
   stdout.write(
     JSON.stringify(
@@ -112,6 +119,61 @@ describe("ComputerUseHelper protocol", () => {
     assert.deepEqual(grants, { accessibility: true, screenRecording: false });
     assert.equal(refused.code, "socket_in_use");
     assert.deepEqual(helper.received[0], { method: "permissions", params: { prompt: false } });
+    await session.close();
+  });
+
+  it("can watch only when the helper's hello says so", async () => {
+    const hello = { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID };
+    const older = await openHelperSession(fakeHelper({ greeting: hello }).process, BUNDLE_ID);
+    const newer = await openHelperSession(
+      fakeHelper({ greeting: { ...hello, features: ["watch"] } }).process,
+      BUNDLE_ID,
+    );
+    expect([older.canWatch, newer.canWatch]).toEqual([false, true]);
+    await Promise.all([older.close(), newer.close()]);
+  });
+
+  it("delivers the events of the watch in force, switching watches as the answer is read", async () => {
+    const target = (windowId: number) => ({ pid: 7, windowId });
+    const event = (watchId: string, active: boolean, windowId: number) => ({
+      type: "event",
+      watchId,
+      event: { type: "privateMode", active, target: target(windowId) },
+    });
+    const helper = fakeHelper({
+      reply: (request, write) => {
+        const params = request.params as { watchId?: string };
+        // The old watch clears its active field before the new watch is answered.
+        if (request.method === "watch" && params.watchId === "w2") write(event("w1", false, 1));
+        // A stray event of a watch that is not in force.
+        if (request.method === "watch") write(event("other", true, 9));
+        return { result: { watchId: params.watchId } };
+      },
+      after: (request, write) => {
+        const params = request as unknown as { params: { watchId?: string } };
+        if (request.method === "watch")
+          write(event(params.params.watchId ?? "", true, params.params.watchId === "w1" ? 1 : 2));
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    const seen: Array<{ active: boolean; windowId: number }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onEvent((delivered) => {
+        if (delivered.type !== "privateMode") return;
+        seen.push({ active: delivered.active, windowId: delivered.target.windowId });
+        if (seen.length === 3) resolve();
+      }),
+    );
+    await session.watch("w1");
+    await session.watch("w2");
+    await done;
+    // w1's first state, w1's clearing under the old watch, then w2's first state.
+    expect(seen).toEqual([
+      { active: true, windowId: 1 },
+      { active: false, windowId: 1 },
+      { active: true, windowId: 2 },
+    ]);
+    expect(helper.received.map(({ method }) => method)).toEqual(["watch", "watch"]);
     await session.close();
   });
 
