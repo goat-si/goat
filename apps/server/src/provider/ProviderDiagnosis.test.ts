@@ -11,6 +11,7 @@ import {
   type ServerProvider,
   type ServerSettings,
 } from "@goat/contracts";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { DevinCloudCli } from "@goat/provider-devin-cloud/server";
@@ -291,7 +292,7 @@ it.effect(
       expect(failures(diagnosis)).toEqual(["forbidden_environment"]);
       const environment = checkOf(diagnosis, "environment")!;
       expect(environment.summary).toContain("ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL");
-      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.setup" });
+      expect(environment.fix).toMatchObject({ actor: "human", path: "provider.setup_open" });
       expect(environment.fix?.instruction).toContain("OpenCodex Claude intercept");
       expect(environment.fix?.instruction).toContain("empty value");
       expect(JSON.stringify(result)).not.toContain(OPENCODEX_TOKEN);
@@ -548,6 +549,40 @@ it.effect("an unknown instance id tells the agent to list providers", () =>
       actor: "agent",
       path: "provider.list",
     });
+  }),
+);
+
+it.effect("every fix a diagnosis emits names a path goat_call resolves", () =>
+  Effect.gen(function* () {
+    const results = [
+      yield* diagnose({ instanceId: id("typo") }),
+      yield* diagnose(
+        { driver: driver("claudeCloud") },
+        { instances: { claudeAgent: { driver: driver("claudeAgent"), enabled: false } } },
+      ),
+      yield* diagnose(
+        { instanceId: id("cloud-work") },
+        { instances: claudeCloud(), env: { HOME: "/home/user", ANTHROPIC_AUTH_TOKEN: "x" } },
+      ),
+      yield* diagnose(
+        { instanceId: id("devin-cloud") },
+        { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling({}, false) } },
+      ),
+      yield* diagnose(
+        { instanceId: id("devin-cloud") },
+        { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling() }, executables: {} },
+      ),
+    ].flatMap(({ result }) => result.diagnoses.flatMap((diagnosis) => diagnosis.checks));
+    const checks = [
+      ...results,
+      ...snapshotChecks(snapshot({ enabled: false, status: "disabled" })),
+      ...snapshotChecks(snapshot({ installed: false, status: "error" })),
+      ...snapshotChecks(snapshot({ auth: { status: "unauthenticated" }, status: "error" })),
+    ];
+    const paths = checks.flatMap((item) => (item.fix?.path === undefined ? [] : [item.fix.path]));
+    expect(paths.filter((path) => resolveAgentSurfaceEntry(path) === undefined)).toEqual([]);
+    expect(paths).toContain("provider.setup_open");
+    expect(paths).toContain("provider.update");
   }),
 );
 

@@ -481,6 +481,33 @@ it.effect("rejects linking a cloud provider to the wrong kind of instance", () =
   ),
 );
 
+it.effect("an add whose linkTo cannot be linked is refused before it installs or saves", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fixture = yield* setup();
+      const before = Object.keys(yield* fixture.instances);
+      // Devin from the registry cannot be Cursor Cloud's login source, and Claude is no cloud.
+      const adds = [cursorCloud, ProviderInstanceId.make("claudeAgent")].map((linkTo) => ({
+        action: "add" as const,
+        input: { acpAgentId: "devin", linkTo },
+      }));
+      for (const add of adds) {
+        const error = yield* Effect.flip(fixture.service.manage(add, managingClient));
+        expect(error.code).toBe("invalid_request");
+      }
+      // A retry after the refusal would otherwise add devin-2 beside a leftover devin.
+      expect(Object.keys(yield* fixture.instances)).toEqual(before);
+      expect(fixture.prepared).toEqual([]);
+      const approver = yield* setup({ capabilities: [] });
+      for (const add of adds) {
+        const error = yield* Effect.flip(approver.service.manage(add, threadScope));
+        expect(error.code).toBe("invalid_request");
+      }
+      expect(approver.created).toEqual([]);
+    }),
+  ),
+);
+
 it.effect("tells a caller that a host too old for the provider tool needs updating", () =>
   Effect.scoped(
     Effect.gen(function* () {
