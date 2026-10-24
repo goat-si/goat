@@ -433,7 +433,7 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       );
       const failure = yield* Effect.flip(reconcileGoatMigrationIds(nightly256Entries));
       assert.strictEqual(failure._tag, "MigrationError");
-      assert.strictEqual(failure.kind, "BadState");
+      if (failure._tag === "MigrationError") assert.strictEqual(failure.kind, "BadState");
       assert.deepStrictEqual(yield* history, before);
       assert.deepStrictEqual(yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`, schema);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
