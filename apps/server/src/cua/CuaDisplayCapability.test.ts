@@ -97,6 +97,30 @@ describe("Linux display parsing", () => {
     ]);
   });
 
+  it("a named DISPLAY that does not answer is unavailable, even with a Wayland session beside it (#1358)", () => {
+    // Started for its own Xvfb on :96 from a terminal inside a Wayland desktop.
+    const failed = classifyLinux(
+      facts({
+        requestedDisplay: ":96",
+        displays: linuxDisplayCandidates(":96", [0, 96]).map((display) => ({
+          display,
+          outcome: "unreachable" as const,
+          xauthority: null,
+        })),
+        wayland: liveWayland,
+      }),
+    );
+    expect(failed).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(failed.reason).toContain("DISPLAY=:96");
+    const forwarded = classifyLinux(
+      facts({ requestedDisplay: "localhost:10.0", displays: [], wayland: liveWayland }),
+    );
+    expect(forwarded).toMatchObject({ capability: "unavailable", environment: [] });
+    expect(forwarded.reason).toContain("forwarded");
+    // Without DISPLAY, the Wayland session is the one this server was started in.
+    expect(classifyLinux(facts({ displays: [], wayland: liveWayland })).capability).toBe("partial");
+  });
+
   it("reads local DISPLAY values and ignores forwarded ones", () => {
     expect(localDisplayNumber(":1")).toBe(1);
     expect(localDisplayNumber(":3.0")).toBe(3);

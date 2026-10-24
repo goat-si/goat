@@ -135,6 +135,12 @@ const LINUX_DRIVER_LIBRARIES = [
 
 export interface LinuxDisplayFacts {
   readonly user: string;
+  /**
+   * The DISPLAY this server was started with. When it names one, that display is the only one
+   * computer use may use: a session reachable some other way, such as an inherited Wayland
+   * socket, may be another desktop (#1358).
+   */
+  readonly requestedDisplay?: string;
   /** The session's Wayland socket, when the environment names one, and whether it accepts. */
   readonly wayland: {
     readonly display: string;
@@ -176,6 +182,18 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   const wayland = facts.wayland?.reachable ? facts.wayland : null;
   // The binary links the X client libraries even on Wayland, so it cannot start without them.
   const missing = missingLibraries(facts);
+  if (!reachable && facts.requestedDisplay) {
+    const requested = facts.requestedDisplay;
+    const refused = facts.displays.some((entry) => entry.outcome === "refused");
+    return {
+      capability: "unavailable",
+      reason:
+        localDisplayNumber(requested) === null
+          ? `This server was started with DISPLAY=${requested}, a forwarded or remote X display, which computer use cannot use. Start GOAT with a local display, or without DISPLAY to use the desktop signed in on this computer.`
+          : `This server was started with DISPLAY=${requested}, and that X display ${refused ? `refused ${facts.user}'s connection` : "is not answering"}. Start that display, or start GOAT without DISPLAY to use the desktop signed in on this computer.`,
+      environment: [],
+    };
+  }
   if (!reachable) {
     if (wayland) {
       const environment = [
@@ -579,6 +597,7 @@ const probeLinux = Effect.fnUntraced(function* () {
 
   return classifyLinux({
     user,
+    ...(environment.DISPLAY?.trim() ? { requestedDisplay: environment.DISPLAY.trim() } : {}),
     wayland,
     displays,
     libraries,
