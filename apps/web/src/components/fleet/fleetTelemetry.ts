@@ -1,3 +1,4 @@
+import { presentChildSetup } from "@goat/client-runtime/hub-devices";
 import type { FleetMachine } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import {
@@ -21,6 +22,7 @@ import type {
   EnvironmentId,
   HostStatusEntry,
   HostStatusQuota,
+  OpenCodexChildBootstrapStatus,
   ServerEventLoopStall,
 } from "@goat/contracts";
 
@@ -239,6 +241,34 @@ export function fleetHostRows(input: {
 }
 
 /**
+ * The Home's Child setup for each row. The Home sets it on its own report of the machine, under
+ * the alias it reaches it by, so a machine this client also reads directly keeps it.
+ */
+export function fleetChildSetups(
+  rows: ReadonlyArray<FleetHostRow>,
+  machines: ReadonlyArray<Pick<FleetMachine, "id" | "sshHost" | "reportedAliases">>,
+  reports: ReadonlyMap<EnvironmentId, ReadonlyArray<HostStatusEntry>>,
+): ReadonlyMap<string, OpenCodexChildBootstrapStatus> {
+  const byId = new Map(machines.map((machine) => [machine.id, machine] as const));
+  const setups = new Map<string, OpenCodexChildBootstrapStatus>();
+  for (const row of rows) {
+    const machine = row.machineId === null ? undefined : byId.get(row.machineId);
+    const routes = machine === undefined ? [] : [machine.sshHost, ...machine.reportedAliases];
+    const status =
+      row.entry?.opencodexChild ??
+      routes
+        .map((route) =>
+          route === null
+            ? undefined
+            : reports.get(route.via)?.find((entry) => entry.host === route.alias)?.opencodexChild,
+        )
+        .find((candidate) => candidate !== undefined);
+    if (status !== undefined) setups.set(row.key, status);
+  }
+  return setups;
+}
+
+/**
  * A reading's tier on the graph's thresholds. Without the graph's hysteresis: a value is
  * colored by what it is now, while the node's ring holds its tier through small dips.
  */
@@ -392,6 +422,8 @@ export function fleetAlerts(
     readonly pendingSince?: ReadonlyMap<EnvironmentId, number>;
     /** The last event-loop stall each environment reported when it connected. */
     readonly stalls?: ReadonlyMap<EnvironmentId, ServerEventLoopStall>;
+    /** The Home's Child setup for each row, from fleetChildSetups. */
+    readonly childSetups?: ReadonlyMap<string, OpenCodexChildBootstrapStatus>;
   } = {},
 ): ReadonlyArray<FleetAlert> {
   const unreadable = options.unreadable ?? [];
@@ -416,6 +448,16 @@ export function fleetAlerts(
         label: row.label,
         ...alert,
         ...(retry ? act("retry") : {}),
+      });
+    }
+    const setup = presentChildSetup(options.childSetups?.get(row.key) ?? row.entry?.opencodexChild);
+    if (setup !== null) {
+      alerts.push({
+        key: row.key + ":child-setup",
+        tone: setup.tone === "progress" ? "muted" : setup.tone,
+        label: row.label,
+        detail: setup.label,
+        ...(setup.detail === null ? {} : { lines: [setup.detail] }),
       });
     }
     const entry = row.entry;

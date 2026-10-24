@@ -10,8 +10,9 @@ cloud runs there.
 The hub is off until you turn it on. Make only one environment the hub.
 
 Hub settings live in three places. **Settings → Hub** turns the hub on and lists
-its **OpenCodex devices**. **Settings → Connections** pairs your phone and lists
-**Devices on this hub**, the machines the hub reaches for phones and agents.
+**Hub devices**: the machines the hub reaches for phones and agents, each with
+whether it is linked to the hub's OpenCodex. It shows the environment you select
+at the top of Settings. **Settings → Connections** pairs your phone.
 **Settings → Providers → Codex** chooses whether Codex uses OpenCodex Home.
 
 When the desktop app first finds OpenCodex on its machine, it asks once whether
@@ -33,8 +34,8 @@ Accounts and keys stay in OpenCodex; open its dashboard from **Accounts and keys
 
 ## Add, repair, or remove a device
 
-In **Settings → Hub → OpenCodex devices**, **Add device to hub** joins a machine
-by its SSH alias; a standalone device in
+In **Settings → Hub → Hub devices**, **Add device to hub** joins a machine to the
+hub's OpenCodex by its SSH alias; a standalone device in
 the list has **Join** too. The device needs OpenCodex and a direct SSH alias on
 the hub. GOAT compares the host key OpenCodex is offered with the key GOAT pinned
 for that alias, links the device, and checks its parity.
@@ -49,9 +50,10 @@ A cloud machine this hub creates joins by itself. The first time it is used,
 GOAT installs this hub's OpenCodex release there with npm, starts it, and
 links it as a Remote Link Child, using the host key it pinned when it created
 the machine. It does this once per machine; use **Repair** if the link breaks
-later. Machines you add over SSH are never joined automatically. The machine's
-`goat_host_status` entry shows the progress, or why it stopped, for example
-when the machine has no npm.
+later. Machines you add over SSH are never joined automatically. Until the
+machine is a Child, its row in **Hub devices**, in the mobile app, and in Fleet
+shows the progress or why it stopped, for example when the machine has no npm.
+Agents read the same from its `goat_host_status` entry.
 
 **Repair** walks the fixes for failing checks in order: sync the device's
 settings, restart its OpenCodex once nothing runs there, and reconnect the link.
