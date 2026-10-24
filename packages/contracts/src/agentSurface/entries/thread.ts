@@ -1,4 +1,5 @@
 import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT, ROUTED_ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
 
 export const threadEntries = {
   "thread.send_attachments": entry({
@@ -59,6 +60,7 @@ export const threadEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: ["approval"],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Create GOAT threads",
       idempotentHint: false,
@@ -123,6 +125,7 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Update GOAT thread metadata",
       idempotentHint: false,
@@ -145,6 +148,7 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Send to a GOAT thread",
       idempotentHint: false,
@@ -209,6 +213,7 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Interrupt a GOAT thread",
       idempotentHint: false,
@@ -231,6 +236,7 @@ export const threadEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason: ROUTED_ORCHESTRATION_RECEIPT,
     annotations: {
       title: "Retry a GOAT thread's failed workspace preparation",
       idempotentHint: false,

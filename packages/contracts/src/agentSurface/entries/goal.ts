@@ -17,6 +17,8 @@ export const goalEntries = {
     requires: "thread",
     dryRun: "supported",
     humanSteps: [],
+    idempotencyReason:
+      "A create stores clientRequestId with the goal under a unique owner and key, so a retried create returns that goal; an update sets the spec, so repeating it changes nothing.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
   "goal.get": entry({
