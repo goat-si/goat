@@ -430,7 +430,9 @@
         "apps/desktop/src/app/DesktopClerk.ts",
         "apps/desktop/src/cua/",
         "scripts/build-desktop-artifact.ts",
-        "patches/@ubjs__node@0.31.0-3.patch"
+        "patches/@ubjs__node@0.31.0-3.patch",
+        "apps/desktop/native/computer-use-helper/",
+        "scripts/build-computer-use-helper.ts"
       ]
     },
     {

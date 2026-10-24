@@ -68,25 +68,31 @@
   - **Engine.** Cua Driver (MIT, pinned 0.37.0; 0.38.0 is evaluated separately) runs as a child of
     the helper. The macOS helper disclaims responsibility at its own start, so it becomes the TCC
     principal whoever launched it, then spawns
-    `cua-driver serve --embedded --host-bundle-id <helper bundle id>`, which inherits the helper's
-    grants and passes the driver's identity check unpatched. GOAT behavior lives in the helper and
-    in small, separate driver patches with recorded provenance, never in a rewritten driver.
-  - **Channel.** The helper talks to its launcher over an authenticated local channel: NDJSON over
-    stdio pipes when spawned, a per-launch random token plus peer process and code-signature checks
-    for any socket. The handshake negotiates the API version, every request has a deadline, and
-    results are bound to the helper's executable, pid and generation, so late results after a
-    Stop are dropped. Agents reach the helper only through GOAT's MCP surface. Every MCP result
+    `cua-driver mcp --direct --embedded --host-bundle-id <helper bundle id>`: one stdio process per
+    session that owns the driver runtime and listens on no socket, inherits the helper's grants and
+    passes the driver's identity check unpatched (D3 amendment, #1210). The first helper (#1211)
+    still runs `serve --embedded` on a private socket, and signed helper builds stay blocked until
+    the broker replaces it (#1202). Direct mode has no driver cursor overlay, so the helper draws
+    the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
+    driver patches with recorded provenance, never in a rewritten driver.
+  - **Channel.** The helper talks to its launcher over line-delimited JSON on stdio and brokers
+    every agent call to the driver in the #1207 envelope. A release helper serves only a parent
+    signed by GOAT's team with the GOAT app identifier, and its service half only its own
+    launcher; any socket, as in the fallback, adds a per-launch token and an audit-token peer
+    check. The hello negotiates `clientApiVersion` and `serverApiVersion`, every request has a
+    deadline, and replies are bound to the helper's executable, pid and generation, so late
+    replies after a Stop are quarantined. Agents reach the helper only through GOAT's MCP surface. Every MCP result
     puts screenshots in `content` image blocks; `structuredContent` never carries image payloads,
     and screenshots keep their request, generation and destination thread through to the
     transcript.
   - **Observation.** Window-scoped screenshot plus accessibility tree. The first observation is
-    full; later ones are diffs keyed by stable element ids. A target is PID, window id and
-    Space/display epoch; a new epoch invalidates ids, and a stale id is a typed `stale_element`
-    error.
+    full; later ones are diffs keyed by element refs that survive re-reads. A target is PID,
+    window id and an epoch naming the window, its Space and display; a new epoch invalidates refs,
+    and a stale ref is refused with `staleElement` or `epochChanged`.
   - **Actions.** Click, type, scroll, drag, key, set value and semantic accessibility actions on an
     exact PID and window, background delivery first, foreground only under a lease that allows it.
     Results are typed `confirmed`, `partial`, `unverifiable`, `suspected_noop` or
-    `refused(reason)`; partial and unverifiable results are never replayed automatically, and a
+    a typed refusal; partial and unverifiable results are never replayed automatically, and a
     refusal never claims the user stopped it (#1146). Stops and refusals name their cause: the
     user stopped, the user intervened, the screen locked, a missing or pending permission, an app
     not approved, a blocked URL, an incompatible client, or a named policy.
@@ -125,8 +131,12 @@
     under a stable designated requirement, and it means computer use no longer needs any grant on
     GOAT.app. Aside and the Codex app ship the same shape.
   - Disclaiming in the helper and spawning the driver embedded is the one arrangement pinned 0.37.0
-    accepts without patching its identity checks. It also gives standalone servers on macOS an app
-    identity to launch, which removes #1174 by construction.
+    accepts without patching its identity checks. A standalone server on a Mac has no GOAT app at
+    the top of its launch chain, so it reports computer use unavailable instead of granting a
+    terminal (#1174).
+  - Running the driver in direct mode behind the helper's stdio leaves nothing for another process
+    to connect to, which closes the same-user socket gap ADR-0022 recorded without a driver patch;
+    the cost is the driver's cursor overlay, which the helper replaces.
   - Small patches rebase; a cumulative fork does not. The deltas GOAT needs that upstream lacks
     (batched accessibility reads, input cancellation with held-input release, host liveness,
     settle waits, text selection, a wider keymap) are each tens to a few hundred lines.
@@ -143,7 +153,9 @@
     each rebuild. That is expected in development and documented, not worked around with
     `tccutil reset`.
   - Each platform helper is one more signed artifact to build, notarize and qualify.
-  - The driver's daemon socket still has no secret. A process running as the same user can reach
-    it; the helper narrows the path GOAT gives agents, not the OS user boundary.
+  - The helper trusts a parent that carries GOAT's signature, and GOAT's executable can run as
+    plain Node, so a same-user process can pass that check until GOAT's run-as-Node fuses are off
+    and its backend runs from a separately identified runtime (#1210). Signed helper builds stay
+    blocked until then (#1202).
   - Background input and private mode depend on what each platform exposes. Wayland has no
     background input path, so foreground actions there need an exclusive lease.

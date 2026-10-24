@@ -68,12 +68,20 @@ valid padding, so a non-catalog from this app's key also tries the sibling keys.
 ## Computer use host
 
 When the server asks for a Cua Driver host on the private control pipe, the Electron main process
-owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`), so macOS attributes Accessibility and Screen
-Recording to GOAT rather than to the server child. On macOS it checks both permissions before
-starting and reports `unavailable` until they are granted. Packaged builds start the driver from
-`resources/cua-driver`; development builds need `GOAT_CUA_DRIVER_PATH`. The host reuses a running
-driver, retires a crashed one, and passes the same telemetry and update-check opt-outs as the
-standalone host ([server.md](server.md#computer-use)).
+owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
+"GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
+packaged builds look in `Contents/Helpers`, development builds need `GOAT_CUA_HELPER_PATH` to a
+helper built by `scripts/build-computer-use-helper.ts`, and a helper that is present but unusable
+keeps computer use off. The helper (`apps/desktop/native/computer-use-helper/main.swift`) checks
+that its parent is GOAT, re-execs itself with responsibility disclaimed, speaks line-delimited
+JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
+Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
+and that the driver it reports is the helper's child. Desktop artifacts do not embed the helper
+yet, so packaged builds run the driver in the Electron process from `resources/cua-driver` under
+GOAT's own grants; development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
+host checks both permissions before starting and reports `unavailable` until they are granted. It
+reuses a running driver, retires a crashed one, and passes the same telemetry and update-check
+opt-outs as the standalone host ([server.md](server.md#computer-use)).
 
 Setup proves the macOS grants from inside the driver (`verify`): Electron's check comes first,
 then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
@@ -88,8 +96,9 @@ tool on Windows. The SDK's native libraries come from `@trycua/cua-driver` and a
 `app.asar`; `patches/@ubjs__node@0.31.0-3.patch` makes the SDK loader find them there. The license
 notices are vendored in `apps/desktop/src/cua/notices/`.
 
-Proposed (not implemented): a separate signed helper app replaces this host; see
-`docs/internals/computer-use.md`.
+Proposed (not implemented): the helper runs the driver socketless as
+`cua-driver mcp --direct --embedded` and brokers agent calls over its stdio, it ships in signed
+desktop artifacts, and it draws the agent cursor itself; see `docs/internals/computer-use.md`.
 
 > Decision record: [ADR-0023](decisions/ADR-0023-goat-computer-use-app.md)
 

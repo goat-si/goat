@@ -13,9 +13,10 @@ traps behind the design; the workstream issues own the remaining work.
 provider (Codex, Claude, ...)
   └─ stdio MCP: goat cua-session-proxy        one per thread session, holds the thread's MCP credential
        └─ GOAT server computer-use service    admission, approvals, lease, preview session, typing of results
-            └─ desktop host control pipe       Electron main on desktop; the server itself elsewhere
-                 └─ helper (NDJSON over stdio) GOAT Computer Use.app / .exe / Linux helper
-                      └─ cua-driver serve --embedded --host-bundle-id <helper id>
+            └─ desktop host control pipe       Electron main on desktop
+                 └─ helper (line JSON on stdio) GOAT Computer Use.app / Windows / Linux helper, #1207 envelope
+                      └─ cua-driver mcp --direct --embedded --host-bundle-id <helper id>
+                           one stdio process per session, no listening socket
                            └─ OS accessibility, capture and input
 ```
 
@@ -25,29 +26,40 @@ provider (Codex, Claude, ...)
   removes them, and processes GOAT starts without disclaiming responsibility, provider CLIs
   included, still run under whatever GOAT.app holds. Keeping provider processes off GOAT.app's
   grants is separate work (#1208).
-- On macOS the helper disclaims responsibility at its
-  own start by re-executing itself once, before it touches any TCC-protected API, and keeps the
-  stdio pipes it inherited. The first process stays alive as a waiter and forwards the exit status,
-  so the launcher's child handle still tracks the real helper. After that, whoever launched it
-  (Electron, a standalone server, a terminal), macOS attributes the grants to the helper bundle.
+- On macOS the helper (`apps/desktop/native/computer-use-helper/main.swift`) checks its parent,
+  then re-executes itself once with responsibility disclaimed, before it touches any
+  TCC-protected API, and keeps the stdio pipes it inherited. The first process stays alive as a
+  waiter and forwards the exit status, so the launcher's child handle still tracks the real
+  helper. macOS then attributes the grants to the helper bundle.
 - The driver runs embedded under the helper. In embedded mode pinned 0.37.0 skips its own disclaim
   and checks that its direct parent carries the bundle id passed as `--host-bundle-id`, so the
   helper must be the driver's parent, not a sibling and not a LaunchServices launch.
-- Desktop servers ask Electron for the helper over the existing private control pipe
-  (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`). A standalone server
-  on macOS launches the helper from an installed GOAT.app; without one it reports computer use
-  unavailable with that reason. It no longer starts the driver under `si.goat.server` (#1174).
-  Windows and Linux servers launch their platform helper directly.
+- The driver runs as `cua-driver mcp --direct --embedded` (lead decision D3 amendment, #1210): one
+  stdio process that owns the driver runtime and listens on nothing, so no provider and no other
+  process of the user ever gets a socket path. Spawned by the helper it reports host attribution
+  and the helper as its parent application, exactly as `serve --embedded` does. Agent calls reach
+  it only through the helper, which brokers them in the #1207 envelope. The first helper
+  (#1211) still starts `serve --embedded` on a host-chosen socket; signed helper builds stay blocked
+  until the broker replaces it (#1202).
+- The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
+  cursor and window highlight itself (#1214), hidden in private mode and during a takeover.
+- Desktop servers ask Electron for the driver over the existing private control pipe
+  (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
+  runs it through the helper when the build has one (`apps/desktop/src/cua/DesktopCuaDriver.ts`).
+  A standalone server on a Mac reports computer use unavailable, because its launch chain ends at a
+  terminal or a launchd job (#1174). Windows and Linux servers launch their platform helper
+  directly.
 - Every turn, interactive or unattended, attaches GOAT's proxy in place of `cua-driver mcp`. The
   proxy generalizes today's lease proxy (`apps/server/src/cua/ComputerUseLeaseProxy.ts`): it asks
   the server before each call and holds one session for its thread and generation.
-- Inside the helper each session has its own driver client process, the `cua-driver mcp` child
-  the lease proxy owns today, now started by the helper against its daemon. Ending a session kills
-  exactly that child. That is the boundary ADR-0022 measured: cancellation and session revoke do
-  not stop a running `run_script`, and killing its transport does.
+- Each session has its own `mcp --direct` driver process under the helper, and ending a session
+  kills exactly that process. That is the boundary ADR-0022 measured: cancellation and session
+  revoke do not stop a running `run_script`, and killing its transport does. Whether several
+  direct runtimes run side by side cleanly is a qualification item for WS3; if they do not,
+  sessions share one driver process, a Stop restarts it, and the other sessions observe again.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
-  helper over the control channel. The helper kills that session's driver client, releases the
+  helper over the control channel. The helper kills that session's driver process, releases the
   input that session holds, and sends a cleanup report over the control channel, which does not
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
@@ -76,23 +88,28 @@ requirement, never from a pid or path alone. The driver stays the helper's child
 
 ## Channel
 
-- Spawned helpers speak NDJSON on stdin/stdout, one JSON record per line, with request ids,
-  cancellation by id, and a per-line size cap enforced on both ends. Screenshots travel as base64
-  inside the record; the cap is sized for one bounded window capture, not for streams.
-- The launcher verifies the helper's code signature against the expected designated requirement
-  (team id and bundle id) before it spawns, then sends a per-launch random token as the first
-  frame. The token never goes in argv or the environment, which other processes of the same user
-  can read. The helper answers with its protocol version, helper version, driver version, bundle
-  id, executable path and pid. Each side states the API version it speaks; an incompatible pair
-  ends the handshake with `incompatible_client_version` rather than degrading.
-- Every request carries a deadline and the session's helper generation. A response is accepted
-  only from the executable, pid and generation the handshake bound; results that arrive after a
-  Stop or a generation change are quarantined and never reach the agent.
+- The helper speaks line-delimited JSON on its inherited stdin and stdout, and nothing else.
+  Requests and replies use the #1207 envelope (`packages/contracts/src/computerUseProtocol.ts`):
+  request ids, a per-request `deadlineMs`, and a frame limit both sides agree on in the hello,
+  between 64 KiB and 16 MiB. Screenshots cross as base64 inside one bounded frame and leave
+  GOAT's MCP surface as image content.
+- Trust starts at the parent. A release helper serves only a parent signed by GOAT's Developer ID
+  team with the GOAT app identifier its own id extends (`si.goat.desktop` for
+  `si.goat.desktop.computer-use`), and its service half accepts only its own launcher; a dev helper
+  serves any parent. The host checks the helper's first line (protocol and bundle id) and that the
+  driver it reports is the helper's own child (#1213), then exchanges the #1207 hello:
+  `clientApiVersion` against `serverApiVersion`, with `incompatibleClientVersion` instead of a
+  degraded session.
+- The parent check is only as strong as the parent. GOAT's executable can run as plain Node
+  (`ELECTRON_RUN_AS_NODE`), so until GOAT's backend runs from a separately identified runtime and
+  the main app's run-as-Node fuses are off, any same-user process can pass the check by running
+  code under GOAT's signature (#1210). Signed helper builds stay blocked on that (#1202).
+- Replies are bound to the helper's executable, pid and generation from the hello.
+  `admitComputerUseReply` quarantines replies from another generation, to a request a Stop or a
+  deadline already ended, or over the frame limit; they never reach the agent.
 - A socket, in the fallback above or for a helper that outlives its launcher, uses a 0700
-  directory, the same token, and a peer check on every accept: audit token to code signature to
-  the designated requirement.
-- The driver's own daemon socket lives in the helper's private state directory. It has no secret
-  (ADR-0022 "Limits"); the helper narrows which path agents get, not what the OS user can reach.
+  directory, a per-launch token, and a peer check on every accept: audit token to code signature
+  to the designated requirement.
 - Liveness runs both ways. A spawned helper exits when stdin closes or its launcher pid
   disappears. A helper reached over a socket instead ends every session of a client whose
   connection drops, through the normal Stop path with its cleanup report, and exits after an idle
@@ -101,50 +118,59 @@ requirement, never from a pid or path alone. The driver stays the helper's child
 
 ## Observation
 
-- A target is `{pid, windowId, epoch}`. The epoch changes when the window moves to another Space
-  or display, the app relaunches, or the window is replaced. Element ids are valid only within one
-  target and epoch.
-- The first observation of a target is full: window screenshot plus accessibility tree. Later
-  observations are diffs against the last tree the agent saw, keyed by stable element ids, with
-  changed, added and removed elements. The helper falls back to a full snapshot when the tree was
-  reordered, the capture was incomplete, or the window changed. Diffs are computed in the helper
-  from consecutive full trees, so every platform gets them even where the native API only returns
-  full trees.
-- Acting on an id from an older epoch, or one that no longer resolves to exactly one element,
-  returns `stale_element`. The helper never guesses among several matches.
-- A text-only observation returns the tree without capturing pixels. Omitting the image from a
-  response is not the same as not capturing it; the browser preview had that gap
-  (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`), and the shared protocol makes
-  capture an explicit choice.
-- Coordinates in a screenshot carry the snapshot's scale, so a coordinate action cites the
-  snapshot it was read from and the helper converts it for that snapshot only.
+- A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
+  desktop, and its display. Any change of epoch invalidates every element ref issued under it.
+- The first observation of a window is full. Later ones are diffs against the latest observation
+  of the same lineage, with added, changed and removed refs; "removed" means not seen, because
+  accessibility reads can miss nodes. GOAT's observation tracker
+  (`packages/shared/src/computerUseObservation.ts`) assigns refs by tree position, so a ref keeps
+  naming the same control while the driver's own tokens rotate, and gives a position a ref only
+  when it is unambiguous all the way up. A full observation starts a new lineage and says why
+  (`first`, `unknown_since`, `scope_changed`, `reordered`, `incomplete`, `window_changed`,
+  `epoch_changed`).
+- A ref from an older lineage or epoch is refused with `staleElement` or `epochChanged`. The
+  helper never guesses among several matches.
+- `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
+  from a response is not the same as not capturing it; the browser preview had that gap
+  (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
+- Points are pixels in the screenshot of the observation the action names, and refs and points are
+  accepted only from the latest observation; points only when it carried a screenshot.
+- While a secure field has focus, the observation is full and incomplete with no elements and no
+  screenshot, and every ref, point and action is refused with `privateMode`.
 - An observation made for the preview panel or a readiness check never counts as the agent's
-  fresh observation; only the agent's own observe call resets its stale state.
+  fresh observation; only the agent's own `observe` resets its stale state.
 
 ## Actions and results
 
-- Actions: click, double and right click, type, key and hotkey, scroll, drag, set value, select
-  text, and semantic accessibility actions (press, menu, increment). Every action names an exact
-  target; there is no "frontmost window" default.
-- Background delivery comes first. Foreground delivery (activating the app or raising the window)
-  happens only when the lease's scope allows it and is reported in the result.
+- The protocol methods are `capabilities`, `permissions`, `listWindows`, `observe` and nine
+  actions: `click`, `doubleClick`, `rightClick`, `typeText`, `pressKey`, `scroll`, `drag`,
+  `setValue` and `performAction`. Every action names an exact target, the observation it acts on
+  and its delivery; there is no "frontmost window" default.
+- Input means the same on every platform. Keys are canonical names (`ComputerUseKey`: one
+  printable character, or `enter`, `tab`, `escape`, `arrowUp`, `pageDown`, `f1`–`f20` and the
+  like), modifiers are roles (`option` is Alt and `command` is the Windows or Super key off macOS),
+  a chord is `pressKey` with modifiers, and `scroll` counts lines from 1 to 50.
+- Background delivery comes first. Foreground delivery happens only when the request asks for it
+  and the lease allows it; otherwise the refusal is `foregroundNotAllowed` or
+  `backgroundUnavailable`.
 - Each action is decided before dispatch: the helper picks one route (semantic, background
   synthetic, or foreground) and does not switch routes or windows after an unknown outcome.
-- Results: `confirmed` (the effect was read back), `partial` (some steps ran), `unverifiable`
-  (dispatched, effect unknown), `suspected_noop` (dispatched, nothing changed), and
-  `refused(reason)` (not dispatched). Synara's `not-dispatched / dispatched-unknown / verified`
-  maps onto `refused`, `unverifiable` and `confirmed`.
-- `partial` and `unverifiable` are never replayed automatically. The agent must observe again
-  before deciding.
-- Refusal reasons are typed and say what happened: `not_admitted`, `lease_expired`,
-  `app_not_approved`, `private_mode`, `human_control`, `input_collision`, `stale_element`,
-  `target_gone`, `target_refused` (a policy refusal, with the policy named), `blocked_url`,
-  `permissions_not_granted`, `permissions_pending`, `screen_locked`, `user_intervened`,
-  `incompatible_client_version`, `unsafe_capture`, `target_bounds_unavailable`, `unsupported` and
-  `user_stopped`. `user_stopped` is used only
-  when a person pressed Stop or stop all, and `user_intervened` only when the helper saw a
-  person's input. A vendor helper that reports a policy refusal as "stopped by the user" makes
-  agents end their turn (#1146); GOAT's helper does not.
+- Results pair an outcome with what the helper saw: `confirmed` and `suspected_noop` are
+  `verified`, `unverifiable` is `dispatched_unknown`, and `partial` may be either. Input that never
+  left is a refusal, never an outcome. A missed deadline is `unverifiable`.
+- `computerUseNextStep` is the one no-replay rule: `partial` and `unverifiable` input is observed
+  again, never resent; only an undispatched `busy` refusal is retried.
+- Refusals name their cause (`ComputerUseRefusalReason`): `userStoppedSession`, `userIntervened`,
+  `screenLocked`, `permissionsNotGranted`, `permissionsPending`, `appNotAllowed`, `blockedURL`,
+  `incompatibleClientVersion` and `targetRefused` (a named policy); observation and targeting
+  reasons such as `staleElement`, `epochChanged`, `windowNotFound`, `ownerMismatch`,
+  `targetGone`, `privateMode`, `leaseRequired`, `foregroundNotAllowed` and `backgroundUnavailable`;
+  and channel reasons such as `unsupported`, `invalidRequest`, `frameTooLarge`, `busy` and
+  `helperUnavailable`. `userStoppedSession` is used only when a person pressed Stop or stop all,
+  and `userIntervened` only when the helper saw a person's input or takeover. A vendor helper that
+  reports a policy refusal as "stopped by the user" makes agents end their turn (#1146); GOAT's
+  helper does not. The mini-view stack below needs two reasons the contract does not have yet,
+  `unsafeCapture` and `targetBoundsUnavailable`; WS7 adds them.
 
 ## Transcript fidelity
 
@@ -199,7 +225,7 @@ PreviewSession {
   `autocomplete=current-password` or WebAuthn in the browser; `AXSecureTextField`, UI Automation
   `IsPassword` or the AT-SPI password role on desktops. Observation, frame streaming and recording
   pause, in-flight results from before the switch are dropped by generation, and the agent gets
-  `private_mode` refusals until it ends. Only the person's explicit action ends it.
+  `privateMode` refusals until it ends. Only the person's explicit action ends it.
 - Ego Lite level for the browser means: a task space that groups an agent's tabs and keeps their
   login state together (profile policy shared, isolated per task, or incognito, each explained),
   a text-only snapshot, and a handoff in which a person finishes a step in the same tab and the
@@ -241,7 +267,7 @@ browser.
   excludes GOAT's own windows, or it hides them before each capture and confirms they are off
   screen before taking it. A helper that can do neither runs without the floating stack and
   overlay on that host, and a capture that would still include them, or a crop without known
-  window bounds, is refused with a typed reason (`unsafe_capture`, `target_bounds_unavailable`).
+  window bounds, is refused with a typed reason (`unsafeCapture`, `targetBoundsUnavailable`).
   Tiles never capture other tiles.
 - Web and mobile show the same tiles in the existing right panel or a sheet, without a floating
   mode.
@@ -285,7 +311,7 @@ browser.
 - **Lock, sleep and display changes.** Screen lock, sleep, a switch to another user, or a display
   change during an admitted action starts a new interruption epoch. The helper fences queued
   input, cancels the action in progress, releases held input and counts the interruption per
-  session. Results from before the epoch are discarded, element ids from before it are stale, and
+  session. Results from before the epoch are discarded, element refs from before it are stale, and
   the session moves to `paused`. Resuming needs an unlocked session, a lease that is still live or
   a person's hand-back, and then a fresh observation.
 - **Limits.** Interactive threads on one desktop still share the person's session; GOAT serializes
@@ -314,7 +340,7 @@ browser.
 - **Windows.** No OS grant. Readiness needs an interactive session (Session 0 over SSH or a
   service is `unavailable`), a non-empty UI Automation tree and a non-blank Windows Graphics
   Capture frame. Elevated windows are out of reach of a non-elevated helper; they return
-  `target_refused` and the helper is never elevated to reach them.
+  `targetRefused` and the helper is never elevated to reach them.
 - **Linux.** X11 needs a reachable display, a session bus and an AT-SPI bus that answer (the
   existing probe). Background input on X11 also needs an Xorg server that accepts hotplugged
   devices and a writable `/dev/uinput`; without them readiness reports `partial`, and input falls
@@ -367,9 +393,9 @@ separate file with its source and license recorded:
 
 - batched accessibility attribute reads with a prefetch pool (the largest speedup for big trees);
 - input cancellation with held-input release;
-- panic containment in `serve` and host-pid liveness polling on Unix;
-- a settle wait driven by accessibility notifications, text range selection, and append for set
-  value;
+- panic containment and host-pid liveness polling in the driver process on Unix;
+- a settle wait driven by accessibility notifications, text range selection, and append for
+  `setValue` (the protocol carries `append`; settle and selection join it only when a workstream adds them);
 - a wider keymap (F13–F20, keypad, Help, Menu).
 
 Where the driver already exposes a setting, use it instead of a patch
@@ -396,40 +422,42 @@ notice goes into the helper's third-party notices with them.
 
 ## Cross-platform parity
 
-One protocol, three helpers. Every method is implemented or returns a typed `unsupported` with a
-reason; nothing fails with an untyped error. "Fallback" means the method works through a
-different route that the result reports.
+One protocol, three helpers. The method rows are the #1207 method list: a helper's
+`capabilities` must name every method as supported or unsupported, and an unsupported method answers
+with an `unsupported` refusal naming the method and platform. The behavior rows are what every
+helper does around those methods, each reported through a typed capability or refusal.
 
-| Protocol method or surface                                                     | macOS                                 | Windows                                  | Linux X11                                                                           | Linux Wayland                                                                            |
-| ------------------------------------------------------------------------------ | ------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `hello` / version handshake                                                    | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| readiness (real tree + non-blank capture)                                      | yes                                   | yes                                      | yes                                                                                 | after portal consent where the compositor supports discovery and capture; else `partial` |
-| request permission                                                             | TCC prompts                           | `unsupported` (none needed)              | `unsupported`                                                                       | portal consent                                                                           |
-| list apps / windows                                                            | yes                                   | yes                                      | yes                                                                                 | compositor dependent, else `unsupported`                                                 |
-| observe full (tree + screenshot)                                               | yes                                   | yes                                      | yes                                                                                 | where the target can be captured; else tree only with `partial`                          |
-| observe diff                                                                   | yes (helper computed)                 | yes (helper computed)                    | yes (helper computed)                                                               | yes (helper computed)                                                                    |
-| observe text-only                                                              | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| stale id → `stale_element`                                                     | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| wait for settle                                                                | accessibility notifications           | UIA events                               | AT-SPI events                                                                       | AT-SPI events                                                                            |
-| semantic actions                                                               | AX actions                            | UIA patterns                             | AT-SPI actions                                                                      | AT-SPI actions                                                                           |
-| background pointer and keys                                                    | yes                                   | partial, foreground fallback             | with Xorg hotplug and writable `/dev/uinput`; else `partial`, foreground with lease | `unsupported`; foreground with lease                                                     |
-| foreground delivery under lease                                                | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| set value / select text                                                        | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| cancel by request id                                                           | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| end session + held-input release + cleanup report                              | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| private mode detection                                                         | `AXSecureTextField`                   | `IsPassword`                             | AT-SPI password role                                                                | AT-SPI password role                                                                     |
-| lock, sleep and session-switch events                                          | yes                                   | session change notifications             | logind and screensaver signals                                                      | logind and screensaver signals                                                           |
-| human input collision                                                          | HID idle time                         | last-input time, own input filtered      | X idle time                                                                         | `unsupported`; exclusive lease                                                           |
-| physical kill switch                                                           | Escape tap (optional grant)           | low-level keyboard hook                  | XInput2 raw keys                                                                    | `unsupported`; Stop controls only                                                        |
-| preview frames                                                                 | yes                                   | yes                                      | yes                                                                                 | through the portal screen cast where granted; else last observation only                 |
-| `takeover`, `handBack`, `requestHandoff`, `pause`, `resume`, `stop`, `stopAll` | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
-| window-only capture for tiles                                                  | yes                                   | yes                                      | yes                                                                                 | where the portal grants a window; else crop of the window's bounds                       |
-| GOAT's own windows kept out of captures                                        | capture filter, else hide and confirm | capture exclusion, else hide and confirm | hide and confirm, else docked only                                                  | window capture only, else docked only                                                    |
-| onboarding flow, panel, chips, controls                                        | same                                  | same                                     | same                                                                                | same                                                                                     |
+| Protocol method                                            | macOS                 | Windows              | Linux X11          | Linux Wayland                                                         |
+| ---------------------------------------------------------- | --------------------- | -------------------- | ------------------ | --------------------------------------------------------------------- |
+| `capabilities` (and the hello)                             | yes                   | yes                  | yes                | yes                                                                   |
+| `permissions`                                              | TCC state             | UI Automation access | AT-SPI and display | portal consent state                                                  |
+| `listWindows`                                              | yes                   | yes                  | yes                | compositor dependent, else `unsupported`                              |
+| `observe` full and diff (diffs computed by GOAT's tracker) | yes                   | yes                  | yes                | where the target can be captured; else tree only, `degraded` says why |
+| `observe` with `screenshot: false`                         | yes                   | yes                  | yes                | yes                                                                   |
+| `click`, `doubleClick`, `rightClick`, `drag`, `scroll`     | yes                   | yes                  | yes                | foreground under a lease only                                         |
+| `typeText`, `pressKey`                                     | yes                   | yes                  | yes                | foreground under a lease only                                         |
+| `setValue`, `performAction`                                | AX values and actions | UIA patterns         | AT-SPI             | AT-SPI                                                                |
 
-Tests enforce it: the contracts package declares the method list, and a conformance suite runs the
-same fixture requests against each platform helper, failing when a method is missing or a refusal
-is untyped. The client tests render the same panel state for each platform.
+| Helper behavior                                                                                                             | macOS                                 | Windows                                  | Linux X11                                                                  | Linux Wayland                                                            |
+| --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| readiness: real tree and non-blank capture                                                                                  | yes                                   | yes                                      | yes                                                                        | after portal consent where the compositor supports discovery and capture |
+| background delivery (`backgroundDelivery`)                                                                                  | yes                                   | partial; else `backgroundUnavailable`    | with Xorg hotplug and writable `/dev/uinput`; else `backgroundUnavailable` | `backgroundUnavailable`                                                  |
+| stale refs refused (`staleElement`, `epochChanged`)                                                                         | yes                                   | yes                                      | yes                                                                        | yes                                                                      |
+| private mode (`privateMode`)                                                                                                | `AXSecureTextField`                   | `IsPassword`                             | AT-SPI password role                                                       | AT-SPI password role                                                     |
+| end session: kill the driver process, release held input, cleanup report                                                    | yes                                   | yes                                      | yes                                                                        | yes                                                                      |
+| lock, sleep and session switch (`screenLocked`)                                                                             | yes                                   | session change notifications             | logind and screensaver signals                                             | logind and screensaver signals                                           |
+| human input collision (`userIntervened`)                                                                                    | HID idle time                         | last-input time, own input filtered      | X idle time                                                                | not detectable; exclusive lease                                          |
+| physical kill switch                                                                                                        | Escape tap (optional grant)           | low-level keyboard hook                  | XInput2 raw keys                                                           | none; Stop controls only                                                 |
+| agent cursor overlay drawn by the helper (#1214)                                                                            | yes                                   | yes                                      | yes                                                                        | compositor dependent                                                     |
+| window-only capture for tiles                                                                                               | yes                                   | yes                                      | yes                                                                        | where the portal grants a window; else crop of the window's bounds       |
+| GOAT's own windows kept out of captures                                                                                     | capture filter, else hide and confirm | capture exclusion, else hide and confirm | hide and confirm, else docked only                                         | window capture only, else docked only                                    |
+| preview frames                                                                                                              | yes                                   | yes                                      | yes                                                                        | through the portal screen cast where granted; else last observation only |
+| preview controls (`takeover`, `handBack`, `requestHandoff`, `pause`, `resume`, `stop`, `stopAll`), onboarding, panel, chips | same                                  | same                                     | same                                                                       | same                                                                     |
+
+Tests enforce it: `ComputerUseCapabilities` fails to decode unless every method is named, and a
+conformance suite runs the same fixture requests against each platform helper, failing when a
+method is missing, a refusal is untyped, or a behavior row is not reported. The client tests
+render the same panel state for each platform.
 
 ## Qualification
 
