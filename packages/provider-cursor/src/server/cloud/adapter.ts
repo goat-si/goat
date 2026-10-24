@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import { CursorProviderCapabilitiesV2 } from "../adapter.ts";
 import { cursorSdkModelSelection } from "../sdkModel.ts";
 import * as CursorCloudSdk from "./sdk.ts";
+import { runErrorText } from "./runError.ts";
 
 export const DRIVER = ProviderDriverKind.make("cursorCloud");
 export const capabilities = {
@@ -176,9 +177,7 @@ export function resultTask(task: Task, result: RunResult): Task {
           : "Cursor Cloud failed. Open the agent for details."),
     ...(output?.branch ? { branch: output.branch } : {}),
     ...(prUrl ? { prUrl } : {}),
-    ...(result.status === "error"
-      ? { error: "Cursor's agent hit an unexpected error before it finished." }
-      : {}),
+    ...(result.status === "error" ? { error: runErrorText(result.error?.message) } : {}),
   };
 }
 
