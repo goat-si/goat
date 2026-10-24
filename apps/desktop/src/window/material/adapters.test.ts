@@ -18,7 +18,7 @@ it.effect("Mica attachment restores the native material once without changing ba
       },
     } as unknown as BrowserWindow;
     yield* adapter.prepare();
-    const attachment = adapter.attachSync(window);
+    const attachment = adapter.attachSync(window, { dark: false, glassOpacity: 80 });
     assert.equal(material, "mica");
     attachment.releaseSync();
     attachment.releaseSync();
@@ -37,7 +37,7 @@ it.effect("a partially failed native Mica call is rolled back", () =>
         if (value === "mica") throw new Error("native failed after mutation");
       },
     } as BrowserWindow;
-    assert.throws(() => adapter.attachSync(window));
+    assert.throws(() => adapter.attachSync(window, { dark: false, glassOpacity: 80 }));
     assert.equal(material, "none");
   }).pipe(Effect.provide(Adapters.layer)),
 );
