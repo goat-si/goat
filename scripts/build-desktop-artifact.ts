@@ -48,6 +48,8 @@ import {
 } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import {
+  computerUseHelperRefusal,
+  CuaDriverArtifactError,
   stageComputerUseHelper,
   stageCuaDriverExecutable,
   verifyEmbeddedComputerUseHelper,
@@ -1876,6 +1878,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
 
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
+  const computerUseHelper = resolveBooleanFlag(
+    input.computerUseHelper ?? Option.none(),
+    env.computerUseHelper,
+  );
+  const helperRefusal = computerUseHelper && computerUseHelperRefusal({ platform, arch, signed });
+  if (helperRefusal) return yield* new CuaDriverArtifactError({ message: helperRefusal });
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
@@ -1920,10 +1928,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     skipBuild,
     keepStage,
     signed,
-    computerUseHelper: resolveBooleanFlag(
-      input.computerUseHelper ?? Option.none(),
-      env.computerUseHelper,
-    ),
+    computerUseHelper,
     macPasskeys: env.macPasskeys,
     verbose,
     mockUpdates,

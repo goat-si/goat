@@ -277,10 +277,10 @@ A packaged build carries the helper in `GOAT.app/Contents/Helpers` when asked to
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
 ```
 
-Unsigned builds embed an ad-hoc helper and sign GOAT.app ad-hoc around it. The build fails when
-the helper inside GOAT.app is not byte for byte the one it signed, or when a signed GOAT.app and
-its helper carry different teams. Release builds leave the flag off until the helper brokers the
-driver over stdio (#1210).
+The build embeds an ad-hoc helper and signs GOAT.app ad-hoc around it, for arm64 or x64. It fails
+when the helper inside GOAT.app is not byte for byte the one it signed or anything in the app
+carries a Developer ID team. With `--signed` the flag is refused until the helper brokers the
+driver over stdio and GOAT's run-as-Node fuses are off (#1210).
 
 ### Windows computer use helper
 
