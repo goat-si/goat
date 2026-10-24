@@ -238,6 +238,35 @@ describe("DesktopTelemetryPublisher", () => {
   );
 
   it.effect(
+    "replays approved apps, accepts apps-only updates and clears them with the local server",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const watch = (seq: number, apps?: ReadonlyArray<string>) =>
+          ({
+            version: 1,
+            type: "cuaWatch",
+            seq,
+            active: true,
+            ...(apps === undefined ? {} : { apps }),
+          }) as const;
+        const current = publisher.cuaWatchApps.pipe(Stream.runHead);
+        yield* publisher.handleControlForSource("primary", watch(1, ["com.example.notes"]));
+        assert.deepEqual(yield* current, Option.some(["com.example.notes"]));
+        yield* publisher.handleControlForSource("primary", watch(2, ["com.example.new"]));
+        yield* publisher.handleControlForSource("primary", watch(1, ["com.example.old"]));
+        yield* publisher.handleControlForSource("ssh:remote", watch(3, ["com.example.foreign"]));
+        assert.deepEqual(yield* current, Option.some(["com.example.new"]));
+        yield* publisher.handleControlForSource("primary", watch(3));
+        assert.deepEqual(yield* current, Option.some([]));
+        yield* publisher.handleControlForSource("primary", watch(4, ["com.example.notes"]));
+        yield* Fiber.interrupt(primary.fiber);
+        assert.deepEqual(yield* current, Option.some([]));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
     "hands its own server's window capture requests to the helper, and clears them when that server goes away",
     () =>
       Effect.gen(function* () {

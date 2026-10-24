@@ -36,6 +36,22 @@ describe("DesktopTelemetryReceiver", () => {
     expect(nextCuaWatch(on, false)).toEqual({ seq: 3, active: false });
   });
 
+  it("numbers apps-only changes and retains the apps on a retry or reconnect", () => {
+    const first = nextCuaWatch({ seq: 0, active: false }, true, ["com.example.notes"]);
+    expect(first).toEqual({ seq: 1, active: true, apps: ["com.example.notes"] });
+    expect(nextCuaWatch(first, true, ["com.example.notes"])).toBe(first);
+    const changed = nextCuaWatch(first, true, ["com.example.new", "com.example.notes"]);
+    expect(changed).toEqual({
+      seq: 2,
+      active: true,
+      apps: ["com.example.new", "com.example.notes"],
+    });
+    expect(
+      nextCuaWatch(changed, true, ["com.example.notes", "com.example.new", "com.example.new"]),
+    ).toBe(changed);
+    expect(nextCuaWatch(changed, false, [])).toEqual({ seq: 3, active: false, apps: [] });
+  });
+
   it("drops a readiness report from a helper launch older than the one already reported", () => {
     const report = (generation: number) =>
       ({

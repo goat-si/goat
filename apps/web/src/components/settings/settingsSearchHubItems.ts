@@ -31,12 +31,22 @@ export const HUB_SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "hub-devices",
-    title: "OpenCodex devices",
+    title: "Hub devices",
     to: "/settings/hub",
     searchTerms: [
-      "hub devices",
+      "opencodex devices devices on this hub nodes machines",
       "devices parity verify fallback sign-in hub down remote link child hub client opencodex",
       "add device join leave remove disconnect repair relink",
+      "child setup cloud machine bootstrap npm missing blocked degraded",
+    ],
+  },
+  {
+    id: "hub-nodes",
+    title: "Add an SSH host or GOAT server",
+    to: "/settings/hub",
+    searchTerms: [
+      "devices on this hub nodes machines ssh hosts linked goat servers cloud machines phone check routes",
+      "saved on this desktop import",
     ],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;

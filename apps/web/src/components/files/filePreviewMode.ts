@@ -91,6 +91,11 @@ export function workspacePreviewAssetResource(input: {
   });
 }
 
+/** A revision that also changes each time the person refreshes the open file. */
+export function refreshedRevision(revision: string | null, refreshRequestId: number) {
+  return refreshRequestId === 0 ? revision : `${revision ?? ""}:files:${refreshRequestId}`;
+}
+
 export function workspaceMediaPreviewUrl(
   url: string,
   workspaceMutationId: string | null,

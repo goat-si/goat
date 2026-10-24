@@ -8,9 +8,11 @@ import * as Layer from "effect/Layer";
 import * as HostThreadsMcpService from "../../mcp/HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "../../mcp/ThreadLaunchMcpService.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import * as RemoteReportService from "../../remoteReports/RemoteReportService.ts";
 import * as ThreadResultService from "../../threadResults/ThreadResultService.ts";
 import * as GoalController from "./GoalController.ts";
+import * as GoalRecovery from "./GoalRecovery.ts";
 import * as GoalService from "./GoalService.ts";
 import * as GoalStore from "./GoalStore.ts";
 import * as GoalWorkerRuntime from "./GoalWorkerRuntime.ts";
@@ -25,6 +27,7 @@ const layerRuntime = GoalWorkerRuntime.layer.pipe(
 
 const layerCore = GoalController.layer.pipe(
   Layer.provideMerge(GoalService.layer),
+  Layer.provideMerge(GoalRecovery.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(layerRuntime),
   Layer.provideMerge(GoalStore.layer),
 );
