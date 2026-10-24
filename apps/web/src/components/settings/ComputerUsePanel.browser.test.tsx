@@ -1,5 +1,5 @@
 import type { CuaHostStatus, DesktopCuaGrants, DesktopCuaVerification } from "@goat/contracts";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
 import { act, render } from "../../../test/render";
@@ -64,12 +64,20 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     calls: [] as string[],
     grants: { accessibility: granted, screenRecording: granted },
     enabled: options.enabled ?? false,
+    // The settings stream echoes each saved value right away unless a test holds it back.
+    echo: true,
+    refresh: () => {},
     localMac: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
     save: vi.fn(
       async (patch: { enableCua?: boolean; disabledBuiltInSkills?: ReadonlyArray<string> }) => {
         f.calls.push(`save:${JSON.stringify(patch)}`);
+        const value = patch.enableCua;
+        if (value !== undefined && f.echo) {
+          f.enabled = value;
+          queueMicrotask(f.refresh);
+        }
         return null as string | null;
       },
     ),
@@ -89,20 +97,29 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
 }
 type Fixture = ReturnType<typeof setup>;
 
-const panel = (f: Fixture) => (
-  <ComputerUsePanel
-    hostLabel="this Mac"
-    enabled={f.enabled}
-    canConfigure
-    status={f.status}
-    error={null}
-    localMac={f.localMac}
-    disabledSkills={f.disabledSkills}
-    fullAccessAutoAdmit={false}
-    save={f.save}
-    bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
-  />
-);
+/** Re-renders when the fixture's settings stream echoes a save. */
+function Harness({ f }: { f: Fixture }) {
+  const [, setEchoes] = useState(0);
+  useEffect(() => {
+    f.refresh = () => setEchoes((count) => count + 1);
+  }, [f]);
+  return (
+    <ComputerUsePanel
+      hostLabel="this Mac"
+      enabled={f.enabled}
+      canConfigure
+      status={f.status}
+      error={null}
+      localMac={f.localMac}
+      disabledSkills={f.disabledSkills}
+      fullAccessAutoAdmit={false}
+      save={f.save}
+      bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
+    />
+  );
+}
+
+const panel = (f: Fixture) => <Harness f={f} />;
 
 const statusText = () => document.querySelector('[role="status"]')?.textContent ?? null;
 const buttonLabels = () =>
@@ -190,6 +207,7 @@ it("shows Retry setup when the check fails, without opening Advanced, and Retry 
 
 it("Off while waiting for a grant stops setup, even before the settings catch up", async () => {
   const f = setup({ granted: false });
+  f.echo = false;
   await using screen = await render(panel(f));
   const toggle = screen.getByRole("switch", { name: "Computer use" });
   await clickSwitch("Computer use");
@@ -416,22 +434,24 @@ it("a System Settings pane that cannot open says so and keeps the Open button", 
   await open.click();
   expect(f.openGuide).toHaveBeenCalledTimes(2);
 });
-it("an older Off echo arriving after On again does not cancel the new setup", async () => {
+it("On right after Off is saved only once the Off has landed, so its echo cannot cancel the setup", async () => {
   const f = setup({ enabled: true });
+  f.echo = false;
   const off = deferred<string | null>();
-  const on = deferred<string | null>();
   await using screen = await render(panel(f));
-  f.save.mockImplementationOnce(() => off.promise).mockImplementationOnce(() => on.promise);
+  f.save.mockImplementationOnce(() => off.promise);
   await clickSwitch("Computer use");
   await clickSwitch("Computer use");
   await act(() => off.resolve(null));
-  // The settings stream echoes the earlier Off before the newer On.
+  // Both answers could beat the stream; the On save waits for the Off echo instead.
+  expect(f.save).toHaveBeenCalledOnce();
   f.enabled = false;
   await screen.rerender(panel(f));
-  await act(() => on.resolve(null));
+  await vi.waitFor(() => expect(f.save).toHaveBeenLastCalledWith({ enableCua: true }));
   await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
   f.enabled = true;
   await screen.rerender(panel(f));
-  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
   await expect.element(screen.getByRole("switch", { name: "Computer use" })).toBeChecked();
+  expect(statusText()).toMatch(/^Ready/);
 });
