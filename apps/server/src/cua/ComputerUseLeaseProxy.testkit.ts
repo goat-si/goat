@@ -76,6 +76,8 @@ export const harness = Effect.fn(function* (
     readonly humanGate?: Deferred.Deferred<void>;
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
+    /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
+    readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -148,7 +150,10 @@ export const harness = Effect.fn(function* (
     leaseUpdates: Stream.fromQueue(updates).pipe(
       Stream.tap((update) => Queue.offer(taken, update.state)),
     ),
-    onLeaseUpdateApplied: (update) => Queue.offer(applied, update.state).pipe(Effect.asVoid),
+    onLeaseUpdateApplied: (update) =>
+      Queue.offer(applied, update.state).pipe(
+        Effect.andThen(options.afterApplied?.(update) ?? Effect.void),
+      ),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
         toDriver: yield* Queue.unbounded<string>(),

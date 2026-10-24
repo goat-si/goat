@@ -193,4 +193,48 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         yield* Fiber.join(forwarded);
       }),
   );
+
+  it.effect(
+    "an older update applied after another thread's grant was taken does not lift the shared screen",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const held = yield* Deferred.make<void>();
+        let hold = false;
+        const h = yield* harness({
+          humanInput: true,
+          agentInputGate: started,
+          afterApplied: () => (hold ? Deferred.await(held) : Effect.void),
+        });
+        yield* h.push(active());
+        assert.equal(yield* h.applied, "active");
+        // A foreground click waits for its input report while two updates arrive: an older one
+        // without the grant, then the one with it. The older one applies and the queue holds.
+        yield* h.send(
+          call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1, dispatch: "foreground" }),
+        );
+        assert.equal(yield* h.agentCall, "start 1");
+        hold = true;
+        yield* h.push(active());
+        yield* h.push({
+          state: "active",
+          controlId: CONTROL,
+          expiresAt: "1970-01-01T00:30:00.000Z",
+          shared: true,
+        });
+        assert.equal(yield* h.applied, "active");
+        yield* Deferred.succeed(started, undefined);
+        const outcome = yield* h.nextToProvider.pipe(
+          Effect.map((answer) => ({ sent: false, answer })),
+          Effect.raceFirst(h.nextToDriver.pipe(Effect.as({ sent: true, answer: undefined }))),
+        );
+        assert.isFalse(outcome.sent, "the click reached the driver");
+        assert.deepInclude(
+          (outcome.answer?.result as Record<string, unknown> | undefined)
+            ?.structuredContent as object,
+          { detail: "screen_shared" },
+        );
+        yield* Deferred.succeed(held, undefined);
+      }),
+  );
 });

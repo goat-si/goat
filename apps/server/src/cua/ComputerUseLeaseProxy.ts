@@ -130,6 +130,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   /** Another thread holds apps on this screen; see takesScreen. */
   let shared = false;
+  /**
+   * What the latest active update taken says, applied or not: an older update applied after it
+   * must not lift a newer update's restriction, so a call is judged by both (sharedNow).
+   */
+  let sharedTaken = false;
+  const sharedNow = () => shared || sharedTaken;
   let running: Running | undefined;
   /**
    * Held while a lease update or a manifest refresh stops or starts a driver child, so one never
@@ -517,10 +523,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   );
   const take = (update: ComputerUseLeaseUpdate | undefined) =>
     Effect.suspend(() => {
-      // Another thread's grant only denies, so it counts as soon as it is taken; only the ordered
-      // activation clears it.
-      if (update?.state === "active" && update.controlId === options.controlId && update.shared)
-        shared = true;
+      // Another thread's grant only denies, so it counts as soon as it is taken.
+      if (update?.state === "active" && update.controlId === options.controlId)
+        sharedTaken = update.shared === true;
       const fence = update === undefined ? fences.lost() : fences.take(update, apps);
       return Queue.offer(applying, { update, fence });
     });
@@ -638,7 +643,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         scopeMessage(verdict.reason, verdict.app, verdict.opaque, verdict.launch),
         verdict.app,
       );
-    if (shared && takesScreen(message.params?.name, message.params?.arguments))
+    if (sharedNow() && takesScreen(message.params?.name, message.params?.arguments))
       return refusal(id, message.method, "screen_shared", SCREEN_SHARED);
     return undefined;
   });
@@ -902,7 +907,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       isRequest &&
         message?.method === "tools/call" &&
         takesScreen(message.params?.name, message.params?.arguments),
-      () => shared,
+      sharedNow,
       stillCurrent,
       register.pipe(Effect.andThen(current.driver.send(line))),
     );
