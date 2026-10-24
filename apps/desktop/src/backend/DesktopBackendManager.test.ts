@@ -165,6 +165,7 @@ function makeTestInstance(input: MakeInstanceInput) {
       encodedForSource: () => input.desktopTelemetryStream ?? Stream.empty,
       cuaRequests: Stream.empty,
       cuaWatch: Stream.empty,
+      cuaWatchApps: Stream.empty,
       publishCuaReport: () => Effect.void,
       publishCuaReadiness: () => Effect.void,
       publishCuaSafety: () => Effect.void,

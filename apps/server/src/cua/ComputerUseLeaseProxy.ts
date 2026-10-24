@@ -26,7 +26,6 @@
 import {
   type ComputerUseHumanInputSource,
   type ComputerUseOverlayCommand,
-  type ComputerUseControlEnd,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
@@ -40,8 +39,8 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -54,96 +53,27 @@ import {
   replyImageSize,
 } from "./ComputerUseOverlay.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
-
-export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wrong_display";
-
-const REQUEST = goatCallText("computer_use.request");
-
-const DESKTOP_CAPTURE_OFF =
-  "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
-
-export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
-  expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
-  revoked: "A person ended computer use for this thread.",
-  replaced: "A newer turn of this thread took over computer use; this connection is closed.",
-  disabled: "Computer use was turned off on this host.",
-  unauthorized:
-    "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
-  stopped: "A person pressed Stop on this thread. Do not continue on the screen in this turn.",
-  stopped_all: "A person stopped computer use for every thread on this host.",
-  lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
-  helper_restarted:
-    "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
-  // The driver answered about another display than the one GOAT gave it (#1358).
-  wrong_display:
-    "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",
-};
-
-const PAUSE_STATE: Readonly<Record<ComputerUsePauseReason, string>> = {
-  human_input: "A person is using this computer, so computer use is paused",
-  takeover: "A person took over the screen, so computer use is paused",
-  private: "A password or other secret field has focus on this computer, so computer use is paused",
-};
-
-const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
-  human_input:
-    "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
-  takeover:
-    "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
-  private: "Do not retry now; observe the screen again after the person leaves it.",
-};
-
-const pauseMessage = (reason: ComputerUsePauseReason) =>
-  `${PAUSE_STATE[reason]} and your call did not run. ${PAUSE_NEXT[reason]}`;
-
-export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
-  human_input: pauseMessage("human_input"),
-  takeover: pauseMessage("takeover"),
-  private: pauseMessage("private"),
-};
-
-/**
- * Tools that only read. One the driver already had when a pause or Stop cut it off changed
- * nothing on the screen; any other tool, a script or batch included, may have acted.
- */
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
-  "check_permissions",
-  "health_report",
-  "get_guide",
-  "list_apps",
-  "list_windows",
-  "get_accessibility_tree",
-  "get_window_state",
-  "get_screen_size",
-  "get_cursor_position",
-  "verify_state",
-  "zoom",
-  "get_session",
-  "list_sessions",
-  "get_agent_cursor_state",
-]);
-
-export const MAY_HAVE_ACTED =
-  "This call was already with the driver when it was cut off, so it may already have acted. Never resend it unchanged, and observe the window before any later action.";
-export const READ_CUT_OFF =
-  "This read was cut off before it answered and changed nothing; read again before acting.";
-
-/** Why a cut-off call ended, worded without claiming it did not run. */
-export type Interruption =
-  | { readonly _tag: "end"; readonly reason: LeaseEnd }
-  | { readonly _tag: "pause"; readonly reason: ComputerUsePauseReason }
-  | { readonly _tag: "other"; readonly detail: ComputerUseRefusalDetail; readonly message: string };
-
-const scopeMessage = (
-  reason: "app_not_approved" | "desktop_not_approved",
-  app?: string,
-  opaque?: boolean,
-) =>
-  reason === "app_not_approved"
-    ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}, then end your turn.`
-    : opaque
-      ? "This thread may control only its approved apps, and a script or batch cannot be checked against them, so it did not run. Make the calls one at a time, each with the pid and window_id of an approved app's window."
-      : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;
+import {
+  type LeaseEnd,
+  type Interruption,
+  DESKTOP_CAPTURE_OFF,
+  LEASE_END_MESSAGES,
+  PAUSE_STATE,
+  PAUSE_NEXT,
+  PAUSE_MESSAGES,
+  READ_ONLY_TOOLS,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
+  scopeMessage,
+} from "./ComputerUseLeaseMessages.ts";
+export {
+  type LeaseEnd,
+  LEASE_END_MESSAGES,
+  PAUSE_MESSAGES,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
+  type Interruption,
+} from "./ComputerUseLeaseMessages.ts";
 
 export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
@@ -174,6 +104,15 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
+  /**
+   * Identifies the driver's capability manifest file as it is now (#1416), where the driver
+   * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
+   * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
+   * replacement can land in between.
+   */
+  readonly manifestStamp?: () => string | undefined;
+  /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
+  readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -329,9 +268,14 @@ const refusal = (
   );
 };
 
+/** A lease update that stops the current child, by what it means for a call. */
+type Stopping = { readonly pause: ComputerUsePauseReason } | { readonly end: LeaseEnd };
+
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
+  /** The driver's capability manifest as it was when this child started, when known. */
+  readonly manifest?: string | undefined;
 }
 
 const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
@@ -430,6 +374,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: ComputerUsePauseReason | undefined;
   let apps: ReadonlySet<string> | undefined;
   let running: Running | undefined;
+  /**
+   * Held while a lease update or a manifest refresh stops or starts a driver child, so one never
+   * replaces a child the other just started or stopped.
+   */
+  const lifecycle = yield* Semaphore.make(1);
+  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
+  let stopping: Stopping | undefined;
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
@@ -624,9 +575,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
+    // Read before the child starts: a change while it starts is caught by the next call.
+    const manifest = options.manifestStamp?.();
     const child = yield* Scope.fork(scope);
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
-    const current: Running = { driver, scope: child };
+    const current: Running = { driver, scope: child, manifest };
     running = current;
     if (driver.humanInput !== undefined && options.onHumanInput !== undefined) {
       const report = options.onHumanInput;
@@ -656,6 +609,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     }
     yield* readLines(current).pipe(Effect.forkIn(scope));
+    return current;
   });
 
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
@@ -717,15 +671,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   // The server is the authority: the first word for this control confirms it, anything else ends.
   yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) =>
-      update.state !== "ended" && update.controlId !== options.controlId
-        ? end("lost")
-        : update.state === "active"
-          ? activate(update)
+    Stream.runForEach((update) => {
+      const stop: Stopping | undefined =
+        update.state !== "ended" && update.controlId !== options.controlId
+          ? { end: "lost" }
           : update.state === "paused"
-            ? pause(update.reason)
-            : end(update.reason === "unauthorized" ? "lost" : update.reason),
-    ),
+            ? { pause: update.reason }
+            : update.state === "ended"
+              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
+              : undefined;
+      return Effect.gen(function* () {
+        // Known at once, before the update waits for the lock: a call judged meanwhile is
+        // refused before it reaches any child.
+        stopping = stop;
+        yield* lifecycle.withPermits(1)(
+          (stop !== undefined && "end" in stop
+            ? end(stop.end)
+            : stop !== undefined
+              ? pause(stop.pause)
+              : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
+          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
+        );
+      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
+    }),
     Effect.catchCause(() => Effect.void),
     Effect.andThen(end("lost")),
     Effect.forkScoped,
@@ -833,6 +801,36 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     return undefined;
   });
 
+  /**
+   * The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
+   * when it starts, so an idle child is replaced before the call is judged; every check after
+   * this one sees the new child.
+   */
+  const refreshManifest = lifecycle.withPermits(1)(
+    Effect.gen(function* () {
+      const before = running;
+      if (
+        options.manifestStamp === undefined ||
+        before === undefined ||
+        paused !== undefined ||
+        finished !== undefined ||
+        outstanding.size > 0
+      )
+        return undefined;
+      const manifest = options.manifestStamp();
+      if (manifest === undefined || manifest === before.manifest) return undefined;
+      yield* interrupt({
+        _tag: "other",
+        detail: "helper_restarted",
+        message: LEASE_END_MESSAGES.helper_restarted,
+      });
+      // Stopping the old child waits; an expiry or a driver exit may have ended the control.
+      if (paused !== undefined || finished !== undefined) return undefined;
+      // The child this refresh started, which the call may use as its own.
+      return yield* start();
+    }),
+  );
+
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);
     const id = message?.id;
@@ -848,7 +846,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
       // The child this call was admitted under. A pause, takeover or narrowed approval while it
       // waits replaces the child, and the call belongs to what was cut off, never to the next one.
-      const admitted = running;
+      // Only the manifest refresh may replace it for the call.
+      let admitted = running;
+      const refreshed = yield* refreshManifest;
+      if (refreshed !== undefined) admitted = refreshed;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));
@@ -904,19 +905,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // call never reached a driver, so it is refused; once sent, an interruption answers it as
     // cut off instead (interrupt above).
     const current = running;
-    const notSent = (requestId: JsonRpcId) =>
-      finished !== undefined
-        ? refusal(requestId, message?.method, finished, LEASE_END_MESSAGES[finished])
-        : paused !== undefined
-          ? refusal(requestId, message?.method, pausedDetail(paused), PAUSE_MESSAGES[paused])
+    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
+    // holds the lock (#1416), counts as applied: the call never reaches a child.
+    const notSent = (requestId: JsonRpcId) => {
+      const ending =
+        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+      const pausing =
+        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+      return ending !== undefined
+        ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
+        : pausing !== undefined
+          ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
           : refusal(
               requestId,
               message?.method,
               interruptionDetail(lastInterruption),
               interruptionRefusal(lastInterruption),
             );
+    };
     const stillCurrent = () =>
-      running === current && paused === undefined && finished === undefined;
+      running === current &&
+      paused === undefined &&
+      finished === undefined &&
+      stopping === undefined;
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
