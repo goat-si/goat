@@ -75,6 +75,8 @@ export type ComputerUseControlState =
   | {
       readonly _tag: "active";
       readonly expiresAt: DateTime.Utc;
+      /** Host pauses so far, so a proxy that missed one still ends the call it overlapped. */
+      readonly interruptions: Interruptions;
       /** Absent when every app the driver admits is allowed. */
       readonly apps: ReadonlyArray<string> | undefined;
       /** When this state can next change without a signal, epoch ms. */
@@ -82,6 +84,11 @@ export type ComputerUseControlState =
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }
   | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
+
+export interface Interruptions {
+  readonly count: number;
+  readonly last: ComputerUsePauseReason;
+}
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
@@ -263,6 +270,11 @@ const make = Effect.gen(function* () {
     return next as ComputerUseControl;
   });
 
+  let interruptions: Interruptions = { count: 0, last: "human_input" };
+  const interrupted = (last: ComputerUsePauseReason) => {
+    interruptions = { count: interruptions.count + 1, last };
+  };
+
   const controlState = Effect.fn("ComputerUseLeases.controlState")(function* (
     threadId: ThreadId,
     controlId: string,
@@ -283,6 +295,7 @@ const make = Effect.gen(function* () {
       return {
         _tag: "active",
         expiresAt: record.expiresAt,
+        interruptions,
         apps: grant.lease.apps,
         wakeAt: DateTime.toEpochMillis(record.expiresAt),
       };
@@ -292,6 +305,7 @@ const make = Effect.gen(function* () {
     return {
       _tag: "active",
       expiresAt: record.expiresAt,
+      interruptions,
       apps: grants.length === 0 ? [] : appsOf(grants),
       wakeAt: Math.min(
         DateTime.toEpochMillis(record.expiresAt),
@@ -314,6 +328,7 @@ const make = Effect.gen(function* () {
       // A person's input with no agent on the screen is just a person using their computer.
       if (![...controls.values()].some((record) => record.ended === undefined)) return false;
       paused = reason;
+      interrupted(reason);
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
@@ -331,6 +346,7 @@ const make = Effect.gen(function* () {
             detection = { humanInput: report.humanInput, privateMode: report.privateMode };
           }).pipe(Effect.andThen(changed));
         return Effect.sync(() => {
+          if (report.active && !privateHost) interrupted("private");
           privateHost = report.active;
         }).pipe(Effect.andThen(changed));
       }),

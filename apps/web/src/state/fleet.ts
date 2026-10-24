@@ -47,6 +47,8 @@ function sameEnvironments(
         environment.sshAliases.join("\n") === other.sshAliases.join("\n") &&
         environment.os === other.os &&
         environment.machineKind === other.machineKind &&
+        environment.machineId === other.machineId &&
+        environment.machineUserId === other.machineUserId &&
         environment.connected === other.connected
       );
     })
@@ -86,6 +88,8 @@ function fleetEnvironments(
       sshAliases,
       os: serverConfig?.environment.platform.os ?? null,
       machineKind: serverConfig ? (machineKinds.get(environmentId) ?? null) : null,
+      machineId: serverConfig?.environment.machineId ?? null,
+      machineUserId: serverConfig?.environment.machineUserId ?? null,
       connected: connected.has(environmentId),
     });
   }
@@ -106,6 +110,7 @@ export const fleetPageEnvironmentsAtom = Atom.make((get) => fleetEnvironments(ge
 const fleetSummaryAtom = createFleetSummaryAtom({
   threadShellsAtom: environmentThreadShells.threadShellsAtom,
   environmentsAtom: fleetEnvironmentsAtom,
+  primaryEnvironmentIdAtom,
 });
 
 export function useFleetSummary(): FleetSummary {
@@ -212,6 +217,7 @@ function snapshotKey(
       machine.label,
       machine.subtitle,
       machine.boat,
+      machine.reportedAliases,
       machine.answering,
       machine.os,
       machine.machineKind,

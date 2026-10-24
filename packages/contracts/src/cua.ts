@@ -140,6 +140,13 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    /**
+     * How many times the host has paused agents, and why last. A pause and its end can both
+     * land before the proxy reads the control, so a higher count still ends the call in flight.
+     */
+    interruptions: Schema.optionalKey(
+      Schema.Struct({ count: Schema.Int, last: ComputerUsePauseReason }),
+    ),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
