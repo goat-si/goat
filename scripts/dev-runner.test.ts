@@ -771,7 +771,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 });
 
 describe("server dev watch", () => {
-  it("restarts on workspace package sources and never on package roots, where Vite and installs write", () => {
+  it("covers workspace package sources and excludes package roots, where Vite and installs write", () => {
     const repo = NodePath.resolve(import.meta.dirname, "..");
     const serverPackage = JSON.parse(
       NodeFS.readFileSync(NodePath.join(repo, "apps/server/package.json"), "utf8"),
