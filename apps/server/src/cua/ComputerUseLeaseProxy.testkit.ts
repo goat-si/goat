@@ -210,6 +210,7 @@ export const harness = Effect.fn(function* (
     person: Queue.take(people),
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
+    agentCallsQueued: Queue.size(agentCalls),
     revoked,
     log,
     proxy,
