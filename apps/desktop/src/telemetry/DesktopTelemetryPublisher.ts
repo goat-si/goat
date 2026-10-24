@@ -189,7 +189,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
-  const cuaReadinessChanges = yield* PubSub.unbounded<DesktopCuaReadinessReport>();
+  // Readiness is state: a connection that falls behind needs only the newest report.
+  const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
   interface CuaSource {
     readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
     requestId?: string;

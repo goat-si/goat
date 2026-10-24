@@ -1,16 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import {
-  type ComputerUseCapabilities,
-  type DesktopCuaSafetyReport,
-  EnvironmentId,
-} from "@goat/contracts";
+import { type ComputerUseCapabilities, EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
-import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
+import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Environment from "../environment/ServerEnvironment.ts";
@@ -31,41 +25,34 @@ type Signals = ComputerUseCapabilities["signals"];
 const supported = { humanInput: "supported", privateMode: "supported" } satisfies Signals;
 
 /**
- * The real leases, after the desktop host's helper reported these signals in its readiness;
+ * The real leases, on a host whose helper's accepted readiness reported these signals;
  * undefined: a host whose helper never reported.
  */
 const leasesDetecting = (signals: Signals | undefined) =>
-  Layer.unwrap(
-    Effect.gen(function* () {
-      const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
-      const reported = Layer.effectDiscard(
-        Effect.gen(function* () {
-          if (signals === undefined) return;
-          const leases = yield* ComputerUseLeases.ComputerUseLeases;
-          const changed = yield* leases.subscribe;
-          yield* Queue.offer(reports, {
-            version: 1,
-            type: "cuaReadiness",
-            generation: 1,
-            readiness: {
-              grants: { accessibility: "granted", screenCapture: "granted" },
-              helper: "authenticated",
-              capture: "ready",
-              tree: "ready",
-              input: "background",
-              blockers: [],
-              reasons: [],
-            },
-            signals,
-          });
-          yield* PubSub.take(changed);
-        }),
-      );
-      return reported.pipe(
-        Layer.provideMerge(ComputerUseLeases.layer),
-        Layer.provide(DesktopTelemetryReceiver.layerTest({ cuaSafety: Stream.fromQueue(reports) })),
-      );
-    }),
+  ComputerUseLeases.layer.pipe(
+    Layer.provide(
+      DesktopTelemetryReceiver.layerTest({
+        cuaReadiness: Effect.succeed(
+          signals === undefined
+            ? Option.none()
+            : Option.some({
+                version: 1,
+                type: "cuaReadiness",
+                generation: 1,
+                readiness: {
+                  grants: { accessibility: "granted", screenCapture: "granted" },
+                  helper: "authenticated",
+                  capture: "ready",
+                  tree: "ready",
+                  input: "background",
+                  blockers: [],
+                  reasons: [],
+                },
+                signals,
+              } as const),
+        ),
+      }),
+    ),
   );
 
 const requestFrom = (

@@ -328,23 +328,30 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
-  // The desktop host's helper reports a person's own input and secret fields, and its readiness
-  // says which it can detect at all; a standalone server and an older helper report nothing, so
-  // they detect neither (#1235).
-  let detection: ComputerUseDetection = { humanInput: false, privateMode: false };
   let privateHost = false;
   const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
+  // The desktop host's helper reports a person's own input and secret fields, and its readiness
+  // says which it can detect at all; a standalone server and an older helper report nothing, so
+  // they detect neither (#1235). Read on every admission from the receiver's accepted report,
+  // so a downgrade counts from the moment it arrives.
+  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
+    ? desktop.value.cuaReadiness.pipe(
+        Effect.map(
+          Option.match({
+            onNone: () => ({ humanInput: false, privateMode: false }),
+            onSome: ({ signals }) => ({
+              humanInput: signals.humanInput === "supported",
+              privateMode: signals.privateMode === "supported",
+            }),
+          }),
+        ),
+      )
+    : Effect.succeed({ humanInput: false, privateMode: false });
   if (Option.isSome(desktop))
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
         if (report.type === "cuaHumanInput") return pause("human_input");
-        if (report.type === "cuaReadiness")
-          return Effect.sync(() => {
-            detection = {
-              humanInput: report.signals.humanInput === "supported",
-              privateMode: report.signals.privateMode === "supported",
-            };
-          }).pipe(Effect.andThen(changed));
+        if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
           if (report.active && !privateHost) interrupted("private");
           privateHost = report.active;
@@ -380,7 +387,7 @@ const make = Effect.gen(function* () {
     ),
     grants: live(),
     pause,
-    detection: Effect.sync(() => detection),
+    detection,
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),

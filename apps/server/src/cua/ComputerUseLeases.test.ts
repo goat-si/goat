@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  type DesktopCuaReadinessReport,
   type DesktopCuaSafetyReport,
   EnvironmentId,
   Handoff,
@@ -18,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -172,29 +174,43 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+      // What the receiver accepted; it stores a report before publishing it.
+      const accepted = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+      const readiness = (
+        signals: DesktopCuaReadinessReport["signals"],
+      ): DesktopCuaReadinessReport => ({
+        version: 1,
+        type: "cuaReadiness",
+        generation: 1,
+        readiness: {
+          grants: { accessibility: "granted", screenCapture: "granted" },
+          helper: "authenticated",
+          capture: "ready",
+          tree: "ready",
+          input: "background",
+          blockers: [],
+          reasons: [],
+        },
+        signals,
+      });
       yield* Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const signals = yield* leases.subscribe;
         // Nothing reported yet: a host that never says it detects anything detects nothing.
         assert.deepEqual(yield* leases.detection, { humanInput: false, privateMode: false });
-        yield* Queue.offer(reports, {
-          version: 1,
-          type: "cuaReadiness",
-          generation: 1,
-          readiness: {
-            grants: { accessibility: "granted", screenCapture: "granted" },
-            helper: "authenticated",
-            capture: "ready",
-            tree: "ready",
-            input: "background",
-            blockers: [],
-            reasons: [],
-          },
-          signals: { humanInput: "supported", privateMode: "supported" },
-        });
+        const supported = readiness({ humanInput: "supported", privateMode: "supported" });
+        yield* Ref.set(accepted, Option.some(supported));
+        yield* Queue.offer(reports, supported);
         yield* PubSub.take(signals);
         assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: true });
+        // A downgrade counts as soon as the receiver accepts it, before the report is consumed.
+        yield* Ref.set(
+          accepted,
+          Option.some(readiness({ humanInput: "supported", privateMode: "unsupported" })),
+        );
+        assert.deepEqual(yield* leases.detection, { humanInput: true, privateMode: false });
+        yield* Ref.set(accepted, Option.some(supported));
 
         const control = yield* leases.control(thread, Option.none());
         yield* Queue.offer(reports, {
@@ -249,7 +265,10 @@ it.effect(
               Layer.mergeAll(
                 database,
                 NodeServices.layer,
-                DesktopTelemetryReceiver.layerTest({ cuaSafety: Stream.fromQueue(reports) }),
+                DesktopTelemetryReceiver.layerTest({
+                  cuaSafety: Stream.fromQueue(reports),
+                  cuaReadiness: Ref.get(accepted),
+                }),
               ),
             ),
           ),

@@ -659,6 +659,94 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       }),
     ),
   );
+
+  it.effect("needs a fresh check after the helper's grants were taken away and given back", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+        });
+        assert.isTrue((yield* test.verify).verified);
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const proven = test.readiness.at(-1);
+        assert.isTrue(proven ? computerUseReady(proven.readiness) : false);
+
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+        yield* test.answerAsHelper({ granted: false });
+        yield* test.request("revoked");
+        assert.equal((yield* test.next).status, "unavailable");
+        yield* test.answerAsHelper({ granted: true });
+        yield* test.request("given-back");
+        assert.equal((yield* test.next).status, "ready");
+        const running = test.readiness.at(-1);
+        assert.equal(running?.readiness.helper, "authenticated");
+        assert.equal(running?.readiness.capture, "pending");
+        assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+
+  it.effect("drops earlier proofs when a later check fails before reading a window", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const tools: Record<string, ReturnType<typeof toolResult>> = helperTools({
+          bundle: HELPER_ID,
+          parent: HELPER_PID,
+        });
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true }, tools });
+        assert.isTrue((yield* test.verify).verified);
+        // The driver now runs outside the helper's permissions.
+        tools.check_permissions = toolResult({
+          accessibility: true,
+          screen_recording: true,
+          source: { attribution: "process" },
+        });
+        const failed = yield* test.verify;
+        assert.equal(failed.steps.at(-1)?.id, "permissions");
+        const after = test.readiness.at(-1);
+        assert.equal(after?.readiness.capture, "pending");
+        assert.equal(after?.readiness.tree, "unavailable");
+        assert.include(after?.readiness.reasons ?? [], failed.steps.at(-1)?.detail);
+
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const running = test.readiness.at(-1);
+        assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+});
+
+describe("DesktopCuaDriver readiness on Windows", () => {
+  it.effect(
+    "reports the helper's own refusal and its typed cause, and clears both on recovery",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const detail = "GOAT runs in Windows Session 0 (a service or SSH session).";
+          const test = yield* fixture({
+            platform: "win32",
+            helper: { granted: false, detail, blocker: "noInteractiveDesktop" },
+          });
+          yield* test.request("session-zero");
+          assert.equal((yield* test.next).status, "unavailable");
+          const refused = test.readiness.at(-1)?.readiness;
+          assert.deepEqual(refused?.blockers, ["noInteractiveDesktop"]);
+          assert.include(refused?.reasons ?? [], detail);
+
+          yield* test.answerAsHelper({ granted: true });
+          yield* test.request("desktop");
+          assert.equal((yield* test.next).status, "ready");
+          const recovered = test.readiness.at(-1)?.readiness;
+          assert.deepEqual(recovered?.blockers, []);
+          assert.notInclude(recovered?.reasons ?? [], detail);
+        }),
+      ),
+  );
 });
 
 describe("DesktopCuaDriver when the helper cannot be used", () => {

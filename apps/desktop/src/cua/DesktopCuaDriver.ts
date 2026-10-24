@@ -1,4 +1,5 @@
 import {
+  type ComputerUseReadiness,
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
@@ -40,6 +41,7 @@ import {
   withGrants,
   withProof,
   withRunning,
+  withoutProof,
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
@@ -76,7 +78,12 @@ interface NativeHost {
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
 /** detail: why a Windows desktop is not ready, in onboarding's words; Windows has no grant to give. */
-type Grants = { accessibility: boolean; screenRecording: boolean; readonly detail?: string };
+type Grants = {
+  accessibility: boolean;
+  screenRecording: boolean;
+  readonly detail?: string;
+  readonly blocker?: ComputerUseReadiness["blockers"][number];
+};
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
@@ -622,7 +629,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
     if (selected?.kind === "helper") {
       helperSeen = true;
-      yield* noteHelper((state) => withGrants(state, grants, false));
+      // A check stands on its own reads: until it proves capture and the tree again, they are not.
+      yield* noteHelper((state) => withoutProof(withGrants(state, grants, false)));
     }
     const missing = [
       ...(grants.accessibility ? [] : ["Accessibility"]),
@@ -787,6 +795,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     return done();
   }).pipe(
     Effect.scoped,
+    // A check that stopped before reading a window says why nothing is proven.
+    Effect.tap((result) => {
+      const early = result.steps.find(
+        (step) =>
+          !step.ok &&
+          (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
+      );
+      return early ? noteHelper((state) => withoutProof(state, early.detail)) : Effect.void;
+    }),
     // Only the check's own generation is stopped here: nothing else holds it. A driver that was
     // already serving an agent is retired only by the restart step, which reports "stopped".
     Effect.ensuring(

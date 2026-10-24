@@ -1,20 +1,24 @@
 import type { ComputerUseCapabilities, ComputerUseReadiness } from "@goat/contracts";
 
 type Readiness = ComputerUseReadiness;
+type Blocker = Readiness["blockers"][number];
 
 /**
  * What this host's computer use helper has shown so far. Capture and the tree count only once a
- * real read proved them (D10), and stay proven across helper launches until a later check says
- * otherwise; the grants are whatever the last grant check answered.
+ * real read proved them (D10), and only until the grants change or a later check fails; then
+ * they need fresh proof.
  */
 export interface HelperReadinessState {
   readonly grants: Readiness["grants"];
   readonly running: boolean;
   readonly capture: Readiness["capture"];
   readonly tree: Readiness["tree"];
-  readonly blockers: Readiness["blockers"];
+  /** What the last check found blocking capture, such as a locked screen. */
+  readonly blockers: ReadonlyArray<Blocker>;
   /** Why the last check could not prove capture or the tree. */
   readonly details: ReadonlyArray<string>;
+  /** Why the helper says this desktop cannot be used at all (Windows), until it says otherwise. */
+  readonly desktop?: { readonly detail: string; readonly blocker?: Blocker };
 }
 
 /** Neither the macOS nor the Windows helper raises the safety signals yet (#1235). */
@@ -32,22 +36,54 @@ export const initialHelperReadiness: HelperReadinessState = {
   details: [],
 };
 
+/** Forgets capture and tree proofs; detail says why the check that would renew them failed. */
+export const withoutProof = (
+  state: HelperReadinessState,
+  detail?: string,
+): HelperReadinessState => ({
+  ...state,
+  capture: "pending",
+  tree: "unavailable",
+  blockers: [],
+  details: detail === undefined ? [] : [detail],
+});
+
 /**
  * A grant check only answers on or off. Off right after asking means the person has not
- * answered yet; off without asking is not known to be a refusal.
+ * answered yet; off without asking is not known to be a refusal. A grant that changed voids
+ * what was proven under the old one.
  */
 export const withGrants = (
   state: HelperReadinessState,
-  grants: { readonly accessibility: boolean; readonly screenRecording: boolean },
+  answer: {
+    readonly accessibility: boolean;
+    readonly screenRecording: boolean;
+    readonly detail?: string;
+    readonly blocker?: Blocker;
+  },
   prompted: boolean,
 ): HelperReadinessState => {
-  const grant = (on: boolean) => (on ? "granted" : prompted ? "pending" : "unknown");
+  const grant = (on: boolean): Readiness["grants"]["accessibility"] =>
+    on ? "granted" : prompted ? "pending" : "unknown";
+  const grants = {
+    accessibility: grant(answer.accessibility),
+    screenCapture: grant(answer.screenRecording),
+  };
+  const changed =
+    grants.accessibility !== state.grants.accessibility ||
+    grants.screenCapture !== state.grants.screenCapture;
+  const { desktop: _previous, ...rest } = changed ? withoutProof(state) : state;
   return {
-    ...state,
-    grants: {
-      accessibility: grant(grants.accessibility),
-      screenCapture: grant(grants.screenRecording),
-    },
+    ...rest,
+    grants,
+    ...(answer.detail === undefined
+      ? {}
+      : {
+          desktop: {
+            detail: answer.detail,
+            ...(answer.blocker === undefined ? {} : { blocker: answer.blocker }),
+          },
+        }),
   };
 };
 
@@ -81,6 +117,12 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
     ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
   ];
   const unproven = state.capture === "pending" && state.details.length === 0;
+  const blockers = [
+    ...new Set([
+      ...state.blockers,
+      ...(state.desktop?.blocker === undefined ? [] : [state.desktop.blocker]),
+    ]),
+  ];
   return {
     grants: state.grants,
     helper: state.running ? "authenticated" : "unauthenticated",
@@ -89,11 +131,14 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
     // The driver delivers input to a window without raising it on macOS and Windows, but only
     // while it runs.
     input: state.running ? "background" : "unavailable",
-    blockers: state.blockers,
+    blockers,
     reasons: [
-      ...(off.length === 0
-        ? []
-        : [`${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`]),
+      // The helper's own refusal names the real cause; the grant pair it zeroed would mislead.
+      ...(state.desktop !== undefined
+        ? [state.desktop.detail]
+        : off.length === 0
+          ? []
+          : [`${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`]),
       ...(state.running ? [] : [`${principal} is not running computer use.`]),
       ...state.details,
       ...(unproven

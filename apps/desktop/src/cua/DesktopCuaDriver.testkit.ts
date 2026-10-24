@@ -1,6 +1,7 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
+  ComputerUseReadiness,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
   DesktopCuaReadinessReport,
@@ -36,6 +37,13 @@ export const HOST_PID = 4242;
 export const HELPER_PID = 5151;
 export const HELPER_ID = "codes.t3.host-test.computer-use";
 export const HELPER_BUNDLE = "/Helpers/GOAT Computer Use.app";
+
+/** The helper's answer to a grant check; detail and blocker are its Windows refusal. */
+export interface HelperAnswer {
+  readonly granted: boolean;
+  readonly detail?: string;
+  readonly blocker?: ComputerUseReadiness["blockers"][number];
+}
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
   text: "",
@@ -83,7 +91,7 @@ export const fixture = Effect.fn(function* (
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
-    helper?: { readonly granted: boolean; readonly detail?: string } | "unusable";
+    helper?: HelperAnswer | "unusable";
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
   } = {},
@@ -111,6 +119,7 @@ export const fixture = Effect.fn(function* (
   const prepared = new Map<string, { scope: string; hostBundleIds: ReadonlyArray<string> }>();
   const holdMonitor = options.hold === "monitor";
   let allowed = !options.denyPermissions;
+  let helperAnswer = typeof options.helper === "object" ? options.helper : undefined;
   let starts = 0;
   let stops = 0;
   let destroys = 0;
@@ -144,11 +153,13 @@ export const fixture = Effect.fn(function* (
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
-      const helper = typeof options.helper === "object" ? options.helper : undefined;
-      const granted = helper?.granted ?? false;
-      return helper?.detail === undefined
-        ? { accessibility: granted, screenRecording: granted }
-        : { accessibility: granted, screenRecording: granted, detail: helper.detail };
+      const granted = helperAnswer?.granted ?? false;
+      return {
+        accessibility: granted,
+        screenRecording: granted,
+        ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
+        ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
+      };
     },
     helperBundlePath: async () =>
       options.helper === "unusable"
@@ -365,6 +376,11 @@ export const fixture = Effect.fn(function* (
     denyPermissions: Effect.sync(() => {
       allowed = false;
     }),
+    /** What the helper answers to its next grant check. */
+    answerAsHelper: (answer: HelperAnswer) =>
+      Effect.sync(() => {
+        helperAnswer = answer;
+      }),
     crash: Effect.sync(() => exits.at(-1)?.()),
     constructors,
     launches,
