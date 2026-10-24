@@ -903,8 +903,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: sendContextPreviewAnnotations,
         direct: directAnnotation,
       });
-    // A direct "send annotation" writes the draft and sends in the same tick; the reference
-    // must be in the text now, not after the next render.
+    // Include a same-tick annotation reference before React renders its draft.
     const promptForSend = directAnnotation
       ? ensureInlineContextReferences(promptRef.current, [
           previewAnnotationContextReference(directAnnotation.annotation),
@@ -914,6 +913,7 @@ export function useComposerSend(input: ComposerSendInput) {
       text: promptForSend,
       records: composerThreadContexts,
       environmentId,
+      hostRoutingEnvironmentId: sendCtx?.threadContextRoutingEnvironmentId,
     })[0];
     if (strandedThread) {
       const owner =

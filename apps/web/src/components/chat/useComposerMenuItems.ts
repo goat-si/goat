@@ -1,3 +1,7 @@
+import { useMemo } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { environmentCatalog } from "~/connection/catalog";
+import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
@@ -102,6 +106,20 @@ export function useComposerMenuItems({
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
+  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const sshHostsByEnvironment = useMemo(() => {
+    const hosts = new Map<EnvironmentId, string>();
+    for (const threadEnvironmentId of catalog.entries.keys()) {
+      const route = resolveThreadContextRoute({
+        agentEnvironmentId: environmentId,
+        threadEnvironmentId,
+        entries: catalog.entries,
+        isDesktopRenderer: window.desktopBridge !== undefined,
+      });
+      if (route.kind === "ssh") hosts.set(threadEnvironmentId, route.host);
+    }
+    return hosts;
+  }, [catalog.entries, environmentId]);
   const activeShell = environmentThreadShells.find(
     (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
   );
@@ -185,6 +203,7 @@ export function useComposerMenuItems({
         ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
+          sshHostsByEnvironment,
           environmentId,
           excludeThreadId: activeThreadId,
           query: composerTrigger.query,

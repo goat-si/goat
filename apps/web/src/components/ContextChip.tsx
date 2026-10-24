@@ -33,6 +33,7 @@ const contextChipVariants = cva(
       state: {
         unresolved: "border-dashed",
         invalid: "",
+        unavailable: "",
       },
     },
     compoundVariants: [
@@ -59,6 +60,11 @@ const contextChipVariants = cva(
         className:
           "[--context-chip-border:color-mix(in_oklab,var(--context-chip-accent)_34%,var(--contrast-border))] [--context-chip-border-hover:color-mix(in_oklab,var(--context-chip-accent)_48%,var(--contrast-border))] [--context-chip-foreground:color-mix(in_oklab,var(--context-chip-accent)_22%,var(--contrast-foreground))] border-(--context-chip-border) bg-(--context-chip-accent)/11 text-(--context-chip-foreground) [button:enabled&,a&]:hover:border-(--context-chip-border-hover) [button:enabled&,a&]:hover:bg-(--context-chip-accent)/17",
       },
+      {
+        state: "unavailable",
+        className:
+          "border-border/70 bg-muted text-muted-foreground [button:enabled&,a&]:hover:border-border [button:enabled&,a&]:hover:bg-muted/80",
+      },
       { state: "unresolved", className: "text-foreground" },
       { state: "invalid", className: "border-destructive/35 bg-destructive/8 text-destructive" },
     ],
@@ -69,7 +75,7 @@ type ContextChipKind = NonNullable<VariantProps<typeof contextChipVariants>["kin
 
 interface ContextChipProps extends useRender.ComponentProps<"span"> {
   kind?: ContextChipKind;
-  state?: "unresolved" | "invalid";
+  state?: "unresolved" | "invalid" | "unavailable";
 }
 
 function ContextChip({ className, kind, state, render, ...props }: ContextChipProps) {
