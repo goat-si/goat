@@ -6,7 +6,11 @@ import { render } from "../../../test/render";
 
 vi.mock(import("~/assets/assetUrls"), async (original) => ({
   ...(await original()),
-  useAssetUrlState: () => ({ _tag: "Success", url: "https://assets.test/page.html?sig=1" }),
+  useAssetUrlState: () => ({
+    _tag: "Success" as const,
+    url: "https://assets.test/page.html?sig=1",
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  }),
   useAssetUrlRefresh: () => async () => null,
 }));
 
