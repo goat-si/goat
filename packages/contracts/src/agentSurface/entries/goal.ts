@@ -71,6 +71,8 @@ export const goalEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "GoalService.setPaused returns the goal unchanged when paused is already true; only a changed pause flag advances generation through a compare-and-swap.",
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
   "goal.resume": entry({
@@ -89,6 +91,8 @@ export const goalEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "GoalService.setPaused returns the goal unchanged when paused is already false; only a changed pause flag advances generation through a compare-and-swap.",
     annotations: { idempotentHint: true, openWorldHint: false },
   }),
   "goal.delete": entry({
@@ -107,6 +111,8 @@ export const goalEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "Graceful deletion marks the goal id with COALESCE(deletion_requested_at), preserving its first deletion request; force removes only that id. A removed goal is not found, and threads, worktrees and branches stay.",
     annotations: { idempotentHint: false, openWorldHint: true },
   }),
 } as const;

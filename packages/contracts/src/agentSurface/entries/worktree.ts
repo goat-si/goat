@@ -11,6 +11,8 @@ export const worktreeEntries = {
       "Move this agent thread into a new git worktree and branch. The provider session detaches and this turn ends: call it last, and pass continuationPrompt to queue the remaining work. Setup and the continuation can fail after the move succeeds; check their statuses. The worktree outlives the thread. For a separate agent use goat_thread_launch with workspaceStrategy.",
     guide:
       "Run inside a GOAT thread. The thread must not already have a worktree binding. Use goat_worktree_status first to check it.\n\nThe handoff creates a branch and worktree, optionally using the base branch's remote, then repoints this thread. Project setup runs by default; pass runSetupScript:false to skip it.\n\nFor a separate agent bound to a new or existing worktree, use goat_thread_launch with workspaceStrategy.\n\nChanging the workspace detaches the provider session shortly after the handoff is recorded. Call this as the last action of the turn. Pass continuationPrompt with the remaining work to queue the next message and start a turn inside the worktree with the conversation preserved. Without a continuation, the thread stays idle until its next message. Check the returned continuation status for a queue failure. Deleting the thread does not automatically remove the worktree.",
+    idempotencyReason:
+      "WorktreeMcpService.handoff serializes per calling thread, refuses an already-bound worktree or existing branch, and rechecks binding before commit. Repeating cannot bind a second worktree or queue a second continuation.",
     effect: "destructive",
     capability: "worktree.create",
     hostRoutable: false,
@@ -120,6 +122,8 @@ export const worktreeEntries = {
       "Sweep stale git worktrees of registered projects, keeping branches. Default dryRun:true only reports; pass dryRun:false to remove. A sweep keeps busy worktrees, unsaved changes, and unpreserved commits. Unbound worktrees qualify only inside GOAT's worktrees folder. Supports host.",
     guide:
       "A bound worktree qualifies when every thread has finished (completed, failed, interrupted, or cancelled) or is archived, and none is busy. An unbound worktree qualifies only in GOAT's worktrees folder. It must have no uncommitted changes, and its commits must be held by remote refs, another local branch, or a merged pull request. Branches stay.\n\nOnly registered GOAT project repositories are swept. If supplied, repo must be an absolute path within one. dryRun defaults to true and only reports; dryRun:false removes eligible worktrees and needs a full-access/default caller. Returns removed and kept entries with reasons; during a dry run, removed means candidates for removal. Main checkouts are left out.\n\nPass host from goat_ssh_host_list or goat_host_link_list to use that machine's GOAT environment. Host calls require a live caller permitted to reach other machines with this machine's credentials.",
+    idempotencyReason:
+      "WorktreeInventoryService.cleanup rescans current worktrees, skips protected/busy/unsaved ones and removes only eligible entries. Removed entries disappear; kept failures must be rechecked on a later sweep, not replayed.",
     effect: "destructive",
     capability: "worktree.create",
     hostRoutable: true,

@@ -64,7 +64,7 @@ const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"]
 
 const ProviderHomeRequestTool = Tool.make(agentSurfaceRegistry["provider.home_request"].name, {
   description: agentSurfaceRegistry["provider.home_request"].description,
-  parameters: ProviderHomeRequestInput,
+  parameters: withClientRequestId(ProviderHomeRequestInput),
   success: ProviderHomeRequestResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -90,7 +90,7 @@ const ProviderHostMatrixTool = Tool.make(agentSurfaceRegistry["provider.host_mat
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.host_matrix"]));
 const ProviderSyncTool = Tool.make(agentSurfaceRegistry["provider.sync"].name, {
   description: agentSurfaceRegistry["provider.sync"].description,
-  parameters: ProviderSyncInput,
+  parameters: withClientRequestId(ProviderSyncInput),
   success: ProviderSyncResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -128,7 +128,7 @@ const ProviderAddableListTool = Tool.make(agentSurfaceRegistry["provider.addable
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.addable_list"]));
 const ProviderSetupOpenTool = Tool.make(agentSurfaceRegistry["provider.setup_open"].name, {
   description: agentSurfaceRegistry["provider.setup_open"].description,
-  parameters: ProviderSetupOpenInput,
+  parameters: withClientRequestId(ProviderSetupOpenInput),
   success: ProviderSetupOpenResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -136,7 +136,7 @@ const ProviderSetupOpenTool = Tool.make(agentSurfaceRegistry["provider.setup_ope
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.setup_open"]));
 const ProviderLoginStartTool = Tool.make(agentSurfaceRegistry["provider.login_start"].name, {
   description: agentSurfaceRegistry["provider.login_start"].description,
-  parameters: ProviderLoginStartInput,
+  parameters: withClientRequestId(ProviderLoginStartInput),
   success: ProviderLoginResultJson,
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,
@@ -208,7 +208,7 @@ const CloudHoldersTool = Tool.make(agentSurfaceRegistry["cloud_agent.holders"].n
 const CloudLaunchTool = Tool.make(agentSurfaceRegistry["cloud_agent.launch"].name, {
   ...cloudTool,
   description: agentSurfaceRegistry["cloud_agent.launch"].description,
-  parameters: CloudLaunchInput,
+  parameters: withClientRequestId(CloudLaunchInput),
   success: CloudLaunchMcpResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_agent.launch"]));
 

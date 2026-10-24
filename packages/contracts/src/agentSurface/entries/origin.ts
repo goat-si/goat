@@ -42,6 +42,8 @@ export const originEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "afterSequence acknowledges only reports at or below that fixed sequence; repeating the deletion cannot acknowledge newer reports. Calls must continue reading fresh reports and run state rather than replay a stored page.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,

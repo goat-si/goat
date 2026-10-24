@@ -38,6 +38,8 @@ export const hostEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "FleetHostStates.cordon upserts one row by host, setting cordoned and reason while preserving an existing drain; repeating does not launch work.",
     annotations: {
       idempotentHint: true,
       openWorldHint: true,
@@ -59,6 +61,8 @@ export const hostEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "FleetHostStates.uncordon deletes the single state row by host; a repeat removes no additional state and starts no work.",
     annotations: {
       idempotentHint: true,
       openWorldHint: true,
@@ -80,6 +84,8 @@ export const hostEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "The handler only calls FleetHostStates.cordon with draining:true, upserting one host row. Repeating sets the same flags and does not launch evacuation work.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,
