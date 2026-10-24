@@ -164,13 +164,16 @@ const handlers = {
               "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
           });
         }
-        // Resolve consent and agent connectivity before booting or registering a session.
+        // Resolve agent connectivity before booting or registering a session.
         if (!(yield* devices.agentReadinessIfSupported(input.hostId ?? LOCAL_DEVICE_HOST_ID))) {
           return yield* new DeviceToolUnavailableError({
             reason:
               "Agent device tools need device support turned on in Settings → Integrations → Devices and an available simulator platform on this host. Only a person can change those settings; ask the user.",
           });
         }
+        // Starting agent tools can wait, and admission may replay an earlier result without
+        // running the checks below, so access is checked again right before admission.
+        yield* authorizeThread(scope.thread.threadId);
         yield* McpToolAccess.admit(input);
         // Android boot replaces an AVD name with a serial; replay must precede discovery by id.
         const target = yield* pickDevice(state.devices, input);

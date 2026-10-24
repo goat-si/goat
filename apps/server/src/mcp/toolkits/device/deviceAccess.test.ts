@@ -58,11 +58,13 @@ interface Fixture {
   readonly boot?: Effect.Effect<void>;
   /** Runs before agent-device configuration is written for a device. */
   readonly configure?: Effect.Effect<void>;
+  /** Runs each time agent tools are made ready. */
+  readonly agentReady?: Effect.Effect<void>;
   readonly projectLookupFails?: boolean;
 }
 
 // A local iOS host that records agent tool starts, device attaches, and agent-device configuration.
-const makeDeviceService = ({ activity, boot, configure }: Fixture) =>
+const makeDeviceService = ({ activity, boot, configure, agentReady }: Fixture) =>
   Effect.gen(function* () {
     let booted = boot === undefined;
     const ready: DeviceHost.DeviceHostReady = {
@@ -98,13 +100,15 @@ const makeDeviceService = ({ activity, boot, configure }: Fixture) =>
       platformAvailability: (platform) => Effect.succeed({ platform, available: true }),
       ensureReady: () => Effect.succeed(ready),
       ensureAgentReady: () =>
-        Effect.sync(() => {
-          activity.push("agent");
-          return {
-            ...ready,
-            agentDevice: { baseUrl: "http://agent.test", token: "test", entryPath: "/agent" },
-          };
-        }),
+        (agentReady ?? Effect.void).pipe(
+          Effect.map(() => {
+            activity.push("agent");
+            return {
+              ...ready,
+              agentDevice: { baseUrl: "http://agent.test", token: "test", entryPath: "/agent" },
+            };
+          }),
+        ),
       current: Effect.succeed(ready),
       stopAgent: Effect.void,
       stop: Effect.void,
@@ -340,6 +344,47 @@ describe("device tools authorize the calling thread's project at each call", () 
             activity,
             configure: Deferred.succeed(configureStarted, undefined).pipe(
               Effect.andThen(Deferred.await(finishConfigure)),
+            ),
+          }),
+        ),
+      );
+    });
+  });
+
+  it.effect("access revoked while a keyed retry waits for agent tools refuses the replay", () => {
+    const activity: Array<string> = [];
+    let holdAgentTools = false;
+    return Effect.gen(function* () {
+      const agentStarted = yield* Deferred.make<void>();
+      const finishAgent = yield* Deferred.make<void>();
+      return yield* Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const keyedOpen = { deviceId: "SIM-1", clientRequestId: "open-retry" };
+        const first = yield* call(threads.granted, "goat_device_open", keyedOpen);
+        expect(first.isError, JSON.stringify(first.content)).toBe(false);
+
+        holdAgentTools = true;
+        const retrying = yield* call(threads.granted, "goat_device_open", keyedOpen).pipe(
+          Effect.forkChild,
+        );
+        yield* Deferred.await(agentStarted);
+        yield* settings.updateSettings({
+          projectSettingsOverrides: { [granted]: { enableAgentDeviceAccess: false } },
+        });
+        yield* Deferred.succeed(finishAgent, undefined);
+        const retried = yield* Fiber.join(retrying);
+        expect(refusal(retried)).toContain(AGENT_DEVICE_ACCESS_OFF);
+        expect(JSON.stringify(retried)).not.toContain("/host.json");
+      }).pipe(
+        Effect.provide(
+          layer(envOffProjectOn, {
+            activity,
+            agentReady: Effect.suspend(() =>
+              holdAgentTools
+                ? Deferred.succeed(agentStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(finishAgent)),
+                  )
+                : Effect.void,
             ),
           }),
         ),
