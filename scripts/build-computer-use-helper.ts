@@ -431,7 +431,8 @@ export const buildComputerUseHelperCommand = Command.make(
           path.join(repoRoot, "apps/desktop/.computer-use-helper"),
         ),
         identity: Option.getOrUndefined(identity),
-        adHoc,
+        // Developer ID unless --ad-hoc is given (#1333); chooseSigningIdentity keeps it dev-only.
+        adHoc: Option.getOrElse(adHoc, () => false),
         notaryProfile: Option.getOrUndefined(notaryProfile),
       });
       yield* Effect.log(

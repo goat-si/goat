@@ -45,14 +45,19 @@ const SIGN_INPUT = {
 };
 
 describe("build-computer-use-helper", () => {
-  it.effect("parses a default build without --ad-hoc (#1349)", () =>
+  it.effect("parses a build with and without --ad-hoc (#1349, #1371)", () =>
     Effect.gen(function* () {
       // Off macOS the build stops at its platform check, so reaching it proves the flags parsed.
-      const exit = yield* Effect.exit(
-        Command.runWith(buildComputerUseHelperCommand, { version: "0.0.0" })(["--channel", "dev"]),
-      );
-      const message = String(Exit.isFailure(exit) ? exit.cause : "");
-      assert.include(message, "The helper builds on macOS only.");
+      for (const args of [
+        ["--channel", "dev"],
+        ["--channel", "dev", "--ad-hoc"],
+      ]) {
+        const exit = yield* Effect.exit(
+          Command.runWith(buildComputerUseHelperCommand, { version: "0.0.0" })(args),
+        );
+        const message = String(Exit.isFailure(exit) ? exit.cause : "");
+        assert.include(message, "The helper builds on macOS only.");
+      }
     }).pipe(
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.provide(NodeServices.layer),
