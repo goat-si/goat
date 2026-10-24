@@ -959,16 +959,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       message?.method === "tools/call" &&
       postsInput(typeof message.params?.name === "string" ? message.params.name : "");
     if (posts) yield* inputStarted(JSON.stringify(id));
-    if (!stillCurrent()) return;
     // Checked last, in one step with the write: see sendUnlessShared.
-    const refused = yield* sendUnlessShared(
+    const outcome = yield* sendUnlessShared(
       isRequest &&
         message?.method === "tools/call" &&
         takesScreen(message.params?.name, message.params?.arguments),
       () => shared,
+      stillCurrent,
       current.driver.send(line),
     );
-    if (refused && id !== undefined && id !== null) {
+    if (outcome === "shared" && id !== undefined && id !== null) {
       const key = JSON.stringify(id);
       const request = outstanding.get(key);
       outstanding.delete(key);

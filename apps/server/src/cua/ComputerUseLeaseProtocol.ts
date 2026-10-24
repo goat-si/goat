@@ -98,15 +98,21 @@ export const replyPlacement = Effect.fnUntraced(function* (
 });
 
 /**
- * Writes a call to the driver unless it takes the screen while another thread shares it; true
- * when refused. The check and the write run with no scheduler yield between them, so the update
- * that makes the screen shared cannot land in between and let a foreground call out anyway.
+ * Writes a call to the driver unless its child is no longer current ("stale": the interrupt that
+ * replaced it answers the call) or it takes the screen while another thread shares it ("shared").
+ * The checks and the write run with no scheduler yield between them, so neither a pause nor the
+ * update that makes the screen shared can land in between and let the call out anyway.
  */
 export const sendUnlessShared = (
   takesScreen: boolean,
   shared: () => boolean,
+  current: () => boolean,
   send: Effect.Effect<void>,
 ) =>
   Effect.suspend(() =>
-    takesScreen && shared() ? Effect.succeed(true) : send.pipe(Effect.as(false)),
+    !current()
+      ? Effect.succeed("stale" as const)
+      : takesScreen && shared()
+        ? Effect.succeed("shared" as const)
+        : send.pipe(Effect.as("sent" as const)),
   ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
