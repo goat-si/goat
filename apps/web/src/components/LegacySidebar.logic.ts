@@ -5,6 +5,7 @@ import type {
 } from "@goat/client-runtime/connection";
 import type { EnvironmentId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
+import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 import { isDesktopLocalConnectionTarget, isWslConnectionTarget } from "../connection/desktopLocal";
@@ -66,6 +67,26 @@ export function createProjectsViewEnvironmentAtoms(input: {
       : next;
   });
   return { metadataAtom, connectionPhasesAtom };
+}
+
+/**
+ * The project group each registered project belongs to, by scoped project key. Member refs
+ * include duplicate registrations of one folder, which share their winner's display row.
+ */
+export function projectsViewProjectKeyByScopedRef(
+  projects: ReadonlyArray<Pick<SidebarProjectSnapshot, "projectKey" | "memberProjectRefs">>,
+): ReadonlyMap<string, string> {
+  return new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (ref) =>
+          [
+            scopedProjectKey(scopeProjectRef(ref.environmentId, ref.projectId)),
+            project.projectKey,
+          ] as const,
+      ),
+    ),
+  );
 }
 
 /** Forks are standalone chats; subagents belong to their parent's Agents surface. */

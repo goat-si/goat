@@ -1,16 +1,18 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { sortPinnedThreadsByOrderKey } from "@goat/client-runtime/state/thread-sort";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import {
   PrimaryConnectionTarget,
   type EnvironmentConnectionPresentation,
 } from "@goat/client-runtime/connection";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import {
   createProjectsViewEnvironmentAtoms,
   isProjectsViewPinnedThread,
   isProjectsViewListedThread,
+  projectsViewProjectKeyByScopedRef,
   resolveProjectsViewPreview,
   resolveProjectConnectionStatus,
   resolveProjectsViewProjectConnectionStatus,
@@ -76,6 +78,35 @@ describe("Projects view pins", () => {
       "remote:last",
     ]);
     expect(resolveProjectsViewThreadOrder(orderedPins, [])).toEqual(orderedPins);
+  });
+});
+
+describe("Projects view pinned section", () => {
+  it("keeps a pin whose project is an older duplicate registration of the same folder", () => {
+    const environmentId = EnvironmentId.make("home-mac");
+    const registration = (id: string, updatedAt: string) => ({
+      id: ProjectId.make(id),
+      environmentId,
+      title: "goat",
+      workspaceRoot: "/work/goat",
+      repositoryIdentity: null,
+      defaultModelSelection: null,
+      scripts: [],
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt,
+    });
+    const groups = buildSidebarProjectSnapshots({
+      projects: [
+        registration("older", "2026-10-01T00:00:00.000Z"),
+        registration("newer", "2026-10-20T00:00:00.000Z"),
+      ],
+      settings: { sidebarProjectGroupingMode: "repository", sidebarProjectGroupingOverrides: {} },
+      primaryEnvironmentId: null,
+      resolveEnvironmentLabel: () => "Home",
+    });
+    const projectKeys = projectsViewProjectKeyByScopedRef(groups);
+    expect(projectKeys.get(`${environmentId}:older`)).toBe(groups[0]?.projectKey);
+    expect(projectKeys.get(`${environmentId}:newer`)).toBe(groups[0]?.projectKey);
   });
 });
 
