@@ -396,14 +396,11 @@ describe("AcpAdapterV2", () => {
       }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live.each([
-    { attached: true, skill: true },
-    { attached: false, skill: true },
-    { attached: true, skill: false },
-  ])(
-    "lists the managed Cua Driver in both server forms and loads the skill only when attached and not switched off (%o)",
-    ({ attached, skill }) =>
+  it.live.each(["attached", "detached", "skill-off"] as const)(
+    "lists the managed Cua Driver in both server forms and loads the skill only when attached and not switched off (%s)",
+    (mode) =>
       Effect.gen(function* () {
+        const [attached, skill] = [mode !== "detached", mode !== "skill-off"];
         const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         const path = yield* Path.Path;
         const selfInvocation = yield* resolveSelfInvocation();
@@ -411,8 +408,8 @@ describe("AcpAdapterV2", () => {
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
         const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
-        const instanceId = ProviderInstanceId.make(`acp-test-cua-${attached}-${skill}`);
-        const threadId = ThreadId.make(`thread-acp-cua-${attached}-${skill}`);
+        const instanceId = ProviderInstanceId.make(`acp-test-cua-${mode}`);
+        const threadId = ThreadId.make(`thread-acp-cua-${mode}`);
         const cuaDriver = {
           command: "/resources/cua-driver",
           args: ["mcp"],
@@ -451,9 +448,7 @@ describe("AcpAdapterV2", () => {
         const modelSelection = { instanceId, model: "default" } as const;
         const runtime = yield* adapter.openSession({
           threadId,
-          providerSessionId: ProviderSessionId.make(
-            `provider-session-acp-cua-${attached}-${skill}`,
-          ),
+          providerSessionId: ProviderSessionId.make(`provider-session-acp-cua-${mode}`),
           modelSelection,
           runtimePolicy,
         });
@@ -1207,6 +1202,26 @@ describe("AcpAdapterV2", () => {
                     },
                     {
                       sessionUpdate: "tool_call",
+                      toolCallId: "child-screenshot",
+                      title: "Screenshot",
+                      status: "completed",
+                      rawInput: { server: "cua-driver", tool: "screenshot" },
+                      rawOutput: {
+                        result: {
+                          content: [
+                            { type: "text", text: "Captured the screen" },
+                            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+                          ],
+                          structuredContent: { width: 1440, height: 900 },
+                        },
+                      },
+                      _meta: {
+                        is_mcp_tool_call: true,
+                        "cognition.ai/subagent_context": { parentAgentId: "child-a" },
+                      },
+                    },
+                    {
+                      sessionUpdate: "tool_call",
                       toolCallId: "child-mcp-fallback",
                       title: "Ran command",
                       kind: "execute",
@@ -1387,6 +1402,26 @@ describe("AcpAdapterV2", () => {
         });
         assert.deepEqual(item?.toolIcon, item?.toolSource?.icon);
       }
+      // Child MCP results drop the ACP `result` envelope like root ones, keeping image blocks.
+      assert.deepEqual(childMcp?.type === "dynamic_tool" ? childMcp.output : undefined, [
+        { type: "text", text: "Sunny" },
+      ]);
+      const childScreenshot = items.findLast(
+        (item) =>
+          item.threadId === task?.childThreadId &&
+          item.type === "dynamic_tool" &&
+          item.toolName === "cua-driver.screenshot",
+      );
+      assert.deepEqual(
+        childScreenshot?.type === "dynamic_tool" ? childScreenshot.output : undefined,
+        {
+          content: [
+            { type: "text", text: "Captured the screen" },
+            { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+          ],
+          structuredContent: { width: 1440, height: 900 },
+        },
+      );
       assert.isTrue(
         items.some(
           (item) =>

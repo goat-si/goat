@@ -166,6 +166,32 @@ describe("computerUseAttachment", () => {
     }),
   );
 
+  it.effect.each([
+    { label: "interactive", origin: undefined, grant: undefined },
+    { label: "leased unattended", origin: unattended, grant: lease },
+  ])(
+    "loads the skill switched off in Settings on a $label turn that asked for @computer",
+    ({ origin, grant }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const skillsFor = (requested: ReadonlyArray<"computer-use" | "browser">) =>
+          decide(driver, {
+            leases: fakeLeases(grant === undefined ? {} : { grant }).leases,
+            requested,
+            ...(origin === undefined ? {} : { origin }),
+          }).pipe(
+            Effect.map((attached) => (attached._tag === "proxied" ? attached.skills : null)),
+            Effect.provide(
+              ServerSettings.ServerSettingsService.layerTest({
+                disabledBuiltInSkills: ["computer-use"],
+              }),
+            ),
+          );
+        assert.deepEqual(yield* skillsFor(["computer-use"]), ["computer-use"]);
+        assert.deepEqual(yield* skillsFor(["browser"]), []);
+      }),
+  );
+
   it.effect(
     "refuses unattended work on a host that cannot detect a person's input or a secret field",
     () =>

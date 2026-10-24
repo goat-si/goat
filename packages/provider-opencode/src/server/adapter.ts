@@ -82,7 +82,11 @@ import {
   makeSubagentChildThread,
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
-import { openCodeToolTurnItem } from "./toolItems.ts";
+import {
+  openCodeToolOutputWithImages,
+  openCodeToolStateResult,
+  openCodeToolTurnItem,
+} from "./toolItems.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
@@ -764,12 +768,6 @@ function toolStatus(part: ToolPart): {
 
 function toolInput(part: ToolPart): Record<string, unknown> {
   return part.state.input;
-}
-
-function toolOutput(part: ToolPart): string | undefined {
-  if (part.state.status === "completed") return part.state.output;
-  if (part.state.status === "error") return part.state.error;
-  return undefined;
 }
 
 function toolStartedAt(part: ToolPart, now: DateTime.Utc): DateTime.Utc {
@@ -1461,7 +1459,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerThread: childProviderThread,
             });
           }
-          const output = toolOutput(part);
+          const { output } = openCodeToolStateResult(part.state);
           if (part.state.status === "completed" && output !== undefined) context.result = output;
           const status = toolStatus(part);
           const completedAt = toolCompletedAt(part, now);
@@ -1607,7 +1605,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             | "updatedAt"
           >;
           const input = toolInput(part);
-          const output = toolOutput(part);
+          const { output, fileUrls } = openCodeToolStateResult(part.state);
           const isNativeTool = part.tool === "code_search" || part.tool === "apply_patch";
           if (!isNativeTool && part.tool.includes("_") && turn.mcpServerNames === undefined) {
             const serverNames = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
@@ -1624,6 +1622,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               !isNativeTool && part.tool.startsWith(`${name.replace(/[^a-zA-Z0-9_-]/g, "_")}_`),
           );
           const serverName = matchingServers?.length === 1 ? matchingServers[0] : undefined;
+          const mcpOutput = openCodeToolOutputWithImages(output, fileUrls);
           const presentation =
             serverName === undefined
               ? {}
@@ -1639,12 +1638,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 ...presentation,
                 toolName: part.tool,
                 input,
-                ...(output === undefined ? {} : { output }),
+                ...(mcpOutput === undefined ? {} : { output: mcpOutput }),
               }
             : openCodeToolTurnItem(base, {
                 name: part.tool,
                 input,
                 output,
+                fileUrls,
                 completedMetadata:
                   part.state.status === "completed" ? part.state.metadata : undefined,
               });

@@ -5,6 +5,7 @@ import {
   type ProviderDriverKind,
   type ProviderInteractionMode,
   type ThreadId,
+  type TurnCapability,
 } from "@goat/contracts";
 import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
@@ -60,6 +61,8 @@ export interface ComputerUseAttachmentInput {
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
   readonly leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
+  /** Capabilities this turn asked for with a chip; they load their skill even when it is off (D13). */
+  readonly requested?: ReadonlyArray<TurnCapability> | undefined;
 }
 
 const none = (reason: ComputerUseRefusal, blockUserConfig = false): ComputerUseAttachment => ({
@@ -112,7 +115,11 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
-    skills: resolveBuiltInSkills({ attached: ["computer-use"], disabled }).active,
+    skills: resolveBuiltInSkills({
+      attached: ["computer-use"],
+      ...(input.requested === undefined ? {} : { requested: input.requested }),
+      disabled,
+    }).active,
   } as const;
 });
 

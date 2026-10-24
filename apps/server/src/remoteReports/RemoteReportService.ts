@@ -38,6 +38,7 @@ import {
   pendingUserInputRequestIdsForRun,
 } from "../orchestration-v2/ThreadManagementService.ts";
 import { frameRemoteReport } from "./reportFrame.ts";
+import { redactGoatCredentialsDeep } from "../mcp/goatCredentialRedaction.ts";
 import { readThreadResult } from "../threadResults/ThreadResultService.ts";
 import {
   completionHoldCount,
@@ -230,9 +231,12 @@ const make = Effect.gen(function* () {
   const append = Effect.fn("RemoteReportService.append")(function* (
     threadId: ThreadId,
     shell: LiveShell,
-    value: RemoteOriginReportInput,
-    relay: RemoteRelaySend | null,
+    agentReport: RemoteOriginReportInput,
+    agentRelay: RemoteRelaySend | null,
   ) {
+    // An agent's report is stored and relayed like its tool output.
+    const value = redactGoatCredentialsDeep(agentReport);
+    const relay = redactGoatCredentialsDeep(agentRelay);
     const runId = shell.activeRunId;
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const result = yield* sql
@@ -295,7 +299,10 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     input: RemoteOriginReportInput,
   ) {
-    const value = yield* decodeReportInput(input).pipe(Effect.mapError(invalid));
+    // Remote or local, an agent's report is stored and relayed like its tool output.
+    const value = redactGoatCredentialsDeep(
+      yield* decodeReportInput(input).pipe(Effect.mapError(invalid)),
+    );
     const shell = yield* liveShell(threadId);
     return yield* append(threadId, shell, value, null).pipe(
       Effect.catchIf(
