@@ -402,6 +402,11 @@ export function createPreviewStreamClient(
 
 export interface PreviewFramePainter {
   readonly paint: (jpeg: ArrayBuffer) => void;
+  /**
+   * While suppressed, frames are dropped. Every change also discards the queued frame and any
+   * decode still running, so pixels from before a private interval, or during it, never paint.
+   */
+  readonly setSuppressed: (suppressed: boolean) => void;
   readonly stop: () => void;
 }
 
@@ -412,13 +417,16 @@ export function createPreviewFramePainter(
 ): PreviewFramePainter {
   const context = canvas.getContext("2d");
   let stopped = false;
+  let suppressed = false;
+  let generation = 0;
   let decoding = false;
   let waiting: ArrayBuffer | null = null;
   const draw = (jpeg: ArrayBuffer) => {
     decoding = true;
+    const started = generation;
     void createImageBitmap(new Blob([jpeg], { type: "image/jpeg" }))
       .then((bitmap) => {
-        if (stopped || !context) {
+        if (stopped || !context || started !== generation) {
           bitmap.close();
           return;
         }
@@ -435,14 +443,20 @@ export function createPreviewFramePainter(
         decoding = false;
         const next = waiting;
         waiting = null;
-        if (next && !stopped) draw(next);
+        if (next && !stopped && !suppressed) draw(next);
       });
   };
   return {
     paint: (jpeg) => {
-      if (stopped) return;
+      if (stopped || suppressed) return;
       if (decoding) waiting = jpeg;
       else draw(jpeg);
+    },
+    setSuppressed: (next) => {
+      if (next === suppressed) return;
+      suppressed = next;
+      generation += 1;
+      waiting = null;
     },
     stop: () => {
       stopped = true;

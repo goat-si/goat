@@ -32,6 +32,7 @@ import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { GoatBotModeButton } from "../goatBot/GoatBotModeButton";
 import { ThreadNotesButton } from "../../notes/ThreadNotesButton";
+import { AgentScreenCardsToggle } from "../preview/sessions/AgentScreenCardsToggle";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -481,6 +482,7 @@ export const ChatHeader = memo(function ChatHeader({
           )}
         </WorkspaceBreadcrumbItem>
       </WorkspaceBreadcrumb>
+      <AgentScreenCardsToggle />
       {isServerThread ? (
         <ThreadNotesButton
           environmentId={activeThreadEnvironmentId}
