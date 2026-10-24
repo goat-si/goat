@@ -96,6 +96,19 @@ describe("cuaDriverManifest", () => {
     ]);
   });
 
+  it("keeps GOAT out however its own path is spelled: prefixed, UNC, forward slashes or case", () => {
+    const listed = [
+      { bundle_id: null, name: "GOAT.exe", executable: "C:\\Apps\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "GOAT.exe", executable: "\\\\server\\share\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "notes.exe", executable: "C:\\Apps\\notes.exe" },
+    ];
+    for (const host of [
+      ["\\\\?\\C:\\Apps\\GOAT\\GOAT.exe", "\\\\?\\UNC\\server\\share\\GOAT\\GOAT.exe"],
+      ["c:/apps//goat/GOAT.EXE", "//SERVER/share/goat/goat.exe"],
+    ])
+      expect(admittedCuaApplications(listed, host)).toEqual(["C:\\Apps\\notes.exe"]);
+  });
+
   it("writes a v3 manifest: tools, display, admitted apps and no file or profile scope", () => {
     const text = cuaDriverCapabilityManifest({
       applications: ['com.example."quoted"'],

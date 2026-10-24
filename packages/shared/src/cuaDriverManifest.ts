@@ -125,13 +125,12 @@ export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
-  const host = new Set(hostBundleIds.map((id) => id.toLowerCase()));
+  const host = new Set(hostBundleIds.map(identityKey));
   const admitted = new Set<string>();
   for (const app of apps) {
     const id = (app.bundle_id?.trim() || app.executable?.trim()) ?? "";
     if (!id) continue;
-    const lower = id.toLowerCase();
-    if (host.has(lower) || EXCLUDED_BUNDLE_IDS.has(lower)) continue;
+    if (host.has(identityKey(id)) || EXCLUDED_BUNDLE_IDS.has(id.toLowerCase())) continue;
     if (
       EXCLUDED_NAME.test(app.name ?? "") ||
       EXCLUDED_NAME.test(id) ||
@@ -141,6 +140,23 @@ export function admittedCuaApplications(
     admitted.add(id);
   }
   return [...admitted].sort();
+}
+
+/**
+ * One spelling per identity for comparing ids: a Windows path the way the driver compares it
+ * (session_manifest.rs normalize_windows_executable_path: \\?\ and \\?\UNC\ prefixes off, / as
+ * \, repeated separators collapsed, case folded); anything else lowercased. GOAT can run from a
+ * path spelled with a prefix while the helper lists the plain form, and must still be excluded.
+ */
+function identityKey(id: string): string {
+  let path = id.trim().replaceAll("/", "\\");
+  const windowsPath = /^[A-Za-z]:\\/u.test(path) || path.startsWith("\\\\");
+  if (!windowsPath) return id.trim().toLowerCase();
+  if (path.toLowerCase().startsWith("\\\\?\\unc\\")) path = "\\\\" + path.slice(8);
+  else if (path.startsWith("\\\\?\\")) path = path.slice(4);
+  const unc = path.startsWith("\\\\");
+  const parts = path.split("\\").filter((part) => part.length > 0);
+  return ((unc ? "\\\\" : "") + parts.join("\\")).toLowerCase();
 }
 
 /** v3 manifest text. JSON strings are valid YAML scalars, so every value is JSON-quoted. */

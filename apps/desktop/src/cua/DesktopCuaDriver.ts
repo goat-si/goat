@@ -230,7 +230,8 @@ async function withResolvedWindowsPaths(
   const { realpath } = await import("node:fs/promises");
   const resolved = await Promise.all(
     ids.map((id) =>
-      /^[A-Za-z]:[\\/]/u.test(id)
+      // Drive, UNC and \\?\ paths alike; the manifest compares their normalized forms.
+      /^([A-Za-z]:[\\/]|[\\/]{2})/u.test(id)
         ? realpath(id).catch(() => undefined)
         : Promise.resolve(undefined),
     ),
