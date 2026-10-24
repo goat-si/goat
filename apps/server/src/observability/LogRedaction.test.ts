@@ -85,6 +85,16 @@ describe("redactLogText", () => {
     expect(redactLogText(text)).toBe(text);
   });
 
+  it("hides a token whose remaining dots fall past the scanned part of a huge text", () => {
+    const header = Buffer.from('{"alg":"HS256"}').toString("base64url");
+    const payload = Buffer.from(
+      JSON.stringify({ privateClaim: "canary-claim", pad: "p".repeat(220_000) }),
+    ).toString("base64url");
+    const text = redactLogText(`start ${header}.${payload}.c2ln end`);
+    expect(text).not.toContain(header);
+    expect(text).not.toContain(payload.slice(0, 40));
+  });
+
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {
     const text = redactLogText(`${"x".repeat(31_990)} ${jwt} ${"y".repeat(100)}`);
     expect(text).not.toContain("eyJhbGciOiJIUzI1NiJ9");
@@ -128,6 +138,15 @@ describe("redactCause", () => {
     expect(Cause.squash(redacted)).not.toHaveProperty("headers");
     const exported = Cause.prettyErrors(redacted, { includeCauseInStack: true });
     expect(exported.map((e) => [e.name, e.message, e.stack]).join("\n")).not.toContain("canary");
+  });
+
+  it("keeps an error whose cause cannot be inspected", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const printed = Cause.pretty(
+      redactCause(Cause.die(new Error("original failure", { cause: proxy }))),
+    );
+    expect(printed).toContain("original failure");
   });
 
   it("keeps a getter-defined message and survives a getter that throws", () => {

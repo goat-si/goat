@@ -144,6 +144,22 @@ function isJoseHeader(part: string): boolean {
   }
 }
 
+/**
+ * A cut text can end inside a token whose remaining dots fall past the cut. Its trailing dotted
+ * run is masked from any part that is a JOSE header, so an unfinished token is hidden as well.
+ */
+function maskUnfinishedJose(text: string): string {
+  let start = text.length;
+  while (start > 0 && /[A-Za-z0-9_.-]/.test(text.charAt(start - 1))) start -= 1;
+  const parts = text.slice(start).split(".");
+  for (let index = 0; index < parts.length; index++) {
+    const part = parts[index] ?? "";
+    if (part.length >= 8 && isJoseHeader(part))
+      return text.slice(0, start) + [...parts.slice(0, index), MASK].join(".");
+  }
+  return text;
+}
+
 /** A dotted run from its first part that is a JOSE header on, masked; otherwise the run itself. */
 function maskJoseToken(run: string): string {
   const parts = run.split(".");
@@ -187,7 +203,8 @@ const MAX_SCANNED = 8 * MAX_STRING;
 
 /** Text with credentials replaced, then cut to a bound, so the cut never splits a credential. */
 export function redactLogText(text: string): string {
-  const scanned = text.length <= MAX_SCANNED ? text : text.slice(0, MAX_SCANNED);
+  const scanned =
+    text.length <= MAX_SCANNED ? text : maskUnfinishedJose(text.slice(0, MAX_SCANNED));
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) =>
       typeof replacement === "string"
@@ -269,7 +286,30 @@ function causeOf(error: Error): unknown {
   }
 }
 
+/**
+ * {@link inspectError} behind a guard: a revoked Proxy or a throwing getter anywhere in an error or
+ * its cause chain becomes inert text, so recording a defect can never fail.
+ */
 function sanitizedError(
+  value: unknown,
+  annotations?: ReadonlyMap<string, unknown>,
+  seen: Set<unknown> = new Set(),
+  depth = 0,
+): Error {
+  try {
+    return inspectError(value, annotations, seen, depth);
+  } catch {
+    return uninspectable();
+  }
+}
+
+function uninspectable(): Error {
+  const error = new Error("[uninspectable]");
+  error.stack = "Error: [uninspectable]";
+  return error;
+}
+
+function inspectError(
   value: unknown,
   annotations?: ReadonlyMap<string, unknown>,
   seen: Set<unknown> = new Set(),
@@ -290,10 +330,15 @@ function sanitizedError(
   const name = bounded(redactLogText(diagnostic(value, "name") ?? "Error"), MAX_NAME_CHARS);
   const message = bounded(redactLogText(diagnostic(value, "message") ?? ""), MAX_MESSAGE_CHARS);
   const nested = causeOf(value);
-  const error =
-    nested instanceof Error && !seen.has(nested) && depth < MAX_CAUSE_DEPTH
-      ? new Error(message, { cause: sanitizedError(nested, undefined, seen, depth + 1) })
-      : new Error(message);
+  let cause: Error | undefined;
+  try {
+    if (nested instanceof Error && !seen.has(nested) && depth < MAX_CAUSE_DEPTH)
+      cause = sanitizedError(nested, undefined, seen, depth + 1);
+  } catch {
+    // A revoked Proxy as a cause throws on instanceof; the outer error still shows.
+    cause = uninspectable();
+  }
+  const error = cause === undefined ? new Error(message) : new Error(message, { cause });
   error.name = name;
   // The stack starts by repeating the message; keep its frames beneath the redacted header.
   const stack = diagnostic(value, "stack") ?? "";
@@ -493,13 +538,7 @@ function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknow
     () => redactLogMessage(fiber.getRef(References.CurrentLogAnnotations)),
     {},
   );
-  const spans = guarded(
-    () =>
-      fiber
-        .getRef(References.CurrentLogSpans)
-        .map(([label, startTime]) => [redactLogText(String(label)), Number(startTime)]),
-    [],
-  );
+  const spans = guarded(() => spanSnapshot(fiber.getRef(References.CurrentLogSpans)), []);
   return new Proxy(fiber, {
     get(target, key) {
       if (key === "getRef")
@@ -513,6 +552,26 @@ function redactedFiber(fiber: Fiber.Fiber<unknown, unknown>): Fiber.Fiber<unknow
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
+}
+
+const MAX_SPANS = 64;
+
+/** Log span labels and start times, read through descriptors so no method of the list runs. */
+function spanSnapshot(spans: unknown): Array<readonly [string, number]> {
+  if (!Array.isArray(spans)) return [];
+  const length = Number(Object.getOwnPropertyDescriptor(spans, "length")?.value ?? 0);
+  const snapshot: Array<readonly [string, number]> = [];
+  for (let index = 0; index < Math.min(length, MAX_SPANS); index++) {
+    const entry: unknown = Object.getOwnPropertyDescriptor(spans, index)?.value;
+    if (!Array.isArray(entry)) continue;
+    const label: unknown = Object.getOwnPropertyDescriptor(entry, 0)?.value;
+    const startTime: unknown = Object.getOwnPropertyDescriptor(entry, 1)?.value;
+    snapshot.push([
+      typeof label === "string" ? redactLogText(label) : "[span]",
+      typeof startTime === "number" ? startTime : 0,
+    ]);
+  }
+  return snapshot;
 }
 
 /** What a log call shows when redaction itself fails: never the unredacted value. */

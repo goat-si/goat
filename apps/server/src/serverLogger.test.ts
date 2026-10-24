@@ -317,6 +317,22 @@ describe("ServerLoggerLive", () => {
         }),
     );
 
+    it.effect("keeps credentials out of the console when a log span list forges its methods", () =>
+      Effect.gen(function* () {
+        // A synthetic canary returned only by the list's own map method.
+        const spans = Object.assign([["request", 0]], {
+          map: () => [["Cookie: sid=canary-forged-span", 0]],
+        });
+        const output = yield* printedBy(
+          Effect.logError("spanned").pipe(
+            Effect.provideService(References.CurrentLogSpans, spans as Array<[string, number]>),
+          ),
+        );
+        assert.include(output, "spanned");
+        assert.notInclude(output, "canary-forged-span");
+      }),
+    );
+
     it.effect("keeps credentials out of the span events the trace file records", () =>
       Effect.gen(function* () {
         const { spans } = yield* logInSpanThrough({}, leakyLog);
