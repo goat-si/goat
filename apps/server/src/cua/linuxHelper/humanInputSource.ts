@@ -365,7 +365,8 @@ export async function openX11HumanInput(
     if (major === undefined || closed || refreshing) return;
     refreshing = true;
     try {
-      while (!closed && ledger.stale()) {
+      for (;;) {
+        if (closed || !ledger.stale()) break;
         // The list covers every change announced before its reply, which may be more than were
         // announced when it was asked for.
         const { message: list, changes: covers } = await askCounted(xiQueryDevice(major));
