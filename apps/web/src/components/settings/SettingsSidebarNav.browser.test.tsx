@@ -12,11 +12,13 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
 }));
 vi.mock("../sidebar/SidebarChrome", () => ({ SidebarUtilityMenu: () => null }));
 
-// Mirrors the Settings composition in AppSidebarLayout.
+// Mirrors the Settings composition in AppSidebarLayout. The header button stands in for the
+// sidebar chrome, so search is not the sheet's first focusable element.
 function SettingsSidebar({ defaultOpen = true }: { defaultOpen?: boolean }) {
   return (
     <SidebarProvider defaultOpen={defaultOpen}>
       <Sidebar side="left" collapsible="offcanvas">
+        <button type="button">Toggle sidebar</button>
         <SettingsSidebarNav pathname="/settings/hub" />
       </Sidebar>
       <SettingsSearchShortcut />
