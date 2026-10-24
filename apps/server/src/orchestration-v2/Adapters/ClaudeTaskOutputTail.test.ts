@@ -112,21 +112,26 @@ describe("claudeTaskOutputRoot", () => {
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const temp = "C:\\Users\\Jane Doe\\AppData\\Local\\Temp";
-      assert.equal(claudeTaskOutputRoot({}, path, 501), path.join("/tmp", "claude-501"));
+      assert.equal(claudeTaskOutputRoot({}, path, { uid: 501 }), path.join("/tmp", "claude-501"));
       assert.equal(
-        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "/scratch" }, path, 501),
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "/scratch" }, path, { uid: 501 }),
         path.join("/scratch", "claude-501"),
       );
       assert.equal(
-        claudeTaskOutputRoot({ TEMP: temp, TMP: "C:\\Other" }, path, undefined),
+        claudeTaskOutputRoot({ TEMP: temp, TMP: "C:\\Other" }, path, { uid: undefined }),
         path.join(temp, "claude"),
       );
-      assert.equal(claudeTaskOutputRoot({ TMP: temp }, path, undefined), path.join(temp, "claude"));
       assert.equal(
-        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "D:\\claude-tmp", TEMP: temp }, path, undefined),
+        claudeTaskOutputRoot({ TMP: temp }, path, { uid: undefined }),
+        path.join(temp, "claude"),
+      );
+      assert.equal(
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "D:\\claude-tmp", TEMP: temp }, path, {
+          uid: undefined,
+        }),
         path.join("D:\\claude-tmp", "claude"),
       );
-      assert.isUndefined(claudeTaskOutputRoot({}, path, undefined));
+      assert.isUndefined(claudeTaskOutputRoot({}, path, { uid: undefined }));
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
