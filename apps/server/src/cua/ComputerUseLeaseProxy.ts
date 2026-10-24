@@ -887,7 +887,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const refused = yield* Effect.suspend(() =>
       takes && shared ? Effect.succeed(true) : current.driver.send(line).pipe(Effect.as(false)),
     ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
-    if (refused) {
+    if (refused && id !== undefined && id !== null) {
       const key = JSON.stringify(id);
       outstanding.delete(key);
       if (posts) yield* inputEnded(key);

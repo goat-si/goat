@@ -27,7 +27,7 @@ import {
   offThread,
   run,
   grant,
-} from "./ComputerUseLeases.testkit.ts";
+} from "./ComputerUseLeases.projection.testkit.ts";
 
 const layer = it.layer(
   Layer.merge(

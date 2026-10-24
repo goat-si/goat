@@ -10,7 +10,7 @@ import * as PubSub from "effect/PubSub";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { database, grant } from "./ComputerUseLeases.testkit.ts";
+import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
 
 /** `threadId` in the projection, in `runtimeMode`. */
 const threadIn = (threadId: ThreadId, runtimeMode: string) =>
