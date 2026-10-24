@@ -1004,7 +1004,7 @@ const make = Effect.gen(function* () {
         `Upload paths must be absolute: ${relative}`,
       );
     const gate = gateFor(tab);
-    // Checked before the gate, so all that can follow it is Playwright's recheck of these files.
+    // Checked before the gate, so a missing file fails before anything reaches the page.
     for (const path of input.paths)
       await NodeFSP.access(path).catch(() => {
         throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1012,7 +1012,7 @@ const make = Effect.gen(function* () {
           `Upload file not found or not readable: ${path}`,
         );
       });
-    if (await ServerBrowserPage.setInputFiles(tab.page, input, gate)) return undefined;
+    if (await ServerBrowserPage.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)
       throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -1024,11 +1024,14 @@ const make = Effect.gen(function* () {
         "PreviewAutomationExecutionError",
         "This file picker accepts one file.",
       );
-    gate();
-    if (input.paths.length > 0)
-      await open.chooser.setFiles([...input.paths], {
-        timeout: input.timeoutMs ?? NAVIGATION_TIMEOUT_MS,
-      });
+    if (input.paths.length > 0) {
+      const element = await open.chooser.element();
+      try {
+        await ServerBrowserPage.uploadInto(tab.cdp, element, input.paths, gate);
+      } finally {
+        void element.dispose().catch(constVoid);
+      }
+    } else gate();
     if (tab.fileChooser === open) closeFileChooser(tab);
     return undefined;
   };

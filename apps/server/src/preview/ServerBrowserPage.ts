@@ -20,7 +20,14 @@ import {
 } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
-import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
+import type {
+  CDPSession,
+  ConsoleMessage,
+  ElementHandle,
+  Frame,
+  Locator,
+  Page,
+} from "playwright-core";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const MAX_EVALUATION_BYTES = 64_000;
@@ -174,11 +181,16 @@ const noPointer: PointerReporter = async () => {};
 
 /**
  * Throws when the input may no longer land: Stop, a takeover or a secret field arrived while the
- * action waited. Every wait for the target runs before it, as a Playwright trial; after it, the
- * action gets only DISPATCH_TIMEOUT_MS. If control is cut after the gate, the tab ignores input
- * until that action ends (SessionControl.onDispatchCut), so a late click or key never lands.
+ * action waited. Every wait for the target runs before it and sends no input (Playwright's trial
+ * runs move the mouse, and a drag trial even releases a button); after it, the action gets only
+ * DISPATCH_TIMEOUT_MS. If control is cut after the gate, the tab ignores input until that action
+ * ends (SessionControl.onDispatchCut). `linger` keeps covering input that outlives its action,
+ * such as a click answered early because it opened a dialog.
  */
-export type DispatchGate = () => void;
+export interface DispatchGate {
+  (): void;
+  readonly linger?: (work: Promise<unknown>) => void;
+}
 const open: DispatchGate = () => {};
 
 /** How long an action that passed its gate may still wait for Playwright's own checks. */
@@ -196,6 +208,21 @@ const elementOf = async (locator: Locator, timeout: number) => {
   if (handle === null) throw targetChanged();
   return handle;
 };
+
+/** Playwright's actionability waits, without the mouse move its trial runs make. */
+const settled = async (locator: Locator, timeout: number, enabled = true) => {
+  const handle = await elementOf(locator, timeout);
+  try {
+    await handle.waitForElementState("visible", { timeout });
+    if (enabled) await handle.waitForElementState("enabled", { timeout });
+    await handle.waitForElementState("stable", { timeout });
+  } finally {
+    void handle.dispose().catch(constVoid);
+  }
+};
+
+/** After the gate: Playwright's own last checks, briefly, and no wait for a navigation. */
+const dispatched = { timeout: DISPATCH_TIMEOUT_MS, noWaitAfter: true } as const;
 
 const targetPoint = async (
   page: Page,
@@ -804,19 +831,23 @@ export const click = async (
   const point = await targetPoint(page, locator, input, timeout);
   await pointer(point, "click");
   const options = { button: input.button ?? "left", clickCount: input.clickCount ?? 1 } as const;
-  if (locator !== null) await locator.click({ ...options, timeout, trial: true });
+  if (locator !== null) await settled(locator, timeout);
   gate();
   const clicked =
     locator === null
       ? page.mouse.click(point.x, point.y, options)
-      : locator.click({ ...options, timeout: DISPATCH_TIMEOUT_MS });
+      : locator.click({ ...options, ...dispatched });
   let onDialog = constVoid;
   const dialogOpened = new Promise<"dialog">((resolve) => {
     onDialog = () => resolve("dialog");
     page.once("dialog", onDialog);
   });
   try {
-    if ((await Promise.race([clicked, dialogOpened])) === "dialog") void clicked.catch(constVoid);
+    if ((await Promise.race([clicked, dialogOpened])) === "dialog") {
+      // The rest of the click (a second press, say) waits on the dialog, past this action.
+      gate.linger?.(clicked);
+      void clicked.catch(constVoid);
+    }
   } finally {
     page.off("dialog", onDialog);
   }
@@ -916,9 +947,9 @@ export const hover = async (
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await locator.hover({ timeout, trial: true });
+  await settled(locator, timeout, false);
   gate();
-  await locator.hover({ timeout: DISPATCH_TIMEOUT_MS });
+  await locator.hover(dispatched);
 };
 
 export const select = async (
@@ -1001,15 +1032,68 @@ export const drag = async (
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
   await pointer(await targetPoint(page, source, {}, timeout), "move");
-  await source.dragTo(target, { timeout, trial: true });
+  await settled(source, timeout, false);
+  await settled(target, timeout, false);
   const end = await target.boundingBox({ timeout }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   gate();
-  await source.dragTo(target, { timeout: DISPATCH_TIMEOUT_MS });
+  await source.dragTo(target, dispatched);
+};
+
+/**
+ * Puts files into a file input (or the one its label names) with a single CDP call after the gate.
+ * Playwright's setter prepares the files and the frame after any check made before it, so a cut
+ * could still let it land. Inputs in a child frame are refused until #1302 gives them this path.
+ */
+export const uploadInto = async (
+  cdp: CDPSession,
+  handle: ElementHandle,
+  paths: ReadonlyArray<string>,
+  gate: DispatchGate,
+) => {
+  const key = `__goatUploadTarget_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
+  try {
+    const multiple = await handle.evaluate((element, name) => {
+      type FileInput = { tagName?: string; type?: string; multiple?: boolean; disabled?: boolean };
+      const target = (
+        element.tagName === "LABEL" ? (element as unknown as { control: unknown }).control : element
+      ) as FileInput | null;
+      if (target?.tagName !== "INPUT" || target.type !== "file" || target.disabled) return null;
+      (globalThis as unknown as Record<string, unknown>)[name] = target;
+      return target.multiple === true;
+    }, key);
+    if (multiple === null)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTargetNotEditableError",
+        "This element is not an enabled file input.",
+      );
+    if (paths.length > 1 && !multiple)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "This file input accepts one file.",
+      );
+    // Read from the main frame: a framed input's global is not there, so it is refused below.
+    const found = await cdp.send("Runtime.evaluate", { expression: `globalThis.${key}` });
+    const objectId = found.result.subtype === "node" ? found.result.objectId : undefined;
+    if (objectId === undefined)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "Uploading into a file input inside a frame is not available yet. Open the frame's page in its own tab and upload there.",
+      );
+    const { node } = await cdp.send("DOM.describeNode", { objectId });
+    gate();
+    await cdp.send("DOM.setFileInputFiles", {
+      files: [...paths],
+      backendNodeId: node.backendNodeId,
+    });
+  } finally {
+    void cdp.send("Runtime.evaluate", { expression: `delete globalThis.${key}` }).catch(constVoid);
+  }
 };
 
 export const setInputFiles = async (
   page: Page,
+  cdp: CDPSession,
   input: PreviewAutomationUploadInput,
   gate: DispatchGate = open,
 ) => {
@@ -1017,8 +1101,7 @@ export const setInputFiles = async (
   if (locator === null) return false;
   const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   try {
-    gate();
-    await handle.setInputFiles([...input.paths]);
+    await uploadInto(cdp, handle, input.paths, gate);
   } finally {
     void handle.dispose().catch(constVoid);
   }

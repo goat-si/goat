@@ -1,3 +1,5 @@
+import { PREVIEW_AGENT_INPUT_HELD_GLOBAL } from "@goat/contracts";
+
 /**
  * Keyboard and text input for a preview tab's page that never lands outside it.
  *
@@ -131,7 +133,14 @@ export const sendPageCommand = async (
   if (!FOCUS_ROUTED_INPUT.has(method) || webContents.focusedFrame) {
     return debuggee.sendCommand(method, params);
   }
-  if ((await evaluate(debuggee, `${FOCUSED_DOCUMENT} !== null`)) !== true) {
+  // One probe for focus and for the server's hold (set after Stop or a secret cut an agent action):
+  // this wait is where a cut can land between the server's gate and the input.
+  const probe = await evaluate(
+    debuggee,
+    `globalThis.${PREVIEW_AGENT_INPUT_HELD_GLOBAL} === true ? "held" : ${FOCUSED_DOCUMENT} !== null`,
+  );
+  if (probe === "held") return {};
+  if (probe !== true) {
     throw new Error(CROSS_SITE_FOCUS_MESSAGE);
   }
   switch (method) {

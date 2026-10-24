@@ -1294,3 +1294,9 @@ export const PreviewUrlResolution = Schema.Struct({
   environmentId: EnvironmentId,
 });
 export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
+
+/**
+ * Page global set while the server holds a preview tab's input after Stop or a secret cut an agent
+ * action. The desktop relay checks it after its own focus wait, right before inserting text.
+ */
+export const PREVIEW_AGENT_INPUT_HELD_GLOBAL = "__goatAgentInputHeld";

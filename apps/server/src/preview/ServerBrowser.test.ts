@@ -477,7 +477,7 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
       const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
-      const element = { boundingBox: box, evaluate: async () => true, dispose: box };
+      const element = { boundingBox: box, waitForElementState: box, dispose: box };
       const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
       page.locator.mockImplementationOnce(
         () => ({ ...locator, elementHandle: async () => element }) as never,

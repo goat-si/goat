@@ -6,13 +6,16 @@ import { sendPageCommand, toKeyboardInputEvents } from "./GuestInput.ts";
 const makeGuest = ({
   focused,
   focusedDocument = true,
+  held = () => false,
 }: {
   readonly focused: boolean;
   readonly focusedDocument?: boolean;
+  /** Whether the server holds the page's input when the probe runs. */
+  readonly held?: () => boolean;
 }) => {
   const sendCommand = vi.fn(async (method: string, params?: { expression?: string }) =>
-    method === "Runtime.evaluate" && params?.expression?.endsWith("!== null")
-      ? { result: { value: focusedDocument } }
+    method === "Runtime.evaluate" && params?.expression?.includes("!== null")
+      ? { result: { value: held() ? "held" : focusedDocument } }
       : { result: {} },
   );
   const webContents = {
@@ -41,6 +44,27 @@ describe("preview guest input", () => {
     await guest.send("Input.insertText", { text: "pairing-code" });
     expect(guest.webContents.insertText).toHaveBeenCalledWith("pairing-code");
     expect(guest.sendCommand).not.toHaveBeenCalledWith("Input.insertText", expect.anything());
+  });
+
+  it("drops text the server held after Stop, and inserts once the hold ends", async () => {
+    let held = true;
+    const guest = makeGuest({ focused: false, held: () => held });
+    await guest.send("Input.insertText", { text: "late" });
+    expect(guest.webContents.insertText).not.toHaveBeenCalled();
+    held = false;
+    await guest.send("Input.insertText", { text: "next" });
+    expect(guest.webContents.insertText).toHaveBeenCalledWith("next");
+  });
+
+  it("still inserts when the hold starts after its probe answered (one IPC hop)", async () => {
+    // The remaining window: the probe is the last check before webContents.insertText.
+    let held = false;
+    const guest = makeGuest({ focused: false, held: () => held });
+    guest.webContents.insertText.mockImplementationOnce(async () => {
+      held = true;
+    });
+    await guest.send("Input.insertText", { text: "raced" });
+    expect(guest.webContents.insertText).toHaveBeenCalledWith("raced");
   });
 
   it("refuses input when a cross-site frame holds the unfocused page's focus", async () => {
