@@ -8,7 +8,10 @@ import type {
   DesktopPreviewTabState,
   DesktopSnapShotEvent,
 } from "@goat/contracts";
-import { DesktopSshPreparationProgressEventSchema } from "@goat/contracts";
+import {
+  DesktopSshPreparationProgressEventSchema,
+  DesktopPreviewSessionStackState,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
@@ -84,6 +87,18 @@ const decodeSshPreparationProgress = Schema.decodeUnknownOption(
 );
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  previewSessionStack: {
+    request: (input) => ipcRenderer.invoke(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, input),
+    onState: (listener) => {
+      const decode = Schema.decodeUnknownOption(DesktopPreviewSessionStackState);
+      const handler = (_event: Electron.IpcRendererEvent, raw: unknown) => {
+        const state = decode(raw);
+        if (state._tag === "Some") listener(state.value);
+      };
+      ipcRenderer.on(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(IpcChannels.PREVIEW_SESSION_STACK_CHANNEL, handler);
+    },
+  },
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

@@ -16,6 +16,7 @@ export const DesktopPreviewSessionStackState = Schema.Struct({
   visible: Schema.Boolean,
   maxHeight: Schema.Number,
   captureProtection: DesktopStackCaptureProtection,
+  mouseEventForwarding: Schema.Boolean,
 });
 export type DesktopPreviewSessionStackState = typeof DesktopPreviewSessionStackState.Type;
 
