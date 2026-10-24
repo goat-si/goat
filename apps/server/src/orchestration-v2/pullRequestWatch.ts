@@ -358,6 +358,10 @@ export function settleHeldContext(
       case "checks": {
         // A pass a rerun or a new failure undid no longer holds, nor do failures that cleared.
         if (state.headMoved) return [];
+        // "No checks" holds until any check result is recorded on this head.
+        if (fragment.startsWith("no checks reported")) {
+          return state.passed || state.failedChecks.length > 0 ? [] : [fragment];
+        }
         if (!fragment.startsWith("checks failed")) return state.passed ? [fragment] : [];
         if (state.failedChecks.length === 0) return [];
         // Restated from every check failing now: one that passed since leaves the list, and one
@@ -430,7 +434,10 @@ function pullRequestWatchMessage(input: {
   const summary = changes.map((change) => SUMMARY[change.kind]);
   if (exhausted) summary.push("stopped watching");
   const checksOnly = changes.every(
-    (change) => change.kind === "checks-failed" || change.kind === "checks-passed",
+    (change) =>
+      change.kind === "checks-failed" ||
+      change.kind === "checks-passed" ||
+      change.kind === "no-checks",
   );
   return {
     text,

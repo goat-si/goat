@@ -7,7 +7,7 @@ import { runMigrations } from "../Migrations.ts";
 it.effect("upgrades schema 61 and maintains indexed background roster flags", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 67 });
+    yield* runMigrations({ toMigrationInclusive: 68 });
     yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
     (provider_thread_id, provider, status, updated_at, payload_json) VALUES
     ('active-roster', 'claude', 'idle', '2026-10-11', '{"pendingBackgroundTasks":[{"taskId":"background","kind":"subagent"}]}'),

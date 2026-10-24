@@ -222,7 +222,7 @@ describe("unreleased memory DB", () => {
       yield* sql`INSERT INTO unrelated_state VALUES ('keep')`;
       assert.deepStrictEqual(
         yield* runMigrations(),
-        migrationManifest.filter(([id]) => id > 75),
+        migrationManifest.filter(([id]) => id > 76),
       );
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT value FROM unrelated_state`, [{ value: "keep" }]);
@@ -282,7 +282,7 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
       yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`;
     const schema = yield* sql`SELECT name,sql FROM sqlite_master ORDER BY name`;
     assert.deepStrictEqual(
-      migrationManifest.filter(([id]) => id >= 80),
+      migrationManifest.filter(([id]) => id >= 81),
       [
         [81, "MemoryImportLineage"],
         [82, "MemoryCheckpointAccounting"],
@@ -293,7 +293,7 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
         [87, "MemoryLastReadySpace"],
         [88, "MemoryHubAdministered"],
         [89, "MemoryCheckpointLifecycle"],
-        ...migrationManifest.filter(([id]) => id > 88),
+        ...migrationManifest.filter(([id]) => id > 89),
       ],
     );
     assert.deepStrictEqual(yield* runMigrations(), []);
