@@ -37,6 +37,8 @@ export const fallbackChainEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "FallbackChains.set replaces or removes the chain at the supplied id and sets or clears its default selection under the settings lock; repeating those assignments leaves the same configuration.",
     annotations: {
       idempotentHint: true,
       openWorldHint: false,

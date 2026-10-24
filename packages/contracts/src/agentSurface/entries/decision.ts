@@ -73,6 +73,8 @@ export const decisionEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],
+    idempotencyReason:
+      "DecisionInbox.answer atomically changes an open durable decision to answered and queues one delivery keyed by decision id; projected answers use the orchestrator's pending-to-resolved request transition, which rejects another response.",
     annotations: { idempotentHint: false, openWorldHint: false },
   }),
 } as const;

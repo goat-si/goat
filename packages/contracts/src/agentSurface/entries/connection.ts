@@ -62,6 +62,8 @@ export const connectionEntries = {
     requires: "either",
     dryRun: "unsupported",
     humanSteps: ["pairing"],
+    idempotencyReason:
+      "HubNodes.remove removes routes for the specified node under its lock and deletes registrations and route state; repeating cannot create routes or cancel remote work, and an absent node or route is refused.",
     annotations: {
       title: "Remove a saved connection",
       idempotentHint: false,

@@ -333,7 +333,7 @@ export const writesAsCaller = <P, A, E, R>(handle: (params: P) => Effect.Effect<
   declare("write", (params: P) =>
     requireThreadCaller.pipe(
       Effect.andThen(orchestratingCaller),
-      Effect.flatMap(() => handle(params)),
+      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
     ),
   );
 
