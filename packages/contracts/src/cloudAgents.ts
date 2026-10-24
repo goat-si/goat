@@ -240,10 +240,20 @@ export type CloudRunSummary = typeof CloudRunSummary.Type;
 export const CloudRunListInput = Schema.Struct({
   provider: Schema.optional(CloudAgentProvider),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  cursor: Schema.optionalKey(
+    Schema.String.check(Schema.isMaxLength(512)).annotate({
+      description: "nextCursor from the previous page, with the same provider.",
+    }),
+  ),
 });
 export type CloudRunListInput = typeof CloudRunListInput.Type;
 
-export const CloudRunListResult = Schema.Struct({ runs: Schema.Array(CloudRunSummary) });
+export const CloudRunListResult = Schema.Struct({
+  runs: Schema.Array(CloudRunSummary),
+  /** More runs match than this page holds. Older servers omit it. */
+  truncated: Schema.optionalKey(Schema.Boolean),
+  nextCursor: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+});
 export type CloudRunListResult = typeof CloudRunListResult.Type;
 
 export const CloudRunForgetInput = Schema.Struct({
