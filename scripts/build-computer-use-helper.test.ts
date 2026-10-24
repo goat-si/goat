@@ -2,6 +2,7 @@
 import * as NodeFS from "node:fs";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
@@ -159,7 +160,7 @@ describe("build-computer-use-helper", () => {
       assert.include(message, "User interaction is not allowed");
       assert.include(message, "Run the build from Terminal while signed in");
       assert.lengthOf(calls, 1);
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("signs drivers, then the bundle under the team requirement, then verifies", () =>
@@ -181,7 +182,7 @@ describe("build-computer-use-helper", () => {
         helperDesignatedRequirement(SIGN_INPUT.bundleId, "U9ATA49N28"),
       );
       assert.include(calls[2] ?? [], "--verify");
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("stops on a codesign failure with the keychain remedy and never retries ad-hoc", () =>
@@ -206,7 +207,7 @@ describe("build-computer-use-helper", () => {
       assert.include(message, "not usable from this session");
       assert.lengthOf(calls, 2);
       assert.isFalse(calls.some((call) => call.includes("-")));
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it("lets only a dev helper serve any parent, under its own per-channel bundle id", () => {
