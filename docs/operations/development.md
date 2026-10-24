@@ -282,8 +282,8 @@ An unsigned one carries an ad-hoc helper when asked to:
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
 ```
 
-That helper serves any parent, sits inside an ad-hoc GOAT.app, builds for arm64 or x64, and is
-never notarized. It has the same row problem as `--ad-hoc` and prints the same warning. Either
+That helper serves any parent, sits inside an ad-hoc GOAT.app and is never notarized. It has the
+same row problem as `--ad-hoc` and prints the same warning. Either
 way, electron-builder leaves the helper's signature alone, and the build fails when the embedded
 helper's code hash differs from the one built, when a signed GOAT.app and its helper carry
 different teams, or when an unsigned one carries any team.

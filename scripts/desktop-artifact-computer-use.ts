@@ -19,6 +19,7 @@ import * as Stream from "effect/Stream";
 import { buildComputerUseHelper } from "./build-computer-use-helper.ts";
 import { runReleaseCommand } from "./lib/release-verify.ts";
 import { windowsSystemTar } from "./lib/windows-tar.ts";
+import { COMPUTER_USE_HELPER_ENV } from "./restore-computer-use-helper.ts";
 
 type DesktopPlatform = "mac" | "linux" | "win";
 type DesktopArch = "arm64" | "x64" | "universal";
@@ -172,20 +173,15 @@ export interface StagedComputerUseHelper {
 /**
  * Why --computer-use-helper cannot apply to this build, or undefined when it can. A signed mac
  * build always carries the Developer ID helper (#1351), so the flag is only for an unsigned one.
- * @electron/universal rewrites every nested Info.plist when it merges slices, which breaks the
- * helper's seal (#1340).
  */
 export function computerUseHelperRefusal(input: {
   readonly platform: DesktopPlatform;
-  readonly arch: DesktopArch;
   readonly signed: boolean;
 }): string | undefined {
   if (input.platform !== "mac")
     return "--computer-use-helper embeds the macOS helper and applies to mac builds only.";
   if (input.signed)
     return "--computer-use-helper is for unsigned builds; a signed mac build always carries the Developer ID helper.";
-  if (input.arch === "universal")
-    return "--computer-use-helper builds arm64 or x64: merging a universal app rewrites the helper's signed Info.plist.";
   return undefined;
 }
 
@@ -198,7 +194,6 @@ export const stageComputerUseHelper = Effect.fn("stageComputerUseHelper")(functi
   readonly repoRoot: string;
   readonly stageRoot: string;
   readonly platform: DesktopPlatform;
-  readonly arch: DesktopArch;
   readonly appId: string;
   readonly signed: boolean;
 }) {
@@ -230,12 +225,17 @@ export const signedComputerUseHelper = (
     ? undefined
     : { bundle, bundleId: computerUseHelperBundleId(appId), signed: true };
 
+/** The build environment the afterPack hook reads to put the staged helper back. */
+export const computerUseHelperEnvironment = (helper: StagedComputerUseHelper | undefined) =>
+  helper ? { [COMPUTER_USE_HELPER_ENV]: helper.bundle } : {};
+
 /**
  * Keeps electron-builder's signer off the helper createBuildConfig placed in Contents/Helpers,
- * so GOAT.app is sealed over the helper's own signature and entitlements (inner binaries, then
- * the helper, then GOAT.app). Unsigned builds are signed ad-hoc so the nested seal still
- * verifies. electron-builder matches an identity of "-" against certificate names before it
- * falls back to ad-hoc, so the sign hook forces ad-hoc whatever certificate it found.
+ * and restores it after packing (universal merges rewrite its Info.plist), so GOAT.app is sealed
+ * over the helper's own signature and entitlements (inner binaries, then the helper, then
+ * GOAT.app). Unsigned builds are signed ad-hoc so the nested seal still verifies.
+ * electron-builder matches an identity of "-" against certificate names before it falls back to
+ * ad-hoc, so the sign hook forces ad-hoc whatever certificate it found.
  */
 export function withComputerUseHelper(
   config: Record<string, unknown>,
@@ -245,6 +245,7 @@ export function withComputerUseHelper(
   const mac = typeof config.mac === "object" && config.mac !== null ? config.mac : {};
   return {
     ...config,
+    afterPack: NodeURL.fileURLToPath(new URL("./restore-computer-use-helper.ts", import.meta.url)),
     mac: {
       ...mac,
       signIgnore: [`/Contents/${COMPUTER_USE_HELPER_IN_APP.replaceAll(".", "\\.")}(/|$)`],

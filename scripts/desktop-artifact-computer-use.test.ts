@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  computerUseHelperEnvironment,
   computerUseHelperRefusal,
   embeddedHelperProblems,
   signedComputerUseHelper,
@@ -14,17 +15,13 @@ const signed = {
 };
 
 describe("desktop computer use payload", () => {
-  it("keeps the flag to unsigned arm64 and x64 mac builds; signed ones always carry the helper", () => {
-    assert.isUndefined(computerUseHelperRefusal({ platform: "mac", arch: "arm64", signed: false }));
-    assert.isUndefined(computerUseHelperRefusal({ platform: "mac", arch: "x64", signed: false }));
+  it("keeps the flag to unsigned mac builds; signed ones always carry the helper", () => {
+    assert.isUndefined(computerUseHelperRefusal({ platform: "mac", signed: false }));
     assert.match(
-      computerUseHelperRefusal({ platform: "mac", arch: "arm64", signed: true }) ?? "",
+      computerUseHelperRefusal({ platform: "mac", signed: true }) ?? "",
       /always carries the Developer ID helper/,
     );
-    assert.isDefined(
-      computerUseHelperRefusal({ platform: "mac", arch: "universal", signed: false }),
-    );
-    assert.isDefined(computerUseHelperRefusal({ platform: "win", arch: "x64", signed: false }));
+    assert.isDefined(computerUseHelperRefusal({ platform: "win", signed: false }));
   });
 
   it("fails a build whose helper was re-signed or signed by another team than GOAT.app", () => {
@@ -107,6 +104,13 @@ describe("desktop computer use payload", () => {
     assert.isFalse(ignored(contents + "/Frameworks/GOAT Helper (Renderer).app"));
     assert.isFalse(ignored(contents + "/Helpers/GOAT Computer Use Extra.app"));
     assert.isFalse(ignored("/dist/mac-arm64/GOAT.app"));
+    // A universal merge rewrites the helper's Info.plist; the afterPack hook puts the staged one
+    // back before GOAT.app is signed (#1340).
+    assert.match(String(config.afterPack), /restore-computer-use-helper\.ts$/);
+    assert.deepEqual(computerUseHelperEnvironment(helper), {
+      GOAT_DESKTOP_STAGED_COMPUTER_USE_HELPER: "/stage/computer-use-helper/GOAT Computer Use.app",
+    });
+    assert.deepEqual(computerUseHelperEnvironment(undefined), {});
 
     const adHoc = withComputerUseHelper({ mac: {} }, { ...signed, signed: false });
     assert.propertyVal(adHoc.mac, "identity", "-");

@@ -49,6 +49,7 @@ import {
 import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { scanReleasePayload, writePayloadReport } from "./lib/release-verify.ts";
 import {
+  computerUseHelperEnvironment,
   computerUseHelperRefusal,
   signedComputerUseHelper,
   CuaDriverArtifactError,
@@ -1884,7 +1885,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     input.computerUseHelper ?? Option.none(),
     env.computerUseHelper,
   );
-  const helperRefusal = computerUseHelper && computerUseHelperRefusal({ platform, arch, signed });
+  const helperRefusal = computerUseHelper && computerUseHelperRefusal({ platform, signed });
   if (helperRefusal) return yield* new CuaDriverArtifactError({ message: helperRefusal });
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
@@ -4384,7 +4385,6 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         repoRoot,
         stageRoot,
         platform: options.platform,
-        arch: options.arch,
         appId: resolveDesktopAppId(appVersion),
         signed: options.signed,
       })
@@ -4598,6 +4598,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   // on `extendEnv` merging.
   let buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
+    ...computerUseHelperEnvironment(computerUseHelper),
   };
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
   for (const [key, value] of Object.entries(buildEnv)) {
@@ -4807,7 +4808,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   computerUseHelper: Flag.Boolean("computer-use-helper").pipe(
     Flag.withDescription(
-      "Embed GOAT Computer Use.app in GOAT.app/Contents/Helpers on macOS; signed builds wait for #1210 (env: GOAT_DESKTOP_COMPUTER_USE_HELPER).",
+      "Embed an ad-hoc GOAT Computer Use.app in an unsigned macOS build; signed builds always carry the Developer ID helper (env: GOAT_DESKTOP_COMPUTER_USE_HELPER).",
     ),
     Flag.optional,
   ),
