@@ -55,13 +55,13 @@ or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
 In the Files panel, `mod+alt+c` copies the full path of the focused file or
 folder and `mod+alt+shift+c` copies its path relative to the thread's
-workspace, the same pair VS Code and Zed use. Several selected rows copy on
+workspace, the pair VS Code and Zed use on macOS and Linux. Several selected rows copy on
 separate lines. A folder you just opened or closed is still the target. With a
 file open, the shortcuts copy that file while the file view has focus, and the
 copy button beside its breadcrumbs offers both. Right-click a row for the same
 actions. Paths on a remote environment are that machine's paths. The shortcuts
 do nothing while you type in a field or a file's editor, or inside a rendered
-HTML page. Search Settings for “Files: Copy Path” to change them.
+HTML page. Search Settings for “Files: Copy” to change them.
 
 ## Find in a diff
 
