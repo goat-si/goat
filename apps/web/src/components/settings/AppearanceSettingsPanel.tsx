@@ -1,3 +1,4 @@
+import { DesktopWindowMaterialSetting } from "./DesktopWindowMaterialSetting";
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import {
@@ -203,6 +204,8 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        <DesktopWindowMaterialSetting />
 
         {showEnvironmentIdentification ? (
           <SettingsRow

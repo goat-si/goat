@@ -8,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -201,6 +202,39 @@ describe("DesktopTelemetryPublisher", () => {
         [report],
       );
     }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "watches only while its own server says agents control the host, ignoring late and foreign messages",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const heard = yield* Queue.unbounded<boolean>();
+        yield* publisher.cuaWatch.pipe(
+          Stream.runForEach((active) => Queue.offer(heard, active)),
+          Effect.forkScoped,
+        );
+        assert.isFalse(yield* Queue.take(heard));
+        const watch = (seq: number, active: boolean) =>
+          ({ version: 1, type: "cuaWatch", seq, active }) as const;
+        const current = publisher.cuaWatch.pipe(Stream.runHead);
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("ssh:remote", watch(9, true));
+        assert.deepEqual(yield* current, Option.some(false));
+        yield* publisher.handleControlForSource("primary", watch(2, true));
+        assert.isTrue(yield* Queue.take(heard));
+        // seq 1 was sent before seq 2 and arrived after it.
+        yield* publisher.handleControlForSource("primary", watch(1, false));
+        assert.deepEqual(yield* current, Option.some(true));
+        yield* publisher.handleControlForSource("primary", watch(3, false));
+        assert.isFalse(yield* Queue.take(heard));
+        yield* publisher.handleControlForSource("primary", watch(4, true));
+        assert.isTrue(yield* Queue.take(heard));
+        // The server going away ends the watch.
+        yield* Fiber.interrupt(primary.fiber);
+        assert.isFalse(yield* Queue.take(heard));
+        assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
 
   it.effect(

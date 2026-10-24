@@ -9,6 +9,8 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { DEFAULT_KEYBINDINGS } from "@goat/shared/keybindings";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import { BROWSER_SETTINGS_SEARCH_ITEMS } from "./settingsSearchBrowserItems";
+import { GLASS_SETTINGS_SEARCH_ITEMS } from "./settingsSearchGlassItems";
+import { hasDesktopWindowMaterialApi } from "../../desktop/useDesktopWindowMaterial";
 import { HUB_SETTINGS_SEARCH_ITEMS } from "./settingsSearchHubItems";
 import {
   validateSettingsScopeSearch,
@@ -65,6 +67,7 @@ export interface SettingsSearchItem {
   readonly secondary?: boolean;
   readonly requiresMemory?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  readonly requiresDesktopWindowMaterial?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -265,13 +268,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
     searchTerms: ["colors borders interface"],
   },
-  {
-    // Prefixed because the slider control already owns the `glass-opacity` id.
-    id: "setting-glass-opacity",
-    title: "Glass opacity",
-    to: "/settings/appearance",
-    searchTerms: ["transparent transparency solid menus dialogs composer"],
-  },
+  ...GLASS_SETTINGS_SEARCH_ITEMS,
   {
     id: "diff-color-scheme",
     title: "Diff colors",
@@ -1332,6 +1329,7 @@ export function searchSettings(
   return items
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
+      if (item.requiresDesktopWindowMaterial && !hasDesktopWindowMaterialApi()) return [];
       if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];

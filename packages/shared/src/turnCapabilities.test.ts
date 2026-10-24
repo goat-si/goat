@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { projectComposerContextForProvider } from "./composerContextReferences.ts";
-import { requestedTurnCapabilities, withTurnCapabilities } from "./turnCapabilities.ts";
+import {
+  capabilityContextRecordsInText,
+  requestedTurnCapabilities,
+  withTurnCapabilities,
+} from "./turnCapabilities.ts";
 
 describe("turn capabilities", () => {
   it("counts only the chips still in the text", () => {
@@ -22,6 +26,14 @@ describe("turn capabilities", () => {
     const once = withTurnCapabilities({ text: "Go" }, ["browser"]);
     const twice = withTurnCapabilities(once, ["browser", "browser"]);
     expect(twice).toEqual(once);
+  });
+
+  it("rebuilds a composer's capability records from the chips in its text", () => {
+    const { text, context } = withTurnCapabilities({ text: "Look" }, ["computer-use"]);
+    expect(capabilityContextRecordsInText(`${text} and again ${text}`)).toEqual(context?.records);
+    expect(
+      capabilityContextRecordsInText("[Computer](goat-context://v1/capability/other)"),
+    ).toEqual([]);
   });
 
   it("tells the agent what was asked and what to do when the tools are missing", () => {

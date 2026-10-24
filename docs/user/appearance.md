@@ -5,6 +5,10 @@ appearance or stay in light or dark mode. To use different themes for light and 
 the corresponding preview within each theme. Appearance preferences are saved separately on each
 device or browser.
 
+In the desktop app, turn on **System glass** in **Settings → Appearance** to use Mica on
+Windows 11 22H2 or later. Native glass is not available on macOS in this build. System glass
+is off at 100% glass opacity or while reduced transparency or high contrast is enabled.
+
 On web and desktop, use **Change theme** in the command palette to select a theme without leaving chat.
 Press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker directly.
 Use **Change appearance** in the command palette to choose System, Light, or Dark independently of

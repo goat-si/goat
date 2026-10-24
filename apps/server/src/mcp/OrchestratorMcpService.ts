@@ -83,6 +83,7 @@ import { derive } from "@goat/provider-core/server/IdAllocator";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
+import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
@@ -3649,15 +3650,11 @@ const make = Effect.gen(function* () {
       const result = yield* threadManagement
         .sendToThread({
           projectId: target.thread.projectId,
-          commandId: stableCommandId({
-            scope,
-            requestKey: key,
-            operation: "thread-send",
-          }),
+          commandId: admissionId,
           threadId: input.threadId,
           ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
           messageId,
-          text: input.message,
+          ...withTurnCapabilities({ text: input.message }, input.capabilities ?? []),
           attachments: [],
           mode,
           createdBy: "agent",

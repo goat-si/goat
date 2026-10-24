@@ -59,6 +59,7 @@ function runRemoteUpdatesTest(
         encoded: Stream.empty,
         encodedForSource: () => Stream.empty,
         cuaRequests: Stream.empty,
+        cuaWatch: Stream.empty,
         publishCuaReport: () => Effect.void,
         publishCuaReadiness: () => Effect.void,
         handleControlForSource: () => Effect.void,

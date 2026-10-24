@@ -9,6 +9,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
+import { ComputerUseReadiness } from "../computerUse/ComputerUseReadiness";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { CuaSetupDialog } from "./CuaSetupDialog";
@@ -215,6 +216,12 @@ function ComputerUseControls({
           </div>
         }
       />
+      <ComputerUseReadiness
+        platform={host.status?.platform}
+        readiness={host.status?.readiness}
+        tools={host.status?.tools}
+        signals={host.status?.signals}
+      />
       {host.enabled ? <BuiltInSkillRows host={host} /> : null}
       {setupOpen && host.canConfigure ? (
         <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
@@ -226,7 +233,7 @@ function ComputerUseControls({
 function BuiltInSkillRows({ host }: { host: ComputerUseHost }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer").map((skill) => {
+  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => {
     const on = !host.disabledSkills.includes(skill.name);
     return (
       <SettingsRow

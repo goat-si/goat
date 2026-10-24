@@ -585,6 +585,7 @@ const make = Effect.gen(function* () {
                 ...(send.mode === undefined
                   ? {}
                   : { mode: send.mode === "restart" ? "restart" : "auto" }),
+                ...(send.capabilities?.length ? { capabilities: send.capabilities } : {}),
                 clientRequestId: `relay:${r.correlation_id}:${requestKey}`,
               },
               writes: true,
@@ -1052,7 +1053,7 @@ const make = Effect.gen(function* () {
               originThreadId: input.originThreadId,
               readKeyHash: NodeCrypto.createHash("sha256").update(readKey).digest("hex"),
               // Delegated tasks report to their parent task and do not relay.
-              ...(input.kind === "thread" ? { relaySend: true } : {}),
+              ...(input.kind === "thread" ? { relaySend: true, relayCapabilities: true } : {}),
             },
           },
           register,

@@ -751,11 +751,11 @@ describe("HostThreadsMcpService", () => {
             host: "box",
             threadId: ThreadId.make("remote-1"),
             message: "status?",
+            capabilities: [],
           }),
       );
       expect(result._tag === "Success" && result.success.host).toBe("box");
-      expect(calls[0]?.tool).toBe("goat_thread_send");
-      expect(calls[0]?.writes).toBe(true);
+      expect([calls[0]?.tool, calls[0]?.writes]).toEqual(["goat_thread_send", true]);
       expect(calls[0]?.arguments).toEqual({ threadId: "remote-1", message: "status?" });
       // The caller's watch on that thread, if any, follows the run the send joined.
       expect(rearms).toEqual([

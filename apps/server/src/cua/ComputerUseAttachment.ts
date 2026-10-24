@@ -112,7 +112,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
-    skills: resolveBuiltInSkills({ attached: ["computer"], disabled }).active,
+    skills: resolveBuiltInSkills({ attached: ["computer-use"], disabled }).active,
   } as const;
 });
 

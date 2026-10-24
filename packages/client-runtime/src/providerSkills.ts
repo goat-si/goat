@@ -148,7 +148,7 @@ export function withBuiltInProviderSkills(
     return skills;
   return [
     ...skills,
-    ...BUILTIN_SKILLS.filter((skill) => skill.capability === "computer").map((skill) => ({
+    ...BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => ({
       name: skill.name,
       displayName: skill.displayName,
       description: skill.description,
