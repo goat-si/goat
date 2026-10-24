@@ -195,10 +195,10 @@ export const make = Effect.gen(function* () {
     }),
   );
   // A new address or host key belongs to the same running machine, often refreshed by this
-  // hub's own check, so only lifecycle changes reset the route and void checks in flight.
+  // hub's own check, so only a stop, disconnect or removal resets the route and voids checks.
   yield* cloud.onAliasInvalidated((alias, cause) =>
     Effect.suspend(() =>
-      active && cause === "lifecycle"
+      active && cause !== "endpoint"
         ? Effect.sync(() =>
             cloudGenerations.set(alias, (cloudGenerations.get(alias) ?? 0) + 1),
           ).pipe(

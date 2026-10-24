@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import { type CloudMachineState } from "@goat/contracts";
+import { CloudMachineError, type CloudMachineState } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -311,6 +312,102 @@ describe("CloudMachineService lifecycle", () => {
           expect(listed.configured).toBe(false);
           expect(listed.machines).toMatchObject([{ alias: ALIAS, presence: "unknown" }]);
           expect((yield* service.stop(ALIAS).pipe(Effect.flip)).reason).toBe("not_configured");
+        }),
+      );
+    }),
+  );
+
+  it.effect(
+    "only delete and forget signal that the machine is gone, after their removal hook ran",
+    () =>
+      Effect.gen(function* () {
+        const world = makeWorld();
+        yield* withService(world, { ownedState: "running" }, (service) =>
+          Effect.gen(function* () {
+            const signals: Array<string> = [];
+            yield* service.onRemoving((alias) =>
+              Effect.sync(() => void signals.push(`removing ${alias} after ${world.calls.at(-1)}`)),
+            );
+            yield* service.onAliasInvalidated((alias, cause) =>
+              Effect.sync(() => void signals.push(`${cause} ${alias}`)),
+            );
+            yield* service.stop(ALIAS);
+            yield* service.disconnect();
+            yield* service.configure({ apiKey: "boat_test_key", consentToSshInclude: true });
+            expect(signals).toEqual([`lifecycle ${ALIAS}`, `lifecycle ${ALIAS}`]);
+            expect(yield* service.isRemoved(ALIAS)).toBe(false);
+
+            world.states.set(ID, "archived");
+            signals.length = 0;
+            yield* service.forget(ALIAS);
+            // Recorded while the catalog still names the machine, after Boat confirmed it stopped.
+            expect(signals).toEqual([`removing ${ALIAS} after get`, `removed ${ALIAS}`]);
+            expect(yield* service.isRemoved(ALIAS)).toBe(true);
+          }),
+        );
+        const deleting = makeWorld();
+        yield* withService(deleting, { ownedState: "running" }, (service) =>
+          Effect.gen(function* () {
+            const signals: Array<string> = [];
+            yield* service.onRemoving((alias) =>
+              Effect.sync(
+                () => void signals.push(`removing ${alias} after ${deleting.calls.at(-1)}`),
+              ),
+            );
+            yield* service.onAliasInvalidated((alias, cause) =>
+              Effect.sync(() => void signals.push(`${cause} ${alias}`)),
+            );
+            yield* service.delete(ALIAS);
+            // Only after Boat accepted the delete, so a refused one leaves nothing to undo.
+            expect(signals).toEqual([`removing ${ALIAS} after remove`, `removed ${ALIAS}`]);
+            // A delete Boat accepted ends ownership even while the catalog still lists it.
+            expect(yield* service.isRemoved(ALIAS)).toBe(true);
+            deleting.failures.set("remove", "conflict");
+            signals.length = 0;
+            expect((yield* service.delete(ALIAS).pipe(Effect.flip)).reason).toBe("conflict");
+            expect(signals).toEqual([]);
+          }),
+        );
+      }),
+  );
+
+  it.effect("a removal hook that fails keeps the machine in the catalog", () =>
+    Effect.gen(function* () {
+      const world = makeWorld();
+      yield* withService(world, { ownedState: "archived" }, (service) =>
+        Effect.gen(function* () {
+          yield* service.onRemoving(() =>
+            Effect.fail(new CloudMachineError({ reason: "storage_failed" })),
+          );
+          expect((yield* service.forget(ALIAS).pipe(Effect.flip)).reason).toBe("storage_failed");
+          expect((yield* service.delete(ALIAS).pipe(Effect.flip)).reason).toBe("storage_failed");
+          expect(world.removedHosts).toEqual([]);
+          expect(world.invalidated).toEqual([]);
+          expect(yield* service.isRemoved(ALIAS)).toBe(false);
+          expect((yield* service.list()).machines).toMatchObject([
+            { alias: ALIAS, deletePending: false },
+          ]);
+        }),
+      );
+    }),
+  );
+
+  it.effect("a delete Boat accepted counts as removed once Boat no longer shows it", () =>
+    Effect.gen(function* () {
+      const world = makeWorld();
+      yield* withService(world, { ownedState: "running" }, (service) =>
+        Effect.gen(function* () {
+          // GOAT stops right after recording the removal, before the catalog marks the delete.
+          yield* service.onRemoving(() => Effect.interrupt);
+          expect(Exit.hasInterrupts(yield* service.delete(ALIAS).pipe(Effect.exit))).toBe(true);
+          expect((yield* service.list()).machines[0]?.deletePending).toBe(false);
+          expect(yield* service.isRemoved(ALIAS)).toBe(false);
+          world.missing.add(ID);
+          expect(yield* service.isRemoved(ALIAS)).toBe(true);
+          // A key that cannot see the machine proves nothing.
+          world.missing.delete(ID);
+          world.failures.set("get", "scope_denied");
+          expect(yield* service.isRemoved(ALIAS)).toBe(false);
         }),
       );
     }),

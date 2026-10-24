@@ -38,6 +38,11 @@ const WorkerDetail = Schema.Struct({
   followUps: NonNegativeInt,
   /** The run a follow-up was last sent about, so each run is nudged once. */
   followedUpRunId: Schema.NullOr(RunId),
+  /**
+   * The run whose recovery reached an outcome, so each run is recovered once. Rows an earlier
+   * controller wrote lack it and mark such runs only in followedUpRunId (#1452).
+   */
+  recoveredRunId: Schema.NullOr(RunId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The usage-limited run the goal resumed after its reset, so it is resumed once. */
   resumedRunId: Schema.NullOr(RunId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The run a stall was steered on, so a second stall reschedules. */
@@ -186,6 +191,10 @@ export class GoalStore extends Context.Service<
     readonly launches: (
       id: FleetGoalId,
     ) => Effect.Effect<ReadonlyArray<LaunchClaim>, GoalStoreError>;
+    /** Fallbacks that continued their run in its own thread, by action id. */
+    readonly switchedFallbacks: (
+      id: FleetGoalId,
+    ) => Effect.Effect<ReadonlyArray<string>, GoalStoreError>;
     /** When an action was claimed and whether it settled; null when it never was. */
     readonly claimOf: (actionId: string) => Effect.Effect<
       {
@@ -357,6 +366,7 @@ const make = Effect.gen(function* () {
         reported: worker.reported,
         followUps: worker.followUps,
         followedUpRunId: worker.followedUpRunId,
+        recoveredRunId: worker.recoveredRunId,
         steeredRunId: worker.steeredRunId,
         resumedRunId: worker.resumedRunId,
         lastRunId: worker.lastRunId,
@@ -714,6 +724,14 @@ const make = Effect.gen(function* () {
             : { claimedAt: row.claimed_at, settledAt: row.settled_at, outcome: row.outcome },
         ),
       ),
+    switchedFallbacks: (id) =>
+      run(
+        "GoalStore.switchedFallbacks",
+        sql<{ readonly action_id: string }>`
+          SELECT action_id FROM fleet_goal_actions
+          WHERE goal_id = ${id} AND kind = 'fallback' AND outcome = 'switched'
+        `,
+      ).pipe(Effect.map((rows) => rows.map((row) => row.action_id))),
     ownsThread: (threadId) =>
       run(
         "GoalStore.ownsThread",

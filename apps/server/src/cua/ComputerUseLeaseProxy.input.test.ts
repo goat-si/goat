@@ -97,7 +97,7 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
   );
 
   it.effect.each(["reply", "cancel", "stop", "pause", "child exits"] as const)(
-    "ends a sent input call exactly once on %s, including after a late reply or replacement",
+    "ends a sent input call exactly once after %s finishes, including after a late reply or replacement",
     (ending) =>
       Effect.gen(function* () {
         const h = yield* harness({ humanInput: true });
@@ -118,6 +118,9 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
             }),
           );
           assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+          // Cancellation alone cannot prove that the driver stopped posting input.
+          assert.equal(yield* h.agentCallsQueued, 0);
+          yield* h.reply(reply);
         } else {
           if (ending === "pause")
             yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });

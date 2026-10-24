@@ -1,0 +1,150 @@
+import type {
+  ComputerUseCallAdmission,
+  ComputerUseCallReservation,
+  ThreadId,
+} from "@goat/contracts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
+import * as NodeCrypto from "node:crypto";
+
+const READS = new Set([
+  "check_permissions",
+  "health_report",
+  "get_guide",
+  "list_apps",
+  "list_windows",
+  "get_accessibility_tree",
+  "get_window_state",
+  "get_screen_size",
+  "get_cursor_position",
+  "verify_state",
+  "zoom",
+  "get_session",
+  "list_sessions",
+  "get_agent_cursor_state",
+  "start_session",
+  "end_session",
+]);
+const WINDOW_MUTATIONS = new Set([
+  "click",
+  "double_click",
+  "right_click",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "hotkey",
+  "set_value",
+  "invoke_menu",
+  "set_window_frame",
+]);
+
+type Resource = { readonly pid: number; readonly windowId: number } | "desktop";
+type Call = Extract<ComputerUseCallReservation, { action: "reserve" }>;
+const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+const positive = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+/** Foreground input shares the desktop even when its named window differs. */
+const foreground = (value: unknown, depth = 0): boolean => {
+  if (depth > 16) return true;
+  if (Array.isArray(value)) return value.some((item) => foreground(item, depth + 1));
+  const object = record(value);
+  if (object === undefined) return false;
+  // Raw MCP arguments bypass the enum; the driver parses mode strings case-insensitively.
+  return Object.entries(object).some(
+    ([key, child]) =>
+      ((key === "delivery_mode" || key === "dispatch") &&
+        typeof child === "string" &&
+        child.toLowerCase() === "foreground") ||
+      (key.includes("foreground") && child === true) ||
+      foreground(child, depth + 1),
+  );
+};
+
+/** Numeric identity is execution scope only; it never preserves approval across window reuse. */
+export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
+  const desktop =
+    call.name === "run_steps" ||
+    call.name === "run_script" ||
+    call.name === "bring_to_front" ||
+    call.name === "launch_app" ||
+    foreground(call.args);
+  if (!WINDOW_MUTATIONS.has(call.name))
+    return !desktop && READS.has(call.name) ? "read" : "desktop";
+  const args = record(call.args);
+  const target = record(args?.target);
+  if (target !== undefined && (args?.pid !== undefined || args?.window_id !== undefined))
+    return "invalid";
+  const exact = target ?? args;
+  if (exact?.pid !== undefined && !positive(exact.pid)) return "invalid";
+  if (exact?.window_id !== undefined && !positive(exact.window_id)) return "invalid";
+  if (desktop || (target !== undefined && target.kind !== "window")) return "desktop";
+  if (positive(exact?.pid) && positive(exact?.window_id))
+    return { pid: exact.pid, windowId: exact.window_id };
+  return "desktop";
+};
+
+interface Ticket {
+  readonly threadId: ThreadId;
+  readonly call: Call;
+  readonly resource: Resource;
+}
+
+const connectionKey = (threadId: ThreadId, call: ComputerUseCallReservation) =>
+  JSON.stringify([threadId, call.controlId, call.connectionId]);
+const overlaps = (a: Resource, b: Resource) =>
+  a === "desktop" || b === "desktop" || (a.pid === b.pid && a.windowId === b.windowId);
+
+/** Owned by the lease service; all operations run without a yield during admission. */
+export const makeCallReservations = () => {
+  const tickets = new Map<string, Ticket>();
+  // A delayed POST must never reopen a driver generation already cut off by its proxy.
+  const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
+  return {
+    reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
+      if (closed.has(connectionKey(threadId, call)))
+        return { status: "refused", detail: "replaced" };
+      const resource = callResource(call);
+      if (resource === "invalid") return { status: "refused", detail: "invalid_target" };
+      if (resource === "read") return { status: "admitted", reservationId: null };
+      for (const ticket of tickets.values()) {
+        const duplicate =
+          connectionKey(threadId, call) === connectionKey(ticket.threadId, ticket.call) &&
+          call.callId === ticket.call.callId;
+        if (
+          duplicate ||
+          ((ticket.threadId !== threadId || ticket.call.controlId !== call.controlId) &&
+            overlaps(resource, ticket.resource))
+        )
+          return { status: "refused", detail: "target_busy", holderThreadId: ticket.threadId };
+      }
+      const reservationId = NodeCrypto.randomUUID();
+      tickets.set(reservationId, { threadId, call, resource });
+      return { status: "admitted", reservationId };
+    },
+    forgetClosed(threadId: ThreadId, controlId: string) {
+      for (const [key, owner] of closed)
+        if (owner.threadId === threadId && owner.controlId === controlId) closed.delete(key);
+    },
+    release(
+      threadId: ThreadId,
+      call: Exclude<ComputerUseCallReservation, Call>,
+      rememberClosed: boolean,
+    ): ComputerUseCallAdmission {
+      const key = connectionKey(threadId, call);
+      if (call.action === "close" && rememberClosed)
+        closed.set(key, { threadId, controlId: call.controlId });
+      for (const [id, ticket] of tickets) {
+        if (
+          connectionKey(ticket.threadId, ticket.call) === key &&
+          (call.action === "close" || call.reservationId === id)
+        )
+          tickets.delete(id);
+      }
+      return { status: "released" };
+    },
+  };
+};
