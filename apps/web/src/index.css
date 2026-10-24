@@ -2100,7 +2100,8 @@ code {
   display: inline-block;
 }
 
-.chat-markdown a {
+/* Context chips own their decoration, including the link-style hover underline. */
+.chat-markdown a:not([data-context-chip-appearance]) {
   text-decoration: none;
 }
 
