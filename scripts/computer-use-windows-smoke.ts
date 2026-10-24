@@ -13,6 +13,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A standalone harness around child processes and files.
 // @effect-diagnostics globalTimers:off -- Waits for windows the harness itself opened.
 // @effect-diagnostics globalConsole:off -- Prints progress to the person running it by hand.
+// @effect-diagnostics globalDate:off -- Times the gap between live frames the helper sends.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -220,13 +221,22 @@ async function main(
      * interval; a no-picture reason must be the expected one and be told once. Nothing may arrive
      * for the request after it is cleared.
      */
-    const frame = async (label: string, expected: string, target: object) => {
+    const frame = async (
+      label: string,
+      expected: string,
+      target: {
+        readonly pid: number;
+        readonly windowId: number;
+        readonly maxWidth: number;
+        readonly apps?: ReadonlyArray<string>;
+      },
+    ) => {
       const id = ++framesId;
       const seen: Array<{ readonly at: number; readonly message: Record<string, unknown> }> = [];
       const unsubscribe = helper.onFrame((message) => {
         if (message.framesId === id) seen.push({ at: Date.now(), message });
       });
-      const params = { key: label, intervalMs: 500, ...target } as { maxWidth: number };
+      const params = { key: label, intervalMs: 500, ...target };
       await helper.call("frames", { framesId: id, targets: [params] });
       const wanted = expected === "frame" ? 2 : 1;
       for (let attempt = 0; attempt < 60 && seen.length < wanted; attempt++) await sleep(250);
