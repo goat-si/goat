@@ -2,7 +2,7 @@ import type { DesktopCuaPrivateModeReport } from "@goat/contracts";
 
 import type { HelperEvent, HelperSession } from "./ComputerUseHelper.ts";
 
-type Watchable = Pick<HelperSession, "watch" | "unwatch" | "onEvent">;
+type Watchable = Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch">;
 type Target = DesktopCuaPrivateModeReport["target"];
 
 /**
@@ -14,12 +14,16 @@ type Target = DesktopCuaPrivateModeReport["target"];
 export function makePrivateModeFollower(deps: {
   readonly publish: (report: DesktopCuaPrivateModeReport) => void;
   readonly newWatchId: () => string;
+  /** Runs a retry later, after a watch or unwatch failed while it still matters. */
+  readonly retryLater: (retry: () => void) => void;
 }) {
   let watching = false;
   let session: Watchable | undefined;
   let watchedBy: Watchable | undefined;
   let unsubscribe: (() => void) | undefined;
   let active: Target | undefined;
+  // A watch or unwatch failed, so the helper may be watching whatever this follower believes.
+  let unsure = false;
   let chain = Promise.resolve();
 
   const report = (isActive: boolean, target: Target) =>
@@ -33,18 +37,25 @@ export function makePrivateModeFollower(deps: {
   };
   const reconcile = async () => {
     const current = session;
-    if (current === undefined) return;
-    if (watching && watchedBy !== current) {
-      await current.watch(deps.newWatchId());
-      watchedBy = current;
-    } else if (!watching && watchedBy === current) {
-      await current.unwatch();
-      watchedBy = undefined;
+    if (current === undefined || !current.canWatch) return;
+    try {
+      if (watching && (watchedBy !== current || unsure)) {
+        await current.watch(deps.newWatchId());
+        watchedBy = current;
+        unsure = false;
+      } else if (!watching && (watchedBy === current || unsure)) {
+        await current.unwatch();
+        watchedBy = undefined;
+        unsure = false;
+      }
+    } catch {
+      unsure = true;
+      deps.retryLater(() => void settle());
     }
   };
-  // One change at a time, in order; a helper that cannot watch leaves the signal unraised.
+  // One change at a time, in order.
   const settle = () => {
-    chain = chain.then(reconcile).catch(() => undefined);
+    chain = chain.then(reconcile);
     return chain;
   };
 
@@ -67,6 +78,7 @@ export function makePrivateModeFollower(deps: {
       unsubscribe = undefined;
       session = undefined;
       watchedBy = undefined;
+      unsure = false;
       if (active !== undefined) report(false, active);
       active = undefined;
     },

@@ -4,6 +4,24 @@ import * as Effect from "effect/Effect";
 import { fixture } from "./DesktopCuaDriver.testkit.ts";
 
 describe("DesktopCuaDriver private mode", () => {
+  it.effect("does not claim private mode for a helper build that cannot watch", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          helperWithoutWatch: true,
+        });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        assert.deepEqual(test.readiness.at(-1)?.signals, {
+          privateMode: "unsupported",
+          humanInput: "unsupported",
+        });
+      }),
+    ),
+  );
+
   it.effect(
     "watches for a secret field only while agents control the host, and clears it when the helper stops",
     () =>

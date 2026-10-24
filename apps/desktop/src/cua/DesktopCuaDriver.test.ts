@@ -588,7 +588,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
   );
 
   it.effect(
-    "reports grants the helper asked for as waiting, and only private mode among the safety signals",
+    "reports grants the helper asked for as waiting, with no safety signal before a helper runs",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -602,7 +602,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           });
           assert.equal(report?.readiness.helper, "unauthenticated");
           assert.deepEqual(report?.signals, {
-            privateMode: "supported",
+            privateMode: "unsupported",
             humanInput: "unsupported",
           });
           assert.isFalse(report ? computerUseReady(report.readiness) : true);

@@ -26,6 +26,8 @@ const Hello = Schema.Struct({
   protocol: Schema.Number,
   pid: Schema.Number,
   bundleId: Schema.String,
+  /** Methods beyond protocol 1's first set; absent from helpers that predate them. */
+  features: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 const Refused = Schema.Struct({
   type: Schema.Literal("refused"),
@@ -148,12 +150,15 @@ export interface HelperSession {
     readonly noOverlay: boolean;
   }) => Promise<typeof Started.Type>;
   readonly stop: () => Promise<void>;
+  /** Whether this helper can watch for a focused secure field (#1235). */
+  readonly canWatch: boolean;
   /**
    * Starts watching every window for a focused secure field, replacing any earlier watch. The
    * new watch is in force from its answer: events the old one sends before it still arrive,
    * and the new one's first state follows it.
    */
   readonly watch: (watchId: string) => Promise<void>;
+  /** Stops whatever this helper watches, including a watch whose answer never arrived. */
   readonly unwatch: () => Promise<void>;
   /** Events of the watch in force; returns the unsubscribe. */
   readonly onEvent: (listener: (event: HelperEvent["event"]) => void) => () => void;
@@ -268,6 +273,8 @@ export async function openHelperSession(
     const answer = await Promise.race([reply, timeout(REQUEST_TIMEOUT_MS)]);
     if (answer === "timeout") {
       pending.delete(id);
+      // A late answer must not switch the watch: the caller treats this one as failed.
+      watchChanges.delete(id);
       throw new ComputerUseHelperError(
         "timeout",
         "GOAT Computer Use did not answer " + method + ".",
@@ -286,12 +293,13 @@ export async function openHelperSession(
     stop: async () => {
       await request("stop");
     },
+    canWatch: hello.features?.includes("watch") === true,
     watch: async (watchId) => {
       await request("watch", { watchId, targets: [] }, { to: watchId });
     },
     unwatch: async () => {
-      if (watching === undefined) return;
-      await request("unwatch", { watchId: watching }, { to: undefined });
+      // No watchId: the helper stops any watch it runs, one this session never saw answered too.
+      await request("unwatch", {}, { to: undefined });
     },
     onEvent: (listener) => {
       eventListeners.add(listener);

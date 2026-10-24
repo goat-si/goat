@@ -741,6 +741,8 @@ func runService() -> Never {
   emit([
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
+    // Methods beyond the protocol's first set, so the host never relies on one this build lacks.
+    "features": ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])

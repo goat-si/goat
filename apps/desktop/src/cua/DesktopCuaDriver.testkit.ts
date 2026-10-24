@@ -96,6 +96,8 @@ export const fixture = Effect.fn(function* (
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
     helper?: HelperAnswer | "unusable";
+    /** A helper build from before the watch method: its hello lists no features. */
+    helperWithoutWatch?: boolean;
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
   } = {},
@@ -198,6 +200,7 @@ export const fixture = Effect.fn(function* (
       let running = false;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
+        canWatch: options.helperWithoutWatch !== true,
         watch: async (_watchId: string) => {
           Queue.offerUnsafe(helperWatches, "watch");
           // A watch's first state follows its answer.

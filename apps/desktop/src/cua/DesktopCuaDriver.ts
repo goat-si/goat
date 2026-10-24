@@ -91,7 +91,9 @@ interface NativeHost {
   /** The helper's service pid, the driver's parent; absent for the in-process host. */
   readonly servicePid?: () => number | undefined;
   /** The helper session of the running generation, for its private-mode watch (#1235). */
-  readonly session?: () => Pick<HelperSession, "watch" | "unwatch" | "onEvent"> | undefined;
+  readonly session?: () =>
+    | Pick<HelperSession, "watch" | "unwatch" | "onEvent" | "canWatch">
+    | undefined;
 }
 type DriverClient = Pick<CuaDriverLike, "callTool"> & { readonly uniffiDestroy?: () => void };
 type DriverImage = ToolResult["images"][number];
@@ -341,10 +343,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperSeen = false;
   let lastReadiness: string | undefined;
   let watches = 0;
+  // Whether the running helper said it can watch; a build without the method raises nothing.
+  let helperCanWatch = false;
   const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport>();
+  const watchRetries = yield* Queue.unbounded<() => void>();
   const privateMode = makePrivateModeFollower({
     publish: (report) => Queue.offerUnsafe(safety, report),
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
+    retryLater: (retry) => Queue.offerUnsafe(watchRetries, retry),
   });
   /** Whether the running check reads through the helper; only then do its reads prove anything. */
   let checkingHelper = false;
@@ -357,7 +363,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         type: "cuaReadiness",
         generation: helperGeneration,
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
-        signals: helperSignals(environment.platform),
+        signals: helperSignals(helperCanWatch),
       } as const;
       const key = encodeJson(report);
       if (key === lastReadiness) return Effect.void;
@@ -872,8 +878,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         Effect.timeout("20 seconds"),
       );
       const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
-      if (entry.helper) yield* noteHelper((state) => withRunning(state, true));
       const session = entry.host.session?.();
+      if (entry.helper) {
+        helperCanWatch = session?.canWatch === true;
+        yield* noteHelper((state) => withRunning(state, true));
+      }
       if (session) yield* Effect.sync(() => void privateMode.attach(session));
       if (!closed)
         yield* publisher.publishCuaReport({
@@ -937,6 +946,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* Stream.runForEach(Stream.fromQueue(safety), publisher.publishCuaSafety).pipe(
         Effect.forkScoped,
       );
+      yield* Stream.runForEach(Stream.fromQueue(watchRetries), (retry) =>
+        Effect.sleep("1 second").pipe(Effect.andThen(Effect.sync(retry))),
+      ).pipe(Effect.forkScoped);
       yield* Effect.forever(
         Queue.take(crashes).pipe(
           Effect.flatMap((entry) =>

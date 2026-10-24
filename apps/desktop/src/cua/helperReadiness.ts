@@ -22,11 +22,12 @@ export interface HelperReadinessState {
 }
 
 /**
- * The safety signals a desktop host's helper raises (#1235). The macOS helper reports a focused
- * secure field; neither reports a person's input yet, so unattended turns stay refused.
+ * The safety signals a desktop host's helper raises (#1235): a focused secure field when the
+ * running helper said it can watch for one. None reports a person's input yet, so unattended
+ * turns stay refused.
  */
-export const helperSignals = (platform: NodeJS.Platform): ComputerUseCapabilities["signals"] => ({
-  privateMode: platform === "darwin" ? "supported" : "unsupported",
+export const helperSignals = (canWatch: boolean): ComputerUseCapabilities["signals"] => ({
+  privateMode: canWatch ? "supported" : "unsupported",
   humanInput: "unsupported",
 });
 

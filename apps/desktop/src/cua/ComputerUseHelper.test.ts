@@ -122,6 +122,17 @@ describe("ComputerUseHelper protocol", () => {
     await session.close();
   });
 
+  it("can watch only when the helper's hello says so", async () => {
+    const hello = { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID };
+    const older = await openHelperSession(fakeHelper({ greeting: hello }).process, BUNDLE_ID);
+    const newer = await openHelperSession(
+      fakeHelper({ greeting: { ...hello, features: ["watch"] } }).process,
+      BUNDLE_ID,
+    );
+    expect([older.canWatch, newer.canWatch]).toEqual([false, true]);
+    await Promise.all([older.close(), newer.close()]);
+  });
+
   it("delivers the events of the watch in force, switching watches as the answer is read", async () => {
     const target = (windowId: number) => ({ pid: 7, windowId });
     const event = (watchId: string, active: boolean, windowId: number) => ({
