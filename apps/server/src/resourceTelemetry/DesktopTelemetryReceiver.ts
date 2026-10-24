@@ -6,6 +6,7 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
   type DesktopCuaDriverReport,
+  type DesktopCuaSafetyReport,
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
@@ -192,6 +193,8 @@ export class DesktopTelemetryReceiver extends Context.Service<
       Scope.Scope
     >;
     readonly cuaReports: Stream.Stream<DesktopCuaDriverReport>;
+    /** The helper's safety reports: a person's input, a secret field, what it can detect. */
+    readonly cuaSafety: Stream.Stream<DesktopCuaSafetyReport>;
     readonly requestCuaDriver: (
       requestId: string,
       enabled: boolean,
@@ -351,6 +354,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
   const cuaReports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+  // Every report counts: a dropped private-mode change would leave agents watching a secret.
+  const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
   const controlMutex = yield* Semaphore.make(1);
   const snapshotMutex = yield* Semaphore.make(1);
   const health = yield* Ref.make<DesktopTelemetryReceiverHealth>({
@@ -543,6 +548,17 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        if (
+          message.type === "cuaHumanInput" ||
+          message.type === "cuaPrivateMode" ||
+          message.type === "cuaDetection"
+        ) {
+          return recordContact.pipe(
+            Effect.andThen(PubSub.publish(cuaSafety, message)),
+            Effect.asVoid,
+          );
+        }
+
         const sampledAt = DateTime.makeUnsafe(message.sampledAtUnixMs);
         return snapshotMutex.withPermits(1)(
           recordContact.pipe(
@@ -638,6 +654,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
 
   return DesktopTelemetryReceiver.of({
     cuaReports: Stream.fromPubSub(cuaReports),
+    cuaSafety: Stream.fromPubSub(cuaSafety),
     requestCuaDriver: (requestId, enabled) =>
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
@@ -719,6 +736,7 @@ export const layerTest = (
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
       cuaReports: Stream.empty,
+      cuaSafety: overrides.cuaSafety ?? Stream.empty,
       requestCuaDriver: () =>
         Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
       desktopUpdates:

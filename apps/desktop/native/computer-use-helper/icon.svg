@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Source for icon-1024.png: rsvg-convert -w 1024 -h 1024 icon.svg -o icon-1024.png -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#18181b"/>
+  <g transform="translate(458 440) scale(22) translate(-12 -12.9)">
+    <path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="white" stroke="white" stroke-width="0.6" stroke-linejoin="round"/>
+    <path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="white" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g transform="translate(618 584) scale(13.5)">
+    <path d="M0 0 L0 17 L4.3 13.2 L7.4 20.4 L10.4 19.1 L7.3 12 L13 11.9 Z" fill="#3b82f6" stroke="#18181b" stroke-width="3.2" stroke-linejoin="round" paint-order="stroke"/>
+    <path d="M0 0 L0 17 L4.3 13.2 L7.4 20.4 L10.4 19.1 L7.3 12 L13 11.9 Z" fill="#3b82f6" stroke="white" stroke-width="1.3" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -7,6 +7,7 @@ import {
   COMPUTER_USE_PROTOCOL_VERSION,
   ComputerUseActionResult,
   ComputerUseCapabilities,
+  ComputerUseElement,
   ComputerUseEventFrame,
   ComputerUseWatchRequest,
   ComputerUseActionRequest,
@@ -462,5 +463,17 @@ describe("computer use watch ordering", () => {
     // After unwatch is answered nothing is in force.
     inForce = undefined;
     expect(admit(frame("w2", false))).toBe("notWatching");
+  });
+});
+
+describe("computer use element state values", () => {
+  it("carries checked, selected, enabled and expanded, with mixed for an indeterminate box", () => {
+    const decode = Schema.decodeUnknownExit(ComputerUseElement);
+    const element = { ref: "l:1", role: "CheckBox", label: "Agree", actions: ["Toggle"] };
+    expect(decode({ ...element, state: { checked: "mixed", enabled: true } })._tag).toBe("Success");
+    expect(
+      decode({ ...element, state: { checked: true, selected: false, expanded: false } })._tag,
+    ).toBe("Success");
+    expect(decode({ ...element, state: { checked: "on" } })._tag).toBe("Failure");
   });
 });

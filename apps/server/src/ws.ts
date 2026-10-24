@@ -181,6 +181,7 @@ import * as ServerConfig from "./config.ts";
 import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import { makeComputerUseRpcHandlers } from "./cua/ComputerUseRpcHandlers.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -2547,15 +2548,7 @@ export const layerWsRpc = (
             Effect.andThen(scheduledTasks.getWebhookDelivery(input)),
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
-        [WS_METHODS.serverCheckComputerUse]: (_input) =>
-          Effect.serviceOption(CuaDriver.CuaDriver).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.succeed({ platform: "other", running: false } as const),
-                onSome: (driver) => driver.status,
-              }),
-            ),
-          ),
+        ...(yield* makeComputerUseRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog
