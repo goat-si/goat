@@ -94,6 +94,7 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
       Effect.map((contents) => contents.trim().split("\n")),
       Effect.orElseSucceed(() => []),
     );
+  const returnedPaths: Array<string> = [];
   const createWorktree = Effect.fn("test.createWorktree")(function* (
     name: string,
     { relative = false, from = checkout }: { relative?: boolean; from?: string } = {},
@@ -106,7 +107,7 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
       refName: head,
       newRefName: `feature/${name}`,
     });
-    assert.equal(worktree.path, worktreePath);
+    returnedPaths.push(worktree.path);
     return worktreePath;
   });
   /** What `git submodule update` in the superproject rewrites, among other things. */
@@ -127,6 +128,7 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
     readConfig,
     sharedRoot,
     hookRoots,
+    returnedPaths,
   };
 });
 
@@ -168,6 +170,7 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         assert.deepStrictEqual(yield* repo.readConfig(), configBefore);
         assert.equal(yield* git(repo.checkout, ["rev-parse", "--show-toplevel"]), repo.checkout);
         assert.equal(yield* git(repo.checkout, ["status", "--porcelain"]), "");
+        assert.deepStrictEqual(repo.returnedPaths, [worktreePath]);
       }),
   );
 
