@@ -16,11 +16,7 @@ import {
   type ServerConfig,
 } from "@goat/contracts";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
-import {
-  hasThreadLinks,
-  relabelThreadLinks,
-  resolveThreadLinkRef,
-} from "@goat/shared/threadLinks";
+import { hasThreadLinks, relabelThreadLinks, resolveThreadLinkRef } from "@goat/shared/threadLinks";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
