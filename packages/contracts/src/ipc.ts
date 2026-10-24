@@ -1193,6 +1193,7 @@ export interface DesktopSystemWakeEvent {
 }
 
 export interface DesktopBridge {
+  previewSessionStack?: import("./desktopPreviewSessionStack.ts").DesktopPreviewSessionStackBridge;
   getAppBranding: () => DesktopAppBranding | null;
   getRelayTelemetryEnabled?: () => boolean;
   getPathForFile?: (file: File) => string;

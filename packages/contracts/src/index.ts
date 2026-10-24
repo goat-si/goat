@@ -12,6 +12,7 @@ export * from "./desktopBootstrap.ts";
 export * from "./cua.ts";
 export * from "./computerUseProtocol.ts";
 export * from "./desktopBrowser.ts";
+export * from "./desktopPreviewSessionStack.ts";
 export * from "./desktopAppActivation.ts";
 export * from "./remoteAccess.ts";
 export * from "./sshHost.ts";
