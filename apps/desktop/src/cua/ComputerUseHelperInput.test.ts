@@ -30,7 +30,7 @@ describe("computer use helper input reports (Swift)", () => {
   });
 
   it.skipIf(!macWithSwift)(
-    "reports each pointer event with its own time, so an agent's cannot hide a person's",
+    "reports each mouse button press with its own time, so an agent's cannot hide a person's",
     () => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-helper-input-"));
       try {

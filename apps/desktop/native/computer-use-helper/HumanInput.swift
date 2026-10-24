@@ -3,34 +3,21 @@
 import CoreGraphics
 import Foundation
 
-/// The reports a run of pointer events turns into, kept free of the system so it can be tested
+/// Which tapped events are reported, kept free of the system so it can be tested
 /// (apps/desktop/src/cua/ComputerUseHelperInput.test.ts). It is given an event's type and the time
-/// it arrived, nothing else. Each event is judged on its own: one that starts a run (no pointer
-/// event in the last burstGap) is always reported with its own time, so an agent's events right
-/// after it cannot hide it (#1488). Inside a run, one event per burstInterval is reported, which
-/// keeps a stream of moves to a few lines a second without leaving a run unreported for longer.
-struct PointerReports {
-  static let burstGap = 0.1
-  static let burstInterval = 0.25
+/// it arrived, nothing else. The tap takes button presses only: a person's click is the input that
+/// must not hide behind an agent's (#1488), and presses come a few a second at most, so every
+/// one is reported with its own time and none is ever dropped or held back. Moves, drags and
+/// scrolls come dozens a second; reporting each would queue the safety reports behind each other,
+/// and thinning them would drop some, so they stay polled.
+enum PointerTap {
+  /// The event types the tap receives. Keyboard events are never among them (D7: the helper does
+  /// not use Input Monitoring); keyboard input is polled.
+  static let types: [CGEventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
 
-  /// The pointer event types the tap receives. Keyboard events are never among them (D7: the
-  /// helper does not use Input Monitoring); keyboard input is polled.
-  static let types: [CGEventType] = [
-    .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
-    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
-  ]
-
-  private var previous = -Double.infinity
-  private var reported = -Double.infinity
-
-  /// The time to report for a pointer event of `type` that arrived at `at`, or nil.
-  mutating func event(_ type: CGEventType, at: Double) -> Double? {
-    guard Self.types.contains(type) else { return nil }
-    let startsRun = at - previous >= Self.burstGap
-    previous = at
-    guard startsRun || at - reported >= Self.burstInterval else { return nil }
-    reported = at
-    return at
+  /// The time to report for a tapped event of `type` that arrived at `at`, or nil.
+  static func report(_ type: CGEventType, at: Double) -> Double? {
+    types.contains(type) ? at : nil
   }
 }
 
@@ -39,21 +26,27 @@ struct PointerReports {
 /// system, so this reports the agent's events too; the lease proxy and the server know when input
 /// calls ran and keep only the rest (apps/server/src/cua/agentInputLog.ts).
 ///
-/// Pointer events come one by one from a listen-only event tap, which needs no grant, so a
-/// person's click or move just before an agent's is reported with its own time (#1488). Keyboard
-/// events are only polled: the newest key's age, read every 250 ms, which needs no grant either
-/// but can miss a person's key right before an agent's typing. A keyboard tap would need Input
-/// Monitoring, which the helper does not use (D7). Polling also covers the pointer, in case no
-/// tap could be made; an event both see is reported twice, and the server judges both alike.
-/// Nothing listens once the connection ends.
+/// Button presses come one by one from a listen-only event tap, which needs no grant, so a
+/// person's click just before an agent's pointer input is reported with its own time (#1488).
+/// Everything else is polled: each kind's newest event age, read every 250 ms, which needs no
+/// grant either but reports only the newest event of a kind per poll, so a person's key, move or
+/// scroll right before an agent's of the same kind can hide behind it. A keyboard tap would need
+/// Input Monitoring, which the helper does not use (D7). Polling sees presses too, so a press both
+/// see is reported twice, which the server judges the same way, and a tap that could not be made
+/// leaves presses polled as before. Nothing listens once the connection ends.
 final class InputActivity {
   private static let polled: [(source: String, types: [CGEventType])] = [
     ("keyboard", [.keyDown, .flagsChanged]),
-    ("pointer", PointerReports.types),
+    (
+      "pointer",
+      [
+        .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+        .leftMouseDragged, .rightMouseDragged,
+      ]
+    ),
   ]
   private let report: (String, Double) -> Void
   private let queue = DispatchQueue(label: "si.goat.computer-use.input")
-  private var pointer = PointerReports()
   private var tap: CFMachPort?
   private var timer: DispatchSourceTimer?
   private var latest: [String: Double] = [:]
@@ -74,7 +67,7 @@ final class InputActivity {
   // MARK: Pointer tap
 
   private func startTap() {
-    let mask = PointerReports.types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+    let mask = PointerTap.types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
     guard
       let tap = CGEvent.tapCreate(
         tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
@@ -109,7 +102,7 @@ final class InputActivity {
     }
     let at = Self.now()
     queue.async { [self] in
-      if let at = pointer.event(type, at: at) { report("pointer", at) }
+      if let at = PointerTap.report(type, at: at) { report("pointer", at) }
     }
   }
 
