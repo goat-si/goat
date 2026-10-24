@@ -15,7 +15,7 @@ const contextChipVariants = cva(
         // A reference reads as a link inside the sentence: the text's own size and
         // baseline, the link color, and an underline only where it does something.
         // The label sets the baseline; the icon centers on the label's line.
-        link: "items-baseline gap-1 rounded-xs px-0.5 align-baseline text-info-foreground no-underline decoration-dashed underline-offset-2 [&_svg]:size-[1em] [button:enabled&,a&,[tabindex]&]:hover:underline focus-visible:outline-1 focus-visible:-outline-offset-1",
+        link: "items-baseline gap-1 rounded-xs px-0.5 align-baseline text-info-foreground no-underline decoration-dashed underline-offset-2 [&_svg]:size-[1em] [button:enabled&,a&]:hover:underline focus-visible:outline-1 focus-visible:-outline-offset-1",
       },
       kind: {
         neutral: "border-border/70 bg-accent/40 text-foreground",
@@ -70,7 +70,7 @@ const contextChipVariants = cva(
         state: "invalid",
         className: "border-destructive/35 bg-destructive/8 text-destructive",
       },
-      { appearance: "link", state: "invalid", className: "text-destructive" },
+      { appearance: "link", state: "invalid", className: "text-destructive-foreground" },
     ],
   },
 );
