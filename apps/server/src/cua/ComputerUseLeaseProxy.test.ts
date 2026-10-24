@@ -667,6 +667,45 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect(
+    "a pause while the manifest is read leaves no driver running and refuses the call",
+    () =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        let reads = 0;
+        // The first read is the first child's start; the second, the call's check, waits.
+        const stamp = Effect.suspend(() => {
+          reads += 1;
+          return reads === 2
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as("v2"),
+              )
+            : Effect.succeed(reads === 1 ? "v1" : "v2");
+        });
+        const h = yield* harness({ manifestStamp: stamp });
+        yield* h.push(active());
+        const forwarded = yield* h
+          .send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.killed;
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(forwarded);
+        const refused = yield* h.nextToProvider;
+        assert.deepInclude(
+          (refused.result as Record<string, unknown>).structuredContent as object,
+          {
+            detail: "waiting_for_human",
+          },
+        );
+        // Nothing started a child while the person has the screen.
+        assert.equal(yield* h.startedQueued, 0);
+      }),
+  );
+
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
     Effect.gen(function* () {
       const h = yield* harness();

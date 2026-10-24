@@ -711,6 +711,28 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     return undefined;
   });
 
+  /**
+   * The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
+   * when it starts, so an idle child is replaced before the call is judged; every check after
+   * this one sees the new child. Reading the file waits, so a pause, end, replacement or a call
+   * that started meanwhile leaves the child as it is.
+   */
+  const refreshManifest = Effect.gen(function* () {
+    const before = running;
+    if (options.manifestStamp === undefined || before === undefined || outstanding.size > 0) return;
+    const manifest = yield* options.manifestStamp;
+    if (manifest === undefined || manifest === before.manifest) return;
+    if (
+      running !== before ||
+      paused !== undefined ||
+      finished !== undefined ||
+      outstanding.size > 0
+    )
+      return;
+    yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
+    yield* start();
+  });
+
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);
     const id = message?.id;
@@ -724,6 +746,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && message?.method === "tools/call") {
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
+      yield* refreshManifest;
       // The child this call was admitted under. A pause, takeover or narrowed approval while it
       // waits replaces the child, and the call belongs to what was cut off, never to the next one.
       const admitted = running;
@@ -772,22 +795,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           ),
         );
       return;
-    }
-    // The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
-    // when it starts, so a fresh child serves this call; with nothing outstanding nothing is cut
-    // off. A call still running keeps the old child until a later call finds it idle.
-    if (
-      isRequest &&
-      message?.method === "tools/call" &&
-      options.manifestStamp !== undefined &&
-      running !== undefined &&
-      outstanding.size === 0
-    ) {
-      const manifest = yield* options.manifestStamp;
-      if (manifest !== undefined && manifest !== running.manifest) {
-        yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
-        yield* start();
-      }
     }
     // Before the call reaches the driver: a capture must not see the overlay (#1321).
     if (isRequest && message?.method === "tools/call") {

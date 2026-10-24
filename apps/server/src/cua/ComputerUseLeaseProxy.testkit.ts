@@ -174,6 +174,8 @@ export const harness = Effect.fn(function* (
     killed: Effect.suspend(() => Deferred.await(first.killed)),
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
+    /** Driver children started and not yet taken with restarted. */
+    startedQueued: Queue.size(started),
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),
