@@ -78,6 +78,13 @@ export const actionAuthority = ({
           "The owner may now act only in " + mode + " mode, below the " + planned + " planned.",
         goalChanged: false,
       });
+    // Last, so a revocation that lands while the profile or the goal is read is still seen. A
+    // thread owner's constructed scope has no grant to ask; an outside client's asks its session.
+    if (access.scope.reauthorize !== undefined) {
+      const live = yield* access.scope.reauthorize(["orchestration:operate"]).pipe(Effect.result);
+      if (live._tag === "Failure")
+        return new GoalOwnerAuthorityLost({ message: live.failure.message, goalChanged: false });
+    }
     return access;
   });
 

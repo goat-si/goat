@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  EnvironmentAuthorizationError,
   FleetGoalId,
   OrchestratorMcpFailure,
   ProviderInstanceId,
@@ -464,6 +465,33 @@ describe("GoalController", () => {
         }).pipe(Effect.provide(layerFor(fake)));
       },
     );
+
+    it.effect("sends nothing when the session is revoked after the owner was read", () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        // The owner read succeeds, then its session's live grant is gone by the final check.
+        const revokedSince: OwnerAccess = {
+          ...access(),
+          scope: {
+            reauthorize: () =>
+              Effect.fail(
+                new EnvironmentAuthorizationError({
+                  message: "The MCP session is no longer active.",
+                  requiredScope: "orchestration:operate",
+                }),
+              ),
+          } as unknown as OwnerAccess["scope"],
+        };
+        fake.owners = [access(), access(), access(), revokedSince, access()];
+        yield* insert(withWorkers("goal_revoked_late", 1));
+        yield* pass("goal_revoked_late");
+        expect(fake.launches).toEqual([]);
+        const [claim] = yield* store.launches(FleetGoalId.make("goal_revoked_late"));
+        expect(claim).toMatchObject({ outcome: NOT_SENT });
+        expect(yield* blocked("goal_revoked_late")).toMatchObject({ reason: "OwnerAuthorityLost" });
+      }).pipe(Effect.provide(layerFor(fake)));
+    });
 
     it.effect("sends nothing when the goal changes right before the send, and replans", () => {
       const fake = makeFake();
