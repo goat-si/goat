@@ -132,7 +132,7 @@ import { editPendingThreadMessage } from "../../state/edit-pending-thread-messag
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
-import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
+import { ThreadPreviewSessions } from "../browser/ThreadPreviewSessions";
 import { useThreadServerBrowserTabs } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -1457,7 +1457,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
       )}
 
       {showContent ? (
-        <ThreadBrowserFloat
+        <ThreadPreviewSessions
           key={selectedThreadKey}
           environmentId={props.environmentId}
           threadId={props.selectedThread.id}

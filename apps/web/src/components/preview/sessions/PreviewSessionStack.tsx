@@ -1,5 +1,6 @@
 import {
   orderPreviewSessions,
+  previewSessionControlUsesBrowser,
   previewSessionDetail,
 } from "@goat/client-runtime/state/preview-sessions";
 import {
@@ -70,11 +71,7 @@ function PreviewSessionTile(props: {
           openBrowser(threadRef, browserTab);
         };
   const act = (control: PreviewSessionControl) =>
-    session.kind === "browser" &&
-    control !== "stop" &&
-    !(control === "handBack" && session.status === "stopped")
-      ? expand?.()
-      : props.onControl(control);
+    previewSessionControlUsesBrowser(session, control) ? expand?.() : props.onControl(control);
   const actions = session.capabilities.controls.filter((control) => control in CONTROL_LABEL);
   return (
     <article

@@ -10,6 +10,10 @@ import {
 } from "@goat/client-runtime/preview/server-browser-stream";
 
 import type { PreviewStreamConfiguration, PreviewStreamMessage } from "./preview-stream-document";
+import {
+  PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
+  PREVIEW_SESSION_THUMBNAIL_WIDTH,
+} from "@goat/client-runtime/state/preview-sessions";
 
 declare global {
   interface Window {
@@ -167,9 +171,12 @@ export function start(configuration: PreviewStreamConfiguration) {
         access: configuration.access,
         threadId: configuration.threadId,
         tabId: configuration.tabId,
-        maxWidth: cap.width,
-        maxHeight: cap.height,
+        maxWidth: configuration.thumbnail ? PREVIEW_SESSION_THUMBNAIL_WIDTH : cap.width,
+        maxHeight: configuration.thumbnail
+          ? Math.round(PREVIEW_SESSION_THUMBNAIL_WIDTH * 0.625)
+          : cap.height,
         interactive,
+        ...(configuration.thumbnail ? { ackDelayMs: PREVIEW_SESSION_THUMBNAIL_FRAME_MS } : {}),
       },
       {
         onFrame: (jpeg) => painter.paint(jpeg),

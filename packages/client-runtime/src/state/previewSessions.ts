@@ -1,4 +1,9 @@
-import { type PreviewSession, type PreviewSessionStatus, WS_METHODS } from "@goat/contracts";
+import {
+  type PreviewSession,
+  type PreviewSessionControl,
+  type PreviewSessionStatus,
+  WS_METHODS,
+} from "@goat/contracts";
 import type { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -27,6 +32,14 @@ export function createPreviewSessionAtoms<R, E>(
 export const PREVIEW_SESSION_THUMBNAIL_FRAME_MS = 500;
 /** Thumbnails are scaled down on the server to at most this many device pixels wide. */
 export const PREVIEW_SESSION_THUMBNAIL_WIDTH = 480;
+
+/** Browser takeover and release happen in the full viewer; resuming after Stop uses the RPC. */
+export const previewSessionControlUsesBrowser = (
+  session: PreviewSession,
+  control: PreviewSessionControl,
+) =>
+  session.kind === "browser" &&
+  (control === "takeover" || (control === "handBack" && session.status !== "stopped"));
 
 const RANK: Readonly<Record<PreviewSessionStatus, number>> = {
   "waiting-for-human": 0,

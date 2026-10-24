@@ -179,6 +179,7 @@ function AuthorizedPreviewStream({
     tabId: props.tabId,
     interactive: props.interactive,
     background: props.background,
+    thumbnail: props.thumbnail,
   } satisfies PreviewStreamConfiguration);
   return (
     <PreviewStreamDocumentView
