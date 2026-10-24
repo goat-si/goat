@@ -164,6 +164,8 @@ export function makeAgentInputLog() {
     readonly start: number;
     readonly end: number;
     readonly kinds: ReadonlyArray<InputKind>;
+    /** Set for an open call kept after its 10 s: it covers only while its control is live. */
+    readonly expired?: string;
   }> = [];
   /**
    * Each kind's spans, kept apart from the calls themselves: forgetting an old call must not make
@@ -200,7 +202,7 @@ export function makeAgentInputLog() {
       if (now - call.start > OPEN_MS) {
         open.delete(key);
         // It covered until start + OPEN_MS and still does for events from then.
-        done = [...done, { ...call, end: call.start + OPEN_MS - AFTER_MS }];
+        done = [...done, { ...call, end: call.start + OPEN_MS - AFTER_MS, expired: key }];
         closed(key, call.kinds, call.start + OPEN_MS);
       }
     // Kept until KEEP_MS past the end of each call's cover, so every event remembers() admits
@@ -258,7 +260,10 @@ export function makeAgentInputLog() {
         ) ||
         done.some(
           (call) =>
-            call.kinds.includes(kind) && at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS,
+            (call.expired === undefined || live(call.expired)) &&
+            call.kinds.includes(kind) &&
+            at >= call.start - BEFORE_MS &&
+            at <= call.end + AFTER_MS,
         );
       if (!covered) return false;
       const run = runsOf(spans[kind]).find(

@@ -139,6 +139,15 @@ describe("agentInputLog", () => {
     assert.equal(log.size(), 0);
   });
 
+  it("an open call kept past its 10 s still covers nothing once its control has ended", () => {
+    const log = makeAgentInputLog();
+    // The end never came: the control ended first, so the server refused its report.
+    log.started("A", 0, ["pointer"]);
+    log.prune(11_000);
+    assert.isFalse(log.isAgents(2_000, "pointer", (key) => key !== "A"));
+    assert.isTrue(log.isAgents(2_000, "pointer"));
+  });
+
   it("a call dated in the future erases nobody else's", () => {
     const log = makeAgentInputLog();
     log.started("A", 1_000);
