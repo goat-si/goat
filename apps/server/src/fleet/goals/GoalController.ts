@@ -330,8 +330,15 @@ const make = Effect.gen(function* () {
                 return;
               }
               const refused = (yield* store.claimOf(action.actionId))?.outcome === OWNER_REFUSED;
-              if (refused && found.success === null)
-                return yield* store.settle(action.actionId, NOT_SENT, nowIso);
+              if (refused && found.success === null) {
+                // Nothing started: a wanted slot plans the same attempt again, a dropped one ends.
+                yield* store.settle(action.actionId, NOT_SENT, nowIso);
+                const dropped = worker.slot >= desiredSlots(goal).length;
+                return void workers.set(worker.slot, {
+                  ...worker,
+                  state: dropped || goal.deletionRequestedAt !== null ? "superseded" : "placing",
+                });
+              }
               if (found.success !== null && !refused) {
                 const thread = found.success;
                 yield* store.settle(action.actionId, "adopted", nowIso, {

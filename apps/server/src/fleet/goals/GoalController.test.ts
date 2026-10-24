@@ -607,6 +607,36 @@ describe("GoalController", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect.each(["deleted", "dropped"] as const)(
+    "finishes a slot that is %s after a launch was refused before its thread existed",
+    (change) => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        fake.owners = [access(), access(), access(), { unavailable: "Revoked." }, access()];
+        fake.lookupFails = true;
+        yield* insert(withWorkers("goal_refused_gone", 1));
+        yield* pass("goal_refused_gone");
+        fake.lookupFails = false;
+        if (change === "deleted")
+          yield* store.requestDeletion(
+            FleetGoalId.make("goal_refused_gone"),
+            "2026-10-20T00:00:00.000Z",
+          );
+        else yield* setCount("goal_refused_gone", 0);
+        const id = FleetGoalId.make("goal_refused_gone");
+        for (let i = 0; i < 4 && (yield* store.get(id)) !== null; i++) yield* pass(id);
+        expect(fake.launches).toEqual([]);
+        if (change === "deleted")
+          expect(yield* store.get(FleetGoalId.make("goal_refused_gone"))).toBeNull();
+        else
+          expect((yield* record("goal_refused_gone")).workers[0]).toMatchObject({
+            state: "superseded",
+          });
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
+
   it.effect("does not delete a goal while a thread it launched may still run (P1-3)", () => {
     const fake = makeFake();
     return Effect.gen(function* () {
