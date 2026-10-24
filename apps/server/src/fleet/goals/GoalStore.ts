@@ -39,9 +39,8 @@ const WorkerDetail = Schema.Struct({
   /** The run a follow-up was last sent about, so each run is nudged once. */
   followedUpRunId: Schema.NullOr(RunId),
   /**
-   * The run whose recovery reached an outcome, so each run is recovered once. Kept apart from
-   * followedUpRunId: a steered run that later fails, and a row an earlier controller marked
-   * followed up after a refused move, still get their one recovery (#1452).
+   * The run whose recovery reached an outcome, so each run is recovered once. Rows an earlier
+   * controller wrote lack it and mark such runs only in followedUpRunId (#1452).
    */
   recoveredRunId: Schema.NullOr(RunId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The usage-limited run the goal resumed after its reset, so it is resumed once. */

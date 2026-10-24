@@ -16,6 +16,7 @@ import { WorkerRecord } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 
 const NOW = Date.parse("2026-10-20T01:00:00.000Z");
+const decodeWorker = Schema.decodeUnknownSync(WorkerRecord);
 
 const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => ({
   now: NOW,
@@ -565,7 +566,7 @@ describe("planGoal", () => {
     // The row the controller before #1472 left behind: the run is recorded as followed up both
     // when its reschedule was refused and when a same-thread fallback was sent.
     const { recoveredRunId: _absent, ...legacy } = running(goal, 0);
-    const followedUp = Schema.decodeUnknownSync(WorkerRecord)({
+    const followedUp = decodeWorker({
       ...legacy,
       followedUpRunId: "run:1",
       lastRunId: "run:1",
