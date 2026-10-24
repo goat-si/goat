@@ -1,5 +1,6 @@
 /**
- * What the computer use lease proxy tells an agent when a call is refused, paused or cut off.
+ * What the lease proxy tells the agent when it refuses, ends or cuts off a call, and the tools it
+ * treats as read-only. Kept apart from the proxy's control flow (ComputerUseLeaseProxy.ts).
  *
  * @module ComputerUseLeaseMessages
  */
@@ -19,6 +20,12 @@ export const DESKTOP_CAPTURE_OFF =
 
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
+
+/** Why a call another thread's window reservation, or none at all, kept from running (#1462). */
+export const reservationRefusal = (holder: string | undefined) =>
+  holder === undefined
+    ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+    : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -107,12 +114,3 @@ export const scopeMessage = (
         : opaque
           ? "This thread may control only its approved apps, and a script or batch cannot be checked against them, so it did not run. Make the calls one at a time, each with the pid and window_id of an approved app's window."
           : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;
-
-export const WRONG_DISPLAY =
-  "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
-export const UNCONFIRMED_DISPLAY =
-  "GOAT could not confirm that computer use is on the screen GOAT gave it, so this did not run. Call list_windows, then try again.";
-/** For a call that reached the driver: its answer is withheld, but it may have acted. */
-export const REPLY_WITHHELD =
-  "This call reached the driver, so it may already have acted, but GOAT could not confirm its answer is about the screen GOAT gave it and withheld it. Never resend it unchanged.";
-export const REPLY_UNCONFIRMED = `${REPLY_WITHHELD} Call list_windows and observe the window before any later action.`;

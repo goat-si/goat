@@ -1,31 +1,36 @@
-/**
- * The JSON-RPC answers the computer use lease proxy writes for a call it refuses or one that was
- * cut off, apart from its control flow (ComputerUseLeaseProxy.ts).
- *
- * @module ComputerUseLeaseAnswers
- */
-// @effect-diagnostics preferSchemaOverJson:off
+// @effect-diagnostics preferSchemaOverJson:off -- Constructs raw MCP JSON-RPC response lines.
 import {
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
   computerUseRefusalReason,
 } from "@goat/contracts";
-
 import {
   type Interruption,
   LEASE_END_MESSAGES,
-  MAY_HAVE_ACTED,
-  PAUSE_MESSAGES,
-  PAUSE_NEXT,
   PAUSE_STATE,
-  READ_CUT_OFF,
+  PAUSE_NEXT,
+  PAUSE_MESSAGES,
   READ_ONLY_TOOLS,
-  REPLY_UNCONFIRMED,
-  REPLY_WITHHELD,
-  UNCONFIRMED_DISPLAY,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
 } from "./ComputerUseLeaseMessages.ts";
 
 export type JsonRpcId = string | number;
+
+export const UNCONFIRMED_DISPLAY =
+  "GOAT could not confirm that computer use is on the screen GOAT gave it, so this did not run. Call list_windows, then try again.";
+/** For a call that reached the driver: its answer is withheld, but it may have acted. */
+const REPLY_WITHHELD =
+  "This call reached the driver, so it may already have acted, but GOAT could not confirm its answer is about the screen GOAT gave it and withheld it. Never resend it unchanged.";
+const REPLY_UNCONFIRMED = `${REPLY_WITHHELD} Call list_windows and observe the window before any later action.`;
+
+/** The answer to a provider request under an id the proxy keeps for its own requests. */
+export const reservedIdAnswer = (id: string, prefix: string) =>
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32600, message: `Request ids starting with ${prefix} are reserved.` },
+  });
 
 export const refusal = (
   id: JsonRpcId,
@@ -33,6 +38,7 @@ export const refusal = (
   detail: ComputerUseRefusalDetail,
   message: string,
   app?: string,
+  holderThreadId?: import("@goat/contracts").ThreadId,
 ) => {
   const refused = { refused: computerUseRefusalReason(detail), detail };
   return JSON.stringify(
@@ -42,7 +48,11 @@ export const refusal = (
           id,
           result: {
             content: [{ type: "text", text: message }],
-            structuredContent: { ...refused, ...(app === undefined ? {} : { app }) },
+            structuredContent: {
+              ...refused,
+              ...(app === undefined ? {} : { app }),
+              ...(holderThreadId === undefined ? {} : { holderThreadId }),
+            },
             isError: true,
           },
         }

@@ -32,6 +32,14 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
   const pulls = yield* Queue.unbounded<void>();
   const overlay: Array<ComputerUseOverlayCommand> = [];
   yield* runLeaseProxy({
+    connectionId: "proxy:screen-test",
+    // Every call is admitted: window reservations are #1462's tests.
+    reservation: (call) =>
+      Effect.succeed(
+        call.action === "reserve"
+          ? { status: "admitted" as const, reservationId: `ticket:${call.callId}` }
+          : { status: "released" as const },
+      ),
     controlId: "control:one",
     expiresAt: DateTime.makeUnsafe("1970-01-01T00:30:00.000Z"),
     bundleIds: true,

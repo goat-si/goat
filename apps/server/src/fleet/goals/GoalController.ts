@@ -40,6 +40,7 @@ import {
   nextDelayMs,
   planGoal,
   repairWorkers,
+  rescheduleActionId,
   type PullRequestObservation,
   type SlotObservation,
   targetKey,
@@ -149,12 +150,16 @@ const make = Effect.gen(function* () {
       // Every launch claim, from the records that outlive status writes. A claim never sent counts
       // as none, so the launch is claimed and sent again.
       const launchClaims = new Map<string, { claimedAt: number; settled: boolean } | null>();
-      for (const launch of launches)
+      const unmovedReschedules = new Set<string>();
+      for (const launch of launches) {
         if (launch.outcome !== NOT_SENT)
           launchClaims.set(launch.actionId, {
             claimedAt: Date.parse(launch.claimedAt),
             settled: launch.settledAt !== null,
           });
+        if (launch.actionId.endsWith(":reschedule") && launch.outcome !== "rescheduled")
+          unmovedReschedules.add(launch.actionId);
+      }
       const wanted = new Set<number>([
         ...goal.spec.targets.flatMap((target) =>
           target.type === "pull_request" ? [target.number] : [],
@@ -191,6 +196,8 @@ const make = Effect.gen(function* () {
             : { available: true },
         workers,
         launchClaims,
+        unmovedReschedules,
+        switchedFallbacks: new Set(yield* store.switchedFallbacks(goal.id)),
         pullRequests,
         issues,
         turns: yield* store.turns(goal.id),
@@ -674,6 +681,7 @@ const make = Effect.gen(function* () {
               const handled = {
                 ...worker,
                 followedUpRunId: action.runId ?? worker.followedUpRunId,
+                recoveredRunId: action.runId ?? worker.recoveredRunId,
               };
               // A run that failed while the hub was down spends no fallback hop or attempt.
               const work = yield* hubGate(worker.host, worker.modelSelection);
@@ -808,16 +816,12 @@ const make = Effect.gen(function* () {
               }
               // One reschedule per run: the claim names the run; the next attempt's launch id is the
               // receiver's dedupe key.
-              const rescheduleId =
-                "goal:" +
-                goal.id +
-                ":s" +
-                worker.slot +
-                ":a" +
-                worker.attempt +
-                ":" +
-                (action.runId ?? action.reason) +
-                ":reschedule";
+              const rescheduleId = rescheduleActionId(
+                goal,
+                worker.slot,
+                worker.attempt,
+                action.runId ?? action.reason,
+              );
               if ((yield* claim(rescheduleId, "launch", worker, worker.host)) !== null) return;
               const rescheduleAuthority = yield* authorityAfterClaim(rescheduleId);
               if (rescheduleAuthority === null) return;

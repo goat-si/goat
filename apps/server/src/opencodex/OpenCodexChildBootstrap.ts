@@ -1,4 +1,5 @@
 import {
+  CloudMachineError,
   EnvironmentId,
   OpenCodexChildBootstrapStatus,
   type HubDeviceMcpResult,
@@ -83,6 +84,7 @@ const make = Effect.gen(function* () {
   const stateFile = path.join(config.stateDir, STATE_FILE);
   const writing = yield* Semaphore.make(1);
   const jobs = new Map<string, Fiber.Fiber<Status>>();
+  const releases = new Map<string, Fiber.Fiber<void>>();
 
   const stored = yield* fs.readFileString(stateFile).pipe(
     Effect.map((text) => Option.getOrElse(decodeRecords(text), () => ({}))),
@@ -224,20 +226,43 @@ const make = Effect.gen(function* () {
     yield* start(alias);
   });
   yield* cloud.onReady(onReady);
-  // A forgotten machine is gone for good; a stopped one keeps its record for its next start.
+
+  /**
+   * Revokes the link this Home added for a deleted or forgotten machine. Only a catalog that says
+   * so releases it; until then, or when the revoke fails, the hub keeps the release pending.
+   */
+  const release = Effect.fn("OpenCodexChildBootstrap.release")(function* (alias: string) {
+    if (!(yield* cloud.isRemoved(alias))) return;
+    yield* membership.releaseProvisioned(alias);
+  });
+  const startRelease = Effect.fn("OpenCodexChildBootstrap.startRelease")(function* (alias: string) {
+    if (releases.has(alias)) return;
+    const fiber = yield* release(alias).pipe(
+      Effect.ignore({ log: true }),
+      Effect.ensuring(Effect.sync(() => releases.delete(alias))),
+      Effect.forkIn(serviceScope, { startImmediately: false }),
+    );
+    releases.set(alias, fiber);
+  });
+  // Recorded before the catalog lets go of the machine, so the release survives a restart.
+  yield* cloud.onRemoving((alias) =>
+    membership
+      .requestRelease(alias)
+      .pipe(Effect.mapError(() => new CloudMachineError({ reason: "storage_failed" }))),
+  );
+  // A removed machine is gone for good; a stopped one keeps its record and link for its next start.
   yield* cloud.onAliasInvalidated((alias, cause) =>
-    cause !== "lifecycle"
+    cause !== "removed"
       ? Effect.void
-      : cloud.owns(alias).pipe(
-          Effect.flatMap((owned) =>
-            owned
-              ? Effect.void
-              : save((current) => {
-                  const { [alias]: _gone, ...rest } = current;
-                  return rest;
-                }),
-          ),
-        ),
+      : save((current) => {
+          const { [alias]: _gone, ...rest } = current;
+          return rest;
+        }).pipe(Effect.andThen(startRelease(alias))),
+  );
+  // Releases that failed, or never ran, before this start.
+  yield* membership.pendingReleases.pipe(
+    Effect.flatMap((aliases) => Effect.forEach(aliases, startRelease, { discard: true })),
+    Effect.ignore({ log: true }),
   );
 
   return OpenCodexChildBootstrap.of({
