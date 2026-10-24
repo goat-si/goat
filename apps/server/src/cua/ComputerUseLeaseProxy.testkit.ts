@@ -1,3 +1,5 @@
+// The fake driver and provider speak raw JSON-RPC lines, as the proxy does.
+// @effect-diagnostics preferSchemaOverJson:off
 import {
   type ComputerUseLeaseUpdate,
   type ComputerUseOverlayCommand,

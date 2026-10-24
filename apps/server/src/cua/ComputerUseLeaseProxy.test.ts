@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { computerUseRefusalReason } from "@goat/contracts";
+import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
