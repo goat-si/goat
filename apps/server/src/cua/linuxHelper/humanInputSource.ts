@@ -11,12 +11,13 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
 
 /**
  * A person's keyboard and pointer input on an X display, from XInput2 raw events (WS10 #1138,
- * #1235). Every raw event names the device it came from, so the helper's own input is told
- * apart by device, not by time: XTEST devices (which the driver's virtual masters use) and any
- * device created after this source opened (the driver's uinput devices, made later) are never
- * the person. Only that an event happened is kept; never which key or where.
- *
- * A keyboard plugged in after the helper started is not watched until the helper restarts.
+ * #1235). Every raw event names the device it came from (XI 2.1 and later), so the helper's own
+ * input is told apart by device, not by time. Cua Driver names every device it creates "CUA …"
+ * (its MPX masters, and their uinput and XTEST slaves; mpx_owner.rs and input/mod.rs at
+ * cua-driver-rs-v0.37.0), and XTEST devices carry synthetic input, so neither is the person.
+ * Every other slave device is. The device list is read again whenever devices come and go,
+ * since ids are reused; input from a device not yet classified waits for that read. Only that
+ * an event happened is kept; never which key or where.
  */
 
 export interface HumanInput {
@@ -38,6 +39,7 @@ const GENERIC_EVENT = 35;
 const XI_RAW_KEY_PRESS = 13;
 const XI_RAW_BUTTON_PRESS = 15;
 const XI_RAW_MOTION = 17;
+const XI_HIERARCHY_CHANGED = 11;
 // XIDeviceInfo.use: slave pointer, slave keyboard, floating slave.
 const SLAVE_USES = new Set([3, 4, 5]);
 
@@ -81,7 +83,7 @@ const xiQueryDevice = (major: number) =>
     view.setUint8(0, major);
     view.setUint8(1, 48);
   });
-/** Raw key, button and motion events from every device, on the root window. */
+/** Raw key, button and motion events from every device, and device changes, on the root. */
 const xiSelectRawEvents = (major: number, root: number) =>
   request(20, (view) => {
     view.setUint8(0, major);
@@ -92,7 +94,10 @@ const xiSelectRawEvents = (major: number, root: number) =>
     view.setUint16(14, 1, true);
     view.setUint32(
       16,
-      (1 << XI_RAW_KEY_PRESS) | (1 << XI_RAW_BUTTON_PRESS) | (1 << XI_RAW_MOTION),
+      (1 << XI_HIERARCHY_CHANGED) |
+        (1 << XI_RAW_KEY_PRESS) |
+        (1 << XI_RAW_BUTTON_PRESS) |
+        (1 << XI_RAW_MOTION),
       true,
     );
   });
@@ -123,13 +128,21 @@ export function parseDevices(reply: Uint8Array): ReadonlyArray<XiDevice> {
   return devices;
 }
 
-/** The person's devices: slaves that are not XTEST. */
-export const personDevices = (devices: ReadonlyArray<XiDevice>) =>
-  new Set(
-    devices
-      .filter((device) => SLAVE_USES.has(device.use) && !/xtest/iu.test(device.name))
-      .map((device) => device.id),
-  );
+/** Whether a device carries a person's input: a slave that is neither XTEST nor Cua Driver's. */
+export const isPersonDevice = (device: XiDevice) =>
+  SLAVE_USES.has(device.use) && !/xtest/iu.test(device.name) && !device.name.startsWith("CUA ");
+
+/** Every device by id, as the person's or not. */
+export const classifyDevices = (devices: ReadonlyArray<XiDevice>) =>
+  new Map(devices.map((device) => [device.id, isPersonDevice(device)]));
+
+/** True for an XI2 event saying devices were added, removed or changed. */
+export const isHierarchyChanged = (message: Uint8Array, major: number) =>
+  ((message[0] ?? 0) & 0x7f) === GENERIC_EVENT &&
+  message[1] === major &&
+  message.byteLength >= 10 &&
+  new DataView(message.buffer, message.byteOffset, message.byteLength).getUint16(8, true) ===
+    XI_HIERARCHY_CHANGED;
 
 /** What kind of input a raw event is, and from which device; undefined for anything else. */
 export function parseRawEvent(
@@ -149,6 +162,10 @@ export function parseRawEvent(
   return source === undefined ? undefined : { source, device: view.getUint16(20, true) };
 }
 
+/** Whether a negotiated XI version puts a source device on raw events (2.1 and later). */
+export const supportsSourceId = (major: number, minor: number) =>
+  major > 2 || (major === 2 && minor >= 1);
+
 /** Bytes one X server message takes: 32, plus the extra length of a reply or generic event. */
 const messageLength = (bytes: Uint8Array) => {
   const code = (bytes[0] ?? 0) & 0x7f;
@@ -161,6 +178,8 @@ const messageLength = (bytes: Uint8Array) => {
 export async function openX11HumanInput(
   environment: { readonly DISPLAY?: string | undefined; readonly XAUTHORITY?: string | undefined },
   now: () => number,
+  /** The display's socket; tests point it at a scripted server. */
+  socketPath?: string,
 ): Promise<HumanInputSource | undefined> {
   const display = localDisplayNumber(environment.DISPLAY);
   if (display === null) return undefined;
@@ -169,11 +188,19 @@ export async function openX11HumanInput(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
-  const socket = NodeNet.createConnection("/tmp/.X11-unix/X" + display);
+  const socket = NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + display);
   let buffer = new Uint8Array(0);
   let closed = false;
   let latest: HumanInput | undefined;
-  let watching: { readonly major: number; readonly devices: ReadonlySet<number> } | undefined;
+  let major: number | undefined;
+  let devices = new Map<number, boolean>();
+  /** Input from devices the last list did not have, held until the next one classifies them. */
+  let unclassified: Array<{ readonly device: number; readonly input: HumanInput }> = [];
+  let refreshing = false;
+  let refreshAgain = false;
+  /** Device changes announced, and how many of them the current list reflects. */
+  let changes = 0;
+  let listed = 0;
   const waiting: Array<(message: Uint8Array | undefined) => void> = [];
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
   const close = () => {
@@ -210,9 +237,22 @@ export async function openX11HumanInput(
         waiting.shift()?.(message);
         continue;
       }
-      if (!watching) continue;
-      const raw = parseRawEvent(message, watching.major);
-      if (raw && watching.devices.has(raw.device)) latest = { at: now(), source: raw.source };
+      if (major === undefined) continue;
+      if (isHierarchyChanged(message, major)) {
+        // Until a list read after this arrives, an id may name a different device than it did.
+        changes++;
+        void refresh();
+        continue;
+      }
+      const raw = parseRawEvent(message, major);
+      if (!raw) continue;
+      const input = { at: now(), source: raw.source };
+      const person = devices.get(raw.device);
+      if (person === true) latest = input;
+      else if (person === undefined || changes !== listed) {
+        unclassified.push({ device: raw.device, input });
+        void refresh();
+      }
     }
   });
   const reply = await new Promise<Uint8Array | undefined>((resolve) => {
@@ -236,6 +276,36 @@ export async function openX11HumanInput(
       });
       socket.write(bytes);
     });
+  /** Reads the device list again; one at a time, once more if devices changed meanwhile. */
+  const refresh = async (): Promise<void> => {
+    if (major === undefined || closed) return;
+    if (refreshing) {
+      refreshAgain = true;
+      return;
+    }
+    refreshing = true;
+    try {
+      do {
+        refreshAgain = false;
+        // Requests are answered in order, so this list reflects every change announced so far.
+        const covers = changes;
+        const list = await ask(xiQueryDevice(major));
+        if (!list || list[0] !== 1) return close();
+        devices = classifyDevices(parseDevices(list));
+        listed = covers;
+        const held = unclassified;
+        unclassified = [];
+        for (const { device, input } of held) {
+          const person = devices.get(device);
+          // Still unknown after a fresh list: a device that came and went. It cannot be shown
+          // not to be a person, so it counts as one.
+          if (person !== false && (latest === undefined || input.at > latest.at)) latest = input;
+        }
+      } while (refreshAgain && !closed);
+    } finally {
+      refreshing = false;
+    }
+  };
   const fail = () => {
     close();
     return undefined;
@@ -243,18 +313,18 @@ export async function openX11HumanInput(
   if (root === undefined) return fail();
   const extension = await ask(queryExtension("XInputExtension"));
   if (!extension || extension[0] !== 1 || extension[8] !== 1) return fail();
-  const major = extension[9] ?? 0;
-  const version = await ask(xiQueryVersion(major));
+  const opcode = extension[9] ?? 0;
+  const version = await ask(xiQueryVersion(opcode));
   if (!version || version[0] !== 1) return fail();
   const versionView = new DataView(version.buffer, version.byteOffset, version.byteLength);
-  if (versionView.getUint16(8, true) < 2) return fail();
-  const list = await ask(xiQueryDevice(major));
+  // Raw events name their source device only from XI 2.1.
+  if (!supportsSourceId(versionView.getUint16(8, true), versionView.getUint16(10, true)))
+    return fail();
+  // Select first, then list: a device added in between is caught by its hierarchy event.
+  socket.write(xiSelectRawEvents(opcode, root));
+  const list = await ask(xiQueryDevice(opcode));
   if (!list || list[0] !== 1) return fail();
-  const devices = personDevices(parseDevices(list));
-  // Select has no reply; a second query after it proves the server took it without an error.
-  socket.write(xiSelectRawEvents(major, root));
-  const synced = await ask(xiQueryVersion(major));
-  if (!synced || synced[0] !== 1) return fail();
-  watching = { major, devices };
+  devices = classifyDevices(parseDevices(list));
+  major = opcode;
   return { latest: () => latest, lost: () => closed, close };
 }
