@@ -20,18 +20,23 @@ export function spawnDriverProcess(
   });
   child.on("error", () => undefined);
   child.stdin.on("error", () => undefined);
-  // A leader that dies alone (a helper launcher crash) leaves its service and driver behind with
-  // no watcher; the group is this connection's, so it ends with its leader.
-  child.once("exit", () => killDriverGroup(platform, child, "SIGKILL"));
+  // A leader that dies alone (a helper launcher crash) is not this side's to clean up: once Node
+  // has reaped it, its group id may name another process group. The helper's service watches its
+  // launcher and ends the driver itself.
   return child;
 }
 
-/** Signals the driver's whole process group on POSIX, where it was started detached. */
+/**
+ * Signals the driver's whole process group on POSIX, where it was started detached. Only while
+ * the leader is unreaped: until Node reaps it (which happens in the event loop, never during this
+ * call) its PID, and so the group id, cannot be reused.
+ */
 export function killDriverGroup(
   platform: NodeJS.Platform,
   child: NodeChildProcess.ChildProcess,
   signal: NodeJS.Signals,
 ) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (platform === "win32" || child.pid === undefined) return void child.kill(signal);
   try {
     process.kill(-child.pid, signal);

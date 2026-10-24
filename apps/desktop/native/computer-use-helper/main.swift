@@ -222,10 +222,16 @@ func runLauncher() -> Never {
   }
   if CommandLine.arguments.contains("--mcp") { endWithParent(parent, service: child) }
   DispatchQueue.global().async {
-    var waitStatus: Int32 = 0
-    while waitpid(child, &waitStatus, 0) == -1 && errno == EINTR {}
-    let signalled = waitStatus & 0x7f
-    exit(signalled == 0 ? (waitStatus >> 8) & 0xff : 128 + signalled)
+    // Wait without reaping: the service stays a zombie until this launcher exits, so its PID, and
+    // every signal forwarded to it above, can never reach a recycled process.
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+    // A service that died alone (a crash, a stray SIGKILL) leaves its driver behind. This launcher
+    // still leads the connection's group and is alive, so the group id is still this group's.
+    if CommandLine.arguments.contains("--mcp") && getpgrp() == getpid() {
+      killpg(getpid(), SIGTERM)
+    }
+    exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
 }
@@ -839,6 +845,8 @@ func mcpFail(_ code: Int32, _ message: String) -> Never {
 /// process that launched this helper reaches the driver (#1210). The driver inherits this
 /// process's disclaimed responsibility, so macOS charges its grants to this bundle.
 func runMcp() -> Never {
+  // The launcher this service was started by, captured before anything can re-parent it.
+  let launcher = getppid()
   guard launcherIsSelf() else { mcpFail(77, "Start the helper through its launcher.") }
   let arguments = Array(CommandLine.arguments.dropFirst())
   guard let flag = arguments.firstIndex(of: "--capability-manifest"),
@@ -878,6 +886,19 @@ func runMcp() -> Never {
   argv.forEach { free($0) }
   envp.forEach { free($0) }
   guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
+  // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
+  // service ends the driver it started. The driver is waited on without reaping below, so
+  // `child` names it for as long as this process runs.
+  let endDriver = {
+    kill(child, SIGKILL)
+    exit(137)
+  }
+  let launcherWatch = DispatchSource.makeProcessSource(
+    identifier: launcher, eventMask: .exit, queue: .main)
+  launcherWatch.setEventHandler(handler: endDriver)
+  launcherWatch.resume()
+  retained.append(launcherWatch)
+  if getppid() != launcher { endDriver() }
   for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
     signal(signalNumber, SIG_IGN)
     let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
@@ -886,10 +907,9 @@ func runMcp() -> Never {
     retained.append(source)
   }
   DispatchQueue.global().async {
-    var waitStatus: Int32 = 0
-    while waitpid(child, &waitStatus, 0) == -1 && errno == EINTR {}
-    let signalled = waitStatus & 0x7f
-    exit(signalled == 0 ? (waitStatus >> 8) & 0xff : 128 + signalled)
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
+    exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
 }
