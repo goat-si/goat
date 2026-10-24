@@ -510,4 +510,37 @@ describe("LinuxHelperHost (#1223)", () => {
         assert.strictEqual(yield* Queue.size(t.safety), 0);
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "a view of the screen does not release a hold refreshed after it was taken (#1494 r8)",
+    () =>
+      Effect.gen(function* () {
+        let windows = [{ pid: 7, windowId: 70 }];
+        const target = { pid: 7, windowId: 70 };
+        const t = yield* hostWith([], {
+          windows: () => windows,
+          // The unwatch is answered by hand, after the window has come back.
+          answers: (request) => request.method !== "unwatch",
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        const watchId = ((yield* t.nextRequest("watch")).params as { watchId: string }).watchId;
+        const helper = t.spawned[0]?.helper;
+        helper?.event(watchId, { type: "privateMode", active: true, target });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        // The listing sees no windows, so the host unwatches.
+        windows = [];
+        yield* TestClock.adjust(TICK_MS);
+        const unwatch = yield* t.nextRequest("unwatch");
+        // Meanwhile the window is back and the watch still in force sees its secret again.
+        windows = [target];
+        helper?.event(watchId, { type: "privateMode", active: true, target });
+        helper?.send({ id: unwatch.id, generation: "gen-1", result: { watching: [] } });
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("listWindows");
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+      }).pipe(Effect.scoped),
+  );
 });

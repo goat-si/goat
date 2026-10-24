@@ -174,7 +174,12 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
   let retryAt = 0;
   let watchWanted = false;
   /** Watched windows with a secure field focused; private mode holds while any is. */
-  const secret = new Map<string, ComputerUseWindowTarget>();
+  const secret = new Map<
+    string,
+    { readonly target: ComputerUseWindowTarget; readonly since: number }
+  >();
+  /** Counts private observations, so a view of the screen releases only holds older than it. */
+  let observations = 0;
 
   const publish = (report: DesktopCuaSafetyReport) => void PubSub.publishUnsafe(hub, report);
 
@@ -183,13 +188,13 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
    * says so, or a later helper sees that window without one or no longer sees the window at all.
    * A helper that exits or is stopped proves nothing, so its holds outlive it until then.
    */
-  const release = (drop: (launch: number, window: string) => boolean) => {
+  const release = (drop: (launch: number, window: string, since: number) => boolean) => {
     let last: ComputerUseWindowTarget | undefined;
-    for (const [key, target] of secret) {
+    for (const [key, held] of secret) {
       const at = key.indexOf("|");
-      if (!drop(Number(key.slice(0, at)), key.slice(at + 1))) continue;
+      if (!drop(Number(key.slice(0, at)), key.slice(at + 1), held.since)) continue;
       secret.delete(key);
-      last = target;
+      last = held.target;
     }
     if (last !== undefined && secret.size === 0)
       publish({ version: 1, type: "cuaPrivateMode", active: false, target: last });
@@ -203,7 +208,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     const window = windowKey(event.target);
     if (event.active) {
       const first = secret.size === 0;
-      secret.set(launch + "|" + window, event.target);
+      secret.set(launch + "|" + window, { target: event.target, since: ++observations });
       if (first)
         publish({ version: 1, type: "cuaPrivateMode", active: true, target: event.target });
       // This launch holds it now; an earlier one's hold on the same window is superseded.
@@ -211,10 +216,14 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     } else if (!current.guard || current.guard.has(window)) release((_held, at) => at === window);
   };
 
-  /** An accepted view of the whole screen releases holds on windows no longer on it. */
-  const observed = (launch: number, targets: ReadonlyArray<ComputerUseWindowTarget>) => {
+  /**
+   * A view of the whole screen, taken when `snapshot` was the observation count, releases holds
+   * on windows no longer on it, but only holds from before it: a window that came back and
+   * reported a secret while the view was acted on is newer than the view.
+   */
+  const observed = (snapshot: number, targets: ReadonlyArray<ComputerUseWindowTarget>) => {
     const seen = new Set(targets.map(windowKey));
-    release((_held, at) => !seen.has(at));
+    release((_held, at, since) => since <= snapshot && !seen.has(at));
   };
 
   const backoff = () => RESTART_MS[Math.min(failures++, RESTART_MS.length - 1)] ?? 60_000;
@@ -348,6 +357,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       entry.watched = "";
       return;
     }
+    // Holds older than this listing are the ones it can speak for.
+    const snapshot = observations;
     const targets = windowsOf(
       yield* Effect.promise(() => entry.client.request("listWindows", {}, WATCH_MS)),
     );
@@ -363,7 +374,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       if (entry.client.watching()) yield* unwatch(entry);
       entry.watched = "";
       // A successful listing of no windows at all: no earlier secret can still be focused.
-      observed(entry.launch, []);
+      observed(snapshot, []);
       return;
     }
     // A watch that was refused or not answered in time leaves the helper's watch unknown, so
@@ -371,7 +382,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     const confirmed = guardFor(entry, new Set(targets.map(windowKey)));
     const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS, confirmed));
     entry.watched = accepted ? key : "";
-    if (accepted) observed(entry.launch, targets);
+    if (accepted) observed(snapshot, targets);
   });
 
   /**
