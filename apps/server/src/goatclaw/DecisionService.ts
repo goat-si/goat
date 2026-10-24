@@ -103,11 +103,17 @@ const make = Effect.gen(function* () {
       return yield* denied("This credential cannot reach other machines because it is read-only.");
     yield* Authority.writeAccess(caller);
     const approval = writes && item?.pending?.approval !== undefined;
-    const required = writes
-      ? approval && caller.kind === "agent"
-        ? (["orchestration:operate", "orchestration:approve"] as const)
-        : (["orchestration:operate"] as const)
-      : (["orchestration:read", "orchestration:operate"] as const);
+    // A thread credential carries orchestration:read only; its write authority is a live,
+    // writable thread (checked here and by assertLiveCaller) plus its profile, as for other
+    // host-reaching thread tools. Outside credentials prove host reach with operate.
+    const required =
+      scope.thread !== undefined
+        ? (["orchestration:read"] as const)
+        : writes
+          ? approval && caller.kind === "agent"
+            ? (["orchestration:operate", "orchestration:approve"] as const)
+            : (["orchestration:operate"] as const)
+          : (["orchestration:read", "orchestration:operate"] as const);
     if (scope.reauthorize === undefined)
       return yield* denied(
         "This credential cannot reach other machines without live session authorization.",
