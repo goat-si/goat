@@ -4,6 +4,7 @@ import {
   AuthHubProxyScope,
   AuthStandardClientScopes,
   ExecutionEnvironmentDescriptor,
+  ORCHESTRATION_PROTOCOL_VERSION,
   PortSchema,
 } from "@goat/contracts";
 import { resolveWorktreeHome } from "@goat/shared/devHome";
@@ -80,6 +81,18 @@ export class NoRunningServerError extends Schema.TaggedError<NoRunningServerErro
       isGoatConnectEnabled()
         ? "Start GOAT with `goat serve`, then pair this device with `goat pair`. For remote access, use `goat pair --tailscale`."
         : "Start one with `goat serve`.",
+    ].join("\n");
+  }
+}
+
+export class IncompatibleServerProtocolError extends Schema.TaggedError<IncompatibleServerProtocolError>()(
+  "IncompatibleServerProtocolError",
+  { serverVersion: Schema.String, serverProtocolVersion: Schema.Number },
+) {
+  override get message(): string {
+    return [
+      `The running GOAT server (${this.serverVersion}) speaks orchestration protocol ${String(this.serverProtocolVersion)}, but this CLI speaks protocol ${String(ORCHESTRATION_PROTOCOL_VERSION)}.`,
+      `Pair with the matching CLI instead: install it with \`curl -fsSL https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh | GOAT_VERSION=${this.serverVersion} sh\`, then run \`goat pair\`.`,
     ].join("\n");
   }
 }
@@ -519,6 +532,16 @@ export const pairCommand = Command.make("pair", {
       const logLevel = Option.getOrElse(cliLogLevel, () => "Warn" as const);
 
       const target = yield* discoverPairTarget(Option.getOrUndefined(flags.baseDir));
+      // Each protocol keeps auth in its own database, so a token minted here
+      // for another protocol's server would never be accepted by it. Refuse
+      // before any local layer opens (and migrates) that database.
+      const serverProtocolVersion = target.descriptor.orchestrationProtocolVersion ?? 1;
+      if (serverProtocolVersion !== ORCHESTRATION_PROTOCOL_VERSION) {
+        return yield* new IncompatibleServerProtocolError({
+          serverVersion: target.descriptor.serverVersion,
+          serverProtocolVersion,
+        });
+      }
 
       const notes: Array<string> = [];
       let pairingBaseUrl: string;

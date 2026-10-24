@@ -1,13 +1,15 @@
 // @effect-diagnostics nodeBuiltinImport:off - CLI integration exercises Node HTTP and filesystem boundaries.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterEach, assert, describe, expect, it } from "@effect/vitest";
-import { AuthStandardClientScopes } from "@goat/contracts";
+import { AuthStandardClientScopes, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { buildMobilePairingLink } from "@goat/shared/mobilePairingLink";
 import * as NetService from "@goat/shared/Net";
+import * as Cause from "effect/Cause";
 import { CliError, Command } from "effect/cli";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import { FetchHttpClient } from "effect/http";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -101,6 +103,7 @@ const testDescriptor = {
   label: "pair-test",
   platform: { os: "linux", arch: "x64" },
   serverVersion: "0.0.1",
+  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
   capabilities: { repositoryIdentity: true },
 };
 
@@ -108,6 +111,7 @@ const withDescriptorServer = <A, E, R>(
   run: (origin: string, paths: string[]) => Effect.Effect<A, E, R>,
   host = "127.0.0.1",
   legacyOnly = false,
+  descriptor: object = testDescriptor,
 ) =>
   Effect.acquireUseRelease(
     Effect.callback<NodeHttp.Server>((resume) => {
@@ -119,7 +123,7 @@ const withDescriptorServer = <A, E, R>(
           (legacyOnly ? "/.well-known/t3/environment" : "/.well-known/goat/environment") // goat-rename: legacy
         ) {
           response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(testDescriptor));
+          response.end(JSON.stringify(descriptor));
           return;
         }
         response.writeHead(404);
@@ -360,6 +364,39 @@ describe("goat pair", () => {
           "server-runtime.json",
         ]);
       }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  // regression: #15492 an older CLI minted into a V1 database the protocol 2
+  // server never reads, so pairing must refuse before opening the database.
+  it.effect("rejects a server on another protocol before opening its database", () =>
+    withDescriptorServer(
+      (origin) =>
+        Effect.gen(function* () {
+          const baseDir = makeTempDir("goat-pair-protocol-test-");
+          yield* persistServerRuntimeState({
+            path: NodePath.join(baseDir, "userdata", "server-runtime.json"),
+            state: yield* makePersistedServerRuntimeState({
+              config: { host: "127.0.0.1", devUrl: undefined },
+              port: Number(new URL(origin).port),
+            }),
+          });
+
+          const exit = yield* provideCliTestLayers(
+            runCli(["pair", "--base-dir", baseDir]).pipe(Effect.exit),
+          );
+
+          assert.deepEqual(NodeFS.readdirSync(NodePath.join(baseDir, "userdata")), [
+            "server-runtime.json",
+          ]);
+          assert.isTrue(Exit.isFailure(exit));
+          if (Exit.isFailure(exit)) {
+            assert.include(String(Cause.squash(exit.cause)), "GOAT_VERSION=0.0.45 sh");
+          }
+        }),
+      "127.0.0.1",
+      false,
+      { ...testDescriptor, serverVersion: "0.0.45", orchestrationProtocolVersion: 1 },
     ).pipe(Effect.provide(NodeServices.layer)),
   );
 
