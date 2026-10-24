@@ -1365,11 +1365,13 @@ export const layerWithOptions = (
         },
       );
 
-      const { closeWithin: closeScopeWithin, awaitLateCloses } = makeScopeCloser(
-        RELEASE_SCOPE_CLOSE_TIMEOUT_MS,
-      );
+      const {
+        closeWithin: closeScopeWithin,
+        trackRelease,
+        awaitPendingReleases,
+      } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
-      const releaseEntry = (input: {
+      const releaseEntryNow = (input: {
         readonly providerSessionId: ProviderSessionId;
         readonly reason: ProviderSessionReleaseReason;
         readonly detail?: string;
@@ -1489,6 +1491,8 @@ export const layerWithOptions = (
             ),
           ),
         );
+      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
+        trackRelease(releaseEntryNow(input));
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -2507,7 +2511,7 @@ export const layerWithOptions = (
             ),
           { concurrency: "unbounded", discard: true },
         );
-        yield* awaitLateCloses;
+        yield* awaitPendingReleases;
       });
       yield* Effect.addFinalizer(() =>
         shutdown.pipe(

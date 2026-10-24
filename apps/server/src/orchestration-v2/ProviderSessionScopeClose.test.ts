@@ -50,7 +50,7 @@ it.effect("shutdown waits for a session close that outlived its release", () =>
       Effect.andThen(Deferred.succeed(session.exited, undefined)),
       Effect.forkChild({ startImmediately: true }),
     );
-    const shutdown = yield* closer.awaitLateCloses.pipe(
+    const shutdown = yield* closer.awaitPendingReleases.pipe(
       Effect.andThen(Effect.sync(() => session.state.closed)),
       Effect.forkChild({ startImmediately: true }),
     );
@@ -65,11 +65,44 @@ it.effect("shutdown stops waiting for a close that never finishes after the same
     const session = yield* makeHeldSessionScope;
     yield* releaseUntilTimeout(closer, session);
 
-    const shutdown = yield* closer.awaitLateCloses.pipe(
+    const shutdown = yield* closer.awaitPendingReleases.pipe(
       Effect.forkChild({ startImmediately: true }),
     );
     yield* TestClock.adjust("30 seconds");
     yield* Fiber.join(shutdown);
     assert.isFalse(session.state.closed);
+  }),
+);
+
+it.effect("shutdown waits for a release that starts its close while shutdown waits", () =>
+  Effect.gen(function* () {
+    const closer = makeScopeCloser(30_000);
+    const first = yield* makeHeldSessionScope;
+    const second = yield* makeHeldSessionScope;
+    yield* releaseUntilTimeout(closer, first);
+    // The second release has removed its session but not yet started its close.
+    const removed = yield* Deferred.make<void>();
+    yield* closer
+      .trackRelease(
+        Deferred.await(removed).pipe(
+          Effect.andThen(closer.closeWithin(second.scope, { reason: "idle_timeout" })),
+        ),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.sleep("5 seconds").pipe(
+      Effect.andThen(Deferred.succeed(removed, undefined)),
+      Effect.andThen(Deferred.succeed(first.exited, undefined)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Effect.sleep("10 seconds").pipe(
+      Effect.andThen(Deferred.succeed(second.exited, undefined)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    const shutdown = yield* closer.awaitPendingReleases.pipe(
+      Effect.andThen(Effect.sync(() => [first.state.closed, second.state.closed])),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* TestClock.adjust("10 seconds");
+    assert.deepEqual(yield* Fiber.join(shutdown), [true, true]);
   }),
 );
