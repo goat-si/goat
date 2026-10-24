@@ -40,9 +40,10 @@ import {
   SHARED_CAPTURE,
   STILL_DRAWING,
   captureX11Window,
+  type X11WindowCapture,
 } from "../linuxHelper/x11WindowCapture.ts";
 import { makeX11WindowPlacement } from "../x11WindowPlacement.ts";
-import { encodeJpeg } from "./jpeg.ts";
+import { jpegSteps } from "./jpeg.ts";
 
 type Target = DesktopCuaFrames["targets"][number];
 
@@ -91,15 +92,33 @@ export function refusalOutcome(refused: string, transient: boolean): FrameOutcom
   return { unavailable: "unsupported" };
 }
 
-/** Packed RGB as a JPEG within the frame byte limit, or undefined when it cannot fit. */
-export function frameJpeg(rgb: Uint8Array, width: number, height: number): string | undefined {
+/** Encoding rows between turns of the event loop: a few milliseconds of work at a time. */
+const ROWS_PER_TURN = 4;
+
+/**
+ * Packed RGB as a JPEG within the frame byte limit, or undefined when it cannot fit. Encoding
+ * runs in short slices, so a large frame does not hold the server's event loop, and a capture
+ * stopped meanwhile stops encoding at the next slice.
+ */
+export const frameJpeg = Effect.fn("LinuxFrameSource.frameJpeg")(function* (
+  rgb: Uint8Array,
+  width: number,
+  height: number,
+) {
   for (const quality of QUALITIES) {
-    const jpeg = encodeJpeg(rgb, width, height, quality);
-    if (jpeg.length <= PREVIEW_SESSION_FRAME_LIMITS.maxBytes)
-      return Buffer.from(jpeg).toString("base64");
+    const steps = jpegSteps(rgb, width, height, quality);
+    let rows = 0;
+    let step = steps.next();
+    while (!step.done) {
+      if (++rows % ROWS_PER_TURN === 0)
+        yield* Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)));
+      step = steps.next();
+    }
+    if (step.value.length <= PREVIEW_SESSION_FRAME_LIMITS.maxBytes)
+      return Buffer.from(step.value).toString("base64");
   }
   return undefined;
-}
+});
 
 /** A capture's outcome as the message a desktop would send for it. */
 const frameMessage = (
@@ -111,69 +130,60 @@ const frameMessage = (
     ? { version: 1, type: "cuaFrame", seq, key, mime: "image/jpeg", ...outcome.frame }
     : { version: 1, type: "cuaFrameUnavailable", seq, key, reason: outcome.unavailable };
 
-const make = Effect.gen(function* () {
-  const platform = yield* HostProcess.Platform;
-  const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
-  const environment = yield* HostProcess.Environment;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
+/** The reads a capture makes, apart so tests can stand in for X, AT-SPI and the driver. */
+export interface FrameIo {
+  /** The driver's display environment, or none when the driver is not running on X. */
+  readonly session: Effect.Effect<Option.Option<Readonly<Record<string, string>>>>;
+  readonly placement: (
+    env: Readonly<Record<string, string>>,
+    target: Target,
+  ) => Promise<"same" | "other" | "unknown">;
+  readonly focus: (
+    env: Readonly<Record<string, string>>,
+    pid: number,
+  ) => Promise<{ readonly known: boolean; readonly secure: boolean }>;
+  /** The driver's list_apps answer, or undefined when it cannot be read. */
+  readonly listApps: Effect.Effect<unknown>;
+  readonly capture: (
+    env: Readonly<Record<string, string>>,
+    target: Target,
+  ) => Promise<X11WindowCapture>;
+}
+
+const isPrivate = (focus: { readonly known: boolean; readonly secure: boolean }) =>
+  !focus.known || focus.secure;
+
+export const makeLinuxFrameSource = Effect.fn("LinuxFrameSource.make")(function* (
+  platform: string,
+  io: FrameIo,
+) {
   const hub = yield* PubSub.sliding<DesktopCuaFrame>(16);
   const loops = yield* FiberMap.make<string>();
-
-  const session =
-    Option.isSome(driver) && driver.value.driverSession !== undefined
-      ? driver.value.driverSession
-      : Effect.succeed(Option.none());
 
   const supported: Effect.Effect<boolean> =
     platform !== "linux"
       ? Effect.succeed(false)
-      : session.pipe(
-          Effect.map(
-            (current) =>
-              Option.isSome(current) &&
-              current.value.display.some(
-                (variable) => variable.name === "DISPLAY" && variable.value.trim() !== "",
-              ),
-          ),
+      : io.session.pipe(
+          Effect.map((env) => Option.exists(env, (value) => (value.DISPLAY ?? "").trim() !== "")),
         );
 
   const capture = Effect.fn("LinuxFrameSource.capture")(function* (target: Target) {
-    const current = yield* session;
-    if (Option.isNone(current)) return { unavailable: "unsupported" } satisfies FrameOutcome;
-    const env: Record<string, string> = Object.fromEntries(
-      Object.entries(environment).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    );
-    for (const variable of current.value.display) env[variable.name] = variable.value;
-    const display = env.DISPLAY;
-    if (display === undefined || display.trim() === "")
+    const current = yield* io.session;
+    if (Option.isNone(current) || (current.value.DISPLAY ?? "").trim() === "")
       return { unavailable: "unsupported" } satisfies FrameOutcome;
+    const env = current.value;
     // The window is still there, on this display, and the pid's (#1358).
-    const placed = yield* Effect.promise(() =>
-      makeX11WindowPlacement({ DISPLAY: display, XAUTHORITY: env.XAUTHORITY })([
-        { pid: target.pid, windowId: target.windowId },
-      ]),
-    );
+    const placed = yield* Effect.promise(() => io.placement(env, target));
     if (placed === "other") return { unavailable: "windowGone" } satisfies FrameOutcome;
     if (placed === "unknown") return { unavailable: "captureFailed" } satisfies FrameOutcome;
     // A focused password field, or focus that cannot be read, shows nothing.
-    const focus = yield* Effect.promise(() => makeSecureFocusProbe(gdbusRunner(env))(target.pid));
-    if (!focus.known || focus.secure) return { unavailable: "private" } satisfies FrameOutcome;
+    if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
+      return { unavailable: "private" } satisfies FrameOutcome;
     if (target.apps !== undefined) {
       const listed = new Map<number, ListedApp>();
-      const sdk = yield* loadDriverSdk(fs, path).pipe(Effect.orElseSucceed(() => Option.none()));
-      const socket = current.value.mcp.socketPath;
       // The listing the proxy judges agent calls by: a desktop app by its desktop id, and a
       // process without one by the app name of the windows list_apps nests under it (#1428).
-      if (Option.isSome(sdk) && socket)
-        learnApps(
-          yield* callDriverTool(sdk.value, socket, "list_apps", {}).pipe(
-            Effect.orElseSucceed(() => undefined),
-          ),
-          listed,
-        );
+      learnApps(yield* io.listApps, listed);
       const verdict = scopeVerdict({
         name: "get_window_state",
         args: { pid: target.pid, window_id: target.windowId },
@@ -182,16 +192,13 @@ const make = Effect.gen(function* () {
       });
       if (verdict._tag !== "allow") return { unavailable: "appNotApproved" } satisfies FrameOutcome;
     }
-    const shot = yield* Effect.promise(() =>
-      captureX11Window(
-        { DISPLAY: display, XAUTHORITY: env.XAUTHORITY },
-        target.windowId,
-        frameSize(target.maxWidth),
-      ),
-    );
+    const shot = yield* Effect.promise(() => io.capture(env, target));
     if ("refused" in shot) return refusalOutcome(shot.refused, shot.transient === true);
-    const data = frameJpeg(shot.rgb, shot.width, shot.height);
+    const data = yield* frameJpeg(shot.rgb, shot.width, shot.height);
     if (data === undefined) return { unavailable: "captureFailed" } satisfies FrameOutcome;
+    // A password field focused while the window was read or encoded keeps the frame back.
+    if (isPrivate(yield* Effect.promise(() => io.focus(env, target.pid))))
+      return { unavailable: "private" } satisfies FrameOutcome;
     return { frame: { width: shot.width, height: shot.height, data } } satisfies FrameOutcome;
   });
 
@@ -222,6 +229,54 @@ const make = Effect.gen(function* () {
     supported,
     setTargets,
     frames: Stream.fromPubSub(hub),
+  });
+});
+
+const make = Effect.gen(function* () {
+  const platform = yield* HostProcess.Platform;
+  const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  const environment = yield* HostProcess.Environment;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driverSession =
+    Option.isSome(driver) && driver.value.driverSession !== undefined
+      ? driver.value.driverSession
+      : Effect.succeedNone;
+  // The server's environment with the display the driver was started on.
+  const session = driverSession.pipe(
+    Effect.map(
+      Option.map((current) => {
+        const env: Record<string, string> = Object.fromEntries(
+          Object.entries(environment).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined,
+          ),
+        );
+        for (const variable of current.display) env[variable.name] = variable.value;
+        return env;
+      }),
+    ),
+  );
+  const listApps = Effect.gen(function* () {
+    const current = yield* driverSession;
+    const socket = Option.isSome(current) ? current.value.mcp.socketPath : undefined;
+    const sdk = yield* loadDriverSdk(fs, path).pipe(Effect.orElseSucceed(() => Option.none()));
+    if (Option.isNone(sdk) || !socket) return undefined;
+    return yield* callDriverTool(sdk.value, socket, "list_apps", {}).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+  });
+  const display = (env: Readonly<Record<string, string>>) => ({
+    DISPLAY: env.DISPLAY ?? "",
+    XAUTHORITY: env.XAUTHORITY,
+  });
+  return yield* makeLinuxFrameSource(platform, {
+    session,
+    placement: (env, target) =>
+      makeX11WindowPlacement(display(env))([{ pid: target.pid, windowId: target.windowId }]),
+    focus: (env, pid) => makeSecureFocusProbe(gdbusRunner(env))(pid),
+    listApps,
+    capture: (env, target) =>
+      captureX11Window(display(env), target.windowId, frameSize(target.maxWidth)),
   });
 });
 

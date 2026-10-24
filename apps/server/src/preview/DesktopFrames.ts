@@ -203,6 +203,9 @@ const make = Effect.gen(function* () {
    * sent again.
    */
   let current: { seq: number; targets: ReadonlyArray<Target> } = { seq: 0, targets: [] };
+  /** What the Linux source was last handed, and whether it, not the desktop, captures now. */
+  let linuxHanded: { seq: number; targets: ReadonlyArray<Target> } | undefined;
+  let linuxCaptures = false;
   let scheduled: number | undefined;
   const mutex = yield* Semaphore.make(1);
   const wake = yield* PubSub.sliding<void>(1);
@@ -253,14 +256,23 @@ const make = Effect.gen(function* () {
             Effect.option,
           );
           current = { seq: Option.getOrElse(seq, () => UNSENT), targets };
-          if (Option.isSome(linux)) {
-            const desktopCaptures =
-              Option.isSome(desktop) &&
-              Option.exists(yield* desktop.value.cuaReadiness, (report) => report.frames === true);
-            yield* linux.value.setTargets(
-              current.seq,
-              desktopCaptures || current.seq === UNSENT ? [] : targets,
-            );
+        }
+        // Which source captures follows the helper's readiness as well as the targets: a helper
+        // that starts or stops sending frames hands the targets over with unchanged targets.
+        if (Option.isSome(linux) && Option.isSome(desktop)) {
+          const desktopCaptures = Option.exists(
+            yield* desktop.value.cuaReadiness,
+            (report) => report.frames === true,
+          );
+          const handed = desktopCaptures || current.seq === UNSENT ? [] : current.targets;
+          if (
+            linuxHanded === undefined ||
+            linuxHanded.seq !== current.seq ||
+            !sameTargets(linuxHanded.targets, handed)
+          ) {
+            linuxHanded = { seq: current.seq, targets: handed };
+            linuxCaptures = handed.length > 0;
+            yield* linux.value.setTargets(current.seq, handed);
           }
         }
         yield* schedule(gates, overdue);
@@ -304,10 +316,14 @@ const make = Effect.gen(function* () {
     );
   });
 
-  /** A frame from the desktop, checked and fanned out with no reconcile in between. */
-  const deliver = (message: DesktopCuaFrame) =>
+  /**
+   * A frame from the desktop or the Linux source, checked and fanned out with no reconcile in
+   * between. Only the source capturing now is heard; the other's late frames carry the same seq.
+   */
+  const deliver = (fromLinux: boolean) => (message: DesktopCuaFrame) =>
     mutex.withPermits(1)(
       Effect.gen(function* () {
+        if (fromLinux !== linuxCaptures) return;
         const set = viewers.get(message.key);
         if (set === undefined || set.size === 0) return;
         if (fence !== undefined) yield* PubSub.takeUpTo(fence, Number.MAX_SAFE_INTEGER);
@@ -353,10 +369,10 @@ const make = Effect.gen(function* () {
       Stream.runForEach(() => kick),
       Effect.forkScoped,
     );
-    yield* desktop.value.cuaFrames.pipe(Stream.runForEach(deliver), Effect.forkScoped);
+    yield* desktop.value.cuaFrames.pipe(Stream.runForEach(deliver(false)), Effect.forkScoped);
   }
   if (Option.isSome(linux))
-    yield* linux.value.frames.pipe(Stream.runForEach(deliver), Effect.forkScoped);
+    yield* linux.value.frames.pipe(Stream.runForEach(deliver(true)), Effect.forkScoped);
 
   const frames = (input: PreviewSessionFramesInput): Stream.Stream<PreviewSessionFrameEvent> =>
     input.sessionId.startsWith(DESKTOP_PREFIX)

@@ -212,6 +212,20 @@ export function encodeJpeg(
   height: number,
   quality: number,
 ): Uint8Array {
+  const steps = jpegSteps(rgb, width, height, quality);
+  for (let step = steps.next(); ; step = steps.next()) if (step.done) return step.value;
+}
+
+/**
+ * The same encoding, pausing after each row of 8×8 blocks, so a caller on a shared event loop can
+ * let other work run between rows (a 480-pixel row takes about a millisecond).
+ */
+export function* jpegSteps(
+  rgb: Uint8Array,
+  width: number,
+  height: number,
+  quality: number,
+): Generator<void, Uint8Array, void> {
   if (
     width < 1 ||
     height < 1 ||
@@ -225,7 +239,8 @@ export function encodeJpeg(
   const writer = new BitWriter();
   const blocks = [new Float64Array(64), new Float64Array(64), new Float64Array(64)] as const;
   const previous = [0, 0, 0];
-  for (let top = 0; top < height; top += 8)
+  for (let top = 0; top < height; top += 8) {
+    if (top > 0) yield;
     for (let left = 0; left < width; left += 8) {
       for (let y = 0; y < 8; y++)
         for (let x = 0; x < 8; x++) {
@@ -262,6 +277,7 @@ export function encodeJpeg(
         CODES.chromaAc,
       );
     }
+  }
   const scan = writer.finish();
   const bytes = [
     0xff,
