@@ -312,11 +312,13 @@ it.effect(
         yield* leases.stop(other);
         assert.isFalse(yield* Queue.take(sent));
 
-        yield* leases.control(thread, Option.none());
+        const lapsing = yield* leases.control(thread, Option.none());
         assert.isTrue(yield* Queue.take(sent));
         // An interactive control lapses after an hour without anyone ending it.
         yield* TestClock.adjust("61 minutes");
         assert.isFalse(yield* Queue.take(sent));
+        // A lapsed control's proxy can no longer name a window to capture.
+        assert.isFalse(yield* leases.setTarget(thread, lapsing.controlId, { pid: 7, windowId: 3 }));
       }).pipe(
         Effect.provide(
           ComputerUseLeases.layer.pipe(

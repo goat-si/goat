@@ -310,9 +310,11 @@ recording get frames.
 A desktop session's live picture (`previewSessions.frames`, `orchestration:read`) comes from
 `apps/server/src/preview/DesktopFrames.ts`. It asks the desktop's helper over the control pipe
 (`cuaFrames`) to capture the window the control's proxy last reported on its lease route. It asks
-only while someone watches and the control is active, not idle, paused or ended. Every frame is
-checked again against the current request and control when it arrives, and is capped at 480 px,
-two a second and 256 KiB.
+only while someone watches and the control is active, not idle, paused or ended, and withdraws the
+request at the control's expiry. Every frame is checked again when it arrives against the current
+request, the control and its approved apps, under the same lock that changes the request. Frames
+wider than 480 px or larger than 256 KiB are refused, and the server passes at most one per
+requested interval, never more than two a second.
 
 ## Services
 
