@@ -51,6 +51,11 @@ export interface McpProviderSessionConfig {
    * while goatclaw is off, which leaves the provider's own limits in place.
    */
   readonly nativeSubagentLimit?: number;
+  /**
+   * The thread's own TMPDIR. Parallel agents on one machine otherwise share /tmp and can pick up
+   * each other's scratch files (#1206).
+   */
+  readonly temporaryDirectory?: string;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */
@@ -171,10 +176,13 @@ export function memoryToolAvailability(
 /** Empty markers prevent a thread shell from falling back to a broader stored login. */
 export function withThreadMcpEnvironment(
   base: NodeJS.ProcessEnv,
-  config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader"> | undefined,
+  config:
+    | Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader" | "temporaryDirectory">
+    | undefined,
 ): NodeJS.ProcessEnv {
   return withLegacyEnvNames({
     ...base,
+    ...(config?.temporaryDirectory === undefined ? {} : { TMPDIR: config.temporaryDirectory }),
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });

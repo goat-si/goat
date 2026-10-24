@@ -22,7 +22,9 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { idleThreadProjection, liveThreadShell } from "../mcp/McpToolAccess.testkit.ts";
+import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as EventSink from "./EventSink.ts";
 import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -524,4 +526,66 @@ it.effect(
       });
       assert.equal((yield* owner.read()).providerThreads[0]!.cloudTask?.title, "After rollback");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
+);
+
+it.effect(
+  "a cloud result repeating a provider message that held a GOAT token is still one item",
+  () =>
+    Effect.gen(function* () {
+      registerCredentialRunTag("testtag0");
+      const owner = yield* makeOwner;
+      const threadId = owner.run.threadId;
+      const now = yield* DateTime.now;
+      // Synthetic, shaped like an issued MCP credential.
+      const text = "Done. Token was testtag0SyntheticMcpTokenNotARealCredential00000000";
+      yield* owner.sink.write({
+        events: [
+          {
+            id: EventId.make("provider:item"),
+            type: "turn-item.updated",
+            threadId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("turn-item:provider-answer"),
+              type: "assistant_message",
+              threadId,
+              runId: owner.run.id,
+              nodeId: owner.run.rootNodeId,
+              providerThreadId: owner.provider.id,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 0,
+              status: "completed",
+              title: null,
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              messageId: MessageId.make("message:provider-answer"),
+              text,
+              streaming: false,
+            },
+          },
+        ],
+      });
+      let next = 0;
+      const events = yield* makeCloudResultEvents({
+        run: owner.run,
+        nodeId: owner.run.rootNodeId!,
+        providerThreadId: owner.provider.id,
+        providerTurnId: null,
+        text,
+        completedAt: now,
+        allocateEventId: () => Effect.succeed(EventId.make(`cloud-result:${next++}`)),
+      });
+      yield* owner.sink.writeWithEffects({ events, effects: [] });
+
+      const items = (yield* owner.read()).turnItems.filter(
+        (item) => item.type === "assistant_message",
+      );
+      assert.deepEqual(
+        items.map((item) => (item.type === "assistant_message" ? item.text : "")),
+        ["Done. Token was [redacted]"],
+      );
+    }).pipe(Effect.provide(layerTest)),
 );
