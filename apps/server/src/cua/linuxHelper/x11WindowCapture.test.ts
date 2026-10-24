@@ -129,6 +129,11 @@ async function scriptedServer(
     readonly managed?: ReadonlyArray<number>;
     /** How the app redraws when asked: all of it (default), half of it, or not at all. */
     readonly redraw?: "whole" | "half" | "none";
+    /**
+     * The backing pixmap is replaced once this many names were taken, as when a compositor stops
+     * and starts redirecting the window; names after it read the replacement.
+     */
+    readonly replacedBackingAfter?: number;
     /** Structure events the server sends right after the redraw: [code, watched, window]. */
     readonly afterRedraw?: ReadonlyArray<readonly [number, number, number]>;
   },
@@ -150,7 +155,8 @@ async function scriptedServer(
     let started = false;
     let geometries = 0;
     const sizes = new Map<number, number>();
-    let named: number | undefined;
+    /** Named pixmaps, each with the backing pixmap generation it names. */
+    const named = new Map<number, number>();
     let damage: { readonly id: number; readonly drawable: number } | undefined;
     const reply = (extra: Buffer, data = 0) => {
       const head = Buffer.alloc(32);
@@ -240,7 +246,8 @@ async function scriptedServer(
           reply(extra);
         } else if (op === COMPOSITE && minor === 6) {
           const target = body.readUInt32LE(4);
-          if (options.redirected.includes(target)) named = body.readUInt32LE(8);
+          if (options.redirected.includes(target))
+            named.set(body.readUInt32LE(8), options.replacedBackingAfter === named.size ? 1 : 0);
           else error();
         } else if (op === 14) {
           geometries++;
@@ -301,13 +308,14 @@ async function scriptedServer(
           reply(extra);
         } else if (op === 73) {
           if (options.stallImage) continue;
-          if (body.readUInt32LE(4) !== named) return error();
+          const generation = named.get(body.readUInt32LE(4));
+          if (generation === undefined) return error();
           const width = body.readUInt16LE(12);
           const height = body.readUInt16LE(14);
           const extra = payload(24 + width * height * 4);
           extra.writeUInt32LE(0x21, 0);
           for (let pixel = 0; pixel < width * height; pixel++)
-            extra.writeUInt32LE(0x808080, 24 + pixel * 4);
+            extra.writeUInt32LE(generation === 0 ? 0x808080 : 0xff0000, 24 + pixel * 4);
           reply(extra, 24);
         }
       }
@@ -512,6 +520,18 @@ describe("X11 window capture against a scripted server", () => {
     expect(
       await captureX11Window(environment, 0x200001, shot, { socketPath: moved.path }),
     ).toMatchObject({ width: 100 });
+  });
+
+  it("refuses when the backing pixmap read is not the one the app redrew into", async () => {
+    // A compositor that stopped and started redirecting the frame filled a new pixmap from
+    // what was behind it (#1390 review r4b).
+    await using server = await scriptedServer(FRAMED, {
+      redirected: [0x400001],
+      replacedBackingAfter: 1,
+    });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: STILL_DRAWING, transient: true });
   });
 
   it("bounds the redraw bookkeeping: drawing in many slivers is not waited on", () => {
