@@ -1093,7 +1093,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   // Command Line Tools' lipo rejects -version, while xcrun --find locates it and
   // fails only when no developer tools are installed.
-  const macPreflightSpawner = (lipoFound: boolean) =>
+  const macPreflightSpawner = (lipo: "found" | "missing" | "unspawnable") =>
     Layer.merge(
       Layer.succeed(
         ChildProcessSpawner.ChildProcessSpawner,
@@ -1103,8 +1103,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             readonly args: ReadonlyArray<string>;
           };
           const invocation = [childProcess.command, ...childProcess.args].join(" ");
+          if (invocation === "xcrun --find lipo" && lipo === "unspawnable") {
+            return Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "ChildProcess",
+                method: "spawn",
+                pathOrDescriptor: "xcrun",
+              }),
+            );
+          }
           const fails =
-            invocation === "lipo -version" || (invocation === "xcrun --find lipo" && !lipoFound);
+            invocation === "lipo -version" ||
+            (invocation === "xcrun --find lipo" && lipo === "missing");
           return Effect.succeed(mockProcess(fails ? 1 : 0));
         }),
       ),
@@ -1114,24 +1125,28 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
 
   it.effect("accepts the Command Line Tools lipo for universal macOS builds", () =>
-    preflightMacDesktopBuild("universal").pipe(Effect.provide(macPreflightSpawner(true))),
+    preflightMacDesktopBuild("universal").pipe(Effect.provide(macPreflightSpawner("found"))),
   );
 
   it.effect("refuses a universal macOS build when lipo is missing", () =>
     Effect.gen(function* () {
-      const error = yield* preflightMacDesktopBuild("universal").pipe(
-        Effect.provide(macPreflightSpawner(false)),
-        Effect.flip,
-      );
+      for (const lipo of ["missing", "unspawnable"] as const) {
+        const error = yield* preflightMacDesktopBuild("universal").pipe(
+          Effect.provide(macPreflightSpawner(lipo)),
+          Effect.flip,
+        );
 
-      assert.instanceOf(error, MacDesktopBuildPrerequisitesMissingError);
-      assert.deepStrictEqual(error.missing, ["lipo"]);
-      assert.include(error.message, "Xcode universal-binary tool (lipo)");
+        assert.instanceOf(error, MacDesktopBuildPrerequisitesMissingError);
+        assert.deepStrictEqual(error.missing, ["lipo"]);
+        assert.include(error.message, "Xcode universal-binary tool (lipo)");
+      }
     }),
   );
 
   it.effect("does not require lipo for single-architecture macOS builds", () =>
-    preflightMacDesktopBuild("arm64").pipe(Effect.provide(macPreflightSpawner(false))),
+    Effect.forEach(["arm64", "x64"] as const, (arch) =>
+      preflightMacDesktopBuild(arch).pipe(Effect.provide(macPreflightSpawner("unspawnable"))),
+    ),
   );
 
   it.effect("reports missing Windows toolchain capabilities before building", () =>
