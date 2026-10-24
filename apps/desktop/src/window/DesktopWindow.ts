@@ -1,3 +1,4 @@
+import * as StackPopout from "../preview/PreviewSessionPopout.ts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -405,6 +406,7 @@ export const make = Effect.gen(function* () {
   const material = yield* DesktopWindowMaterial.DesktopWindowMaterial;
   const materialScope = yield* Effect.scope;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const installPopout = yield* StackPopout.makePreviewSessionPopoutInstaller(environment.platform);
   const desktopState = yield* DesktopState.DesktopState;
   const assets = yield* DesktopAssets.DesktopAssets;
   const electronMenu = yield* ElectronMenu.ElectronMenu;
@@ -720,7 +722,8 @@ export const make = Effect.gen(function* () {
           }),
         );
       });
-      contents.on("did-create-window", (popup) => {
+      contents.on("did-create-window", (popup, details) => {
+        if (details.frameName === StackPopout.PREVIEW_SESSION_STACK_WINDOW_NAME) return;
         installContextMenu(popup, popup.webContents);
       });
     };
@@ -730,12 +733,7 @@ export const make = Effect.gen(function* () {
       void runPromise(previewManager.prepareWebview(contents));
     });
 
-    window.webContents.setWindowOpenHandler(({ url }) => {
-      if (Option.isSome(ElectronShell.parseSafeExternalUrl(url))) {
-        void runPromise(electronShell.openExternal(url));
-      }
-      return { action: "deny" };
-    });
+    yield* installPopout(window);
     window.webContents.on("will-navigate", (event, url) => {
       if (
         isSameOriginRendererNavigation({

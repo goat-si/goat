@@ -215,10 +215,16 @@ export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 export const ComputerUseRefusalDetail = Schema.Literals([
   "app_not_approved",
   "desktop_not_approved",
+  /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
+  "desktop_capture_off",
   "waiting_for_human",
   "private_mode",
   ...ComputerUseControlEnd.literals,
   "lost",
+  /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
+  "helper_restarted",
+  /** The driver named a window that is not on the screen GOAT gave it (#1358). */
+  "wrong_display",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 
@@ -233,6 +239,8 @@ export const computerUseRefusalReason = (
       return "userIntervened";
     case "app_not_approved":
       return "appNotAllowed";
+    case "helper_restarted":
+      return "helperUnavailable";
     default:
       return "targetRefused";
   }

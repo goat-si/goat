@@ -10,6 +10,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
 
 import { CuaDriverMcpConfiguration } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -18,8 +19,15 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
+import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
+const decodeX11Display = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({ DISPLAY: Schema.String, XAUTHORITY: Schema.optionalKey(Schema.String) }),
+  ),
+);
 
 const argument = (args: ReadonlyArray<string>, name: string) => {
   const index = args.indexOf(name);
@@ -40,6 +48,9 @@ async function* responseLines(response: Response): AsyncGenerator<string> {
 }
 
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
+  const platform = HostProcess.Platform.defaultValue();
+  const drivers = new Set<NodeChildProcess.ChildProcess>();
+  endDriversWithProxy(platform, () => drivers);
   const url = process.env[LEASE_PROXY_ENV.url];
   const authorization = process.env[LEASE_PROXY_ENV.authorization];
   const driver = decodeDriver(process.env[LEASE_PROXY_ENV.driver] ?? "");
@@ -57,6 +68,11 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     return;
   }
   const descriptor = driver.value;
+  // The X display GOAT started the driver on; every window the driver names must be there (#1358).
+  const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
+  const placement = Option.isSome(x11Display)
+    ? makeX11WindowPlacement(x11Display.value)
+    : undefined;
   // The driver child never sees the thread's GOAT credential.
   const childEnvironment: NodeJS.ProcessEnv = { ...process.env };
   for (const name of Object.values(LEASE_PROXY_ENV)) delete childEnvironment[name];
@@ -89,16 +105,17 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ),
       startDriver: Effect.acquireRelease(
         Effect.sync(() => {
-          const child = NodeChildProcess.spawn(descriptor.command, [...descriptor.args], {
-            env: childEnvironment,
-            stdio: ["pipe", "pipe", "inherit"],
-            windowsHide: true,
-          });
-          child.on("error", () => undefined);
-          child.stdin.on("error", () => undefined);
+          const child = spawnDriverProcess(
+            platform,
+            descriptor.command,
+            descriptor.args,
+            childEnvironment,
+          );
+          drivers.add(child);
+          child.once("exit", () => drivers.delete(child));
           return child;
         }),
-        (child) => Effect.sync(() => void child.kill()),
+        (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
       ).pipe(
         Effect.map((child) => ({
           send: (line: string) =>
@@ -111,33 +128,40 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           ).pipe(Stream.catchCause(() => Stream.empty)),
           kill: Effect.sync(() => {
             child.stdin.end();
-            child.kill("SIGKILL");
+            killDriverGroup(platform, child, "SIGKILL");
           }),
         })),
       ),
+      ...(placement === undefined
+        ? {}
+        : { placement: (windows) => Effect.promise(() => placement(windows)) }),
       revokeSessions: (sessions) =>
-        Effect.promise(() =>
-          Promise.all(
-            sessions.map(
-              (session) =>
-                new Promise<void>((resolve) => {
-                  NodeChildProcess.execFile(
-                    descriptor.command,
-                    [
-                      "revoke",
-                      "--session",
-                      session,
-                      ...(descriptor.socketPath === undefined
-                        ? []
-                        : ["--socket", descriptor.socketPath]),
-                    ],
-                    { env: childEnvironment, timeout: 5_000, windowsHide: true },
-                    () => resolve(),
-                  );
-                }),
-            ),
-          ),
-        ).pipe(Effect.asVoid),
+        // A driver without a socket is a direct child of this connection; killing it ends its
+        // sessions, and there is no daemon left to ask.
+        descriptor.socketPath === undefined
+          ? Effect.void
+          : Effect.promise(() =>
+              Promise.all(
+                sessions.map(
+                  (session) =>
+                    new Promise<void>((resolve) => {
+                      NodeChildProcess.execFile(
+                        descriptor.command,
+                        [
+                          "revoke",
+                          "--session",
+                          session,
+                          ...(descriptor.socketPath === undefined
+                            ? []
+                            : ["--socket", descriptor.socketPath]),
+                        ],
+                        { env: childEnvironment, timeout: 5_000, windowsHide: true },
+                        () => resolve(),
+                      );
+                    }),
+                ),
+              ),
+            ).pipe(Effect.asVoid),
     }).pipe(Effect.scoped, Effect.ensuring(Effect.sync(() => abort.abort()))),
   );
   process.exit(0);

@@ -225,6 +225,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   const layerSettings = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
     get: Effect.sync(() => testSettings),
     load: Effect.sync(() => testSettings),
+    setPreviewSessionStackPoppedOut: () => Effect.die("unexpected stack popout preference change"),
     setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
     setServerExposureMode: () => Effect.die("unexpected server exposure update"),
     setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),

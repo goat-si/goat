@@ -60,6 +60,9 @@ const fakeLeases = (input: {
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
+    turnEnded: () => Effect.die("unused"),
+    settle: Effect.die("unused"),
+    disable: Effect.die("unused"),
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
     detection: Effect.succeed(input.detection ?? { humanInput: true, privateMode: true }),
@@ -77,9 +80,16 @@ const interactiveControl = {
   expiresAt: DateTime.makeUnsafe("2026-10-21T13:00:00.000Z"),
 };
 
-const fakeDriver = (input: { readonly enabled: boolean; readonly running: boolean }) => {
+const fakeDriver = (input: {
+  readonly enabled: boolean;
+  readonly running: boolean;
+  readonly x11Display?: CuaDriver.CuaX11Display;
+}) => {
   const calls = { acquire: 0 };
   const service = CuaDriver.CuaDriver.of({
+    ...(input.x11Display === undefined
+      ? {}
+      : { x11Display: Effect.succeed(Option.some(input.x11Display)) }),
     enabled: Effect.succeed(input.enabled),
     acquire: Effect.sync(() => {
       calls.acquire++;
@@ -355,6 +365,22 @@ describe("computerUseAttachment", () => {
     assert.isFalse("cuaDriver" in blocked);
     assert.isTrue(blocked.cuaDriverBlocked);
   });
+
+  it.effect(
+    "tells the proxy the X display the driver was started on, so it can check every window",
+    () =>
+      Effect.gen(function* () {
+        const display = { DISPLAY: ":96", XAUTHORITY: "/run/user/1000/xauth" };
+        const driver = fakeDriver({ enabled: true, running: true, x11Display: display });
+        const attached = yield* decide(driver, { leases: fakeLeases({}).leases });
+        assert.deepInclude(attached, { _tag: "proxied", x11Display: display });
+        const config = ComputerUse.withComputerUse(session, attached, ROUTE);
+        assert.deepInclude(config.cuaDriver?.environment ?? [], {
+          name: "GOAT_CUA_X11_DISPLAY",
+          value: JSON.stringify(display),
+        });
+      }),
+  );
 
   it("hands a turn the proxy with its control, credential and driver, never the raw driver", () => {
     const leased = ComputerUse.withComputerUse(

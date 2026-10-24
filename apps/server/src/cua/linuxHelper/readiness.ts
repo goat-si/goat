@@ -9,6 +9,7 @@ import {
   type LinuxSession,
   type ReadinessFacts,
 } from "./linuxSession.ts";
+import { driverShot, type CaptureRoute } from "./windowCapture.ts";
 
 const Permissions = Schema.Struct({
   x11: Schema.Boolean,
@@ -39,6 +40,7 @@ export async function readLinuxReadiness(
     readonly session: LinuxSession;
     readonly uinputWritable: () => Promise<boolean>;
     readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+    readonly capture: CaptureRoute;
     readonly call: (
       tool: string,
       args: Readonly<Record<string, unknown>>,
@@ -53,6 +55,7 @@ export async function readLinuxReadiness(
     capture: "unproven",
     tree: "unavailable",
     uinputWritable: await deps.uinputWritable(),
+    captureRefused: undefined,
   };
   const call = async (tool: string, args: Readonly<Record<string, unknown>>) => {
     const answer = await deps.call(tool, args, deadlineMs);
@@ -63,6 +66,8 @@ export async function readLinuxReadiness(
     const decoded = decodePermissions(permissions?.structured);
     if (decoded._tag === "Some") {
       facts.driver = decoded.value;
+      // A capture that may not be the window's own proves nothing, so it is not even taken.
+      if (deps.capture.route === "refused") facts.captureRefused = deps.capture.reason;
       const list = await call("list_windows", {});
       const windows = decodeWindows(list?.structured);
       const shown =
@@ -74,21 +79,12 @@ export async function readLinuxReadiness(
       if (shown.length === 0) facts.capture = windows._tag === "Some" ? "noWindow" : "failed";
       // One window does not speak for the desktop: an app without accessibility, or a covered
       // window that captures blank. The best answer among a few shown windows wins.
+      let refusedBy: string | undefined;
       for (const window of shown) {
-        if (facts.capture !== "varied") {
-          // display_only preserves the snapshot the agent's element tokens belong to.
-          const capture = await call("get_window_state", {
-            pid: window.pid,
-            window_id: window.window_id,
-            include_accessibility_tree: false,
-            display_only: true,
-            max_image_dimension: 256,
-          });
-          const image = capture?.images[0];
-          const found = image
-            ? (pngColors(Buffer.from(image.data, "base64")) ?? "failed")
-            : "failed";
-          if (CAPTURE_RANK[found] > CAPTURE_RANK[facts.capture]) facts.capture = found;
+        if (facts.capture !== "varied" && facts.captureRefused === undefined) {
+          const found = await readinessCapture(deps, call, window);
+          if (typeof found !== "string") refusedBy = found.refused;
+          else if (CAPTURE_RANK[found] > CAPTURE_RANK[facts.capture]) facts.capture = found;
         }
         if (facts.tree !== "ready") {
           const focus = await deps.secureFocus(window.pid);
@@ -97,7 +93,45 @@ export async function readLinuxReadiness(
         }
         if (facts.capture === "varied" && facts.tree === "ready") break;
       }
+      // No window's own pixels could be read: say why, as the agent would hear it.
+      if (refusedBy !== undefined && facts.capture !== "varied" && facts.capture !== "uniform")
+        facts.captureRefused = refusedBy;
     }
   }
   return linuxReadiness(facts);
+}
+
+/**
+ * One window's capture for readiness, taken the way the agent's would be: "varied" or "uniform"
+ * when it is the window's own pixels, why not when the helper refused it, "failed" otherwise.
+ */
+async function readinessCapture(
+  deps: { readonly capture: CaptureRoute },
+  call: (tool: string, args: Readonly<Record<string, unknown>>) => Promise<DriverToolResult | null>,
+  window: { readonly pid: number; readonly window_id: number },
+): Promise<"varied" | "uniform" | "failed" | { readonly refused: string }> {
+  if (deps.capture.route === "own") {
+    // At most 256 pixels on a side, as the driver's readiness capture below.
+    const geometry = await call("get_window_state", {
+      pid: window.pid,
+      window_id: window.window_id,
+      include_accessibility_tree: false,
+      display_only: true,
+      max_image_dimension: 256,
+    });
+    const shot = driverShot(geometry?.structured);
+    if (!shot) return "failed";
+    const own = await deps.capture.capture(window.window_id, shot);
+    return "refused" in own ? own : (pngColors(own.png) ?? "failed");
+  }
+  // display_only preserves the snapshot the agent's element tokens belong to.
+  const capture = await call("get_window_state", {
+    pid: window.pid,
+    window_id: window.window_id,
+    include_accessibility_tree: false,
+    display_only: true,
+    max_image_dimension: 256,
+  });
+  const image = capture?.images[0];
+  return image ? (pngColors(Buffer.from(image.data, "base64")) ?? "failed") : "failed";
 }

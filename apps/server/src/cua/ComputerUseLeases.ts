@@ -72,6 +72,13 @@ export interface ComputerUseControl {
   readonly expiresAt: DateTime.Utc;
   /** The grant an unattended control lives on; interactive controls have none. */
   readonly handoffId?: TurnItemId;
+  /** The apps it last held while active, so a stopped one keeps its label; absent until then. */
+  readonly scope?: { readonly apps: ReadonlyArray<string> | undefined };
+  /**
+   * Its thread has no open run. It stays valid, so the next turn reuses it without respawning
+   * the proxy, but no agent can act on it until then.
+   */
+  readonly idle?: boolean;
 }
 
 export type ComputerUseControlState =
@@ -138,6 +145,15 @@ export class ComputerUseLeases extends Context.Service<
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
+    /**
+     * Marks the thread's control idle once none of its runs is still open; true when it did.
+     * A turn that starts meanwhile keeps the control it reused active.
+     */
+    readonly turnEnded: (threadId: ThreadId) => Effect.Effect<boolean, ComputerUseLeaseError>;
+    /** Checks every acting control for a thread with nothing left open; see turnEnded. */
+    readonly settle: Effect.Effect<void>;
+    /** Ends every control because computer use was turned off. */
+    readonly disable: Effect.Effect<void>;
     /** Every live grant on this host, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
     /** Which safety reports this host's helper sends; unattended turns need both. */
@@ -190,7 +206,12 @@ const appsOf = (leases: ReadonlyArray<ComputerUseLease>): ReadonlyArray<string> 
 
 interface ControlRecord extends ComputerUseControl {
   readonly ended?: ComputerUseControlEnd;
+  /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
+  readonly uses: number;
 }
+
+/** Whether an agent can act on the screen through this control now. */
+const acting = (record: ControlRecord) => record.ended === undefined && record.idle !== true;
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -261,8 +282,14 @@ const make = Effect.gen(function* () {
       existing.ended === undefined &&
       existing.handoffId === handoffId &&
       DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
-    )
-      return existing as ComputerUseControl;
+    ) {
+      const { idle, ...rest } = existing;
+      const reused: ControlRecord = { ...rest, uses: existing.uses + 1 };
+      controls.set(threadId, reused);
+      // The session list hid it while idle; it shows again for this turn.
+      if (idle === true) yield* changed;
+      return reused as ComputerUseControl;
+    }
     const next: ControlRecord = {
       controlId: `control:${NodeCrypto.randomUUID()}`,
       threadId,
@@ -270,6 +297,7 @@ const make = Effect.gen(function* () {
         ? lease.value.expiresAt
         : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
       ...(handoffId === undefined ? {} : { handoffId }),
+      uses: 0,
     };
     controls.set(threadId, next);
     yield* kick;
@@ -281,6 +309,14 @@ const make = Effect.gen(function* () {
   let interruptions: Interruptions = { count: 0, last: "human_input" };
   const interrupted = (last: ComputerUsePauseReason) => {
     interruptions = { count: interruptions.count + 1, last };
+  };
+
+  /** Remembers what an active control held, unless a newer control replaced it meanwhile. */
+  const scoped = (record: ControlRecord, apps: ReadonlyArray<string> | undefined) => {
+    const current = controls.get(record.threadId);
+    if (current?.controlId === record.controlId)
+      controls.set(record.threadId, { ...current, scope: { apps } });
+    return apps;
   };
 
   const controlState = Effect.fn("ComputerUseLeases.controlState")(function* (
@@ -304,7 +340,7 @@ const make = Effect.gen(function* () {
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
-        apps: grant.lease.apps,
+        apps: scoped(record, grant.lease.apps),
         wakeAt: DateTime.toEpochMillis(record.expiresAt),
       };
     }
@@ -314,7 +350,7 @@ const make = Effect.gen(function* () {
       _tag: "active",
       expiresAt: record.expiresAt,
       interruptions,
-      apps: grants.length === 0 ? [] : appsOf(grants),
+      apps: scoped(record, grants.length === 0 ? [] : appsOf(grants)),
       wakeAt: Math.min(
         DateTime.toEpochMillis(record.expiresAt),
         ...grants.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
@@ -333,8 +369,9 @@ const make = Effect.gen(function* () {
 
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
-      // A person's input with no agent on the screen is just a person using their computer.
-      if (![...controls.values()].some((record) => record.ended === undefined)) return false;
+      // A person's input with no agent on the screen is just a person using their computer,
+      // also between a thread's turns.
+      if (![...controls.values()].some(acting)) return false;
       paused = reason;
       interrupted(reason);
       return true;
@@ -400,7 +437,7 @@ const make = Effect.gen(function* () {
         if (endedAny) yield* PubSub.publish(signals, undefined);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const expiries = [...controls.values()]
-          .filter((record) => record.ended === undefined)
+          .filter(acting)
           .map((record) => DateTime.toEpochMillis(record.expiresAt))
           .filter((expiresAt) => expiresAt > now);
         const active = expiries.length > 0;
@@ -429,6 +466,47 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
+  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
+    const before = controls.get(threadId);
+    if (before === undefined || before.ended !== undefined) return false;
+    // Native subagents work through the parent's provider session, and so its control, on
+    // their own child threads; one can outlive a failed parent run. Delegated tasks hold
+    // controls of their own.
+    const open = yield* sql<{ readonly one: number }>`
+      WITH RECURSIVE native(child_thread_id, status) AS (
+        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
+        WHERE s.thread_id = ${threadId} AND s.origin = 'provider_native'
+        UNION
+        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
+        JOIN native n ON s.thread_id = n.child_thread_id
+        WHERE s.origin = 'provider_native'
+      )
+      SELECT 1 AS one FROM orchestration_v2_projection_runs
+      WHERE thread_id = ${threadId}
+        AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+      UNION ALL
+      SELECT 1 AS one FROM native WHERE status IN ('pending', 'running', 'waiting')
+      UNION ALL
+      SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
+      WHERE status IN ('pending', 'running')
+        AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
+      LIMIT 1
+    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
+    if (open.length > 0) return false;
+    // The read yields: a turn that minted or reused the control since then keeps it.
+    const after = controls.get(threadId);
+    if (
+      after?.controlId !== before.controlId ||
+      after.uses !== before.uses ||
+      after.ended !== undefined ||
+      after.idle === true
+    )
+      return false;
+    controls.set(threadId, { ...after, idle: true });
+    yield* changed;
+    return true;
+  });
+
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
@@ -454,6 +532,23 @@ const make = Effect.gen(function* () {
     stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
       Effect.tap(() => changed),
     ),
+    turnEnded,
+    // Fails only on a read; a control left as it was is read again on the next end.
+    settle: Effect.suspend(() =>
+      Effect.forEach(
+        [...controls.values()].filter(acting).map((record) => record.threadId),
+        (threadId) =>
+          turnEnded(threadId).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("computer use control left to expire", { threadId, cause }),
+            ),
+          ),
+        { discard: true },
+      ),
+    ),
+    disable: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "disabled"))).pipe(
+      Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void)),
+    ),
     grants: live(),
     pause,
     detection,
@@ -468,7 +563,12 @@ const make = Effect.gen(function* () {
             _tag: "ended",
             reason: "revoked",
           })),
-          Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+          // Read again: an active state just recorded the scope it holds.
+          Effect.map((state) => {
+            const current = controls.get(record.threadId);
+            const latest = current?.controlId === record.controlId ? current : record;
+            return { control: latest as ComputerUseControl, state };
+          }),
         ),
       ),
     ),

@@ -20,6 +20,8 @@ import { serveHelperChannel } from "./helperChannel.ts";
 import { openX11HumanInput } from "./humanInputSource.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import { captureRoute } from "./windowCapture.ts";
+import { captureX11Window } from "./x11WindowCapture.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
@@ -39,6 +41,8 @@ const SESSION_NAMES = [
   "DISPLAY",
   "XAUTHORITY",
   "WAYLAND_DISPLAY",
+  // The driver captures a Hyprland window by its own export only when it sees this.
+  "HYPRLAND_INSTANCE_SIGNATURE",
   "XDG_RUNTIME_DIR",
   "XDG_SESSION_TYPE",
   "XDG_CURRENT_DESKTOP",
@@ -86,6 +90,11 @@ const generation = NodeCrypto.randomUUID();
 // Deadlines and event spacing need a clock that never steps back when the system time changes.
 const monotonic = () => performance.now();
 const secureFocus = makeSecureFocusProbe(gdbus);
+const capture = captureRoute({
+  session,
+  driverEnvironment,
+  captureX11: (windowId, shot) => captureX11Window(environment, windowId, shot),
+});
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
   undefined;
 const signals = makeSignalMonitor({
@@ -117,6 +126,7 @@ const helper = makeLinuxHelper({
       expectedVersion: driverVersion,
     }),
   secureFocus,
+  capture,
   uinputWritable: () =>
     NodeFS.promises.access("/dev/uinput", NodeFS.constants.W_OK).then(
       () => true,

@@ -96,6 +96,18 @@ function writeSettingsPatch(patch: typeof DesktopSettingsPatch.Type) {
 }
 
 describe("DesktopSettings", () => {
+  it.effect("restores a popped-out stack across reloads and persists docking", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        assert.isFalse((yield* settings.load).previewSessionStackPoppedOut);
+        yield* settings.setPreviewSessionStackPoppedOut(true);
+        assert.isTrue((yield* settings.load).previewSessionStackPoppedOut);
+        yield* settings.setPreviewSessionStackPoppedOut(false);
+        assert.isFalse((yield* settings.load).previewSessionStackPoppedOut);
+      }),
+    ),
+  );
   it.effect("round trips update policies and the durable pending record with sparse defaults", () =>
     withSettings(
       Effect.gen(function* () {
@@ -179,6 +191,7 @@ describe("DesktopSettings", () => {
         );
 
         assert.deepEqual(yield* settings.load, {
+          previewSessionStackPoppedOut: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
@@ -278,6 +291,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          previewSessionStackPoppedOut: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,
@@ -311,6 +325,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          previewSessionStackPoppedOut: false,
           linuxPasswordStore: "auto",
           localEnvironmentEnabled: true,
           mainWindowBounds: null,

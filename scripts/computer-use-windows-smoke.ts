@@ -26,7 +26,9 @@ import {
 } from "@goat/shared/computerUseObservation";
 import {
   windowsComputerUseReadiness,
+  windowsDriverRead,
   windowsObservationTarget,
+  WindowsElementStates,
   WindowsHelperReadiness,
   WindowsWindowFacts,
 } from "@goat/shared/computerUseWindows";
@@ -36,6 +38,7 @@ import { pidsSafeToClose } from "./lib/windows-shared-hosts.ts";
 
 const decodeReadiness = Schema.decodeUnknownSync(WindowsHelperReadiness);
 const decodeFacts = Schema.decodeUnknownSync(WindowsWindowFacts);
+const decodeStates = Schema.decodeUnknownSync(WindowsElementStates);
 
 const repo = NodePath.resolve(import.meta.dirname, "..");
 const outIndex = process.argv.indexOf("--out");
@@ -166,6 +169,14 @@ async function main(
       const read = target.privateMode
         ? undefined
         : await tool("get_window_state", { pid, window_id: windowId, tree_format: "elements" });
+      const states = read
+        ? decodeStates(await helper.call("elementStates", { pid, windowId }))
+        : undefined;
+      if (states)
+        record("element states " + label, {
+          count: states.elements.length,
+          truncated: states.truncated,
+        });
       const image = read?.images[0];
       if (image)
         NodeFS.writeFileSync(
@@ -173,7 +184,10 @@ async function main(
           Buffer.from(image.dataBase64, "base64"),
         );
       const observation = tracker.observe({
-        read: (read?.structured ?? { pid, window_id: windowId }) as DriverWindowState,
+        read: windowsDriverRead(
+          (read?.structured ?? { pid, window_id: windowId }) as DriverWindowState,
+          states,
+        ),
         since,
         epoch: target.epoch,
         scope: "default",
@@ -255,6 +269,20 @@ async function main(
       const fw = await windowOf([fixture.pid ?? 0], /GOAT computer use fixture/u);
       const first = await observe("fixture-1", fw.pid, fw.window_id);
       const firstElements = fullElements(first);
+      // State the driver gives (Agree's ToggleState) and what only the helper reads (#1286).
+      const states = ["Agree", "Mixed", "unnamedMixed", "Size"].map(
+        (name) => labelled(firstElements, new RegExp("^" + name + "$", "u")).state,
+      );
+      if (
+        JSON.stringify(states) !==
+        JSON.stringify([
+          { enabled: true, checked: false },
+          { enabled: true, checked: "mixed" },
+          { enabled: true, checked: "mixed" },
+          { enabled: true, expanded: false },
+        ])
+      )
+        fail("Unexpected element state: " + JSON.stringify(states));
       await sent(
         "set_value",
         fw.pid,
