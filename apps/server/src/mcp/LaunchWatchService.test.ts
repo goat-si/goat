@@ -1321,7 +1321,8 @@ describe("LaunchWatchService", () => {
           canRetry: true,
         },
       },
-      retry: 'Retry with goat_call {path: "thread.retry", args: {threadId: "target", host: "box"}}',
+      retry:
+        'Retry with goat_call {path: "thread.retry", args: {threadId: "target", host: "box"}}, and this watch reports the retried run. A Retry pressed in that thread on box is not reported here.',
     },
   ])("reports a remote run that failed preparing its workspace, from $host", (example) =>
     Effect.gen(function* () {

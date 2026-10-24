@@ -618,7 +618,9 @@ function launchFailedWake(input: {
     .filter((part) => part !== null)
     .join(", ");
   const retry = failure.canRetry
-    ? `Retry with ${call("thread.retry", toolArgs(watch))}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
+    ? watch.host === null
+      ? `Retry with ${call("thread.retry", toolArgs(watch))}; the user can also press Retry on the failure in that thread. This watch reports the retried run.`
+      : `Retry with ${call("thread.retry", toolArgs(watch))}, and this watch reports the retried run. A Retry pressed in that thread on ${watch.host} is not reported here.`
     : failure.stage === "workspace_preparation"
       ? `Retry it from a GOAT client connected to ${watch.host ?? "this environment"} (Retry on the failure in that thread), or launch again.`
       : null;
