@@ -285,13 +285,13 @@ export default function DiffPanel({
     turn: selectedTurn,
     awaitingCheckpoint,
     runActive: selectedRunActive,
-    edit: selectedEdit,
-    editPatch,
+    edit,
   } = useDiffPanelTurn({
     threadRef: routeThreadRef,
     selection: diffSelection,
     orderedSummaries: orderedTurnDiffSummaries,
     environmentId: activeThread?.environmentId,
+    ignoreWhitespace: diffIgnoreWhitespace,
     activeRunId: activeThread?.runtime?.activeRunId,
     latestRunId: activeThread?.latestRun?.runId,
   });
@@ -306,14 +306,14 @@ export default function DiffPanel({
         : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn
     ? `turn:${selectedTurn.runId}`
-    : (selectedEdit && `edit:${selectedEdit.itemId}`) || selectedGitScope;
+    : (edit?.sectionId ?? selectedGitScope);
   const collapseScopeKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}:${reviewSectionId}`
     : null;
   const codeViewMountKey = `${collapseScopeKey ?? reviewSectionId}:${codeViewRevision}`;
   const reviewSectionTitle = selectedTurn
     ? `Turn ${selectedCheckpointTurnCount ?? "?"}`
-    : (selectedEdit && "Edit") || GIT_REVIEW_SCOPES[selectedGitScope].title;
+    : (edit && "Edit") || GIT_REVIEW_SCOPES[selectedGitScope].title;
   const selectedCheckpointRange =
     typeof selectedCheckpointTurnCount === "number"
       ? {
@@ -360,7 +360,7 @@ export default function DiffPanel({
   const preview = branchDiffPreview.data;
   const gitDiff = selectedGitSource?.diff;
 
-  const turnPatch = selectedTurn ? activeCheckpointDiff : editPatch;
+  const turnPatch = selectedTurn ? activeCheckpointDiff : edit;
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
   const isSelectedPatchTruncated = !selectedTurn && selectedGitSource?.truncated === true;
   const selectedPatchQuery = turnPatch ?? branchDiffPreview;
@@ -375,7 +375,7 @@ export default function DiffPanel({
   const renderablePatch = getRenderablePatch(
     lazySource ? undefined : selectedPatch,
     `diff-panel:${resolvedTheme}`,
-    { compactPartialHunkOffsets: selectedRunId === null },
+    { compactPartialHunkOffsets: selectedRunId === null, ignoreWhitespace: edit?.ignoreWhitespace },
   );
   const fileStats = new Map(lazySource?.files?.map((file) => [file.path, file]));
   const sourceLineStat =
@@ -1021,9 +1021,9 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : awaitingCheckpoint && !selectedEdit ? (
+      ) : awaitingCheckpoint && !edit ? (
         <DiffPanelAwaitingCheckpoint runActive={selectedRunActive} />
-      ) : selectedRunId !== null && !selectedEdit && orderedTurnDiffSummaries.length === 0 ? (
+      ) : selectedRunId !== null && !edit && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
@@ -1038,7 +1038,7 @@ export default function DiffPanel({
       ) : (
         <>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
-            {selectedEdit && <DiffPanelEditNotice runActive={selectedRunActive} />}
+            {edit && <DiffPanelEditNotice runActive={selectedRunActive} />}
             {isSelectedPatchTruncated && !lazySource && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 This preview exceeds the size limit. Changes shown are incomplete.

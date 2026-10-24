@@ -13,13 +13,15 @@ const emptyStateClassName =
 /**
  * The turn a diff panel selection shows, and the clicked edit's own patch while that turn has no
  * checkpoint. The patch comes from the same cached query as the edit row's inline diff and takes
- * the shape of a checkpoint diff.
+ * the shape of a checkpoint diff. Checkpoint diffs hide whitespace on the server; the edit's patch
+ * arrives raw, so it carries the setting for the panel's parser.
  */
 export function useDiffPanelTurn<T extends { readonly runId: RunId }>(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly selection: DiffPanelSelection;
   readonly orderedSummaries: ReadonlyArray<T>;
   readonly environmentId: EnvironmentId | undefined;
+  readonly ignoreWhitespace: boolean;
   readonly activeRunId: RunId | null | undefined;
   readonly latestRunId: RunId | null | undefined;
 }) {
@@ -31,7 +33,8 @@ export function useDiffPanelTurn<T extends { readonly runId: RunId }>(input: {
     latestRunId: input.latestRunId,
     sourceItem: selection.kind === "turn" ? (selection.sourceItem ?? null) : null,
   });
-  const { awaitingCheckpoint, edit } = resolved;
+  const { edit: source, ...rest } = resolved;
+  const { awaitingCheckpoint } = rest;
 
   useEffect(() => {
     if (!threadRef || selection.kind !== "turn" || awaitingCheckpoint) return;
@@ -41,18 +44,20 @@ export function useDiffPanelTurn<T extends { readonly runId: RunId }>(input: {
     );
   }, [awaitingCheckpoint, selection, orderedSummaries, threadRef]);
 
-  const detail = useTurnItemDetail(edit && environmentId ? { environmentId, ...edit } : null);
+  const detail = useTurnItemDetail(source && environmentId ? { environmentId, ...source } : null);
   const item = detail.data?.item;
   const diff = item?.type === "file_change" ? item.patch : undefined;
-  const editPatch =
-    edit === null
+  const edit =
+    source === null
       ? null
       : {
           data: diff === undefined ? null : { diff },
           error: detail.error,
           isPending: detail.isPending,
+          sectionId: `edit:${source.itemId}`,
+          ignoreWhitespace: input.ignoreWhitespace,
         };
-  return { ...resolved, editPatch };
+  return { ...rest, edit };
 }
 
 export function DiffPanelAwaitingCheckpoint({ runActive }: { readonly runActive: boolean }) {
