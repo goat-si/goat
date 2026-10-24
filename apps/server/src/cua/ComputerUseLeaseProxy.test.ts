@@ -49,9 +49,7 @@ const harness = Effect.fn(function* (
      * Gives each driver an overlay channel; draws and sends land in `log` in order. With a gate,
      * every "show" signals `entered` and then waits for `gate`, like a helper slow to draw.
      */
-    readonly overlay?:
-      | boolean
-      | { readonly gate: Deferred.Deferred<void>; readonly entered: Deferred.Deferred<void> };
+    readonly overlay?: boolean | ((command: ComputerUseOverlayCommand) => Effect.Effect<void>);
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -89,10 +87,8 @@ const harness = Effect.fn(function* (
         ...(options.overlay
           ? {
               overlay: (command: ComputerUseOverlayCommand) =>
-                (typeof options.overlay === "object" && command.op === "show"
-                  ? Deferred.succeed(options.overlay.entered, undefined).pipe(
-                      Effect.andThen(Deferred.await(options.overlay.gate)),
-                    )
+                (typeof options.overlay === "function"
+                  ? options.overlay(command)
                   : Effect.void
                 ).pipe(
                   Effect.andThen(
@@ -193,7 +189,12 @@ describe("ComputerUseLeaseProxy", () => {
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
       const entered = yield* Deferred.make<void>();
-      const h = yield* harness({ overlay: { gate, entered } });
+      const h = yield* harness({
+        overlay: (command) =>
+          command.op === "show"
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
+            : Effect.void,
+      });
       yield* h.push(active());
       yield* h.send(call(5, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
       yield* Deferred.await(entered);
@@ -206,6 +207,43 @@ describe("ComputerUseLeaseProxy", () => {
       assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
       assert.notInclude(h.log, "send click");
     }),
+  );
+
+  it.effect(
+    "refuses a call drawn while a pause is still hiding the overlay, before the driver stops",
+    () =>
+      Effect.gen(function* () {
+        const show = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const hide = { gate: yield* Deferred.make<void>(), entered: yield* Deferred.make<void>() };
+        const hold = (step: typeof show) =>
+          Deferred.succeed(step.entered, undefined).pipe(Effect.andThen(Deferred.await(step.gate)));
+        const h = yield* harness({
+          overlay: (command) =>
+            command.op === "show"
+              ? hold(show)
+              : command.op === "hide" && command.reason === "takeover"
+                ? hold(hide)
+                : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(5, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        yield* Deferred.await(show.entered);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        // The pause is waiting for its hide to land; the driver is still running.
+        yield* Deferred.await(hide.entered);
+        yield* Deferred.succeed(show.gate, undefined);
+        const first = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.as("driver" as const)),
+          h.nextToProvider.pipe(Effect.map((answer) => answer)),
+        );
+        // Released before asserting: the pause cannot be interrupted, so a failure must not leave
+        // it waiting.
+        yield* Deferred.succeed(hide.gate, undefined);
+        assert.notEqual(first, "driver");
+        assert.include(JSON.stringify(first), PAUSE_MESSAGES.takeover);
+        yield* h.killed;
+        assert.notInclude(h.log, "send click");
+      }),
   );
 
   it.effect("holds a call until the server confirms the lease, then forwards it", () =>

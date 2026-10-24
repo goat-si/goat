@@ -264,10 +264,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               sessions.add(session);
             if (request.method === "tools/call") {
               const image = replyImageSize(message.result);
+              const result: { readonly isError?: unknown } | undefined = message.result;
               yield* drawOverlay({
                 type: "reply",
                 id: JSON.stringify(message.id),
                 ...(image ? { image } : {}),
+                ...(message.error !== undefined || result?.isError === true
+                  ? { failed: true }
+                  : {}),
               });
             }
           }
@@ -488,8 +492,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
       });
-      // A pause or end while drawing replaced or removed the driver; this call never ran.
-      if (running !== current)
+      // A pause or end that came while drawing: refuse, whether or not it has stopped the
+      // driver yet. This call never ran.
+      if (running !== current || paused !== undefined || finished !== undefined)
         return yield* options.output(
           finished !== undefined
             ? refusal(id, message.method, finished, LEASE_END_MESSAGES[finished])

@@ -73,6 +73,9 @@ final class AgentOverlay {
     panel.ignoresMouseEvents = true
     panel.hidesOnDeactivate = false
     panel.isReleasedWhenClosed = false
+    // No fade: a hide must be off screen before its ack, and a fading panel still showed in
+    // captures taken right after it (measured on macOS 26 with screencapture).
+    panel.animationBehavior = .none
     panel.level = .screenSaver
     panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     panel.contentView = view

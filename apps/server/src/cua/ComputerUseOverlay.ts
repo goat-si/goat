@@ -62,6 +62,8 @@ export interface OverlayState {
   readonly acting: ReadonlySet<string>;
   readonly capturing: ReadonlySet<string>;
   readonly recording: boolean;
+  /** stop_recording calls in flight: the recording runs until one answers without an error. */
+  readonly stopping: ReadonlySet<string>;
   readonly pause: ComputerUsePauseReason | undefined;
   readonly ended: boolean;
   /** Pixel size of the last screenshot per window id. */
@@ -76,6 +78,7 @@ export const initialOverlayState: OverlayState = {
   acting: new Set(),
   capturing: new Set(),
   recording: false,
+  stopping: new Set(),
   pause: undefined,
   ended: false,
   shots: new Map(),
@@ -90,6 +93,8 @@ export type OverlayEvent =
       readonly id: string;
       /** The screenshot in the reply, when it has one. */
       readonly image?: { readonly width: number; readonly height: number };
+      /** The call answered with an error, so whatever it was to change may not have changed. */
+      readonly failed?: boolean;
     }
   /** The control paused or ended. The proxy then stops this helper; a resume starts a new one. */
   | { readonly type: "pause"; readonly reason: ComputerUsePauseReason }
@@ -167,7 +172,9 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
     case "call": {
       const args = record(event.args);
       if (event.name === "start_recording") return { ...state, recording: true };
-      if (event.name === "stop_recording") return { ...state, recording: false };
+      // Still recording until the driver says it stopped.
+      if (event.name === "stop_recording")
+        return { ...state, stopping: new Set(state.stopping).add(event.id) };
       const window = windowOf(args);
       const capture =
         CAPTURES.has(event.name) &&
@@ -201,6 +208,8 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         ...state,
         acting: without(state.acting, event.id),
         capturing: without(state.capturing, event.id),
+        stopping: without(state.stopping, event.id),
+        recording: state.recording && !(state.stopping.has(event.id) && !event.failed),
         shots,
         snapshots,
       };

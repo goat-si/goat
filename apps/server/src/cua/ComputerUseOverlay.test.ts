@@ -105,7 +105,14 @@ describe("ComputerUseOverlay", () => {
       visible,
     );
     assert.deepEqual(recording.state.shown, { op: "hide", reason: "capture" });
-    assert.equal(run([call("r2", "stop_recording", {})], recording.state).state.shown?.op, "show");
+    // Hidden until the driver confirms the recording stopped; a failed stop keeps it hidden.
+    const stopping = run([call("r2", "stop_recording", {})], recording.state).state;
+    assert.deepEqual(stopping.shown, { op: "hide", reason: "capture" });
+    assert.deepEqual(run([{ type: "reply", id: "r2", failed: true }], stopping).state.shown, {
+      op: "hide",
+      reason: "capture",
+    });
+    assert.equal(run([reply("r2")], stopping).state.shown?.op, "show");
     assert.deepEqual(run([call("x", "run_script", {})], visible).state.shown, {
       op: "hide",
       reason: "capture",
