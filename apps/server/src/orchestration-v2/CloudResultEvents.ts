@@ -11,6 +11,8 @@ import {
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
+import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+
 /** Commit the pair with terminal state in the caller's ownership-gated write.
  * EventSink deduplicates the stable item and assigns its durable ordinal there.
  */
@@ -24,6 +26,8 @@ export const makeCloudResultEvents = <E>(input: {
   readonly allocateEventId: () => Effect.Effect<EventId, E>;
 }) =>
   Effect.gen(function* () {
+    // EventSink deduplicates this text against stored items, which the event store redacted.
+    const text = redactGoatCredentials(input.text);
     const messageId = MessageId.make(`message:cloud-result:${input.run.id}`);
     const identity = {
       threadId: input.run.threadId,
@@ -46,7 +50,7 @@ export const makeCloudResultEvents = <E>(input: {
           createdBy: "agent",
           creationSource: "provider",
           role: "assistant",
-          text: input.text,
+          text,
           attachments: [],
           streaming: false,
           createdAt: input.completedAt,
@@ -72,7 +76,7 @@ export const makeCloudResultEvents = <E>(input: {
           completedAt: input.completedAt,
           updatedAt: input.completedAt,
           messageId,
-          text: input.text,
+          text,
           attachments: [],
           streaming: false,
         },
