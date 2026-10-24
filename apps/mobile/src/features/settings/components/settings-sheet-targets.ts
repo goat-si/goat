@@ -1,6 +1,15 @@
+export type GoatSettingsSheetTarget = "SettingsMemory" | "SettingsGoatBot" | "SettingsHubNodes";
+
+export function isGoatSettingsSheetTarget(
+  target: SettingsSheetTarget,
+): target is GoatSettingsSheetTarget {
+  return (
+    target === "SettingsMemory" || target === "SettingsGoatBot" || target === "SettingsHubNodes"
+  );
+}
+
 export type SettingsSheetTarget =
-  | "SettingsMemory"
-  | "SettingsGoatBot"
+  | GoatSettingsSheetTarget
   | "SettingsEnvironments"
   | "SettingsNotifications"
   | "SettingsThreads"
@@ -18,7 +27,6 @@ export type SettingsSheetTarget =
   | "SettingsKeyboard"
   | "SettingsMicrophone"
   | "SettingsFollowUp"
-  | "SettingsHubNodes"
   | "SettingsScheduledTasks"
   | "SettingsProjectGrouping"
   | "SettingsClientStorage"
