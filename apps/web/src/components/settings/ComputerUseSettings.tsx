@@ -1,5 +1,5 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@goat/contracts";
+import { BUILTIN_SKILLS, type EnvironmentId } from "@goat/contracts";
 import { useContext, useEffect, useEffectEvent, useState } from "react";
 
 import { isElectron } from "../../env";
@@ -29,6 +29,10 @@ import { useSettingsScope } from "./SettingsScopeContext";
 export function useComputerUseHost(environmentId: EnvironmentId, local: boolean) {
   const registry = useContext(RegistryContext);
   const enabled = useEnvironmentSettings(environmentId, (settings) => settings.enableCua);
+  const disabledSkills = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.disabledBuiltInSkills,
+  );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -54,15 +58,19 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     typeof bridge.checkSystemPermission === "function" &&
     typeof bridge.verifyCuaDriver === "function";
 
-  const save = async (enableCua: boolean): Promise<string | null> => {
+  const save = async (patch: {
+    readonly enableCua?: boolean;
+    readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  }): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
       return "This connection cannot change settings on this host.";
-    const result = await update({ environmentId, input: { patch: { enableCua } } });
+    const result = await update({ environmentId, input: { patch } });
     query.refresh();
     return result._tag === "Success" ? null : "Could not save the setting. Try again.";
   };
   return {
     enabled,
+    disabledSkills,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -101,7 +109,7 @@ export function ComputerUseSetup({
       onAllow={openGuide}
       onReveal={window.desktopBridge?.revealCuaGrantTarget}
       onRelaunch={window.desktopBridge?.relaunchForCuaGrants}
-      onEnable={() => host.save(true)}
+      onEnable={() => host.save({ enableCua: true })}
       onVerify={async () => {
         const verifyDriver = window.desktopBridge?.verifyCuaDriver;
         if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
@@ -201,7 +209,7 @@ function ComputerUseControls({
                   return;
                 }
                 setSaving(true);
-                void host.save(false).then((failure) => {
+                void host.save({ enableCua: false }).then((failure) => {
                   setSaving(false);
                   setSaveError(failure);
                 });
@@ -219,9 +227,46 @@ function ComputerUseControls({
         tools={host.status?.tools}
         signals={host.status?.signals}
       />
+      {host.enabled ? <BuiltInSkillRows host={host} /> : null}
       {setupOpen && host.canConfigure ? (
         <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
       ) : null}
     </>
   );
+}
+
+function BuiltInSkillRows({ host }: { host: ComputerUseHost }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  return BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => {
+    const on = !host.disabledSkills.includes(skill.name);
+    return (
+      <SettingsRow
+        key={skill.name}
+        {...searchableSetting("computer-use-skill")}
+        serverScoped
+        settingKeys={["disabledBuiltInSkills"]}
+        description="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+        status={saveError ? <span role="status">{saveError}</span> : undefined}
+        control={
+          <Switch
+            aria-label={`${skill.displayName} skill`}
+            checked={on}
+            disabled={saving || !host.canConfigure}
+            onCheckedChange={(checked) => {
+              setSaveError(null);
+              setSaving(true);
+              const others = host.disabledSkills.filter((name) => name !== skill.name);
+              void host
+                .save({ disabledBuiltInSkills: checked ? others : [...others, skill.name] })
+                .then((failure) => {
+                  setSaving(false);
+                  setSaveError(failure);
+                });
+            }}
+          />
+        }
+      />
+    );
+  });
 }

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { SettingsTarget } from "./settings-environment-filter";
 import {
+  planMobileBuiltInSkillToggle,
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
@@ -166,5 +167,31 @@ describe("mobile project settings scope", () => {
     expect(
       planMobileScopedSettingsPatch(targets, false, { automaticServerUpdates: false }),
     ).toEqual([{ environmentId: firstId, patch: { automaticServerUpdates: false } }]);
+  });
+});
+
+describe("mobile built-in skill switch across environments", () => {
+  it("changes only the toggled skill in each environment's own switched-off list", () => {
+    const targets = resolveMobileSettingsTargets(
+      [
+        environment(firstId, DEFAULT_SERVER_SETTINGS),
+        environment(secondId, {
+          ...DEFAULT_SERVER_SETTINGS,
+          disabledBuiltInSkills: ["skill-from-a-newer-build"],
+        }),
+      ],
+      null,
+    );
+    expect(planMobileBuiltInSkillToggle(targets, "computer-use", false)).toEqual([
+      { environmentId: firstId, patch: { disabledBuiltInSkills: ["computer-use"] } },
+      {
+        environmentId: secondId,
+        patch: { disabledBuiltInSkills: ["skill-from-a-newer-build", "computer-use"] },
+      },
+    ]);
+    expect(planMobileBuiltInSkillToggle(targets, "computer-use", true)).toEqual([
+      { environmentId: firstId, patch: { disabledBuiltInSkills: [] } },
+      { environmentId: secondId, patch: { disabledBuiltInSkills: ["skill-from-a-newer-build"] } },
+    ]);
   });
 });

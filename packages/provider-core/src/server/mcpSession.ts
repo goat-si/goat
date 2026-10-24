@@ -1,6 +1,7 @@
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import type {
   AuthEnvironmentScope,
+  BuiltInSkillName,
   CuaDriverMcpConfiguration,
   EnvironmentId,
   ProviderInstanceId,
@@ -47,6 +48,11 @@ export interface McpProviderSessionConfig {
    */
   readonly cuaDriverBlocked?: boolean;
   /**
+   * Built-in skills this thread's turns carry, from `resolveBuiltInSkills`. Set with
+   * `cuaDriver`; absent means every skill of what is attached.
+   */
+  readonly builtInSkills?: ReadonlyArray<BuiltInSkillName>;
+  /**
    * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
    * while goatclaw is off, which leaves the provider's own limits in place.
    */
@@ -56,6 +62,11 @@ export interface McpProviderSessionConfig {
    * each other's scratch files (#1206).
    */
   readonly temporaryDirectory?: string;
+  /**
+   * The machine's own temporary directory, which TMPDIR no longer names in the thread. Desktop
+   * activation sockets live there, so `goat app` from a thread shell still finds a running desktop.
+   */
+  readonly systemTemporaryDirectory?: string;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */
@@ -138,6 +149,16 @@ export function cuaDriverKey(descriptor: CuaDriverMcpConfiguration | undefined):
     : JSON.stringify([descriptor.command, descriptor.args, descriptor.socketPath ?? null]);
 }
 
+/**
+ * Whether a turn with the driver attached also carries the computer use skill. The person can
+ * switch the skill off in Settings while keeping the tools.
+ */
+export function carriesComputerUseSkill(
+  config: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined,
+): boolean {
+  return config?.builtInSkills?.includes("computer-use") ?? true;
+}
+
 export function withAgentDeviceEnvironment(
   base: NodeJS.ProcessEnv,
   config: Pick<McpProviderSessionConfig, "agentDeviceEnvironment"> | undefined,
@@ -177,12 +198,25 @@ export function memoryToolAvailability(
 export function withThreadMcpEnvironment(
   base: NodeJS.ProcessEnv,
   config:
-    | Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader" | "temporaryDirectory">
+    | Pick<
+        McpProviderSessionConfig,
+        "endpoint" | "authorizationHeader" | "temporaryDirectory" | "systemTemporaryDirectory"
+      >
     | undefined,
 ): NodeJS.ProcessEnv {
   return withLegacyEnvNames({
     ...base,
-    ...(config?.temporaryDirectory === undefined ? {} : { TMPDIR: config.temporaryDirectory }),
+    ...(config?.temporaryDirectory === undefined
+      ? {}
+      : {
+          // POSIX tools read TMPDIR; Windows ones read TEMP and TMP.
+          TMPDIR: config.temporaryDirectory,
+          TEMP: config.temporaryDirectory,
+          TMP: config.temporaryDirectory,
+          ...(config.systemTemporaryDirectory === undefined
+            ? {}
+            : { GOAT_SYSTEM_TMPDIR: config.systemTemporaryDirectory }),
+        }),
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });

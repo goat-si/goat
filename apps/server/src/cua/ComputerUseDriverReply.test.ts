@@ -78,3 +78,55 @@ describe("admitDriverReplyScreenshots", () => {
     ]);
   });
 });
+
+describe("computer use results reaching Codex (#1154)", () => {
+  const image = { type: "image", mimeType: "image/png", data: PNG };
+  const structured = { session: "work", window: { pid: 41, windowId: 12 } };
+  const resultOf = (line: string) => (JSON.parse(line) as { result: unknown }).result;
+  const call = (result: object) => JSON.stringify({ jsonrpc: "2.0", id: 9, result });
+
+  it("leaves image-only, structured-only and error results as the driver wrote them", () => {
+    for (const result of [
+      { content: [image] },
+      { content: [text, image] },
+      { content: [text], structuredContent: structured },
+      { content: [text], structuredContent: { error: "no_window" }, isError: true },
+    ]) {
+      const line = call(result);
+      assert.equal(admitDriverReplyScreenshots(line), line);
+    }
+  });
+
+  it("never sends structuredContent beside a screenshot, keeping its fields as JSON text", () => {
+    assert.deepEqual(
+      resultOf(
+        admitDriverReplyScreenshots(
+          call({ content: [text, image], structuredContent: structured }),
+        ),
+      ),
+      { content: [{ type: "text", text: JSON.stringify(structured) }, text, image] },
+    );
+    const echoed = { type: "text", text: JSON.stringify(structured) };
+    assert.deepEqual(
+      resultOf(
+        admitDriverReplyScreenshots(
+          call({ content: [echoed, image], structuredContent: structured, isError: false }),
+        ),
+      ),
+      { content: [echoed, image], isError: false },
+    );
+  });
+
+  it("keeps structuredContent when every screenshot in the result was withheld", () => {
+    const svg = { type: "image", mimeType: "image/svg+xml", data: PNG };
+    assert.deepEqual(
+      resultOf(
+        admitDriverReplyScreenshots(call({ content: [svg], structuredContent: structured })),
+      ),
+      {
+        content: [withheld("it is not a PNG or JPEG image")],
+        structuredContent: structured,
+      },
+    );
+  });
+});

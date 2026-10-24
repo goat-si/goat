@@ -76,6 +76,7 @@ import {
   TerminalFontSize,
 } from "./settingsFontSizes.ts";
 import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/listing.ts";
+import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings.ts";
 
 export * from "./settingsFontSizes.ts";
 
@@ -1490,13 +1491,12 @@ export const ServerSettings = Schema.Struct({
    * next server start.
    */
   projectSettingsFolded: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-
   enableAgentDeviceAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** What tools/list shows GOAT's agents: the core tools, or every tool the caller can use. */
   agentToolListing: AgentToolListing.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AGENT_TOOL_LISTING)),
   ),
-  enableCua: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ...CuaSettingsFields,
   /**
    * Kept separate from agent access so enabling the user's Device panel does
    * not also grant providers control of simulators and emulators.
@@ -1987,7 +1987,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   enableAgentDeviceAccess: Schema.optionalKey(Schema.Boolean),
   agentToolListing: Schema.optionalKey(AgentToolListing),
   enableDeviceSupport: Schema.optionalKey(Schema.Boolean),
-  enableCua: Schema.optionalKey(Schema.Boolean),
+  ...CuaSettingsPatchFields,
   deviceOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   deviceHosts: Schema.optionalKey(SshDeviceHostConfigs),
   easDeviceHosts: Schema.optionalKey(EasDeviceHostConfigs),
