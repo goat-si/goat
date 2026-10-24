@@ -532,7 +532,7 @@ describe("Linux computer use helper conformance", () => {
     const first = await helper.observe();
     // The driver still took its screenshot, so its pointer scale is current; its image is not sent.
     expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(true);
-    expect(shots).toEqual([{ width: 420, height: 320, windowWidth: 420 }]);
+    expect(shots).toEqual([{ width: 420, height: 320, windowWidth: 420, windowHeight: 320 }]);
     expect(first.image?.data).not.toBe(SHOT);
     expect(first.image?.data).toBe(png(420, 320, false).toString("base64"));
     expect(first.observation.screenshot).toEqual({

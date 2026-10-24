@@ -48,17 +48,24 @@ export function captureRoute(deps: {
   return hyprland ? { route: "driver" } : { route: "refused", reason: CROPPED_CAPTURE };
 }
 
-/** The size of the driver's screenshot of a window, and of the window it was taken from. */
+/**
+ * The size of the driver's screenshot of a window, and the window's own size when the driver
+ * read it (window_bounds), so a window that changed size since is never matched by guesswork.
+ */
 export const driverShot = (structured: unknown): DriverShot | undefined => {
-  const read = (key: string): unknown =>
-    typeof structured === "object" && structured !== null
-      ? (structured as Record<string, unknown>)[key]
+  const read = (value: unknown, key: string): unknown =>
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)[key]
       : undefined;
-  const width = read("screenshot_width");
-  const height = read("screenshot_height");
-  const original = read("screenshot_original_width") ?? width;
-  if (typeof width !== "number" || typeof height !== "number" || typeof original !== "number")
+  const bounds = read(structured, "window_bounds");
+  const numbers = [
+    read(structured, "screenshot_width"),
+    read(structured, "screenshot_height"),
+    read(bounds, "width"),
+    read(bounds, "height"),
+  ];
+  if (!numbers.every((value): value is number => typeof value === "number" && value > 0))
     return undefined;
-  if (width <= 0 || height <= 0 || original <= 0) return undefined;
-  return { width, height, windowWidth: original };
+  const [width = 0, height = 0, windowWidth = 0, windowHeight = 0] = numbers;
+  return { width, height, windowWidth, windowHeight };
 };

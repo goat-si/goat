@@ -17,7 +17,8 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
  * is drawn inside the ancestor. Another client's window can still be drawn there, over the
  * target (a shared frame, a virtual root), so every window painted after the target inside the
  * ancestor is checked, and one from another client that overlaps it refuses the capture. The
- * server is grabbed from the check through the read, so what was checked is what is read.
+ * server is held from the check through the read, so what was checked is what is read, and
+ * never longer than GRAB_LIMIT_MS.
  * An unredirected window (no compositor, a fullscreen unredirect, rootful Xwayland) is refused.
  */
 export type X11WindowCapture =
@@ -33,10 +34,18 @@ export const UNREDIRECTED_CAPTURE =
 export const SHARED_CAPTURE =
   "Another app's window is drawn over this one inside the same frame, so its screenshot would show that app. Observe it without a screenshot, or move the other window away.";
 const UNREADABLE = "The window's pixels could not be read in a format GOAT understands.";
+export const BUSY_CAPTURE =
+  "The window took too long to read without holding up the rest of the desktop. Observe it again.";
 export const RESIZED_CAPTURE =
   "The window changed size while it was read, so its screenshot would not match its controls. Observe it again.";
 
 const EXCHANGE_TIMEOUT_MS = 3_000;
+/**
+ * Longest the X server may be held for one capture. While it is held every other client on the
+ * display, the person's own apps included, waits; past this the hold ends and the capture is
+ * refused rather than freeze the desktop longer.
+ */
+const GRAB_LIMIT_MS = 250;
 const MAX_WINDOW_PIXELS = 16_000_000;
 /** Windows checked for drawing over the target before the capture gives up and refuses. */
 const MAX_CHECKED_WINDOWS = 256;
@@ -267,40 +276,22 @@ function connection(socket: NodeNet.Socket) {
         socket.write(bytes);
       }),
     close: fail,
+    /** Ends the connection now; the X server then releases anything it held for it. */
+    abort: () => {
+      fail();
+      socket.destroy();
+    },
   };
 }
 
 type Connection = ReturnType<typeof connection>;
 
-/** Screenshot pixels each rounded side may be off by: the driver rounds twice at most. */
-const ROUNDING = 2;
-
-/**
- * Whether a window of this size could have been scaled to the driver's screenshot. The driver
- * scales both sides by one factor and rounds each (cua-driver-core image_utils.rs), possibly
- * twice, so the factors each side allows must overlap; the window's height is never recovered
- * from the rounded screenshot.
- */
-export function sameShape(
-  window: { readonly width: number; readonly height: number },
-  shot: { readonly width: number; readonly height: number },
-): boolean {
-  const low = Math.max(
-    (shot.width - ROUNDING) / window.width,
-    (shot.height - ROUNDING) / window.height,
-  );
-  const high = Math.min(
-    (shot.width + ROUNDING) / window.width,
-    (shot.height + ROUNDING) / window.height,
-  );
-  return low <= high;
-}
-
 export interface DriverShot {
   readonly width: number;
   readonly height: number;
-  /** The window's width when the driver took it; its height is only known rounded. */
+  /** The window's size when the driver read it (its window_bounds). */
   readonly windowWidth: number;
+  readonly windowHeight: number;
 }
 
 export async function captureX11Window(
@@ -311,8 +302,14 @@ export async function captureX11Window(
    * deliver, and the window size it was taken at.
    */
   size: DriverShot,
-  /** For tests: a scripted server's socket. */
-  socketPath?: string,
+  options: {
+    /** For tests: a scripted server's socket. */
+    readonly socketPath?: string;
+    /** How long the X server was held, in milliseconds. */
+    readonly onGrab?: (ms: number) => void;
+    /** For tests: a shorter hold limit than GRAB_LIMIT_MS. */
+    readonly grabLimitMs?: number;
+  } = {},
 ): Promise<X11WindowCapture> {
   const display = localDisplayNumber(environment.DISPLAY);
   if (display === null) return { refused: UNREDIRECTED_CAPTURE };
@@ -322,7 +319,7 @@ export async function captureX11Window(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
-  const socket = NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + display);
+  const socket = NodeNet.createConnection(options.socketPath ?? "/tmp/.X11-unix/X" + display);
   const x = connection(socket);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<undefined>((resolve) => {
@@ -332,7 +329,13 @@ export async function captureX11Window(
     }, EXCHANGE_TIMEOUT_MS);
   });
   try {
-    const answer = await Promise.race([exchange(x, cookie, screen, windowId, size), expired]);
+    const answer = await Promise.race([
+      exchange(x, cookie, screen, windowId, size, {
+        onGrab: options.onGrab,
+        limitMs: options.grabLimitMs ?? GRAB_LIMIT_MS,
+      }),
+      expired,
+    ]);
     return answer ?? { refused: UNREDIRECTED_CAPTURE };
   } finally {
     clearTimeout(timer);
@@ -427,6 +430,7 @@ async function exchange(
   screen: number,
   windowId: number,
   size: DriverShot,
+  hold: { readonly onGrab: ((ms: number) => void) | undefined; readonly limitMs: number },
 ): Promise<X11WindowCapture | undefined> {
   const setupReply = await x.start(x11SetupRequest(cookie));
   const setup = setupReply && parseSetup(setupReply, screen);
@@ -448,18 +452,11 @@ async function exchange(
     }),
   );
   if (!version || (u32(version, 8) === 0 && u32(version, 12) < 2)) return undefined;
-  // Nothing else may map, move or draw a window between the check below and the read: the
-  // server runs only this connection's requests until it is released, or the connection ends.
-  x.send(request(36, 0, 1, () => undefined));
-  const geometry = await getGeometry(x, windowId);
-  if (!geometry) return undefined;
-  const width = u16(geometry, 16);
-  const height = u16(geometry, 18);
-  if (width === 0 || height === 0 || width * height > MAX_WINDOW_PIXELS)
-    return { refused: UNREADABLE };
-  if (width !== size.windowWidth || !sameShape({ width, height }, size))
-    return { refused: RESIZED_CAPTURE };
-  // The redirected window is the top-level one: the window itself or its ancestor under root.
+  // Read without holding the server: the window's place in the tree, and its top-level
+  // ancestor's border and visual. What can change in between is read again while held.
+  const first = await getGeometry(x, windowId);
+  if (!first) return undefined;
+  if (u16(first, 16) * u16(first, 18) > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
   const chain = [windowId];
   for (let hops = 0; hops < 32; hops++) {
     const tree = await queryTree(x, chain.at(-1) ?? windowId);
@@ -469,42 +466,70 @@ async function exchange(
     chain.push(parent);
   }
   const topLevel = chain.at(-1) ?? windowId;
-  const inFrame = await translate(x, windowId, topLevel);
-  const onScreen = await translate(x, windowId, setup.root);
-  if (!inFrame || !onScreen) return undefined;
-  const target = { x: i16(onScreen, 12), y: i16(onScreen, 14), width, height };
-  const shared = await drawnOver(x, setup, chain, target);
-  if (shared === undefined) return undefined;
-  if (shared) return { refused: SHARED_CAPTURE };
   // The named pixmap holds the top-level window with its border, and its pixels are in that
   // window's visual: a pixmap read answers with no visual of its own.
   const frameGeometry = await getGeometry(x, topLevel);
   const attributes = await getAttributes(x, topLevel);
   if (!frameGeometry || !attributes) return undefined;
   const border = u16(frameGeometry, 20);
-  const at = { x: i16(inFrame, 12) + border, y: i16(inFrame, 14) + border };
   const visual = setup.visuals.get(u32(attributes, 8));
-  const pixmap = setup.idBase | 1;
-  // No reply; if the frame is not redirected it errs, and the read below never answers.
-  x.send(
-    request(composite, 6, 3, (view) => {
-      view.setUint32(4, topLevel, true);
-      view.setUint32(8, pixmap, true);
+  // Held: nothing else may map, move or draw a window between the check and the read. The hold
+  // covers only that, and is cut off at GRAB_LIMIT_MS by ending the connection.
+  const held = async () => {
+    const geometry = await getGeometry(x, windowId);
+    if (!geometry) return undefined;
+    const width = u16(geometry, 16);
+    const height = u16(geometry, 18);
+    if (width !== size.windowWidth || height !== size.windowHeight)
+      return { refused: RESIZED_CAPTURE };
+    const inFrame = await translate(x, windowId, topLevel);
+    const onScreen = await translate(x, windowId, setup.root);
+    if (!inFrame || !onScreen) return undefined;
+    const target = { x: i16(onScreen, 12), y: i16(onScreen, 14), width, height };
+    const shared = await drawnOver(x, setup, chain, target);
+    if (shared === undefined) return undefined;
+    if (shared) return { refused: SHARED_CAPTURE };
+    const pixmap = setup.idBase | 1;
+    // No reply; if the frame is not redirected it errs, and the read below never answers.
+    x.send(
+      request(composite, 6, 3, (view) => {
+        view.setUint32(4, topLevel, true);
+        view.setUint32(8, pixmap, true);
+      }),
+    );
+    const image = await x.ask(
+      request(73, 2, 5, (view) => {
+        view.setUint32(4, pixmap, true);
+        view.setInt16(8, i16(inFrame, 12) + border, true);
+        view.setInt16(10, i16(inFrame, 14) + border, true);
+        view.setUint16(12, width, true);
+        view.setUint16(14, height, true);
+        view.setUint32(16, 0xffffffff, true);
+      }),
+    );
+    x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
+    return image ? { image, width, height } : undefined;
+  };
+  let limit: ReturnType<typeof setTimeout> | undefined;
+  const started = performance.now();
+  x.send(request(36, 0, 1, () => undefined));
+  const read = await Promise.race([
+    held(),
+    new Promise<"limit">((resolve) => {
+      limit = setTimeout(() => resolve("limit"), hold.limitMs);
     }),
-  );
-  const image = await x.ask(
-    request(73, 2, 5, (view) => {
-      view.setUint32(4, pixmap, true);
-      view.setInt16(8, at.x, true);
-      view.setInt16(10, at.y, true);
-      view.setUint16(12, width, true);
-      view.setUint16(14, height, true);
-      view.setUint32(16, 0xffffffff, true);
-    }),
-  );
-  x.send(request(54, 0, 2, (view) => view.setUint32(4, pixmap, true)));
+  ]);
+  clearTimeout(limit);
+  if (read === "limit") {
+    x.abort();
+    hold.onGrab?.(performance.now() - started);
+    return { refused: BUSY_CAPTURE };
+  }
   x.send(request(37, 0, 1, () => undefined));
-  if (!image) return undefined;
+  hold.onGrab?.(performance.now() - started);
+  if (!read) return undefined;
+  if (read.refused !== undefined) return { refused: read.refused };
+  const { image, width, height } = read;
   const format = setup.bitsPerPixel.get(image[1] ?? 0);
   if (!setup.lsbImages || !visual?.trueColor || format?.bpp !== 32) return { refused: UNREADABLE };
   const stride = Math.ceil((width * format.bpp) / format.pad) * (format.pad / 8);

@@ -8,11 +8,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { pngColors } from "./linuxSession.ts";
 import {
+  BUSY_CAPTURE,
   captureX11Window,
   parseSetup,
   RESIZED_CAPTURE,
   rgbToPng,
-  sameShape,
   SHARED_CAPTURE,
   shrinkRgb,
   UNREDIRECTED_CAPTURE,
@@ -82,25 +82,6 @@ describe("X11 window capture", () => {
     expect([header.getUint32(0), header.getUint32(4)]).toEqual([width, height]);
   });
 
-  it("an unchanged window matches the driver's rounded screenshot in any orientation, and a resized one does not", () => {
-    // The driver's own rounding: scale by the long side, round each side.
-    const driver = (width: number, height: number, limit: number) => {
-      const scale = limit / Math.max(width, height);
-      return { width: Math.round(width * scale), height: Math.round(height * scale) };
-    };
-    for (const [width, height, limit] of [
-      [1920, 1040, 256],
-      [402, 1920, 256],
-      [406, 1920, 1568],
-      [1, 1920, 256],
-      [3000, 7, 1568],
-    ] as const)
-      expect(sameShape({ width, height }, driver(width, height, limit))).toBe(true);
-    // The same width with a clearly different height is another window size.
-    expect(sameShape({ width: 1920, height: 1200 }, driver(1920, 1040, 256))).toBe(false);
-    expect(sameShape({ width: 402, height: 1500 }, driver(402, 1920, 256))).toBe(false);
-  });
-
   it("shrinks to the driver's screenshot size by averaging, never past the source", () => {
     // Four pixels, two black and two white, become one mid grey.
     const rgb = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255, 255, 0, 0, 0]);
@@ -131,7 +112,12 @@ const COMPOSITE = 140;
  */
 async function scriptedServer(
   windows: Readonly<Record<number, FakeWindow>>,
-  options: { readonly redirected: ReadonlyArray<number>; readonly closeOnGeometry?: number },
+  options: {
+    readonly redirected: ReadonlyArray<number>;
+    readonly closeOnGeometry?: number;
+    /** Never answer GetImage, as a server stuck mid-read. */
+    readonly stallImage?: boolean;
+  },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
   const path = NodePath.join(dir, "X0");
@@ -144,6 +130,8 @@ async function scriptedServer(
   const server = NodeNet.createServer((socket) => {
     socket.on("end", () => ended.resolve());
     socket.on("close", () => ended.resolve());
+    // A client that dropped the connection makes the next answer fail; that is the client's end.
+    socket.on("error", () => ended.resolve());
     let buffer = Buffer.alloc(0);
     let started = false;
     let geometries = 0;
@@ -232,6 +220,7 @@ async function scriptedServer(
           extra[18] = found.viewable === false ? 0 : 2;
           reply(extra);
         } else if (op === 73) {
+          if (options.stallImage) continue;
           if (body.readUInt32LE(4) !== named) return error();
           const width = body.readUInt16LE(12);
           const height = body.readUInt16LE(14);
@@ -257,7 +246,7 @@ async function scriptedServer(
 }
 
 const environment = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
-const shot = { width: 100, height: 80, windowWidth: 100 };
+const shot = { width: 100, height: 80, windowWidth: 100, windowHeight: 80 };
 // A window manager's frame (client 0x400000) holding the app's window (client 0x200000).
 const FRAMED: Record<number, FakeWindow> = {
   [ROOT]: { parent: 0, children: [0x400001], x: 0, y: 0, width: 800, height: 600 },
@@ -268,13 +257,17 @@ const FRAMED: Record<number, FakeWindow> = {
 describe("X11 window capture against a scripted server", () => {
   it("captures a window inside its redirected frame, at the driver's size", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    const capture = await captureX11Window(environment, 0x200001, shot, server.path);
+    const capture = await captureX11Window(environment, 0x200001, shot, {
+      socketPath: server.path,
+    });
     expect(capture).toMatchObject({ width: 100, height: 80 });
   });
 
   it("refuses a window whose frame nothing redirects", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [] });
-    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({
       refused: UNREDIRECTED_CAPTURE,
     });
   });
@@ -286,7 +279,9 @@ describe("X11 window capture against a scripted server", () => {
       0x600001: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
     };
     await using server = await scriptedServer(shared, { redirected: [0x400001] });
-    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({
       refused: SHARED_CAPTURE,
     });
     // The same window unmapped, input-only, or off to the side draws nothing over it.
@@ -295,7 +290,9 @@ describe("X11 window capture against a scripted server", () => {
         { ...shared, 0x600001: { ...shared[0x600001]!, ...other } },
         { redirected: [0x400001] },
       );
-      expect(await captureX11Window(environment, 0x200001, shot, clear.path)).toMatchObject({
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: clear.path }),
+      ).toMatchObject({
         width: 100,
       });
     }
@@ -304,18 +301,29 @@ describe("X11 window capture against a scripted server", () => {
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
     expect(
-      await captureX11Window(environment, 0x200001, { ...shot, windowWidth: 90 }, server.path),
+      await captureX11Window(
+        environment,
+        0x200001,
+        { ...shot, windowHeight: 90 },
+        { socketPath: server.path },
+      ),
     ).toEqual({ refused: RESIZED_CAPTURE });
   });
 
-  it("holds the server from the first window read through the pixel read, so no window changes between", async () => {
+  it("holds the server from the size check through the pixel read, and only for that", async () => {
     await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
-    await captureX11Window(environment, 0x200001, shot, server.path);
+    await captureX11Window(environment, 0x200001, shot, { socketPath: server.path });
     await server.ended;
     const grab = server.requests.indexOf(36);
-    expect(grab).toBeGreaterThanOrEqual(0);
-    expect(grab).toBeLessThan(server.requests.indexOf(14));
-    expect(server.requests.indexOf(37)).toBeGreaterThan(server.requests.indexOf(73));
+    const release = server.requests.indexOf(37);
+    const held = server.requests.slice(grab + 1, release);
+    // The size is checked again, the window placed, and the pixels read, all while held.
+    expect(grab).toBeGreaterThan(0);
+    expect(held[0]).toBe(14);
+    expect(held).toContain(40);
+    expect(held).toContain(73);
+    // The tree walk up to the top-level window happens before the hold.
+    expect(server.requests.slice(0, grab)).toContain(15);
   });
 
   it("an unchanged window read at a rounded thumbnail size is not taken for a resized one", async () => {
@@ -329,10 +337,37 @@ describe("X11 window capture against a scripted server", () => {
       await captureX11Window(
         environment,
         0x200001,
-        { width: 256, height: 139, windowWidth: 1920 },
-        server.path,
+        { width: 256, height: 139, windowWidth: 1920, windowHeight: 1040 },
+        { socketPath: server.path },
       ),
     ).toMatchObject({ width: 256, height: 139 });
+  });
+
+  it("a hold that runs past its limit is ended, by dropping the connection, and refused", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [0x400001], stallImage: true });
+    const held: number[] = [];
+    const capture = await captureX11Window(environment, 0x200001, shot, {
+      socketPath: server.path,
+      grabLimitMs: 1,
+      onGrab: (ms) => held.push(ms),
+    });
+    expect(capture).toEqual({ refused: BUSY_CAPTURE });
+    // The server sees the connection end, which releases the hold.
+    await server.ended;
+    expect(held).toHaveLength(1);
+  });
+
+  it("a window whose size differs from the driver's read by any amount is refused", async () => {
+    await using server = await scriptedServer(FRAMED, { redirected: [0x400001] });
+    for (const changed of [{ windowHeight: 81 }, { windowWidth: 99 }])
+      expect(
+        await captureX11Window(
+          environment,
+          0x200001,
+          { ...shot, ...changed },
+          { socketPath: server.path },
+        ),
+      ).toEqual({ refused: RESIZED_CAPTURE });
   });
 
   it("a connection lost in the middle ends the capture instead of leaving it waiting", async () => {
@@ -341,7 +376,9 @@ describe("X11 window capture against a scripted server", () => {
       redirected: [0x400001],
       closeOnGeometry: 2,
     });
-    expect(await captureX11Window(environment, 0x200001, shot, server.path)).toEqual({
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({
       refused: UNREDIRECTED_CAPTURE,
     });
   });

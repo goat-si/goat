@@ -146,12 +146,16 @@ export function fixtureDriver() {
       state.reads.push(args);
       if (args.include_accessibility_tree === false)
         // The readiness images are 8 by 4.
-        return ok({ screenshot_width: 8, screenshot_height: 4 }, "", [
-          {
-            mimeType: "image/png",
-            data: state.readinessImages.get(Number(args.pid)) ?? state.readinessImage,
-          },
-        ]);
+        return ok(
+          { screenshot_width: 8, screenshot_height: 4, window_bounds: { width: 420, height: 320 } },
+          "",
+          [
+            {
+              mimeType: "image/png",
+              data: state.readinessImages.get(Number(args.pid)) ?? state.readinessImage,
+            },
+          ],
+        );
       state.snapshot++;
       const token = (index: number) => "s" + state.snapshot + ":" + index;
       const shot = args.include_screenshot !== false;
