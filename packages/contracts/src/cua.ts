@@ -100,6 +100,21 @@ export const ComputerUseLeaseTarget = Schema.Struct({
 });
 export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 
+/**
+ * Why the desktop would not give agents a driver, in a form every surface can act on: the
+ * preview tile, Settings and onboarding, the agent's own computer_use request, and the trace
+ * (#1399). Only a grant the helper lacks so far; other refusals keep their message.
+ */
+export const CuaAgentBlock = Schema.Struct({
+  reason: Schema.Literal("permissionsNotGranted"),
+  /** The grants macOS has not given the app that holds them, GOAT Computer Use or GOAT. */
+  missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording"])).check(
+    Schema.isMinLength(1),
+  ),
+  holder: Schema.Literals(["helper", "app"]),
+});
+export type CuaAgentBlock = typeof CuaAgentBlock.Type;
+
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
@@ -114,6 +129,8 @@ export const DesktopCuaDriverReport = Schema.Union([
     requestId: TrimmedNonEmptyString,
     status: Schema.Literals(["stopped", "unavailable"]),
     message: Schema.optionalKey(Schema.String),
+    /** Set when the reason is one of the typed ones; older desktops send only the message. */
+    block: ForwardCompatibleOptional(CuaAgentBlock),
   }),
 ]);
 export type DesktopCuaDriverReport = typeof DesktopCuaDriverReport.Type;
@@ -146,6 +163,8 @@ export const CuaHostStatus = Schema.Struct({
   running: Schema.Boolean,
   /** Why the last start failed, until a later start succeeds. */
   failure: Schema.optionalKey(Schema.String),
+  /** The typed reason behind that failure, when it is one agents cannot get past alone. */
+  block: ForwardCompatibleOptional(CuaAgentBlock),
   /** Linux hosts in a Wayland session, where the driver supports fewer apps than on X11. */
   wayland: Schema.optionalKey(Schema.Boolean),
   /** Older hosts omit it; they predate the check, so clients fall back to the platform. */
@@ -406,8 +425,11 @@ export const ComputerUseRequestResult = Schema.Union([
       "not_unattended",
       /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
       "detection_unsupported",
+      /** macOS has not granted what computer use needs; a person allows it in System Settings. */
+      "not_granted",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
+    block: Schema.optionalKey(CuaAgentBlock),
     message: Schema.String,
   }),
 ]);

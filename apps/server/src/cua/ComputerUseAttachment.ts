@@ -1,6 +1,7 @@
 import {
   BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
+  type CuaAgentBlock,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
@@ -26,6 +27,8 @@ export type ComputerUseRefusal =
   | "plan"
   | "read-only"
   | "unavailable"
+  /** The desktop would not start the driver: macOS has not granted what it needs (#1399). */
+  | "not-granted"
   | "needs-approval"
   /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
   | "detection-unsupported";
@@ -40,6 +43,8 @@ export type ComputerUseAttachment =
   | {
       readonly _tag: "none";
       readonly reason: ComputerUseRefusal;
+      /** Which grants, for "not-granted"; every surface that explains the refusal reads it. */
+      readonly block?: CuaAgentBlock;
       /** An unattended turn without a lease: a `cua-driver` the user configured must not run. */
       readonly blockUserConfig: boolean;
     }
@@ -101,7 +106,20 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (Option.isNone(leases) || leases.value.proxy === undefined)
     return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
-  if (Option.isNone(mcp)) return none("unavailable", unattended);
+  if (Option.isNone(mcp)) {
+    const failure = yield* cua.value.lastFailure;
+    const block =
+      Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+        ? failure.value.block
+        : undefined;
+    // The trace says why a turn ran without computer use, not only that it did.
+    yield* Effect.annotateCurrentSpan({
+      "computerUse.refusal": block === undefined ? "unavailable" : "not-granted",
+      ...(block === undefined ? {} : { "computerUse.missing": block.missing.join(",") }),
+    });
+    if (block === undefined) return none("unavailable", unattended);
+    return { ...none("not-granted", unattended), block };
+  }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
   // Names this build does not know are ignored; unreadable settings keep the default on.

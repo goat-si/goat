@@ -730,6 +730,39 @@ it.effect("shows the desktop's reason when it cannot start the driver", () =>
   ),
 );
 
+it.effect("keeps the desktop's typed reason for a missing grant beside its message (#1399)", () =>
+  Effect.gen(function* () {
+    const f = yield* desktopFixture();
+    const { service } = yield* makeService(f.factory);
+    const acquiring = yield* service.acquire.pipe(Effect.forkChild);
+    const block = {
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "helper",
+    } as const;
+    yield* PubSub.publish(f.reports, {
+      version: 1,
+      type: "cuaDriverReport",
+      requestId: yield* Deferred.await(f.requested),
+      status: "unavailable",
+      message: "Allow Screen Recording for GOAT Computer Use in System Settings.",
+      block,
+    });
+    expect(yield* Fiber.join(acquiring)).toEqual(Option.none());
+    expect((yield* service.status).block).toEqual(block);
+    const failure = yield* service.lastFailure;
+    expect(
+      Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
+        ? failure.value.block
+        : undefined,
+    ).toEqual(block);
+  }).pipe(
+    Effect.provide([ServerSettings.layerTest(), NodeCrypto.layer]),
+    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.scoped,
+  ),
+);
+
 it.effect("treats a desktop restart as a stop, then starts fresh for the next session", () =>
   Effect.gen(function* () {
     const f = yield* desktopFixture(true);

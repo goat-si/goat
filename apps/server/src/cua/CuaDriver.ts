@@ -1,6 +1,7 @@
 import * as NodeModule from "node:module";
 
 import {
+  CuaAgentBlock,
   CuaDriverMcpConfiguration,
   type ComputerUseReadiness,
   type CuaDisplayCapability,
@@ -71,6 +72,8 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
       "install",
     ]),
     cause: Schema.optional(Schema.Defect()),
+    /** The desktop's typed reason, beside its message, when agents cannot get past it alone. */
+    block: Schema.optional(CuaAgentBlock),
   },
 ) {
   override get message() {
@@ -405,6 +408,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ? observed
           : {}),
         ...(Option.isSome(failure) ? { failure: failure.value.message } : {}),
+        ...(Option.isSome(failure) &&
+        failure.value._tag === "CuaDriverHostError" &&
+        failure.value.block !== undefined
+          ? { block: failure.value.block }
+          : {}),
         ...(platform === "linux"
           ? { wayland: hostEnvironment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" }
           : {}),
@@ -661,9 +669,13 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
                 yield* retire(new CuaDriverHostError({ operation: "restart" }));
               else
                 yield* retire(
-                  report.message === undefined
+                  report.message === undefined && report.block === undefined
                     ? unavailable
-                    : new CuaDriverHostError({ operation: "desktop", cause: report.message }),
+                    : new CuaDriverHostError({
+                        operation: "desktop",
+                        ...(report.message === undefined ? {} : { cause: report.message }),
+                        ...(report.block === undefined ? {} : { block: report.block }),
+                      }),
                 );
             }),
           ),

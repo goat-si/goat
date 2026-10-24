@@ -87,6 +87,7 @@ const fakeDriver = (input: {
   readonly enabled: boolean;
   readonly running: boolean;
   readonly x11Display?: CuaDriver.CuaX11Display;
+  readonly failure?: CuaDriver.CuaDriverError;
 }) => {
   const calls = { acquire: 0 };
   const service = CuaDriver.CuaDriver.of({
@@ -98,7 +99,7 @@ const fakeDriver = (input: {
       calls.acquire++;
       return input.running ? Option.some(mcp) : Option.none();
     }),
-    lastFailure: Effect.succeed(Option.none()),
+    lastFailure: Effect.succeed(Option.fromUndefinedOr(input.failure)),
     status: Effect.succeed({ platform: "darwin", running: input.running }),
     computerUse: Effect.die("unused"),
     admitEnable: Effect.die("unused"),
@@ -291,6 +292,33 @@ describe("computerUseAttachment", () => {
         blockUserConfig: false,
       });
     }),
+  );
+
+  it.effect(
+    "says which grant is missing when the desktop would not start the driver for it (#1399)",
+    () =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const driver = fakeDriver({
+          enabled: true,
+          running: false,
+          failure: new CuaDriver.CuaDriverHostError({
+            operation: "desktop",
+            cause: "Allow it.",
+            block,
+          }),
+        });
+        assert.deepEqual(yield* decide(driver), {
+          _tag: "none",
+          reason: "not-granted",
+          block,
+          blockUserConfig: false,
+        });
+      }),
   );
 
   it.effect("gives an unattended turn nothing without a lease, and blocks a user's driver", () =>
