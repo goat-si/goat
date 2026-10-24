@@ -482,6 +482,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         deadlineMs,
       });
     }
+    if (method === "watch" || method === "unwatch")
+      return { result: unsupportedComputerUseMethod(method, "linux") };
     if (ACTIONS.has(method)) return act(method, params, left);
     return { result: refusal("invalidRequest", method + " is not a computer use method.") };
   };

@@ -371,6 +371,27 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("says it raises no safety signals yet, and refuses watch as typed unsupported", async () => {
+    const helper = await connect();
+    expect(helper.hello).toMatchObject({
+      capabilities: {
+        signals: { privateMode: "unsupported", humanInput: "unsupported" },
+        methods: { watch: "unsupported", unwatch: "unsupported" },
+      },
+    });
+    const reply = await helper.request("watch", {
+      watchId: "w1",
+      targets: [{ pid: 10, windowId: 20 }],
+    });
+    expect(reply.result).toMatchObject({
+      outcome: "refused",
+      reason: "unsupported",
+      method: "watch",
+      platform: "linux",
+    });
+    await helper.close();
+  });
+
   it("a client on another protocol version is refused before any work", async () => {
     const helper = await connect({ clientApiVersion: COMPUTER_USE_PROTOCOL_VERSION + 1 });
     expect(helper.hello).toMatchObject({ outcome: "refused", reason: "incompatibleClientVersion" });
