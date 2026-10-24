@@ -44,7 +44,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 
-export type LeaseEnd = ComputerUseControlEnd | "lost";
+export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted";
 
 const REQUEST = goatCallText("computer_use.request");
 
@@ -61,6 +61,8 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   stopped: "A person pressed Stop on this thread. Do not continue on the screen in this turn.",
   stopped_all: "A person stopped computer use for every thread on this host.",
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
+  helper_restarted:
+    "GOAT Computer Use stopped or restarted (for example after an update), so this connection ended. A call already in progress may have acted before it stopped. Do not retry in this turn; a later turn gets computer use back once it is ready and should observe the screen again before acting.",
 };
 
 export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
@@ -241,8 +243,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           yield* options.output(admitDriverReplyScreenshots(line));
         }),
       ),
-      // A driver that exits on its own cannot be trusted with the rest of the control.
-      Effect.andThen(Effect.suspend(() => (running === current ? end("lost") : Effect.void))),
+      // A driver that exits on its own cannot be trusted with the rest of the control, and the
+      // route it took died with it; the agent hears why instead of a dead transport (#1233).
+      Effect.andThen(
+        Effect.suspend(() => (running === current ? end("helper_restarted") : Effect.void)),
+      ),
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
