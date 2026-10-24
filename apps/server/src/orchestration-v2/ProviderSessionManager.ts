@@ -58,6 +58,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUse from "../cua/ComputerUseAttachment.ts";
 import { withTurnAgentAccess } from "./TurnCapabilities.ts";
+import { type PrepareReuse, selectPrepareInput } from "./McpPrepareInput.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ComputerUseOrigin from "../cua/ComputerUseOrigin.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
@@ -637,7 +638,7 @@ export const layerWithOptions = (
        */
       const prepareMcpSession = (
         input: ProviderMemoryPrepareInput,
-        reusePreparedInput: boolean | ProviderMemoryPrepareInput = false,
+        reusePreparedInput: PrepareReuse = false,
       ): Effect.Effect<PreparedMcpCredential> =>
         options.configureMcp === false
           ? mcpSessions
@@ -647,30 +648,9 @@ export const layerWithOptions = (
               input.threadId,
               Effect.gen(function* () {
                 const previousInput = memoryPrepareInputs.get(input.threadId);
-                const admitted =
-                  typeof reusePreparedInput === "object" ? reusePreparedInput : previousInput;
-                const {
-                  runId: _previousRun,
-                  delegatedTaskId: _previousTask,
-                  ...admittedAuthority
-                } = admitted ?? input;
-                const preparedInput =
-                  reusePreparedInput && admitted?.providerInstanceId === input.providerInstanceId
-                    ? {
-                        // Internal reprepare retains this execution's provenance. An
-                        // explicit admission replaces IDs, including absent IDs.
-                        ...(reusePreparedInput === true ? admitted : admittedAuthority),
-                        ...(input.runId === undefined ? {} : { runId: input.runId }),
-                        ...(input.delegatedTaskId === undefined
-                          ? {}
-                          : { delegatedTaskId: input.delegatedTaskId }),
-                        ...(input.interactionMode === undefined
-                          ? {}
-                          : { interactionMode: input.interactionMode }),
-                        ...(input.turnCapabilities && { turnCapabilities: input.turnCapabilities }),
-                        readOnly: admitted.readOnly === true || input.readOnly === true,
-                      }
-                    : { ...input, readOnly: input.readOnly === true };
+                const preparedInput = selectPrepareInput(input, reusePreparedInput, previousInput);
+                if (preparedInput === undefined)
+                  return { mcpCredentialId: undefined, issued: false };
                 const { threadId, providerInstanceId } = preparedInput;
                 const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
                 const usableThread =
@@ -771,15 +751,7 @@ export const layerWithOptions = (
                   interactionMode: preparedInput.interactionMode,
                   readOnly,
                   origin: computerUseOrigin,
-                  lease:
-                    computerUseOrigin._tag === "unattended" && Option.isSome(computerUseLeases)
-                      ? yield* computerUseLeases.value
-                          .active(threadId)
-                          .pipe(Effect.orElseSucceed(() => Option.none()))
-                      : Option.none(),
-                  proxy: Option.isSome(computerUseLeases)
-                    ? computerUseLeases.value.proxy
-                    : undefined,
+                  leases: computerUseLeases,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {
@@ -2582,7 +2554,7 @@ export const layerWithOptions = (
                 Effect.gen(function* () {
                   const input = memoryPrepareInputs.get(threadId);
                   if (!input || (yield* mcpSessions.read(threadId)) === undefined) return;
-                  const prepared = yield* prepareMcpSession(input, true);
+                  const prepared = yield* prepareMcpSession(input, "stored");
                   if (prepared.mcpCredentialId)
                     dropMcpCredentialReservation(threadId, prepared.mcpCredentialId);
                 }),
