@@ -19,10 +19,26 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 const integer = (value: unknown) =>
   typeof value === "number" && Number.isInteger(value) ? value : undefined;
 
-/** Both forms that cua-driver 0.37.0 accepts for an explicit desktop scope. */
-export function desktopScope(args: unknown): boolean {
-  const top = record(args);
-  return top?.scope === "desktop" || record(top?.target)?.kind === "desktop";
+/**
+ * Whether a move_cursor moves the real pointer under pinned cua-driver 0.37.0
+ * (normalize_action_target): only a desktop move with no window selector. Any other form moves
+ * only GOAT's overlay, or is refused before it runs: legacy desktop scope with a pid or window_id
+ * becomes a window move (Linux) or a refusal, and a typed target beside any legacy field, or one
+ * the driver does not accept, is refused. Keys count when present, as the driver checks them.
+ */
+export function movesPointer(args: unknown): boolean {
+  const given = record(args);
+  const has = (key: string) => given !== undefined && key in given;
+  if (has("target")) {
+    if (has("scope") || has("pid") || has("window_id")) return false;
+    const target = record(given?.target);
+    return (
+      target?.kind === "desktop" &&
+      target.display_id === "primary" &&
+      Object.keys(target).length === 2
+    );
+  }
+  return given?.scope === "desktop" && !has("pid") && !has("window_id");
 }
 
 /** The window a call's arguments name, or undefined for a desktop, app or unnamed target. */

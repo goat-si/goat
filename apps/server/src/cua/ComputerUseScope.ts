@@ -10,7 +10,7 @@
  * @module ComputerUseScope
  */
 import { foreground } from "./ComputerUseCallReservations.ts";
-import { desktopScope } from "./computerUseTarget.ts";
+import { movesPointer } from "./computerUseTarget.ts";
 
 /** Reads and session bookkeeping that touch no app's contents or input. */
 const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
@@ -78,7 +78,7 @@ const targetPid = (args: Readonly<Record<string, unknown>> | undefined) => {
  */
 export function takesScreen(name: unknown, args: unknown): boolean {
   // Window/default moves leave the real pointer alone, even with foreground delivery (#1501).
-  if (name === "move_cursor") return desktopScope(args);
+  if (name === "move_cursor") return movesPointer(args);
   if (typeof name === "string" && (SCREEN_TOOLS.has(name) || OPAQUE_TOOLS.has(name))) return true;
   // The same foreground test as window reservations (#1462), so both agree on what takes it.
   return foreground(args);
