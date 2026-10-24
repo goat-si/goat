@@ -257,8 +257,12 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
                   file in files ? Effect.succeed(files[file] ?? "") : noop.readFileString(file),
               }),
             ),
-            // Windows separators on any host: resolution only joins paths.
-            Effect.provideService(Path.Path, { ...path, join: joinWindowsPath }),
+            // Windows separators on any host: resolution only joins and splits paths.
+            Effect.provideService(Path.Path, {
+              ...path,
+              join: joinWindowsPath,
+              dirname: (file: string) => file.replace(/[\\/][^\\/]*$/, ""),
+            }),
             Effect.provideService(HostProcess.Environment, { GOAT_NPM_LAUNCHER_PATH: entry }),
             Effect.provideService(HostProcess.IsExecutable, true),
             Effect.provideService(
