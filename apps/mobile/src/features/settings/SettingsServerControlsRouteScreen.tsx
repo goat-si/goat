@@ -5,6 +5,7 @@ import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/sess
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
 import {
+  DEFAULT_SERVER_SETTINGS,
   type ResponseStreamingMode,
   type ServerSettings,
   type ServerSettingsPatch,
@@ -13,6 +14,7 @@ import {
   PROJECT_SCOPED_SERVER_SETTING_KEYS,
   type ProjectScopedServerSettingKey,
 } from "@goat/contracts";
+import type { AgentToolListing } from "@goat/contracts/agentSurface/listing";
 import { useRef, useState } from "react";
 import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -119,6 +121,23 @@ const STREAMING_CHOICES: ReadonlyArray<{
     mode: "paragraph",
     label: "Finished paragraphs",
     description: "Show each paragraph or code block as it completes.",
+  },
+];
+
+const TOOL_LISTING_CHOICES: ReadonlyArray<{
+  readonly listing: AgentToolListing;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    listing: "core",
+    label: "Core",
+    description: "Two GOAT tools that look up and run the rest.",
+  },
+  {
+    listing: "full",
+    label: "All tools",
+    description: "Every tool up front. Can make each agent's first prompt much larger.",
   },
 ];
 
@@ -443,6 +462,30 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                  </SettingsSection>
+                  <SettingsSection
+                    title="GOAT tools agents see"
+                    trailing={
+                      pendingWrites === 0 && uniform("agentToolListing") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {TOOL_LISTING_CHOICES.map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.listing}
+                        label={
+                          choice.listing === DEFAULT_SERVER_SETTINGS.agentToolListing
+                            ? `${choice.label} (default)`
+                            : choice.label
+                        }
+                        description={choice.description}
+                        selected={uniform("agentToolListing") === choice.listing}
+                        separated={index > 0}
+                        disabled={disabledFor("agentToolListing")}
+                        onPress={() => write({ agentToolListing: choice.listing })}
+                      />
+                    ))}
                   </SettingsSection>
                   <StandingInstructionsSettings
                     key={targets

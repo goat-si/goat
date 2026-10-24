@@ -44,7 +44,8 @@ export const layer = McpToolAccess.toLayer(RemoteReportToolkit, {
         .pipe(Effect.mapError(remoteReportFailure));
     }),
   ),
-  goat_origin_reports_wait: McpToolAccess.reads((input) =>
+  // The read key is its capability; the declaration refuses a read-only client before it deletes.
+  goat_origin_reports_wait: McpToolAccess.writesWithCapability((input) =>
     Effect.gen(function* () {
       const reports = yield* RemoteReportService.RemoteReportService;
       return yield* reports.wait(input).pipe(Effect.mapError(remoteReportFailure));

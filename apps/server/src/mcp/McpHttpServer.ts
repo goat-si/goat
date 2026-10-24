@@ -1,4 +1,4 @@
-import { listingSetting, withCallerListing } from "./toolListing.ts";
+import { listingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
@@ -297,6 +297,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const clients = yield* Effect.serviceOption(McpClientAuthenticator);
   const listing = listingSetting(yield* Effect.serviceOption(Settings.ServerSettingsService));
+  const permissions = yield* Effect.serviceOption(Profiles.PermissionProfiles);
   return Effect.fn("McpHttpServer.authenticateRequest")(function* (httpEffect) {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const authorization = request.headers.authorization;
@@ -355,7 +356,10 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
         message,
       });
     }
-    return yield* withCallerListing(listing)(withServedToolNames(httpEffect)).pipe(
+    return yield* withCallerListing(
+      listing,
+      permissions,
+    )(withServedToolNames(httpEffect)).pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
       Effect.map(normalizeMcpHttpResponse),
     );
@@ -927,6 +931,7 @@ const applyToolContracts = <A, E, R>(register: Effect.Effect<A, E, R>) =>
                   : Effect.succeed(
                       undeclaredArgumentsResult(
                         registration.tool.name,
+                        payload,
                         undeclared,
                         Object.keys(properties),
                       ),
@@ -1362,20 +1367,12 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
-/** Tells connected clients to list tools again when the listing setting changes (MCP list_changed). */
+/** Tells connected clients to list tools again when what tools/list shows them may have changed. */
 const layerListingChanges = Layer.effectDiscard(
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
-    if (Option.isNone(settings)) return;
-    // Changes carry no initial snapshot, so compare against the listing clients have now.
-    let listed = yield* listingSetting(settings);
-    yield* settings.value.streamChanges.pipe(
-      Stream.runForEach((current) => {
-        if (current.agentToolListing === listed) return Effect.void;
-        listed = current.agentToolListing;
-        return server.notifications["notifications/tools/list_changed"]({});
-      }),
+    yield* listingChanges(yield* Effect.serviceOption(Settings.ServerSettingsService)).pipe(
+      Stream.runForEach(() => server.notifications["notifications/tools/list_changed"]({})),
       Effect.forkScoped,
     );
   }),
@@ -1425,7 +1422,8 @@ export const layer = Layer.mergeAll(
   Layer.provide(ThreadResultService.layer),
   // Every registration's goatclaw capability gate, and the handlers that check profiles.
   Layer.provide(Profiles.layer),
-  Layer.provideMerge(layerMcpTransport),
+  // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
+  Layer.provideMerge(layerMcpTransport.pipe(Layer.provide(Profiles.layer))),
 );
 
 // L5 composes these after the domain and committed policy producers are ready.

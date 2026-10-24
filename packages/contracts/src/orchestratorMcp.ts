@@ -850,6 +850,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   status: OrchestratorMcpThreadStatus,
   timedOut: Schema.Boolean,
   pendingRequestIds: Schema.optional(Schema.Array(RuntimeRequestId)),
+  /** When the waited run ended; absent while it runs, and from hosts that predate it. */
+  completedAt: Schema.optional(IsoDateTime),
   /** The waited run's structured result, once that run has ended. */
   result: Schema.optional(ThreadResult),
 });

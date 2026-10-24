@@ -12,8 +12,9 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import type * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { availability } from "../../toolAvailability.ts";
+import { availability, type CallerProfile, callerProfile } from "../../toolAvailability.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { type Match, nearestPaths, searchEntries } from "./search.ts";
 import type { DescribeResult } from "./tools.ts";
@@ -41,7 +42,11 @@ const surfaceVersion = surfaceVersionOf(entries);
 const DEFAULT_LIMIT = 10;
 const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as const;
 
-type Scope = McpInvocationContext.McpInvocationScope;
+/** Who asks: availability follows their scope and, for a thread, their goatclaw profile. */
+interface Caller {
+  readonly scope: McpInvocationContext.McpInvocationScope;
+  readonly profile: CallerProfile | undefined;
+}
 type Detail = "names" | "summary" | "full";
 
 const Cursor = Schema.fromJsonString(
@@ -60,11 +65,17 @@ const decodeCursor = Schema.decodeUnknownOption(Cursor);
 const refuse = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
 
-export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
+export const makeDescribe = (
+  dispatch: ToolDispatch["Service"],
+  permissions: Profiles.PermissionProfiles["Service"],
+) => {
   const served = (entry: AgentSurfaceRegistryEntry) =>
     dispatch.served(listedToolName(entry)) !== undefined;
 
-  const listed = (entry: AgentSurfaceRegistryEntry, scope: Scope, detail: Detail) =>
+  const availableTo = (entry: AgentSurfaceRegistryEntry, caller: Caller, isServed: boolean) =>
+    availability(entry, caller.scope, isServed, caller.profile);
+
+  const listed = (entry: AgentSurfaceRegistryEntry, caller: Caller, detail: Detail) =>
     detail === "names"
       ? { path: entry.path, name: listedToolName(entry), summary: entry.summary }
       : {
@@ -73,22 +84,22 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
           summary: entry.summary,
           effect: entry.effect,
           requires: entry.requires,
-          available: availability(entry, scope, served(entry)),
+          available: availableTo(entry, caller, served(entry)),
           description: entry.description,
         };
 
   const matched = (
     { entry, match, matchedWords, unmatchedWords }: Match<AgentSurfaceRegistryEntry>,
-    scope: Scope,
+    caller: Caller,
     detail: Detail,
   ) => ({
-    ...listed(entry, scope, detail),
+    ...listed(entry, caller, detail),
     match,
     ...(match === "exact" ? {} : { matchedWords, unmatchedWords }),
   });
 
   const search = Effect.fn("AgentSurface.search")(function* (
-    scope: Scope,
+    caller: Caller,
     input: {
       readonly query: string;
       readonly path: string | undefined;
@@ -134,7 +145,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
       surfaceVersion,
       query: input.query,
       mode: outcome.mode,
-      entries: page.map((match) => matched(match, scope, input.detail)),
+      entries: page.map((match) => matched(match, caller, input.detail)),
       total: outcome.matches.length,
       returned: page.length,
       truncated: next < outcome.matches.length,
@@ -155,7 +166,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
         ignoredWords: [...outcome.ignoredWords],
         notServed: unserved.length,
         unavailableToCaller: matchedEntries.filter(
-          (entry) => served(entry) && !availability(entry, scope, true).now,
+          (entry) => served(entry) && !availableTo(entry, caller, true).now,
         ).length,
       },
       ...(outcome.matches.length === 0
@@ -176,13 +187,21 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
   }) {
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const detail = input.detail ?? "summary";
+    // The surface depth names resources only, so it never pays for resolving a profile.
+    const caller: Caller = {
+      scope,
+      profile:
+        input.path === undefined && input.query === undefined
+          ? undefined
+          : yield* callerProfile(permissions, scope),
+    };
     if (input.detail === "full" && (input.query !== undefined || input.path === undefined))
       return yield* refuse(
         'detail "full" describes one path: pass its path, such as "thread.send", without query.',
       );
     const limit = input.limit ?? DEFAULT_LIMIT;
     if (input.query !== undefined)
-      return yield* search(scope, {
+      return yield* search(caller, {
         query: input.query,
         path: input.path,
         detail,
@@ -194,7 +213,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
     // A name that is no path or resource is searched, never answered with absence; its cursor
     // continues that search.
     if (input.path !== undefined && entry === undefined && !isResource)
-      return yield* search(scope, {
+      return yield* search(caller, {
         query: input.path,
         path: undefined,
         detail: detail === "full" ? "summary" : detail,
@@ -219,7 +238,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
     if (entry !== undefined && input.detail !== undefined && input.detail !== "full")
       return {
         depth: "path" as const,
-        entry: listed(entry, scope, input.detail),
+        entry: listed(entry, caller, input.detail),
       } satisfies DescribeResult;
     if (entry !== undefined) {
       const tool = dispatch.served(listedToolName(entry));
@@ -230,7 +249,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
           name: listedToolName(entry),
           summary: entry.summary,
           effect: entry.effect,
-          available: availability(entry, scope, tool !== undefined),
+          available: availableTo(entry, caller, tool !== undefined),
           canonicalName: canonicalToolName(entry),
           legacyNames: entry.legacyNames,
           description: entry.description,
@@ -250,7 +269,7 @@ export const makeDescribe = (dispatch: ToolDispatch["Service"]) => {
       resource: input.path,
       entries: inResource
         .toSorted((a, b) => a.verb.localeCompare(b.verb))
-        .map((candidate) => listed(candidate, scope, detail === "full" ? "summary" : detail)),
+        .map((candidate) => listed(candidate, caller, detail === "full" ? "summary" : detail)),
     } satisfies DescribeResult;
   });
 };

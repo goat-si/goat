@@ -108,7 +108,7 @@ An empty database is a bad test. Seed your worktree's `.goat` with a copy of rea
 
 ## Verifying
 
-- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, and tests beside changes. CI still runs the full test suites.
+- Before you push, run `vp run check:changed`. It runs CI's fast checks for changed files: format, lint, knip, typecheck of affected packages and dependents, and tests beside changes. A pull request's goat-ci run is quick by default (check, typecheck, tests beside changes); add the `ci:full` label or run `gh workflow run goat-ci.yml --ref <branch>` for the full suites.
 - While you iterate, run `vp test run <files>`. For big files, add `-t "<name>"`.
 - Use `vp run typecheck`, not `npx tsc`; it caches per package. Both run tsc-rs (`typescript` is the `@tsc-rs/typescript` drop-in).
 - Run `node -e` snippets from `apps/server` or the owning package. `effect` does not resolve from the repo root.
@@ -162,7 +162,7 @@ For authorized mobile verification, a missing or outdated native client is a bui
 - Squash-merge with `gh pr merge <pr> --admin --squash --match-head-commit <head-sha>` once `goat-ci-result` is `SUCCESS` on that exact head. `CLEAN` and `UNSTABLE` (behind `dev`) are both fine.
 - A failure that reproduces identically on `dev` does not block: note it in the PR and merge. Re-run flaky or cancelled jobs instead of rebasing.
 - Stacks, batch merging, and the `dev` full-run cadence: [Merging pull requests](docs/operations/merging.md).
-- Nightly builds `dev`; stable builds `main`, which changes only by a `Merge dev into main: release ...` promotion. A hotfix merges to `dev` first, then is cherry-picked onto `main`; never patch `main` alone. See [Release channels](docs/internals/release-channels.md).
+- `dev` is the only long-lived branch. Nightly builds green `dev` commits; stable rebuilds a nightly's commit once it has been out for 24 hours, unless an open issue is labeled `release-blocker` or `GOAT_STABLE_HOLD` is `true`. A hotfix merges to `dev` and is promoted by a manual stable run naming its nightly. See [Release channels](docs/internals/release-channels.md#stable-promotion).
 
 ## Documentation
 

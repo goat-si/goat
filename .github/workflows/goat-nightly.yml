@@ -5,14 +5,18 @@ name: goat-nightly
 # whose full manual goat-ci run ("goat-ci all on dev") succeeded, skips it when that commit
 # is already a published nightly, and versions it as a prerelease of the next stable
 # (<base>-nightly.<date>.<run>). A manual run may name any dev commit, green or not.
-# Stable builds main: only a manual run with channel=stable, from a main commit (the
-# "Merge dev into main: release ..." promotion). Both build every platform from the
-# chosen commit, sign and notarize macOS on the Mac Studio, verify everything, and
-# publish to the public goat-si/goat-releases repository. Nothing publishes unless the
-# repository variable GOAT_RELEASES_PUBLISH is 'true'; a manual run also needs its
-# publish input. A schedule runs the workflow file on the default branch (main), so a
-# trigger change takes effect there at the next promotion. Only the hosted publish job
-# can read the goat-releases App credentials. The pre-push guard
+# Stable promotes a published nightly: its own schedule, or a manual run with
+# channel=stable, rebuilds the commit of the newest nightly that has been out for 24 hours
+# and is newer than the current stable, with the plain version, unless an open issue is
+# labeled release-blocker or the repository variable GOAT_STABLE_HOLD is 'true'
+# (.github/scripts/release-train.cjs). A manual run that names a nightly's commit promotes
+# it without those rules. The base is the patch after the newest stable tag, or the
+# manifests' version when higher. Both channels build every platform from the chosen
+# commit, sign and notarize macOS on the Mac Studio, verify everything, and publish to the
+# public goat-si/goat-releases repository. Nothing publishes unless the repository variable
+# GOAT_RELEASES_PUBLISH is 'true'; a manual run also needs its publish input. A schedule
+# runs the workflow file on the default branch, dev. Only the hosted publish job can read
+# the goat-releases App credentials. The pre-push guard
 # (.vite-hooks/goat-workflow-guard.mjs) enforces the gates below.
 #
 # Jobs hand their outputs to each other through draft releases in goat-si/goat,
@@ -21,20 +25,24 @@ name: goat-nightly
 # not count toward the Actions and Packages storage quota. Draft releases are
 # visible only with push access, so every job that reads or writes a hand-off asks
 # for contents: write and passes github.token to its staging steps alone. The
-# cleanup job deletes the drafts when the run ends, whatever its outcome. Re-running only the failed jobs after
-# that finds no hand-off; re-run all jobs instead.
+# cleanup job deletes the drafts when the run ends, unless a job failed or was
+# cancelled: then it keeps them, so "Re-run failed jobs" re-runs the failed jobs and
+# the jobs that depend on them, reusing the hand-offs the passing jobs staged.
 on:
-  # 03:00 KST. A day without a newer green dev commit publishes nothing.
+  # 03:00 KST nightly: a day without a newer green dev commit publishes nothing. 15:00 KST
+  # stable: twelve hours later, so yesterday's nightly has soaked for 24 hours. The stable
+  # cron string is matched in prepare's resolve step.
   schedule:
     - cron: "0 18 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       sha:
-        description: commit to build (nightly default the newest green dev commit; stable default the main tip)
+        description: commit to build (nightly default the newest green dev commit; stable the commit of a published nightly, default the newest that passes the promotion rules)
         required: false
         type: string
       channel:
-        description: release channel (stable uses the plain version in apps/desktop/package.json)
+        description: release channel (stable rebuilds a published nightly with its plain base version)
         required: false
         default: nightly
         type: choice
@@ -63,10 +71,12 @@ jobs:
     # Hosted: the resolve step needs gh, which the EPYC runners do not carry.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # Reading goat-ci runs needs actions: read; nothing here writes.
+    # Reading goat-ci runs needs actions: read and counting release-blocker issues
+    # issues: read; nothing here writes.
     permissions:
       actions: read
       contents: read
+      issues: read
     outputs:
       skip: ${{ steps.resolve.outputs.skip }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -77,23 +87,29 @@ jobs:
       manifest: ${{ steps.release.outputs.manifest }}
     steps:
       # Nightly: the newest dev commit whose full manual goat-ci run succeeded, or a
-      # given dev commit; already published means skip. Stable: a commit on main
-      # (default its tip). Every checkout trusts this sha.
+      # given dev commit; already published means skip. Stable: the nightly that
+      # release-train.cjs (from this workflow's commit) promotes, or skip. Every
+      # checkout trusts this sha.
       - name: Resolve commit
         id: resolve
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_SHA: ${{ inputs.sha }}
-          CHANNEL: ${{ inputs.channel || 'nightly' }}
+          CHANNEL: ${{ github.event.schedule == '0 6 * * *' && 'stable' || inputs.channel || 'nightly' }}
+          GOAT_STABLE_HOLD: ${{ vars.GOAT_STABLE_HOLD }}
         run: |
           set -euo pipefail
           skip=false
+          version=
           runs='repos/goat-si/goat/actions/workflows/goat-ci.yml/runs'
           green='[.workflow_runs[] | select(.display_title == "goat-ci all on dev" and .head_branch == "dev" and .head_repository.full_name == "goat-si/goat")]'
+          train="$RUNNER_TEMP/release-train.cjs"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/goat-si/goat/contents/.github/scripts/release-train.cjs?ref=$GITHUB_WORKFLOW_SHA" > "$train"
+          branch=dev
           case "$CHANNEL" in
             nightly)
-              branch=dev
               if [ -n "$INPUT_SHA" ]; then
                 sha="$(gh api "repos/goat-si/goat/commits/$INPUT_SHA" --jq .sha)"
               else
@@ -101,8 +117,23 @@ jobs:
               fi
               ;;
             stable)
-              branch=main
-              sha="$(gh api "repos/goat-si/goat/commits/${INPUT_SHA:-main}" --jq .sha)"
+              releases="$RUNNER_TEMP/goat-releases.jsonl"
+              gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' \
+                --jq '.[] | {tag_name, name, draft, prerelease, published_at}' > "$releases"
+              # The issues API lists pull requests too; only issues block.
+              blockers="$(gh api --paginate 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' \
+                --jq '.[] | select(.pull_request | not) | .number' | wc -l | tr -d ' ')"
+              decision="$(RELEASES_FILE="$releases" OPEN_BLOCKERS="$blockers" node "$train" stable)"
+              printf '%s\n' "$decision"
+              if [ "$(printf '%s\n' "$decision" | sed -n 's/^promote=//p')" != true ]; then
+                echo "sha=" >> "$GITHUB_OUTPUT"
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              short="$(printf '%s\n' "$decision" | sed -n 's/^short_sha=//p')"
+              version="$(printf '%s\n' "$decision" | sed -n 's/^version=//p')"
+              sha="$(gh api "repos/goat-si/goat/commits/$short" --jq .sha)"
               ;;
             *)
               echo "::error::unknown channel '$CHANNEL'"
@@ -118,7 +149,7 @@ jobs:
             identical | ahead) ;;
             *) echo "::error::$sha is not on $branch ($status)"; exit 1 ;;
           esac
-          if [ "$branch" = dev ]; then
+          if [ "$CHANNEL" = nightly ]; then
             published="$(gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[] | select(.prerelease) | .name')"
             if grep -Fq "(${sha:0:12})" <<<"$published"; then
               echo "$sha is already a published nightly; skipping"
@@ -127,6 +158,8 @@ jobs:
           fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         if: steps.resolve.outputs.skip == 'false'
@@ -151,23 +184,29 @@ jobs:
         if: steps.resolve.outputs.skip == 'false'
         run: vp install --filter=@goat/scripts...
 
-      # Version rule (docs/internals/release-channels.md#version-rule): a nightly is
-      # <base>-nightly.<date>.<run> of the package version, stamped into every
-      # artifact. check-release-version refuses a version that does not sort
-      # above the newest stable and the previous nightly; once the base ships
-      # stable it fails with the exact bump command instead of publishing.
+      # Version rule (docs/internals/release-channels.md#version-rule): the base is the
+      # patch after the newest stable tag, or the manifests' version when higher
+      # (release-train.cjs base). A nightly is <base>-nightly.<date>.<run>; a stable
+      # promotion is the plain base of the nightly it rebuilds. check-release-version
+      # refuses a version that does not sort above the newest stable and the previous
+      # nightly.
       - name: Resolve release version
         id: release
         if: steps.resolve.outputs.skip == 'false'
         env:
           SHA: ${{ steps.resolve.outputs.sha }}
-          CHANNEL: ${{ inputs.channel || 'nightly' }}
+          CHANNEL: ${{ steps.resolve.outputs.channel }}
+          STABLE_VERSION: ${{ steps.resolve.outputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          base="$(node -p 'require("./apps/desktop/package.json").version')"
           tags="$RUNNER_TEMP/goat-releases-tags.txt"
           gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[].tag_name' > "$tags"
+          manifest_version="$(node -p 'require("./apps/desktop/package.json").version')"
+          base="$(RELEASE_TAGS_FILE="$tags" PACKAGE_VERSION="$manifest_version" node "$RUNNER_TEMP/release-train.cjs" base)"
+          # The checkout's manifests carry the base, so resolve-nightly-release and
+          # check-release-version read it; every build job stamps the full version again.
+          node scripts/update-release-package-versions.ts "$base"
           case "$CHANNEL" in
             nightly)
               metadata="$(node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" \
@@ -176,8 +215,13 @@ jobs:
               manifest=nightly
               ;;
             stable)
-              version="$base"
-              metadata="$(printf 'version=%s\ntag=v%s\nname=GOAT %s (%s)\n' "$base" "$base" "$base" "${SHA:0:12}")"
+              # The nightly's base; the stable must not sort below the nightly it rebuilds.
+              version="$STABLE_VERSION"
+              if [ "$version" != "$base" ]; then
+                echo "::error::promoted nightly carries base $version but the next stable is $base"
+                exit 1
+              fi
+              metadata="$(printf 'version=%s\ntag=v%s\nname=GOAT %s (%s)\n' "$version" "$version" "$version" "${SHA:0:12}")"
               manifest=latest
               ;;
             *)
@@ -832,9 +876,11 @@ jobs:
       (github.event_name == 'schedule' || inputs.publish))
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    # Reading the draft hand-off needs push access to goat-si/goat.
+    # Reading the draft hand-off needs push access to goat-si/goat; the stable
+    # recheck counts release-blocker issues.
     permissions:
       contents: write
+      issues: read
     concurrency:
       group: goat-nightly-publish
       cancel-in-progress: false
@@ -881,6 +927,49 @@ jobs:
         env:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
         run: node scripts/.staging/nightly-staging.ts get --repo goat-si/goat --tag "$STAGING_TAG" --names release-assets --dir release
+
+      # Prepare checked the version hours ago; a run of the other channel may have
+      # published since (a stable of this nightly's base, or a newer nightly). Inside
+      # the publish lock, check again against what goat-releases holds now. A tag that
+      # already exists is left to the publisher, which accepts identical bytes on a re-run.
+      - name: Recheck release version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tags="$RUNNER_TEMP/goat-releases-tags.txt"
+          gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' --jq '.[].tag_name' > "$tags"
+          if grep -Fxq "v$VERSION" "$tags"; then
+            echo "v$VERSION already exists; the publisher compares its files."
+            exit 0
+          fi
+          node scripts/check-release-version.ts --candidate "$VERSION" --published-tags "$tags"
+
+      # A stable promotion decided in prepare publishes hours later. Inside the publish
+      # lock, right before the App token, check again that no release-blocker issue
+      # opened and GOAT_STABLE_HOLD was not set (both skipped when a manual run named
+      # its commit), and that no stable shipped this commit or a newer base meanwhile. A
+      # re-run after this exact stable went public passes on to the publisher's byte check.
+      - name: Recheck stable promotion
+        if: needs.prepare.outputs.channel == 'stable'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ inputs.sha }}
+          GOAT_STABLE_HOLD: ${{ vars.GOAT_STABLE_HOLD }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          set -euo pipefail
+          train="$RUNNER_TEMP/release-train.cjs"
+          gh api -H 'Accept: application/vnd.github.raw+json' \
+            "repos/goat-si/goat/contents/.github/scripts/release-train.cjs?ref=$GITHUB_WORKFLOW_SHA" > "$train"
+          releases="$RUNNER_TEMP/goat-releases.jsonl"
+          gh api --paginate 'repos/goat-si/goat-releases/releases?per_page=100' \
+            --jq '.[] | {tag_name, name, draft, prerelease, published_at}' > "$releases"
+          blockers="$(gh api --paginate 'repos/goat-si/goat/issues?labels=release-blocker&state=open&per_page=100' \
+            --jq '.[] | select(.pull_request | not) | .number' | wc -l | tr -d ' ')"
+          RELEASES_FILE="$releases" OPEN_BLOCKERS="$blockers" SHORT_SHA="${SHA:0:12}" node "$train" recheck
 
       # The only step in this workflow that reads a secret. The token is scoped to
       # goat-si/goat-releases by the App installation.
@@ -947,10 +1036,11 @@ jobs:
           while read -r _ name; do cp "release/${name#\*}" release-runtime/; done < release-runtime/SHA256SUMS
           node scripts/publish-nightly-release.ts --repo goat-si/goat --dir release-runtime --assets-only \
             --target "$SHA" --version "$VERSION" --name "$RELEASE_NAME"
-  # Deletes this run's hand-off drafts whatever happened, including cancellation,
-  # and any staging draft a crashed run left behind for more than 72 hours. A dry run
-  # (assemble passed, nothing published) keeps the release-assets draft so the
-  # verified files can be inspected; a later run's sweep removes it after 72 hours.
+  # Deletes this run's hand-off drafts, and any staging draft an earlier run left
+  # behind for more than 72 hours. A dry run (assemble passed, nothing published)
+  # keeps the release-assets draft so the verified files can be inspected. A run with
+  # a failed or cancelled job keeps every hand-off for "Re-run failed jobs", which
+  # re-runs this job too. A later run's sweep removes kept drafts after 72 hours.
   cleanup:
     name: Delete staging release
     needs: [prepare, js_bundle, cli, desktop_mac, desktop_other, assemble, publish]
@@ -1001,8 +1091,10 @@ jobs:
           GOAT_RELEASES_TOKEN: ${{ github.token }}
           ASSEMBLE: ${{ needs.assemble.result }}
           PUBLISH: ${{ needs.publish.result }}
+          RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
           set -euo pipefail
           keep=""
           if [ "$ASSEMBLE" = success ] && [ "$PUBLISH" = skipped ]; then keep=release-assets; fi
+          case " $RESULTS " in *" failure "* | *" cancelled "*) keep="*" ;; esac
           node scripts/.staging/nightly-staging.ts cleanup --repo goat-si/goat --tag "$STAGING_TAG" --keep "$keep"

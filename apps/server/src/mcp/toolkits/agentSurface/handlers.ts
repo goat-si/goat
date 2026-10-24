@@ -7,6 +7,7 @@ import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
 import { makeHandoffReader } from "../../operations/handoffReads.ts";
 import { makeOperationTokens } from "../../operations/OperationTokens.ts";
@@ -29,7 +30,7 @@ export const layer = McpToolAccess.toLayer(
       makeHandoffReader(yield* Effect.serviceOption(Handoffs.Handoffs)),
     );
 
-    const describe = makeDescribe(dispatch);
+    const describe = makeDescribe(dispatch, yield* Profiles.PermissionProfiles);
 
     const call = Effect.fn("AgentSurface.call")(function* (input: {
       readonly path: string;

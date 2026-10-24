@@ -11,10 +11,11 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpBody, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import type * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Settings from "../serverSettings.ts";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
-import { availability } from "./toolAvailability.ts";
+import { availability, type CallerProfile, callerProfile } from "./toolAvailability.ts";
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -34,12 +35,13 @@ const listedTools = (
   tools: ReadonlyArray<unknown>,
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
+  profile: CallerProfile | undefined,
 ): ReadonlyArray<unknown> =>
   tools.flatMap((tool) => {
     if (!isRecord(tool) || typeof tool.name !== "string") return [tool];
     const entry = resolveAgentSurfaceEntry(tool.name);
     if (entry === undefined) return [tool];
-    if (!availability(entry, scope, true).now) return [];
+    if (!availability(entry, scope, true, profile).now) return [];
     const core = "listing" in entry && entry.listing === "core";
     if (listing === "core" && !core && scope.thread !== undefined) return [];
     if (!core) return [tool];
@@ -55,6 +57,7 @@ const filterMessage = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
+  profile: CallerProfile | undefined,
 ) => {
   const message = Option.getOrUndefined(decodeJson(text));
   if (!isRecord(message) || !isRecord(message.result) || !Array.isArray(message.result.tools))
@@ -64,7 +67,7 @@ const filterMessage = (
     ...message,
     result: {
       ...message.result,
-      tools: listedTools(message.result.tools, scope, listing),
+      tools: listedTools(message.result.tools, scope, listing, profile),
       _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing },
     },
   });
@@ -75,12 +78,13 @@ const filterEvents = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
+  profile: CallerProfile | undefined,
 ) =>
   text
     .split("\n")
     .map((line) =>
       line.startsWith("data:")
-        ? `data: ${filterMessage(line.slice(5).trim(), scope, listing)}`
+        ? `data: ${filterMessage(line.slice(5).trim(), scope, listing, profile)}`
         : line,
     )
     .join("\n");
@@ -93,6 +97,7 @@ export const filterToolsListBody = Effect.fnUntraced(function* (
   body: HttpBody.HttpBody,
   scope: McpInvocationContext.McpInvocationScope,
   listing: AgentToolListing,
+  profile?: CallerProfile,
 ) {
   if (body._tag !== "Uint8Array" && body._tag !== "Stream") return body;
   const text =
@@ -100,16 +105,36 @@ export const filterToolsListBody = Effect.fnUntraced(function* (
       ? new TextDecoder().decode(body.body)
       : yield* body.stream.pipe(Stream.decodeText, Stream.mkString, Effect.orDie);
   const filtered = body.contentType.includes("text/event-stream")
-    ? filterEvents(text, scope, listing)
-    : filterMessage(text, scope, listing);
+    ? filterEvents(text, scope, listing, profile)
+    : filterMessage(text, scope, listing, profile);
   return HttpBody.text(filtered, body.contentType);
+});
+
+/**
+ * The profile tools/list follows. Clients keep a listing for the session, so a profile that does
+ * not resolve lists every tool: its calls report the refusal, and goat_describe reports it live.
+ */
+const listingProfile = Effect.fnUntraced(function* (
+  permissions: Option.Option<Profiles.PermissionProfiles["Service"]>,
+  scope: McpInvocationContext.McpInvocationScope,
+) {
+  if (Option.isNone(permissions)) return undefined;
+  const profile = yield* callerProfile(permissions.value, scope);
+  if (profile?.resolved !== false) return profile;
+  yield* Effect.logWarning("listing tools without the goatclaw profile: it does not resolve", {
+    reason: profile.reason,
+  });
+  return undefined;
 });
 
 /**
  * Filters tools/list by caller here, around Effect's MCP core: the core guards tools/list and
  * tools/call with one visibility check, so a tool it hid could not be called by name.
  */
-export const withCallerListing = (listing: Effect.Effect<AgentToolListing>) =>
+export const withCallerListing = (
+  listing: Effect.Effect<AgentToolListing>,
+  permissions: Option.Option<Profiles.PermissionProfiles["Service"]>,
+) =>
   /* The auth middleware's span already covers each request. */
   Effect.fnUntraced(function* <E, R>(
     httpEffect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
@@ -126,10 +151,11 @@ export const withCallerListing = (listing: Effect.Effect<AgentToolListing>) =>
     if (!isRecord(call) || call.method !== "tools/list") return yield* httpEffect;
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const mode = yield* listing;
+    const profile = yield* listingProfile(permissions, scope);
     const response = yield* httpEffect;
     return HttpServerResponse.setBody(
       response,
-      yield* filterToolsListBody(response.body, scope, mode),
+      yield* filterToolsListBody(response.body, scope, mode, profile),
     );
   });
 
@@ -150,3 +176,34 @@ export const listingSetting = (
           ),
         ),
       );
+
+/**
+ * The settings changes after which clients should list tools again (MCP list_changed): the
+ * listing setting, or the goatclaw policy, since a thread's listing leaves out what its profile
+ * refuses. A save that changes neither is skipped.
+ */
+export const listingChanges = (
+  settings: Option.Option<Settings.ServerSettingsService["Service"]>,
+) => {
+  if (Option.isNone(settings)) return Stream.empty;
+  const service = settings.value;
+  const policyOf = (current: { readonly goatclaw: unknown }) => JSON.stringify(current.goatclaw);
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      // Changes carry no initial snapshot, so compare against what clients were listed from.
+      let listed = yield* listingSetting(settings);
+      let policy = yield* service.getSettings.pipe(
+        Effect.map(policyOf),
+        Effect.catch(() => Effect.succeed(undefined)),
+      );
+      return service.streamChanges.pipe(
+        Stream.filter((current) => {
+          if (current.agentToolListing === listed && policyOf(current) === policy) return false;
+          listed = current.agentToolListing;
+          policy = policyOf(current);
+          return true;
+        }),
+      );
+    }),
+  );
+};

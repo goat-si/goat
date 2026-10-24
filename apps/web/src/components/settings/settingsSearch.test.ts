@@ -175,6 +175,7 @@ describe("searchSettings", () => {
     ["default model", "default-model", "/settings/general"],
     ["new threads", "new-threads", "/settings/general"],
     ["agent browser access", "agent-browser-access", "/settings/integrations"],
+    ["tool listing", "agent-tool-listing", "/settings/integrations"],
     ["goat bot home", "goat-bot-home", "/settings/goat-bot"],
     ["slack", "slack-connection", "/settings/goat-bot"],
     ["imessage", "imessage-channel", "/settings/goat-bot"],

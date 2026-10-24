@@ -106,6 +106,8 @@ export const OrchestratorMcpFailureReason = Schema.Union([
   ClientRequestReservationReason,
   // A remote task with this id is already launching or launched.
   Schema.Literal("duplicate_task"),
+  // A pending upload's file could not be removed; the caller still owns it.
+  Schema.Literal("attachment_remove_failed"),
 ]);
 export type OrchestratorMcpFailureReason = typeof OrchestratorMcpFailureReason.Type;
 

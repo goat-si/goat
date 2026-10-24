@@ -22,6 +22,7 @@ import {
   ProviderInstanceId,
   implicitDefaultInstance,
   isDevinAcpRegistryInstance,
+  providerSettingsFixPath,
   type ProviderDiagnoseInput,
   type ProviderDiagnoseResult,
   type ProviderDiagnosis,
@@ -104,15 +105,14 @@ const agent = (
 type FixCall = NonNullable<ProviderDiagnosisFix["call"]>;
 
 /**
- * A settings change. `call` is the provider tool that applies it; ProviderDiagnosisRouting hands
- * it to the agent when the caller may manage providers, and otherwise a person approves it.
+ * A settings change. Its call runs directly for a provider manager; others get an approval. With
+ * no call, no GOAT tool makes the change: a person follows the instruction in Settings.
  */
 const settingsChange = (instruction: string, call?: FixCall) =>
-  human(instruction, {
-    path: "provider.setup",
-    handoff: "approval",
-    ...(call === undefined ? {} : { call }),
-  });
+  human(
+    instruction,
+    call === undefined ? {} : { path: providerSettingsFixPath(call), handoff: "approval", call },
+  );
 
 const enableCall = (instanceId: string): FixCall => ({
   tool: "goat_provider_update",

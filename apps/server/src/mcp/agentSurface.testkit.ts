@@ -287,121 +287,130 @@ export interface ListedTool {
   readonly _meta?: Readonly<Record<string, unknown>>;
 }
 
-export const serveOverHttp = Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
-  scopes: Readonly<Record<string, McpInvocationScope>>,
-  registrations: Layer.Layer<never, E, R>,
-) {
-  const scopeOf = new Map(
-    Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
-  );
-  yield* HttpRouter.serve(
-    registrations.pipe(
-      Layer.provideMerge(McpHttpServer.layerMcpTransport),
-      Layer.provide(
-        Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-          resolve: () => Effect.succeed(undefined),
-          explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
-          isRegistryToken: () => false,
-        }),
-      ),
-      Layer.provide(
-        Layer.succeed(McpHttpServer.McpClientAuthenticator, {
-          authenticate: (request) =>
-            Effect.succeed(scopeOf.get(request.headers.authorization ?? "")),
-        }),
-      ),
-    ),
-    { disableListenLog: true, disableLogger: true },
-  ).pipe(Layer.build);
-  const http = yield* HttpClient.HttpClient;
-  const sessions = new Map<string, string>();
-  let nextId = 0;
-  const post = Effect.fn(function* (
-    caller: string,
-    method: string,
-    params: object,
-    /** Rewrites the encoded request, for spellings JSON allows but encoders never produce. */
-    rewrite: (body: string) => string = (body) => body,
+const serveVia = <ET, RT>(
+  transport: Layer.Layer<Layer.Success<typeof McpHttpServer.layerMcpTransport>, ET, RT>,
+) =>
+  Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
+    scopes: Readonly<Record<string, McpInvocationScope>>,
+    registrations: Layer.Layer<never, E, R>,
   ) {
-    const id = ++nextId;
-    const session = sessions.get(caller);
-    const response = yield* http.post("/mcp", {
-      headers: {
-        accept: "application/json, text/event-stream",
-        authorization: `Bearer ${caller}.token`,
-        ...(session === undefined
-          ? {}
-          : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
-      },
-      body: HttpBody.text(
-        rewrite(encodeJson({ jsonrpc: "2.0", id, method, params })),
-        "application/json",
-      ),
-    });
-    const sessionId = response.headers["mcp-session-id"];
-    if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
-    const text = yield* response.text;
-    const lines = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
-    const messages = (lines.length > 0 ? lines.map((line) => line.slice(5)) : [text]).map(
-      (line) => decodeJson(line) as RpcMessage,
+    const scopeOf = new Map(
+      Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
     );
-    return messages.find((message) => message.id === id) ?? { error: text };
-  });
-  const ensureSession = (caller: string) =>
-    sessions.has(caller)
-      ? Effect.void
-      : post(caller, "initialize", {
-          protocolVersion: "2025-06-18",
-          capabilities: {},
-          clientInfo: { name: "agent-surface-http", version: "1" },
-        });
-  const address = (yield* HttpServer.HttpServer).address;
-  return {
-    /** Where /mcp listens, for clients that bring their own HTTP stack, such as the CLI. */
-    endpoint:
-      address._tag === "UnixPathAddress" ? "unix-socket" : `http://127.0.0.1:${address.port}/mcp`,
-    /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
-    callTool: (caller: string, name: string, args: object) =>
-      ensureSession(caller).pipe(
-        Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
-        // A transport failure is a broken harness, never an access outcome.
-        Effect.orDie,
-        Effect.map((message) =>
-          message.result === undefined
-            ? new McpSchema.CallToolResult({
-                isError: true,
-                content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
-              })
-            : decodeCallToolResult(message.result),
+    yield* HttpRouter.serve(
+      registrations.pipe(
+        Layer.provideMerge(transport),
+        Layer.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: () => Effect.succeed(undefined),
+            explainRefusal: () => Effect.succeed({ reason: "unknown" as const }),
+            isRegistryToken: () => false,
+          }),
+        ),
+        Layer.provide(
+          Layer.succeed(McpHttpServer.McpClientAuthenticator, {
+            authenticate: (request) =>
+              Effect.succeed(scopeOf.get(request.headers.authorization ?? "")),
+          }),
         ),
       ),
-    /** Every tool tools/list shows the caller, across pages. */
-    listTools: Effect.fn(function* (caller: string, rewrite?: (body: string) => string) {
-      yield* ensureSession(caller);
-      const tools: Array<ListedTool> = [];
-      let cursor: unknown;
-      do {
-        const page = (yield* post(
-          caller,
-          "tools/list",
-          cursor === undefined ? {} : { cursor },
-          rewrite,
-        )).result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
-        tools.push(...page.tools);
-        cursor = page.nextCursor;
-      } while (cursor !== undefined && cursor !== null);
-      return tools;
-    }),
-    /** The _meta of the caller's first tools/list page. */
-    listResultMeta: Effect.fn(function* (caller: string) {
-      yield* ensureSession(caller);
-      const page = (yield* post(caller, "tools/list", {})).result as {
-        readonly _meta?: Readonly<Record<string, unknown>>;
-      };
-      return page._meta;
-    }),
-  };
-});
+      { disableListenLog: true, disableLogger: true },
+    ).pipe(Layer.build);
+    const http = yield* HttpClient.HttpClient;
+    const sessions = new Map<string, string>();
+    let nextId = 0;
+    const post = Effect.fn(function* (
+      caller: string,
+      method: string,
+      params: object,
+      /** Rewrites the encoded request, for spellings JSON allows but encoders never produce. */
+      rewrite: (body: string) => string = (body) => body,
+    ) {
+      const id = ++nextId;
+      const session = sessions.get(caller);
+      const response = yield* http.post("/mcp", {
+        headers: {
+          accept: "application/json, text/event-stream",
+          authorization: `Bearer ${caller}.token`,
+          ...(session === undefined
+            ? {}
+            : { "mcp-session-id": session, "mcp-protocol-version": "2025-06-18" }),
+        },
+        body: HttpBody.text(
+          rewrite(encodeJson({ jsonrpc: "2.0", id, method, params })),
+          "application/json",
+        ),
+      });
+      const sessionId = response.headers["mcp-session-id"];
+      if (session === undefined && sessionId !== undefined) sessions.set(caller, sessionId);
+      const text = yield* response.text;
+      const lines = text.split(/\r?\n/).filter((line) => line.startsWith("data:"));
+      const messages = (lines.length > 0 ? lines.map((line) => line.slice(5)) : [text]).map(
+        (line) => decodeJson(line) as RpcMessage,
+      );
+      return messages.find((message) => message.id === id) ?? { error: text };
+    });
+    const ensureSession = (caller: string) =>
+      sessions.has(caller)
+        ? Effect.void
+        : post(caller, "initialize", {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "agent-surface-http", version: "1" },
+          });
+    const address = (yield* HttpServer.HttpServer).address;
+    return {
+      /** Where /mcp listens, for clients that bring their own HTTP stack, such as the CLI. */
+      endpoint:
+        address._tag === "UnixPathAddress" ? "unix-socket" : `http://127.0.0.1:${address.port}/mcp`,
+      /** tools/call as the caller; a JSON-RPC error comes back as an error result naming it. */
+      callTool: (caller: string, name: string, args: object) =>
+        ensureSession(caller).pipe(
+          Effect.andThen(post(caller, "tools/call", { name, arguments: args })),
+          // A transport failure is a broken harness, never an access outcome.
+          Effect.orDie,
+          Effect.map((message) =>
+            message.result === undefined
+              ? new McpSchema.CallToolResult({
+                  isError: true,
+                  content: [{ type: "text", text: `rpc error: ${encodeJson(message.error)}` }],
+                })
+              : decodeCallToolResult(message.result),
+          ),
+        ),
+      /** Every tool tools/list shows the caller, across pages. */
+      listTools: Effect.fn(function* (caller: string, rewrite?: (body: string) => string) {
+        yield* ensureSession(caller);
+        const tools: Array<ListedTool> = [];
+        let cursor: unknown;
+        do {
+          const page = (yield* post(
+            caller,
+            "tools/list",
+            cursor === undefined ? {} : { cursor },
+            rewrite,
+          )).result as { tools: ReadonlyArray<ListedTool>; nextCursor?: unknown };
+          tools.push(...page.tools);
+          cursor = page.nextCursor;
+        } while (cursor !== undefined && cursor !== null);
+        return tools;
+      }),
+      /** The _meta of the caller's first tools/list page. */
+      listResultMeta: Effect.fn(function* (caller: string) {
+        yield* ensureSession(caller);
+        const page = (yield* post(caller, "tools/list", {})).result as {
+          readonly _meta?: Readonly<Record<string, unknown>>;
+        };
+        return page._meta;
+      }),
+    };
+  });
+
+export const serveOverHttp = serveVia(McpHttpServer.layerMcpTransport);
+// tools/list follows the caller's goatclaw profile, so this transport reads profiles too.
+const serveOverHttpWithProfiles = serveVia(
+  McpHttpServer.layerMcpTransport.pipe(Layer.provide(Profiles.layer)),
+);
 
 // Settings come from the caller, so a test can change the goatclaw policy.
 const serveWith = <E, R>(
@@ -420,7 +429,10 @@ export const serveCatalogOverHttp = (
   agentToolListing: AgentToolListing = DEFAULT_AGENT_TOOL_LISTING,
 ) => serveWith(scopes, servicesOff).pipe(Effect.provide(settingsListing(agentToolListing)));
 
-/** serveCatalogOverHttp with goatclaw enforcing; see enforcingDependencies for what it needs. */
+/**
+ * serveCatalogOverHttp with goatclaw enforcing, in tools/list as in calls; see
+ * enforcingDependencies for what it needs.
+ */
 export const serveEnforcingCatalogOverHttp = (
   scopes: Readonly<Record<string, McpInvocationScope>>,
-) => serveWith(scopes, enforcingDependencies);
+) => serveOverHttpWithProfiles(scopes, catalog.pipe(Layer.provide(enforcingDependencies)));

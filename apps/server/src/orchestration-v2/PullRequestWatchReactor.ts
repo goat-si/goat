@@ -39,7 +39,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   evaluatePullRequestWatch,
   pullRequestWatchOutcome,
-  withHeldContext,
+  type PullRequestWatchWake,
 } from "./pullRequestWatch.ts";
 import { pullRequestWakeMessageId } from "./goat/PullRequestWatchWakes.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -183,8 +183,8 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
     left.wakes === right.wakes &&
-    left.automatic === right.automatic &&
-    (left.heldContext ?? []).join("\n") === (right.heldContext ?? []).join("\n")
+    // Kept context is merged by the orchestrator; a pass sends only what it kept itself.
+    left.automatic === right.automatic
   );
 }
 
@@ -279,7 +279,7 @@ export const make = Effect.gen(function* () {
   const record = Effect.fn("PullRequestWatchReactor.record")(function* (
     target: WatchTarget,
     next: ThreadPullRequestWatch | null,
-    wake?: { readonly text: string; readonly notification: OrchestrationV2Notification },
+    wake?: PullRequestWatchWake,
     note?: OrchestrationV2Notification,
     endedWatch?: ThreadPullRequestWatch,
     dropQueuedWakes?: true,
@@ -295,7 +295,13 @@ export const make = Effect.gen(function* () {
       ...(endedWatch === undefined ? {} : { endedWatch }),
       ...(wake === undefined
         ? {}
-        : { wake: { ...wake, messageId: pullRequestWakeMessageId(target.link, uuid) } }),
+        : {
+            wake: {
+              text: wake.text,
+              notification: wake.notification,
+              messageId: pullRequestWakeMessageId(target.link, uuid, wake.checksOn),
+            },
+          }),
       ...(note === undefined ? {} : { note }),
       ...(dropQueuedWakes === undefined ? {} : { dropQueuedWakes }),
     });
@@ -303,10 +309,7 @@ export const make = Effect.gen(function* () {
 
   const giveUp = (target: WatchTarget) =>
     record(target, null, {
-      text: withHeldContext(
-        `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
-        target.watch.heldContext,
-      ),
+      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} to watch it again.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
@@ -412,10 +415,7 @@ export const make = Effect.gen(function* () {
       target,
       null,
       {
-        text: withHeldContext(
-          `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
-          target.watch.heldContext,
-        ),
+        text: `Pull request #${target.link.number} (${target.link.url}) was closed, so GOAT stopped watching it. Call ${goatCallText("pull_request.watch")} if it reopens.`,
         notification: {
           source: { kind: "monitor" },
           outcome: "updated",

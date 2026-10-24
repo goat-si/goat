@@ -6,14 +6,19 @@ import {
   ALWAYS_LOAD_META_KEY,
 } from "@goat/contracts/agentSurface/listing";
 import { canonicalToolName, listedToolName } from "@goat/contracts/agentSurface/resolve";
+import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import { NodeHttpServer } from "@effect/platform-node";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { HttpBody } from "effect/http";
 
+import * as Settings from "../serverSettings.ts";
 import { type ListedTool, serveCatalogOverHttp } from "./agentSurface.testkit.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { filterToolsListBody } from "./toolListing.ts";
+import { filterToolsListBody, listingChanges } from "./toolListing.ts";
 
 const entries = Object.values(agentSurfaceRegistry);
 const base = {
@@ -52,6 +57,11 @@ const listed = (filter: (entry: (typeof entries)[number]) => boolean) =>
   entries.filter(filter).map(listedToolName).sort();
 const textOf = (result: { readonly content: ReadonlyArray<unknown> }) =>
   JSON.stringify(result.content);
+/** The message of a refusal, which travels as an encoded OrchestratorMcpFailure. */
+const refusalMessage = (result: { readonly content: ReadonlyArray<unknown> }) => {
+  const [block] = result.content as ReadonlyArray<{ readonly text?: string }>;
+  return (JSON.parse(block?.text ?? "{}") as { readonly message?: string }).message ?? "";
+};
 
 /** What a thread's model sees of the core listing: name, description and input schema. */
 const CORE_LISTING_BUDGET_BYTES = 6 * 1024;
@@ -78,7 +88,7 @@ it.effect(
 );
 
 it.effect(
-  "keeps every tool callable by each of its names when the core listing leaves it out",
+  "keeps every tool callable by each of its names, refusing under the name it is listed by",
   () =>
     Effect.gen(function* () {
       const http = yield* serveCatalogOverHttp(callers, "core");
@@ -86,18 +96,42 @@ it.effect(
         const caller = entry.requires === "client" ? "client" : "thread";
         // The meta tools keep their short names; every other path also answers to goat_<path>.
         const canonical = entry.resource === "surface" ? [] : [canonicalToolName(entry)];
+        // A refusal naming a legacy name would send the agent back to a name no longer listed.
+        const refusal = `${listedToolName(entry)} does not take goat_probe`;
         for (const name of new Set([listedToolName(entry), ...canonical, ...entry.legacyNames])) {
           // An undeclared argument is refused before the handler, so nothing runs.
           const direct = yield* http.callTool(caller, name, { goat_probe: 1 });
-          expect(textOf(direct), name).toContain("does not take goat_probe");
+          expect(textOf(direct), name).toContain(refusal);
           if (entry.resource === "surface") continue;
           const called = yield* http.callTool(caller, "goat_call", {
             path: name,
             args: { goat_probe: 1 },
           });
-          expect(textOf(called), name).toContain("does not take goat_probe");
+          expect(textOf(called), name).toContain(refusal);
         }
       }
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "refuses goat_call's argument wrapper on a direct call and says where its fields go",
+  () =>
+    Effect.gen(function* () {
+      const http = yield* serveCatalogOverHttp(callers, "core");
+      const refused = (name: string, args: object) =>
+        http.callTool("thread", name, args).pipe(Effect.map(refusalMessage));
+      for (const name of ["goat_provider_list", "orchestrator_capabilities"])
+        for (const key of ["args", "arguments"])
+          expect(yield* refused(name, { [key]: { search: "claude" } }), `${name} ${key}`).toBe(
+            `goat_provider_list does not take ${key}, so nothing ran. It takes search. ` +
+              `${key} wraps arguments only for goat_call {path: "provider.list", args: {...}}; ` +
+              "call goat_provider_list with its fields at the top level instead.",
+          );
+      // Only an object wrapper by itself is goat_call's shape; anything else is a plain unknown field.
+      for (const args of [{ args: "claude" }, { args: { search: "claude" }, bogus: 1 }])
+        expect(yield* refused("goat_provider_list", args), JSON.stringify(args)).not.toContain(
+          "goat_call",
+        );
     }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
 );
 
@@ -185,4 +219,33 @@ it.effect("filters a tools/list whose method JSON spells with unicode escapes", 
       listed((entry) => "listing" in entry && entry.listing === "core"),
     );
   }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
+);
+
+it.effect(
+  "asks clients to list tools again when the goatclaw policy changes, not on every save",
+  () =>
+    Effect.gen(function* () {
+      const changes = yield* Queue.unbounded<typeof DEFAULT_SERVER_SETTINGS>();
+      const settings = yield* Settings.ServerSettingsService.pipe(
+        Effect.provide(
+          Layer.mock(Settings.ServerSettingsService)({
+            getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+            streamChanges: Stream.fromQueue(changes),
+          }),
+        ),
+      );
+      const goatclaw = DEFAULT_SERVER_SETTINGS.goatclaw;
+      const unchanged = { ...DEFAULT_SERVER_SETTINGS };
+      const policy = {
+        ...DEFAULT_SERVER_SETTINGS,
+        goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
+      };
+      const listing = { ...policy, agentToolListing: "core" as const };
+      yield* Queue.offerAll(changes, [unchanged, policy, listing]);
+      const relisted = yield* listingChanges(Option.some(settings)).pipe(
+        Stream.take(2),
+        Stream.runCollect,
+      );
+      expect(relisted).toEqual([policy, listing]);
+    }),
 );

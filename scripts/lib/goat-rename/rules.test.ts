@@ -84,6 +84,40 @@ describe("env names", () => {
       "T3CODE_NO_BROWSER",
     );
   });
+
+  it("keeps the legacy ACP MCP aliases that Codex thread-config tests pin (#1059)", () => {
+    const aliasLines = [
+      '"shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",',
+      '"shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION",',
+    ];
+    for (const path of [
+      "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+      "apps/server/src/orchestration-v2/Adapters/CodexReplay.testkit.ts",
+      "packages/effect-codex-app-server/src/replay.test.ts",
+    ]) {
+      for (const line of aliasLines) {
+        expect(applyTextRules(path, line, TEXT_RULES, KEEP_RULES).text).toBe(line);
+        expect(
+          findResidue(
+            path,
+            line,
+            KEEP_RULES.filter((rule) => rule.holdsOnApply),
+          ),
+        ).toEqual([]);
+      }
+      expect(applyTextRules(path, "env.T3_ACP_MCP_ENDPOINT", TEXT_RULES, KEEP_RULES).text).toBe(
+        "env.GOAT_ACP_MCP_ENDPOINT",
+      );
+    }
+    expect(
+      applyTextRules(
+        "packages/provider-acp/src/server/adapter.ts",
+        aliasLines[0]!,
+        TEXT_RULES,
+        KEEP_RULES,
+      ).text,
+    ).toBe('"shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": "http://127.0.0.1:43123/mcp",');
+  });
 });
 
 describe("fixtures", () => {
