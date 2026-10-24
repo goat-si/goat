@@ -421,4 +421,47 @@ describe("LinuxHelperHost (#1223)", () => {
         assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "a teardown clear that arrives after its request timed out is no proof, even once a new watch is asked for (#1494 r6)",
+    () =>
+      Effect.gen(function* () {
+        let watchId = "";
+        let watches = 0;
+        const target = { pid: 7, windowId: 70 };
+        const t = yield* hostWith([target], {
+          onRequest: (request) => {
+            if (request.method === "watch" && ++watches === 1)
+              watchId = (request.params as { watchId: string }).watchId;
+          },
+          // The unwatch and the second watch go unanswered; the third is answered.
+          answers: (request) =>
+            request.method === "unwatch" ? false : request.method !== "watch" || watches !== 2,
+          afterAnswer: initialStates,
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        const helper = t.spawned[0]?.helper;
+        helper?.event(watchId, { type: "privateMode", active: true, target });
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+        yield* t.host.setWatch(false);
+        yield* t.nextRequest("unwatch");
+        t.expire();
+        // The helper carries out the unwatch late: its clear under the first watch arrives.
+        helper?.event(watchId, { type: "privateMode", active: false, target });
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+        yield* t.host.setWatch(true);
+        yield* t.nextRequest("watch");
+        t.expire();
+        helper?.event(watchId, { type: "privateMode", active: false, target });
+        assert.strictEqual(yield* Queue.size(t.safety), 0);
+        // A watch that is answered looks at the field again: clear now.
+        yield* TestClock.adjust(TICK_MS);
+        yield* t.nextRequest("watch");
+        assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
+      }).pipe(Effect.scoped),
+  );
 });

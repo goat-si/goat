@@ -150,11 +150,12 @@ interface Running {
   readinessAt: number;
   watched: string;
   /**
-   * The windows the watch being asked for keeps, until its answer (empty for unwatch). The
-   * helper clears every other target it drops before answering; that only ends the watch on
-   * it, and is no sign the secret is gone.
+   * Set while a watch or unwatch is unconfirmed: the windows every unconfirmed request keeps
+   * (none for unwatch). A helper clears each target it drops before answering, which only ends
+   * the watch on it, so a clear for any other window proves nothing. A request that timed out
+   * may still be carried out later, so only a confirmed answer, read as it arrives, lifts this.
    */
-  changing: ReadonlySet<string> | undefined;
+  guard: ReadonlySet<string> | undefined;
   /** The process exited on its own. */
   ended: boolean;
   /** The host let it go: stopped, its reports withdrawn. */
@@ -205,8 +206,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
         publish({ version: 1, type: "cuaPrivateMode", active: true, target: event.target });
       // This launch holds it now; an earlier one's hold on the same window is superseded.
       release((held, at) => held !== launch && at === window);
-    } else if (!current.changing || current.changing.has(window))
-      release((_held, at) => at === window);
+    } else if (!current.guard || current.guard.has(window)) release((_held, at) => at === window);
   };
 
   /** An accepted view of the whole screen releases holds on windows no longer on it. */
@@ -258,7 +258,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       watched: "",
       ended: false,
       retired: false,
-      changing: undefined,
+      guard: undefined,
     };
     current = entry;
     process.onLine(client.line);
@@ -318,10 +318,18 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (readiness._tag === "Some") failures = 0;
   });
 
+  /** Narrows the guard to the windows this request keeps as well. */
+  const guardFor = (entry: Running, keeps: ReadonlySet<string>) => {
+    const before = entry.guard;
+    entry.guard = before ? new Set([...keeps].filter((window) => before.has(window))) : keeps;
+  };
+  const confirmed = (entry: Running) => () => {
+    entry.guard = undefined;
+  };
+
   const unwatch = (entry: Running) =>
-    Effect.sync(() => (entry.changing = new Set())).pipe(
-      Effect.andThen(Effect.promise(() => entry.client.unwatch(WATCH_MS))),
-      Effect.ensuring(Effect.sync(() => (entry.changing = undefined))),
+    Effect.sync(() => guardFor(entry, new Set())).pipe(
+      Effect.andThen(Effect.promise(() => entry.client.unwatch(WATCH_MS, confirmed(entry)))),
     );
 
   /** Watches every window on screen while agents control the host; nothing otherwise. */
@@ -351,9 +359,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     }
     // A watch that was refused or not answered in time leaves the helper's watch unknown, so
     // the next tick asks again rather than trusting the windows it last watched.
-    entry.changing = new Set(targets.map(windowKey));
-    const accepted = yield* Effect.promise(() => entry.client.watch(targets, WATCH_MS)).pipe(
-      Effect.ensuring(Effect.sync(() => (entry.changing = undefined))),
+    guardFor(entry, new Set(targets.map(windowKey)));
+    const accepted = yield* Effect.promise(() =>
+      entry.client.watch(targets, WATCH_MS, confirmed(entry)),
     );
     entry.watched = accepted ? key : "";
     if (accepted) observed(entry.launch, targets);

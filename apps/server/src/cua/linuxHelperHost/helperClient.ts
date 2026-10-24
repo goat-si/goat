@@ -66,7 +66,13 @@ export function makeHelperClient(options: HelperClientOptions) {
    * which watch is in force: the helper may have taken it after the client stopped waiting, and
    * its events would otherwise go unheard.
    */
-  let latestWatch: { readonly requestId: string; readonly watchId: string } | undefined;
+  let latestWatch:
+    | {
+        readonly requestId: string;
+        readonly watchId: string;
+        readonly onAccepted: (() => void) | undefined;
+      }
+    | undefined;
   const helloWaiter = Promise.withResolvers<HelperHello>();
   // A client closed before anyone awaits its hello must not raise an unhandled rejection.
   helloWaiter.promise.catch(() => undefined);
@@ -131,7 +137,10 @@ export function makeHelperClient(options: HelperClientOptions) {
         frameBytes <= hello.maxFrameBytes
       ) {
         latestWatch = undefined;
-        if (acceptsWatch(reply.value.result, late.watchId)) watchId = late.watchId;
+        if (acceptsWatch(reply.value.result, late.watchId)) {
+          watchId = late.watchId;
+          late.onAccepted?.();
+        }
         return;
       }
       const verdict = admitComputerUseReply({
@@ -194,7 +203,12 @@ export function makeHelperClient(options: HelperClientOptions) {
      * after it: until then events of the old one (its clearing active:false among them) count,
      * and from then the new one's initial states, which can follow in the same chunk.
      */
-    watch: async (targets: ReadonlyArray<ComputerUseWindowTarget>, deadlineMs: number) => {
+    /** onAccepted runs as the helper's acceptance is read, before any event after it. */
+    watch: async (
+      targets: ReadonlyArray<ComputerUseWindowTarget>,
+      deadlineMs: number,
+      onAccepted?: () => void,
+    ) => {
       const next = options.newId();
       const result = await request(
         "watch",
@@ -202,21 +216,26 @@ export function makeHelperClient(options: HelperClientOptions) {
         deadlineMs,
         (answer) => {
           latestWatch = undefined;
-          if (acceptsWatch(answer, next)) watchId = next;
+          if (acceptsWatch(answer, next)) {
+            watchId = next;
+            onAccepted?.();
+          }
         },
         (requestId) => {
-          latestWatch = { requestId, watchId: next };
+          latestWatch = { requestId, watchId: next, onAccepted };
         },
       );
       return acceptsWatch(result, next);
     },
-    unwatch: async (deadlineMs: number) => {
+    unwatch: async (deadlineMs: number, onAcknowledged?: () => void) => {
       // A refused unwatch leaves the helper watching: its events, clearing ones among them,
       // still count until an unwatch is acknowledged.
       const acknowledged = (result: unknown) =>
         typeof result === "object" && result !== null && !("outcome" in result);
       const result = await request("unwatch", {}, deadlineMs, (answer) => {
-        if (acknowledged(answer)) watchId = undefined;
+        if (!acknowledged(answer)) return;
+        watchId = undefined;
+        onAcknowledged?.();
       });
       return acknowledged(result);
     },
