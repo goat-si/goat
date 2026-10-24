@@ -19,14 +19,14 @@ The \`cua-driver\` tools operate the computer the person is using right now. Use
 Work in one app and one window at a time. Capture that window, not the whole desktop, unless the task needs more.
 
 ## Targeting
-Prefer element actions and setting a field's value through the accessibility tree; they are exact and cheap. Use screenshot coordinates only when the tree lacks or mislabels the control, and only from the latest screenshot. Element indexes belong to the window state that issued them: after a refusal such as \`stale_element_token\`, \`stale_geometry\` or \`window_id_not_found\`, read the window state again and pick the element anew.
+Prefer element actions and setting a field's value through the accessibility tree. Use screenshot coordinates only when the tree lacks or mislabels the control, and only from the latest screenshot. Element indexes belong to the window state that issued them; after a stale or missing target, read the window state again and pick anew.
 
 ## Results
 Read each action result's \`effect\` field.
 - \`confirmed\`: continue.
 - \`suspected_noop\`, \`no_drop\` or \`not_applied\`: nothing changed. Observe and decide; do not repeat the action blindly.
-- \`partial\`, an error after input may have been sent, or no clear effect: the input may have landed. Observe before anything else and never resend it unchanged; a repeated keystroke can send a message twice.
-- A refusal (\`effect\` \`refused\`, or an error with a \`code\`) means nothing was sent. Fix its cause, such as a stale element or a hidden window, instead of repeating the same call.
+- Nothing was sent only when \`effect\` is \`refused\` or the error \`code\` is one checked before input leaves: \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\`, \`background_unavailable\`, \`permission_denied\`. Fix that cause instead of repeating the call.
+- \`partial\`, any other error (such as \`delivery_failed\`), or no clear effect: the input may have landed. Observe first and never resend it unchanged; a repeated keystroke can send a message twice.
 - When the person says stop, takes over the computer, the computer use session ends, or the tools stop answering, stop: end the computer use part of the task and say so. Never route around a stop with other tools, and never replay earlier steps afterwards; observe first if you are asked to continue.
 
 ## Input
