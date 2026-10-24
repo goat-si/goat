@@ -16,6 +16,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { AgentScreenCard } from "./AgentScreenCard";
 import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
+import { useDocumentVisible } from "./PreviewSessionThumbnail";
 import {
   matchesFocus,
   selectAgentCardsShown,
@@ -81,6 +82,7 @@ export function PreviewSessionStack(props: {
   const focus = usePreviewSessionStack((state) => state.focus);
   const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const probe = useRef<HTMLDivElement>(null);
+  const documentVisible = useDocumentVisible();
   // Browser tabs whose large view should take control once its stream connects.
   const [takeOver, setTakeOver] = useState<ReadonlySet<string>>(() => new Set());
   const layout = useAgentCardsPlacement(
@@ -91,6 +93,7 @@ export function PreviewSessionStack(props: {
       detailsOpen === true,
     ].join("|"),
     props.environmentId !== null && sessions.length > 0 && !panelOpen,
+    shown && documentVisible,
   );
   const focusedId =
     focus === null ? null : (sessions.find((session) => matchesFocus(session, focus))?.id ?? null);

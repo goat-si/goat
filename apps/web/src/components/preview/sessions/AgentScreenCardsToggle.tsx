@@ -6,7 +6,7 @@ import { Toggle } from "~/components/ui/toggle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useThreadRouteTarget } from "~/hooks/useThreadRouteTarget";
 import { usePrimaryEnvironmentId } from "~/state/environments";
-import { previewSessionsEnvironment } from "~/state/previewSessions";
+import { previewSessionsEnvironment, usePreviewSessions } from "~/state/previewSessions";
 
 import { selectAgentCardsShown, usePreviewSessionStack } from "./previewSessionStackStore";
 import { useAgentScreenSessions, useStopAllAgents } from "./useAgentScreenCards";
@@ -23,12 +23,15 @@ export function AgentScreenCardsToggle() {
   const threadRef = threadTarget?.kind === "server" ? threadTarget.threadRef : null;
   const environmentId = threadRef?.environmentId ?? primaryEnvironmentId;
   const sessions = useAgentScreenSessions(environmentId, threadRef);
+  // Stop all reaches every agent on the host, including a tab shown in the mini player instead of a card.
+  const stoppable = usePreviewSessions(environmentId).some((session) =>
+    session.capabilities.controls.includes("stop"),
+  );
   const shown = usePreviewSessionStack(selectAgentCardsShown);
   const setShown = usePreviewSessionStack((state) => state.setShown);
   const stopAll = useStopAllAgents(environmentId);
   const canControl = useAtomValue(previewSessionsEnvironment.control.permissionAtom(environmentId));
-  if (sessions.length === 0) return null;
-  const stoppable = sessions.some((session) => session.capabilities.controls.includes("stop"));
+  if (sessions.length === 0 && !stoppable) return null;
   return (
     <>
       {stoppable ? (
@@ -50,23 +53,25 @@ export function AgentScreenCardsToggle() {
           <TooltipPopup side="bottom">Stops every agent using the screen now</TooltipPopup>
         </Tooltip>
       ) : null}
-      <Tooltip>
-        <TooltipTrigger render={<span className="flex shrink-0" />}>
-          <Toggle
-            className="shrink-0 [-webkit-app-region:no-drag]"
-            pressed={shown}
-            onPressedChange={setShown}
-            aria-label="Agents on screen"
-            variant="ghost"
-            size="sm"
-          >
-            <ListIcon className="size-4" />
-          </Toggle>
-        </TooltipTrigger>
-        <TooltipPopup side="bottom">
-          {shown ? "Hide agents on screen" : "Show agents on screen"}
-        </TooltipPopup>
-      </Tooltip>
+      {sessions.length === 0 ? null : (
+        <Tooltip>
+          <TooltipTrigger render={<span className="flex shrink-0" />}>
+            <Toggle
+              className="shrink-0 [-webkit-app-region:no-drag]"
+              pressed={shown}
+              onPressedChange={setShown}
+              aria-label="Agents on screen"
+              variant="ghost"
+              size="sm"
+            >
+              <ListIcon className="size-4" />
+            </Toggle>
+          </TooltipTrigger>
+          <TooltipPopup side="bottom">
+            {shown ? "Hide agents on screen" : "Show agents on screen"}
+          </TooltipPopup>
+        </Tooltip>
+      )}
     </>
   );
 }

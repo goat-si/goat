@@ -34,6 +34,7 @@ const state = vi.hoisted(() => ({
         } | null,
       ) => void),
   surfaceCalls: [] as Array<string>,
+  routeThread: null as string | null,
 }));
 
 vi.mock("../../../state/previewSessions", async () => {
@@ -70,6 +71,15 @@ vi.mock("../../../state/entities", () => ({
     ref === null ? null : { title: `Thread ${ref.threadId}` },
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
+vi.mock("../../../hooks/useThreadRouteTarget", () => ({
+  useThreadRouteTarget: () =>
+    state.routeThread === null
+      ? null
+      : {
+          kind: "server",
+          threadRef: { environmentId: state.environmentId, threadId: state.routeThread },
+        },
+}));
 // The stream needs a server; this stub stands in at the card's level (the real surface is
 // exercised in AgentScreenCard.surface.browser.test.tsx).
 vi.mock("../../../browser/ServerBrowserSurface", async () => {
@@ -96,6 +106,7 @@ import { AgentScreenCardView } from "./AgentScreenCard";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
+import { usePreviewMiniPlayerStore } from "../../../previewMiniPlayerStore";
 
 const environmentId = "env-cards" as EnvironmentId;
 const HIDDEN_KEY = "goat:agent-screen-cards:hidden";
@@ -163,6 +174,8 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
   state.frameRequests = [];
   state.surfaceControl = null;
   state.surfaceCalls = [];
+  state.routeThread = null;
+  usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   window.sessionStorage.removeItem(HIDDEN_KEY);
   usePreviewSessionStack.setState({
     hidden: false,
@@ -191,7 +204,14 @@ function Cards() {
   return (
     <>
       <AgentScreenCardsToggle />
-      <PreviewSessionStack environmentId={environmentId} threadRef={null} />
+      <PreviewSessionStack
+        environmentId={environmentId}
+        threadRef={
+          state.routeThread === null
+            ? null
+            : { environmentId, threadId: ThreadId.make(state.routeThread) }
+        }
+      />
     </>
   );
 }
@@ -330,6 +350,28 @@ it("stops every agent from the header with the cards hidden, and says when a sto
   );
 });
 
+it("keeps the header's Stop all while the only agent tab plays in the thread's mini player", async () => {
+  setup([browserTab()]);
+  state.routeThread = "thread-1";
+  usePreviewMiniPlayerStore
+    .getState()
+    .open(
+      { environmentId, threadId: ThreadId.make("thread-1") },
+      { kind: "browser", tabId: "tab-1" },
+    );
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  await expect
+    .element(screen.getByRole("button", { name: "Stop all agents on screen" }))
+    .toBeVisible();
+  // The mini player already shows the tab, so it gets no card and no list button.
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("button", { name: "Agents on screen" }))
+    .not.toBeInTheDocument();
+});
+
 it("shows the corner controls on hover and on keyboard focus, and Stop stops the session", async () => {
   setup([]);
   const card = cardView(desktopApp());
@@ -390,6 +432,18 @@ it("reveals the controls with a first tap on touch screens instead of enlarging"
     ),
   );
   await fadedControl(screen.getByRole("button", { name: "Stop" }));
+});
+
+it("reveals the large view's controls with a tap on touch screens", async () => {
+  setup([]);
+  await using screen = await render(cardView(browserTab(), { size: "large" }).element);
+  const shrink = screen.getByRole("button", { name: "Shrink to a card" });
+  await fadedControl(shrink);
+  const picture = screen.getByTestId("session-frame").element();
+  await act(() =>
+    picture.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })),
+  );
+  await shownControl(shrink);
 });
 
 it("enlarges in place, keeps the picture 16:10 as the pane resizes, and shrinks back", async () => {

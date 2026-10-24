@@ -170,7 +170,9 @@ export function PreviewSessionThumbnail(props: {
   const stopped = session.status === "stopped";
   // The large browser view may be the controller itself, typing a secret: it keeps its stream,
   // which sends a private page only to its controller. A card is never the controller.
-  const interactive = large && session.target.kind === "browser" && !stopped;
+  // A person still holding a stopped tab keeps it: dropping the stream would release their control.
+  const interactive =
+    large && session.target.kind === "browser" && (!stopped || session.owner !== "agent");
   if (!interactive && session.owner === "private")
     return <Placeholder icon="lock" text="Private" />;
   // A person who took over is working in their own view; a card does not watch them.
@@ -187,7 +189,7 @@ export function PreviewSessionThumbnail(props: {
         tabId={session.target.tabId}
         threadId={session.threadId}
         live={props.live}
-        stopped={stopped}
+        stopped={stopped && !interactive}
         large={large}
         surfaceRef={props.surfaceRef}
         onStreamControl={props.onStreamControl}

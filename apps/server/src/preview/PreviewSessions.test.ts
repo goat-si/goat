@@ -149,6 +149,18 @@ describe("preview sessions", () => {
     });
   });
 
+  it("shows a stopped agent as stopped while a person holds the tab or types a secret in it", () => {
+    for (const held of [{ humanControls: true }, { private: true }]) {
+      const session = browserSession(base, { ...tab, ...held, agentStopped: true })!;
+      // Stop all after a takeover must still leave a card that says stopped and can close.
+      expect(session.status).toBe("stopped");
+      expect(session.capabilities.controls).toEqual(["handBack", "stopAll"]);
+    }
+    expect(browserSession(base, { ...tab, private: true, agentStopped: true })!.owner).toBe(
+      "private",
+    );
+  });
+
   effectIt.effect("stops every agent without waiting on a page that never answers", () => {
     const stopped: Array<string> = [];
     const layer = PreviewSessions.layer.pipe(

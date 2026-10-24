@@ -235,9 +235,10 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   };
 
   const reveal = (event: ReactPointerEvent) => {
-    if (large || event.pointerType === "mouse" || shown) return;
+    if (event.pointerType === "mouse" || shown) return;
     setRevealed(true);
-    swallowClick.current = true;
+    // The large view's taps go to the page; a card's first tap only reveals.
+    if (!large) swallowClick.current = true;
   };
   const expand = () => {
     if (swallowClick.current) {

@@ -76,8 +76,12 @@ export const browserSession = (
   tab: ServerBrowserSessionView,
 ): PreviewSession | undefined => {
   if (tab.agentId === null) return undefined;
-  const status =
-    tab.private || tab.humanControls ? "paused" : tab.agentStopped ? "stopped" : "acting";
+  // A stopped agent stays stopped while a person holds the tab or types a secret in it.
+  const status = tab.agentStopped
+    ? "stopped"
+    : tab.private || tab.humanControls
+      ? "paused"
+      : "acting";
   const controls: ReadonlyArray<PreviewSessionControl> = tab.agentStopped
     ? ["handBack", "stopAll"]
     : tab.humanControls

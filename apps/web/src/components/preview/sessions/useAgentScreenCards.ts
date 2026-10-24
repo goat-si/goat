@@ -134,13 +134,15 @@ const sameLayout = (a: AgentScreenLayout | null, b: AgentScreenLayout) =>
 /**
  * Measures the thread pane under `[data-chat-header]` and the conversation width that `probe`
  * resolves from `--chat-content-max-width`, and records whether the pane is too narrow for
- * cards. It runs only while there are cards (`active`). `layoutKey` names a change that moves
- * what floats beside the cards without resizing anything, such as the details panel opening.
+ * cards. It runs only while there are cards (`active`), and watches elements mounting only
+ * while they are on screen (`watchMounts`). `layoutKey` names a change that moves what floats
+ * beside the cards without resizing anything, such as the details panel opening.
  */
 export function useAgentCardsPlacement(
   probe: RefObject<HTMLElement | null>,
   layoutKey: string,
   active: boolean,
+  watchMounts: boolean,
 ): AgentScreenLayout | null {
   const setNarrow = usePreviewSessionStack((state) => state.setNarrow);
   const [layout, setLayout] = useState<AgentScreenLayout | null>(null);
@@ -200,7 +202,7 @@ export function useAgentCardsPlacement(
         measure();
       });
     });
-    tree.observe(document.body, { childList: true, subtree: true });
+    if (watchMounts) tree.observe(document.body, { childList: true, subtree: true });
     watch();
     measure();
     window.addEventListener("resize", measure);
@@ -212,6 +214,7 @@ export function useAgentCardsPlacement(
     };
   }, [
     active,
+    watchMounts,
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- A new layoutKey moves what floats beside the cards without resizing anything, so it measures again.
     layoutKey,
     probe,

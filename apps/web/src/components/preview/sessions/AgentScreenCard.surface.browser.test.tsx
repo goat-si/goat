@@ -71,6 +71,7 @@ function setup(agentDriven = false) {
   state.events = null;
   state.sent = [];
   state.agentDriven = agentDriven;
+  state.created = 0;
 }
 
 /** A real 16:10 JPEG, so the painter decodes and paints it like a streamed frame. */
