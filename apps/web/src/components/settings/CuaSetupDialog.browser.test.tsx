@@ -1,7 +1,7 @@
 import type { CuaHostStatus, DesktopCuaGrants, DesktopCuaVerification } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 import { CuaSetupDialog } from "./CuaSetupDialog";
 import type { CuaPermission } from "./CuaSetupDialog.logic";
 
@@ -253,17 +253,14 @@ it("explains a remote Wayland host's needs and turns on without macOS checks", a
 
 it("stops asking a broken helper on a timer and asks again when GOAT regains focus", async () => {
   const message = "GOAT Computer Use cannot be used: protocol mismatch.";
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  try {
-    const f = fixture({ unusable: message });
-    await using _screen = await dialog(f);
-    await vi.waitFor(() => expect(text()).toContain(message));
-    const calls = f.onCheck.mock.calls.length;
-    await act(() => vi.advanceTimersByTime(6000));
-    expect(f.onCheck).toHaveBeenCalledTimes(calls);
-    await refocus();
-    expect(f.onCheck).toHaveBeenCalledTimes(calls + 1);
-  } finally {
-    vi.useRealTimers();
-  }
+  // The polling interval starts with the first render, so the clock is fake before it.
+  using _timers = fakeTimers();
+  const f = fixture({ unusable: message });
+  await using _screen = await dialog(f);
+  await vi.waitFor(() => expect(text()).toContain(message));
+  const calls = f.onCheck.mock.calls.length;
+  await act(() => vi.advanceTimersByTime(6000));
+  expect(f.onCheck).toHaveBeenCalledTimes(calls);
+  await refocus();
+  expect(f.onCheck).toHaveBeenCalledTimes(calls + 1);
 });
