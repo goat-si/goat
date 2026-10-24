@@ -41,6 +41,8 @@ vi.mock("../../state/server", () => ({
     repairHubDevice: { label: "hub:repair", run: state.repair, permissionAtom: state.permission },
   },
 }));
+// Sync OpenCodex has its own dialog; these tests cover the hub's device rows.
+vi.mock("../opencodex/OpenCodexSyncDialog", () => ({ OpenCodexSyncButton: () => null }));
 vi.mock("~/hooks/useSettings", async () => {
   const { useAtomValue } = await import("@effect/atom-react");
   return {

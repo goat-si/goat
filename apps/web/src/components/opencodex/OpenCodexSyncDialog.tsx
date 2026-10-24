@@ -3,7 +3,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OpenCodexSyncReport } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { serverEnvironment } from "~/state/server";
@@ -33,57 +33,13 @@ const TONE_TEXT: Record<SyncTone, string> = {
 const failureText = (failure: unknown, fallback: string) =>
   failure instanceof Error ? failure.message : fallback;
 
-/**
- * Opens the Sync OpenCodex dialog for an environment. `homeLabel` names that environment's own
- * row, since its alias is null there.
- */
-export function OpenCodexSyncButton({
-  environmentId,
-  homeLabel,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly homeLabel: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const allowed = useAtomValue(serverEnvironment.syncOpenCodex.permissionAtom(environmentId));
-  return (
-    <>
-      <Button
-        size="xs"
-        variant="outline"
-        disabled={!allowed}
-        title={allowed ? undefined : "Syncing needs permission to maintain this server."}
-        onClick={() => setOpen(true)}
-      >
-        Sync OpenCodex
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogPopup className="max-w-lg">
-          {open ? <SyncPanel environmentId={environmentId} homeLabel={homeLabel} /> : null}
-        </DialogPopup>
-      </Dialog>
-    </>
-  );
-}
-
-function SyncPanel({
-  environmentId,
-  homeLabel,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly homeLabel: string;
-}) {
-  const allowed = useAtomValue(serverEnvironment.syncOpenCodex.permissionAtom(environmentId));
-  const live = Option.getOrNull(
-    AsyncResult.value(
-      useAtomValue(serverEnvironment.openCodexSyncLive({ environmentId, input: {} })),
-    ),
-  );
+/** The plan, the run and its result for one environment, read when the dialog opens. */
+function useOpenCodexSync(environmentId: EnvironmentId) {
   const readPlan = useAtomCommand(serverEnvironment.planOpenCodexSync, { reportFailure: false });
   const runSync = useAtomCommand(serverEnvironment.syncOpenCodex, { reportFailure: false });
   const [plan, setPlan] = useState<OpenCodexSyncReport | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
-  const [reading, setReading] = useState(true);
+  const [reading, setReading] = useState(false);
   // undefined until Sync is pressed; then the live report's time at that moment.
   const [before, setBefore] = useState<number | null | undefined>(undefined);
   const [running, setRunning] = useState(false);
@@ -103,14 +59,14 @@ function SyncPanel({
     }
     setReading(false);
   };
-  useEffect(() => {
+  const open = () => {
+    setBefore(undefined);
+    setResult(null);
+    setRunError(null);
     void refreshPlan();
-    // Read once per opening; Sync reads it again after each run.
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const start = async () => {
-    setBefore(live?.checkedAt ?? null);
+  };
+  const start = async (liveAt: number | null) => {
+    setBefore(liveAt);
     setResult(null);
     setRunError(null);
     setRunning(true);
@@ -121,9 +77,77 @@ function SyncPanel({
     setRunning(false);
     await refreshPlan();
   };
+  return { plan, planError, reading, before, running, result, runError, open, start };
+}
 
-  const report = shownReport({ plan, live, result, before });
-  const action = syncAction({ allowed, reading, running, planError, plan });
+/**
+ * Opens the Sync OpenCodex dialog for an environment. `homeLabel` names that environment's own
+ * row, since its alias is null there.
+ */
+export function OpenCodexSyncButton({
+  environmentId,
+  homeLabel,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly homeLabel: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const allowed = useAtomValue(serverEnvironment.syncOpenCodex.permissionAtom(environmentId));
+  const sync = useOpenCodexSync(environmentId);
+  return (
+    <>
+      <Button
+        size="xs"
+        variant="outline"
+        disabled={!allowed}
+        title={allowed ? undefined : "Syncing needs permission to maintain this server."}
+        onClick={() => {
+          setOpen(true);
+          sync.open();
+        }}
+      >
+        Sync OpenCodex
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogPopup className="max-w-lg">
+          {open ? (
+            <SyncPanel
+              environmentId={environmentId}
+              homeLabel={homeLabel}
+              allowed={allowed}
+              sync={sync}
+            />
+          ) : null}
+        </DialogPopup>
+      </Dialog>
+    </>
+  );
+}
+
+function SyncPanel({
+  environmentId,
+  homeLabel,
+  allowed,
+  sync,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly homeLabel: string;
+  readonly allowed: boolean;
+  readonly sync: ReturnType<typeof useOpenCodexSync>;
+}) {
+  const live = Option.getOrNull(
+    AsyncResult.value(
+      useAtomValue(serverEnvironment.openCodexSyncLive({ environmentId, input: {} })),
+    ),
+  );
+  const report = shownReport({ plan: sync.plan, live, result: sync.result, before: sync.before });
+  const action = syncAction({
+    allowed,
+    reading: sync.reading,
+    running: sync.running,
+    planError: sync.planError,
+    plan: sync.plan,
+  });
   return (
     <>
       <DialogHeader>
@@ -136,7 +160,7 @@ function SyncPanel({
       <DialogPanel>
         {report === null ? (
           <p className="text-muted-foreground text-sm">
-            {planError ?? (reading ? "Checking each machine…" : "No machines to sync.")}
+            {sync.planError ?? (sync.reading ? "Checking each machine…" : "No machines to sync.")}
           </p>
         ) : (
           <ul aria-label="Machines" className="divide-y divide-border">
@@ -153,9 +177,9 @@ function SyncPanel({
             })}
           </ul>
         )}
-        {runError === null ? null : (
+        {sync.runError === null ? null : (
           <p role="alert" className="mt-2 text-destructive-foreground text-xs">
-            {runError}
+            {sync.runError}
           </p>
         )}
       </DialogPanel>
@@ -166,7 +190,7 @@ function SyncPanel({
           </p>
         )}
         <DialogClose render={<Button variant="outline" />}>Close</DialogClose>
-        <Button disabled={!action.enabled} onClick={() => void start()}>
+        <Button disabled={!action.enabled} onClick={() => void sync.start(live?.checkedAt ?? null)}>
           Sync
         </Button>
       </DialogFooter>

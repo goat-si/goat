@@ -20,7 +20,7 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   "timed-out": "timed out",
 };
 
-export function syncReasonText(reason: string | undefined): string {
+function syncReasonText(reason: string | undefined): string {
   if (reason === undefined) return "no reason given";
   const exit = /^exit-(\d+)$/u.exec(reason);
   return exit ? `ocx sync exited ${exit[1]}` : (REASON_TEXT[reason] ?? reason);
