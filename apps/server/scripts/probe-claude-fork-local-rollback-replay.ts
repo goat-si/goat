@@ -19,6 +19,11 @@ import {
 } from "../src/orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
 import { makeCheckpointWorkspace } from "@goat/provider-testing/replayWorkspace";
+import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
+
+// Started from a git hook, this run inherits GIT_DIR, which would point git in its fixture
+// workspace, and in every server or provider child it starts, at the developer's checkout (#1114).
+removeInheritedGitEnv(process.env);
 
 const SCENARIO = "thread_fork_native_fork_local_rollback";
 const DEFAULT_OUTPUT = new URL(

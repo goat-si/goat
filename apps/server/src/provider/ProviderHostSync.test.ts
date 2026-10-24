@@ -5,13 +5,17 @@ import {
   ProviderDriverKind,
   ProviderHostMatrixResult,
   ProviderInstanceId,
+  type ProviderAuthState,
 } from "@goat/contracts";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import packageJson from "../../package.json" with { type: "json" };
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -385,3 +389,114 @@ it.effect("installs with the official argv and never relays the installer's outp
     expect(wire).not.toContain("npm ERR");
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "regression #983: a cancel that lands while a host accepts the sync still reaches it",
+  () =>
+    Effect.gen(function* () {
+      const calling = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const running = (done: boolean) => ({
+        syncId: "remote-sync",
+        driver: "opencode",
+        version: "1.2.3",
+        login: true,
+        startedAt: "2026-10-20T00:00:00.000Z",
+        done,
+        hosts: [{ host: null, phase: done ? "cancelled" : "installing", version: null }],
+      });
+      const { layer, state } = harness({
+        answer: (call) =>
+          call.tool === "goat_provider_sync"
+            ? Deferred.succeed(calling, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ kind: "started", sync: running(false) }),
+              )
+            : Effect.succeed(running(true)),
+      });
+      yield* Effect.gen(function* () {
+        const sync = yield* HostSync.ProviderHostSync;
+        const started = yield* sync.sync(
+          { driver: "opencode", hosts: ["box"], version: "1.2.3" },
+          { kind: "client", sessionId: person },
+        );
+        if (started.kind !== "started") return expect.unreachable();
+        yield* Deferred.await(calling);
+        // The cancel starts while the remote is still answering, before its sync id is known here.
+        const stopping = yield* sync
+          .cancel({ syncId: started.sync.syncId }, { kind: "client", sessionId: person })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(release, undefined);
+        const cancelled = yield* Fiber.join(stopping);
+        expect(state.calls.at(-1)?.call).toMatchObject({
+          host: "box",
+          tool: "goat_provider_sync_cancel",
+          arguments: { syncId: "remote-sync" },
+        });
+        expect(cancelled).toMatchObject({
+          done: true,
+          hosts: [{ host: "box", phase: "cancelled" }],
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+);
+
+it.effect("regression #983: cancelling a sync during a managed sign-in cancels the flow", () =>
+  Effect.gen(function* () {
+    const signingIn = yield* Deferred.make<void>();
+    const cancels: Array<{ readonly input: unknown; readonly owner: string }> = [];
+    const instanceId = ProviderInstanceId.make("opencode");
+    const flow = {
+      instanceId,
+      phase: "waiting" as const,
+      flowId: "flow-1",
+      authorizationUrl: null,
+      expiresAt: null,
+      message: null,
+      interaction: { type: "deviceCode", url: "https://example.test/device", userCode: "ABCD" },
+    } as unknown as ProviderAuthState;
+    const { layer } = harness({
+      providers: [
+        {
+          instanceId,
+          driver: ProviderDriverKind.make("opencode"),
+          displayName: "OpenCode",
+          installed: true,
+          version: "1.2.3",
+          auth: { status: "unauthenticated" },
+          setup: { canAuthenticate: true },
+        },
+      ],
+      instances: [{ instanceId: "opencode", driverKind: "opencode" }],
+      auth: {
+        start: () => Effect.succeed(flow),
+        subscribe: () =>
+          Stream.fromEffect(Deferred.succeed(signingIn, undefined)).pipe(
+            Stream.drain,
+            Stream.concat(Stream.never),
+          ),
+        cancel: (input, owner) =>
+          Effect.sync(() => {
+            cancels.push({ input, owner });
+            return { ...flow, phase: "cancelled" as const };
+          }),
+      },
+    });
+    yield* Effect.gen(function* () {
+      const sync = yield* HostSync.ProviderHostSync;
+      const started = yield* sync.sync(
+        { driver: "opencode", version: "1.2.3" },
+        { kind: "client", sessionId: person },
+      );
+      if (started.kind !== "started") return expect.unreachable();
+      yield* Deferred.await(signingIn);
+      const cancelled = yield* sync.cancel(
+        { syncId: started.sync.syncId },
+        { kind: "client", sessionId: person },
+      );
+      expect(cancels).toEqual([{ input: { instanceId, flowId: "flow-1" }, owner: person }]);
+      expect(cancelled.hosts[0]).toMatchObject({ host: null, phase: "cancelled" });
+      expect(cancelled.hosts[0]).not.toHaveProperty("login");
+    }).pipe(Effect.provide(layer));
+  }),
+);

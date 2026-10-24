@@ -1,6 +1,9 @@
-import { GOAT_PROJECT_FILE_NAME, type ProjectScript, type ServerSettings } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME, type ServerSettings } from "@goat/contracts";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
-import { resolveProjectScriptConfiguration } from "@goat/shared/projectScripts";
+import {
+  resolveProjectScriptConfiguration,
+  resolveProjectSetupScriptConfiguration,
+} from "@goat/shared/projectScripts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -26,20 +29,7 @@ export const makeSetupScriptResolver = Effect.gen(function* () {
       (yield* fs.exists(path.join(cwd, GOAT_PROJECT_FILE_NAME))) ||
       (yield* fs.exists(path.join(cwd, LEGACY_PROJECT_FILE_NAME)));
     const file = yield* loader.load(hasCheckoutFile ? cwd : project.workspaceRoot);
-    const declared = Option.getOrNull(file)?.scripts?.find((script) => script.runOnWorktreeCreate);
-    if (declared === undefined) return scripts;
-    let id = "goat-file-setup";
-    for (let suffix = 2; scripts.some((script) => script.id === id); suffix++) {
-      id = `goat-file-setup-${suffix}`;
-    }
-    return [
-      ...scripts,
-      {
-        ...declared,
-        id,
-        icon: declared.icon ?? "play",
-        runOnWorktreeCreate: true,
-      } satisfies ProjectScript,
-    ];
+    return resolveProjectSetupScriptConfiguration({ scripts, source }, Option.getOrNull(file))
+      .scripts;
   });
 });

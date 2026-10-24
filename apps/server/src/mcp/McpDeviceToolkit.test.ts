@@ -181,7 +181,9 @@ it.effect("registers the device tools and returns the screenshot as image conten
         .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
       expect(shot.isError).toBe(false);
       expect(shot.content.map((entry) => entry.type)).toEqual(["text", "image"]);
-      expect(shot.structuredContent).toMatchObject({
+      expect(shot.structuredContent).toBeUndefined();
+      const [shotText] = shot.content;
+      expect(shotText?.type === "text" ? JSON.parse(shotText.text) : null).toMatchObject({
         screenshot: { mimeType: "image/png", width: 1206, height: 2622 },
       });
 

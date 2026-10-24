@@ -404,7 +404,7 @@ traffic.
 | `Unreachable`     | ≥ 3 consecutive failed contacts (`OUTAGE_NOTICE_FAILURES`) across watches or host status | placement refused; attempts there are suspect                                      |
 | `Lost`            | `Unreachable` for ≥ `hostLostAfterMs` (default 300 s, same as `LAUNCH_GRACE_MS`)         | attempts there may be rescheduled                                                  |
 | `Cordoned`        | a person or agent ran `goat_host_cordon`                                                 | placement refused; running work untouched                                          |
-| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | goal attempts moved after their current run                                        |
+| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | placement refused; attempts move only by `goat_thread_reschedule` until #1130      |
 | `VersionMismatch` | `markVersionMismatch` flagged it                                                         | warning only, as today                                                             |
 | `QuotaExhausted`  | per provider instance: a quota window at 100 % before `resetsAt` (`isExhausted` rule)    | that instance is filtered out on that host                                         |
 
@@ -414,10 +414,12 @@ and Nomad's `disconnect.lost_after`, which keeps an allocation `unknown` before 
 ([disconnect](https://developer.hashicorp.com/nomad/docs/job-specification/disconnect)).
 
 Cordon and drain state persists in `fleet_host_states` (host alias, cordoned, draining, reason, by,
-at). Cordon only stops new placement, like `kubectl cordon`; drain also moves goal attempts, but only
-between runs, one slot per goal at a time (a fixed `maxUnavailable: 1` in PodDisruptionBudget terms,
-[disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)). Drain never interrupts a
-running turn and never touches threads that no goal owns. `goat_host_uncordon` clears both.
+at). Cordon only stops new placement, like `kubectl cordon`. Drain is meant to also move goal
+attempts, but only between runs, one slot per goal at a time (a fixed `maxUnavailable: 1` in
+PodDisruptionBudget terms, [disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)),
+never interrupting a running turn or touching threads that no goal owns. The goal controller does not
+request those moves yet (#1130): `nextHealingStep` has no production caller, so a drained host keeps its
+attempts until `goat_thread_reschedule` moves them. `goat_host_uncordon` clears both.
 
 ### Thread health
 
@@ -852,7 +854,7 @@ input, calls one service method, and maps errors.
 | `goat_goal_pause` / `goat_goal_resume`                | write        | T1    | pause stops actions, never threads                                                 |
 | `goat_goal_delete`                                    | destructive  | T1    | finalizer path above; work is kept                                                 |
 | `goat_host_cordon` / `goat_host_uncordon`             | write        | T2    | persisted per host                                                                 |
-| `goat_host_drain`                                     | write        | T2    | cordon plus between-run moves of goal attempts                                     |
+| `goat_host_drain`                                     | write        | T2    | cordon plus Draining; between-run moves of goal attempts wait on #1130             |
 | `goat_thread_reschedule`                              | write        | T2    | manual reschedule of a goal attempt; refuses while the host answers unless `force` |
 | `goat_scheduler_status`                               | read         | T3    | per host: conditions, limits, counts, quota windows, last refusals                 |
 | `goat_fallback_chain_get` / `goat_fallback_chain_set` | read / write | T3    | settings-backed; set validates instances and models                                |
