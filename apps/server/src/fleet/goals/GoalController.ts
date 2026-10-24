@@ -47,7 +47,7 @@ import {
   publicWorker,
   type WorkerRecord,
 } from "./GoalStore.ts";
-import { actionAuthority, isLost } from "./GoalAuthority.ts";
+import { actionAuthority, isLost, OWNER_REFUSED } from "./GoalAuthority.ts";
 import { renderPrompt } from "./goalPrompt.ts";
 import {
   effectiveRuntimeMode,
@@ -329,12 +329,10 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              // Settled "failed" yet its thread exists: its first message was refused, so the thread got
-              // no worktree and the slot moves on instead of adopting it.
-              const refusedFirst =
-                found.success !== null &&
-                (yield* store.claimOf(action.actionId))?.outcome === "failed";
-              if (found.success !== null && !refusedFirst) {
+              const refused = (yield* store.claimOf(action.actionId))?.outcome === OWNER_REFUSED;
+              if (refused && found.success === null)
+                return yield* store.settle(action.actionId, NOT_SENT, nowIso);
+              if (found.success !== null && !refused) {
                 const thread = found.success;
                 yield* store.settle(action.actionId, "adopted", nowIso, {
                   host: thread.host,
@@ -354,11 +352,9 @@ const make = Effect.gen(function* () {
                   worker,
                   action.actionId,
                 );
-              } else if (action.expired || refusedFirst) {
-                if (!refusedFirst) yield* store.settle(action.actionId, "unknown", nowIso);
-                const why = refusedFirst
-                  ? "first message was refused"
-                  : "launch was never confirmed";
+              } else if (action.expired || refused) {
+                if (!refused) yield* store.settle(action.actionId, "unknown", nowIso);
+                const why = refused ? "first message was refused" : "launch was never confirmed";
                 // A dropped slot just ends; a wanted one moves to its next attempt.
                 const dropped = worker.slot >= desiredSlots(goal).length;
                 const next = dropped
@@ -490,9 +486,9 @@ const make = Effect.gen(function* () {
                 return;
               }
               failed = true;
-              // A refused step is recorded before anything can fail: settled "failed", a thread found
-              // later is one whose first message was refused, never one to adopt.
-              if (isLost(launched.failure)) yield* store.settle(action.actionId, "failed", nowIso);
+              // A refusal is recorded before the lookup that may fail (see OWNER_REFUSED).
+              if (isLost(launched.failure))
+                yield* store.settle(action.actionId, OWNER_REFUSED, nowIso);
               // The thread may exist even though the call failed after creating it.
               const created = yield* runtime
                 .findLaunched(current, goal, action.actionId, placed.host)
@@ -520,9 +516,7 @@ const make = Effect.gen(function* () {
                 return;
               }
               if (lost !== null) {
-                // Created, but its first message was refused: the next pass moves the slot on
-                // (resolve_launch) instead of adopting a thread that got no worktree.
-                yield* store.settle(action.actionId, "failed", nowIso);
+                // Created, but its first message was refused: the next pass moves the slot on.
                 if (!lost.goalChanged)
                   issues.push({
                     condition: "Blocked",

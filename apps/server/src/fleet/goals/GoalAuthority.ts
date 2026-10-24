@@ -20,6 +20,12 @@ import {
 
 export type ActionKind = "launch" | "followup" | "fallback" | "interrupt";
 
+/**
+ * How a launch refused for lost authority settles. Any thread it left never got its first message
+ * or its worktree, so it is never adopted; with no thread, the same attempt is sent again.
+ */
+export const OWNER_REFUSED = "owner_refused";
+
 export const isLost = Schema.is(GoalOwnerAuthorityLost);
 
 export const actionAuthority = ({

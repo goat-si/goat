@@ -20,6 +20,7 @@ import * as FleetDefaults from "../defaults.ts";
 import { Health, type ThreadHealth } from "../health/Health.ts";
 import { Fallback } from "../resources/Fallback.ts";
 import { Placement } from "../resources/Placement.ts";
+import { OWNER_REFUSED } from "./GoalAuthority.ts";
 import { GoalController, layer as controllerLayer } from "./GoalController.ts";
 import { LAUNCH_GRACE_MS, type PullRequestObservation } from "./goalPlan.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
@@ -521,7 +522,7 @@ describe("GoalController", () => {
           fake.loseAfterCreate = true;
           yield* pass("goal_half");
           const [claim] = yield* store.launches(FleetGoalId.make("goal_half"));
-          expect(claim).toMatchObject({ outcome: "failed" });
+          expect(claim).toMatchObject({ outcome: OWNER_REFUSED });
           expect(yield* blocked("goal_half")).toMatchObject({ reason: "OwnerAuthorityLost" });
           // The next pass moves the slot on rather than adopt the empty thread, and the one after
           // starts attempt 2, never attempt 1 again.
@@ -572,6 +573,39 @@ describe("GoalController", () => {
       },
     );
   });
+
+  it.effect(
+    "sends the same attempt again, across a restart, when a launch was refused before its thread existed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = (yield* fs.makeTempDirectoryScoped()) + "/state.sqlite";
+        const fake = makeFake();
+        // Live through the claim; the last confirm finds the owner gone, and the lookup after fails.
+        fake.owners = [access(), access(), access(), { unavailable: "Revoked." }, access()];
+        fake.lookupFails = true;
+        const onlyAttempt = testGoal("goal_refused", {
+          spec: testSpec({ limits: { ...testSpec().limits, maxAttemptsPerWorker: 1 } }),
+        });
+        yield* Effect.gen(function* () {
+          yield* insert(onlyAttempt);
+          yield* pass("goal_refused");
+          const [claim] = yield* (yield* GoalStore).launches(onlyAttempt.id);
+          expect(claim).toMatchObject({ outcome: OWNER_REFUSED });
+        }).pipe(Effect.provide(layerFor(fake, { path })));
+        fake.lookupFails = false;
+        yield* Effect.gen(function* () {
+          // Even past the launch grace, a refusal that started nothing spends no attempt.
+          yield* TestClock.adjust(LAUNCH_GRACE_MS + 1);
+          yield* pass("goal_refused");
+          yield* pass("goal_refused");
+          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+            "goal:goal_refused:s0:a1:launch",
+          ]);
+          expect((yield* record("goal_refused")).goal.status.phase).not.toBe("failed");
+        }).pipe(Effect.provide(layerFor(fake, { path })));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("does not delete a goal while a thread it launched may still run (P1-3)", () => {
     const fake = makeFake();
