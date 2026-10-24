@@ -40,6 +40,7 @@ import {
 import {
   FILE_TREE_FOCUS_REQUEST,
   focusTreeRow,
+  isDirectoryHandle,
   runFileTreeCommand,
   toggleDirectoryRecursively,
   typeToFindSeed,
@@ -101,10 +102,13 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
   );
 }
 
-function FileSearchField(props: {
+function FileSearchField({
+  ref,
+  ...props
+}: {
   ariaLabel: string;
   name: string;
-  inputRef: RefObject<HTMLInputElement | null>;
+  ref: RefObject<HTMLInputElement | null>;
   onClose: () => void;
   onFocusTree: () => void;
   onValueChange: (value: string) => void;
@@ -113,7 +117,7 @@ function FileSearchField(props: {
   return (
     <InputGroup variant="ghost" className="h-7 min-w-0 flex-1">
       <InputGroupInput
-        ref={props.inputRef}
+        ref={ref}
         type="search"
         name={props.name}
         size="sm"
@@ -639,7 +643,7 @@ export default function FileBrowserPanel({
       );
     const path = row?.dataset.itemPath;
     const item = path === undefined ? null : model.getItem(path);
-    if (path === undefined || !item?.isDirectory()) return;
+    if (path === undefined || !isDirectoryHandle(item)) return;
     event.preventDefault();
     event.stopPropagation();
     toggleDirectoryRecursively(shortcutContext(), path, !item.isExpanded());
@@ -676,7 +680,7 @@ export default function FileBrowserPanel({
         <FileSearchField
           name="project-files-search"
           ariaLabel={`Search ${projectName} files`}
-          inputRef={searchInputRef}
+          ref={searchInputRef}
           value={search.value}
           onValueChange={handleSearchValueChange}
           onClose={closeSearch}

@@ -1,9 +1,15 @@
-import type { FileTree } from "@pierre/trees";
+import type { FileTree, FileTreeDirectoryHandle, FileTreeItemHandle } from "@pierre/trees";
 
 import type { FileTreeCommand } from "./fileViewCommands";
 
 /** Dispatched on a Files panel element to move keyboard focus onto its tree. */
 export const FILE_TREE_FOCUS_REQUEST = "goat:file-tree-focus";
+
+export function isDirectoryHandle(
+  item: FileTreeItemHandle | null | undefined,
+): item is FileTreeDirectoryHandle {
+  return item != null && "expand" in item;
+}
 
 export interface FileTreeShortcutContext {
   readonly model: FileTree;
@@ -66,7 +72,7 @@ function parentDirectory(path: string): string | null {
 function setExpanded(model: FileTree, paths: readonly string[], expanded: boolean) {
   for (const path of paths) {
     const item = model.getItem(path);
-    if (item?.isDirectory()) {
+    if (isDirectoryHandle(item)) {
       if (expanded) item.expand();
       else item.collapse();
     }
@@ -119,7 +125,7 @@ export function runFileTreeCommand(
     }
     case "files.open": {
       if (focused === null) return false;
-      if (focused.isDirectory()) {
+      if (isDirectoryHandle(focused)) {
         focused.expand();
         focusTreeRow(host, model, focused.getPath());
         return true;
