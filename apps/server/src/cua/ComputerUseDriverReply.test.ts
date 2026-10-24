@@ -53,6 +53,22 @@ describe("admitDriverReplyScreenshots", () => {
     ]);
   });
 
+  it("checks an image block whatever the JSON spells, and never throws on an odd mimeType", () => {
+    const escaped = reply(text).replace(
+      '"content":[',
+      `"content":[{"type":"im\\u0061ge","mimeType":"image/svg+xml","data":"${PNG}"},`,
+    );
+    assert.deepEqual(contentOf(admitDriverReplyScreenshots(escaped)), [
+      withheld("it is not a PNG or JPEG image"),
+      text,
+    ]);
+    for (const mimeType of ["constructor", "__proto__", "toString"])
+      assert.deepEqual(
+        contentOf(admitDriverReplyScreenshots(reply({ type: "image", mimeType, data: PNG }))),
+        [withheld("it is not a PNG or JPEG image")],
+      );
+  });
+
   it("withholds a screenshot over 25 MiB", () => {
     const length = Math.ceil(COMPUTER_USE_SCREENSHOT_MAX_BYTES / 3) * 4 + 4;
     const oversize = PNG + "A".repeat(length - PNG.length);
