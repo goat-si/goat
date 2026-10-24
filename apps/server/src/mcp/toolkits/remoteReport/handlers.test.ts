@@ -45,6 +45,7 @@ const expected: Record<
   relay_unsupported: "invalid_request",
   relay_queue_full: "invalid_request",
   idempotency_mismatch: "conflict",
+  fenced: "conflict",
 };
 
 it.each(Object.entries(expected))("maps %s to %s", (reason, code) => {

@@ -1,4 +1,5 @@
-import { EnvironmentId, type KeybindingRule, type ProjectEntry } from "@goat/contracts";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { EnvironmentId, ThreadId, type KeybindingRule, type ProjectEntry } from "@goat/contracts";
 import {
   compileResolvedKeybindingRule,
   DEFAULT_RESOLVED_KEYBINDINGS,
@@ -10,6 +11,7 @@ import { resolveShortcutCommand } from "~/keybindings";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
+  readFile: vi.fn(async (_path: string): Promise<unknown> => ({ _tag: "Failure" })),
   copy: vi.fn(async (_text: string, _target?: string) => true),
   toast: vi.fn(),
   menu: vi.fn(),
@@ -22,6 +24,9 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
   useAtomValue: (() => state.keybindings) as never,
 }));
 vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: "keybindings" }));
+// Contents reads go through the query runner; tests answer them directly.
+vi.mock("./projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "read" }));
+vi.mock("~/state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.readFile }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/composerHandleContext", () => ({ useComposerHandleContext: () => null }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: state.copy }));
@@ -82,7 +87,7 @@ vi.mock("./useDirectoryEntries", async () => {
 });
 
 import FileBrowserPanel from "./FileBrowserPanel";
-import { FilePathCopyMenu } from "./FilePathCopyMenu";
+import { FileViewMenu } from "./FileViewMenu";
 
 const MOD = /mac|iphone|ipad/i.test(navigator.platform) ? "Meta" : "Control";
 const COPY_PATH = `{${MOD}>}{Alt>}c{/Alt}{/${MOD}}`;
@@ -319,6 +324,7 @@ describe("file tree context menu path copy", () => {
     expect(items.filter((item) => item.id.startsWith("copy-")).map((item) => item.label)).toEqual([
       "Copy relative path (from repo)",
       "Copy full path",
+      "Copy name",
       "Copy mention",
     ]);
   });
@@ -344,7 +350,13 @@ describe("file viewer path copy shortcuts", () => {
       <div>
         {/* Matches FilePreviewPanel's surface root, which clicks on content focus. */}
         <div data-file-view tabIndex={-1}>
-          <FilePathCopyMenu filePath="docs/guide.md" workspaceRoot="/home/dev/repo" />
+          <FileViewMenu
+            filePath="docs/guide.md"
+            workspaceRoot="/home/dev/repo"
+            environmentId={EnvironmentId.make("local")}
+            threadRef={scopeThreadRef(EnvironmentId.make("local"), ThreadId.make("thread-1"))}
+            readResult={null}
+          />
           <p>Rendered file content</p>
           <input aria-label="Find in file" />
         </div>
