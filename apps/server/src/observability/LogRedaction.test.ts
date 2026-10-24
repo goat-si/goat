@@ -55,6 +55,14 @@ describe("redactLogText", () => {
     ['{"to\\u006ben":"CANARY","ok":1}', '{"to\\u006ben":***,"ok":1}'],
     ['{\\"to\\\\u006ben\\":\\"CANARY\\"}', '{\\"to\\\\u006ben\\":***}'],
     [`requestid.${jwt} done`, "requestid.*** done"],
+    // Text joined to a token without a dot, however it is joined.
+    [`jwt-${jwt} done`, "jwt-*** done"],
+    [`jwt_${jwt} done`, "jwt_*** done"],
+    [`bearer${jwt} done`, "bearer*** done"],
+    // An escaped line break inside a quoted value, and short scheme credentials.
+    ['password="two \\\nCANARY words" user=me', "password=*** user=me"],
+    ["Authorization: Basic dTpw", "Authorization: Basic ***"],
+    ["authorization=Bearer abc", "authorization=Bearer ***"],
     ["https://user:p@CANARY@example.com/x?q=1", "https://***@example.com/x?q=1"],
     [
       `clone https://bot:${"x".repeat(600)}@example.com/r.git`,
@@ -81,6 +89,7 @@ describe("redactLogText", () => {
     "https://github.com/goat-si/goat/pull/1388",
     '{"tokenCount":3,"secretName":"memory-hub-internal"}',
     "eyes.width.px and ewma.window.size=3",
+    "Basic auth is enabled for the dev server",
     "apps/server/src/serverLogger.test.ts and collector.example.com.local",
   ])("leaves %j as it is", (text) => {
     expect(redactLogText(text)).toBe(text);

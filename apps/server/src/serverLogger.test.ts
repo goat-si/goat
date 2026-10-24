@@ -213,11 +213,14 @@ const canaries = [
 /** An error whose message, own field and nested cause each carry a credential. */
 const leakyError = (label: string) =>
   Object.assign(
-    new Error(`${label} failed with requestid.${canaryJwt}, ${spacedJwt} and ${leadingSpaceJwt}`, {
-      cause: new Error(
-        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"],"cookie":[["a"],"canary-nested-cookie"],"to\\u006ben":"canary-escaped-key"}',
-      ),
-    }),
+    new Error(
+      `${label} failed with requestid.${canaryJwt}, jwt-${spacedJwt} and ${leadingSpaceJwt}`,
+      {
+        cause: new Error(
+          'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"],"cookie":[["a"],"canary-nested-cookie"],"to\\u006ben":"canary-escaped-key"}',
+        ),
+      },
+    ),
     {
       headers: {
         authorization: "Bearer canary-field-token-0123456789",

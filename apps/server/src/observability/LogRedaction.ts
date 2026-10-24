@@ -22,7 +22,7 @@ const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|cs
 const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
 
 // A value after = or :, whole when it is quoted.
-const VALUE = String.raw`(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|\S+)`;
+const VALUE = String.raw`(?:"(?:\\[\s\S]|[^"\\])*"?|'(?:\\[\s\S]|[^'\\])*'?|\S+)`;
 
 /**
  * A quoted field name followed by a colon, in JSON escaped inside another JSON string, in JSON,
@@ -144,22 +144,57 @@ function isJoseHeader(part: string): boolean {
   }
 }
 
+// The first base64url character of a JSON header: "{" or the whitespace that may precede it.
+const HEADER_LEAD = /[eICD]/;
+const MAX_HEADER_OFFSET = 256;
+
+/**
+ * Where a JOSE header starts inside a base64url part, if one does. Text joined to the token without
+ * a dot (jwt-, id_, a word) shares its first part, so each offset where a header could begin is
+ * tried. accepts decides on the decoded rest; a cheap look at its start screens most offsets.
+ */
+function headerOffset(part: string, accepts: (rest: string) => boolean): number | undefined {
+  const last = Math.min(part.length - 8, MAX_HEADER_OFFSET);
+  for (let offset = 0; offset <= last; offset++) {
+    if (!HEADER_LEAD.test(part.charAt(offset))) continue;
+    const rest = part.slice(offset);
+    const start = Buffer.from(rest.slice(0, 64), "base64url").toString("utf8");
+    if ((/^\s*\{/.test(start) || /^\s{40,}/.test(start)) && accepts(rest)) return offset;
+  }
+  return undefined;
+}
+
+/** A dotted run with every part from a JOSE header on masked, keeping any text joined before it. */
+function maskFromHeader(
+  parts: ReadonlyArray<string>,
+  acceptsAt: (index: number) => ((rest: string) => boolean) | undefined,
+): string | undefined {
+  for (let index = 0; index < parts.length; index++) {
+    const accepts = acceptsAt(index);
+    if (accepts === undefined) continue;
+    const part = parts[index] ?? "";
+    const offset = headerOffset(part, accepts);
+    if (offset !== undefined)
+      return [...parts.slice(0, index), part.slice(0, offset) + MASK].join(".");
+  }
+  return undefined;
+}
+
 /**
  * A cut text can end inside a token whose remaining dots fall past the cut. Its trailing dotted
- * run is masked from any part that is a JOSE header, or from a last part that the cut leaves as
- * the start of a JSON object, so an unfinished token or header is hidden as well.
+ * run is masked from any JOSE header, or from a last part that the cut leaves as the start of a
+ * JSON object, so an unfinished token or header is hidden as well.
  */
 function maskUnfinishedJose(text: string): string {
   let start = text.length;
   while (start > 0 && /[A-Za-z0-9_.-]/.test(text.charAt(start - 1))) start -= 1;
   const parts = text.slice(start).split(".");
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index] ?? "";
-    const cut = index === parts.length - 1 && startsJsonObject(part);
-    if (part.length >= 8 && (cut || isJoseHeader(part)))
-      return text.slice(0, start) + [...parts.slice(0, index), MASK].join(".");
-  }
-  return text;
+  const masked = maskFromHeader(parts, (index) =>
+    index === parts.length - 1
+      ? (rest) => startsJsonObject(rest) || isJoseHeader(rest)
+      : isJoseHeader,
+  );
+  return masked === undefined ? text : text.slice(0, start) + masked;
 }
 
 function startsJsonObject(part: string): boolean {
@@ -167,14 +202,12 @@ function startsJsonObject(part: string): boolean {
   return /^\s*\{/.test(Buffer.from(part, "base64url").toString("utf8"));
 }
 
-/** A dotted run from its first part that is a JOSE header on, masked; otherwise the run itself. */
+/** A dotted run from its first JOSE header on, masked; otherwise the run itself. */
 function maskJoseToken(run: string): string {
   const parts = run.split(".");
-  for (let index = 0; index + 2 < parts.length; index++) {
-    const part = parts[index] ?? "";
-    if (part.length >= 8 && isJoseHeader(part)) return [...parts.slice(0, index), MASK].join(".");
-  }
-  return run;
+  return (
+    maskFromHeader(parts, (index) => (index + 2 < parts.length ? isJoseHeader : undefined)) ?? run
+  );
 }
 
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
@@ -193,7 +226,11 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
   [
-    new RegExp(String.raw`\b(authorization\s*[=:]\s*)(?!(?:Bearer|Basic)\b)${VALUE}`, "gi"),
+    // Whatever the scheme word, and however short the credential after it.
+    new RegExp(
+      String.raw`\b(authorization\s*[=:]\s*(?:(?:Bearer|Basic|Digest|Token)\s+)?)${VALUE}`,
+      "gi",
+    ),
     `$1${MASK}`,
   ],
   [
