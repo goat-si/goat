@@ -90,4 +90,17 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
     reason:
       "Saved coverage records name t3_thread_read from before the MCP rename; delivery rewrites both spellings to goat_call (#1052).",
   },
+  {
+    id: "wire-codex-legacy-acp-mcp-aliases",
+    pattern: /(?<=shell_environment_policy\.set\.)T3_ACP_MCP_(?:ENDPOINT|AUTHORIZATION)\b/g,
+    scope: (path) =>
+      source(path, [
+        "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts",
+        "apps/server/src/orchestration-v2/Adapters/CodexReplay.testkit.ts",
+        "packages/effect-codex-app-server/src/replay.test.ts",
+      ]),
+    holdsOnApply: true,
+    reason:
+      "Codex thread config sets each ACP MCP credential under its legacy T3_ name beside the GOAT_ one (withLegacyEnvNames); these tests pin both keys (#1039, #1059).",
+  },
 ];

@@ -762,29 +762,31 @@ it.effect("inbox caps include framed text and separators and preserve the exclud
   }).pipe(Effect.provide(database)),
 );
 
-it.effect("fifty progress imports coalesce per correlation while preserving substantive rows", () =>
+it.effect("every progress report imported before the origin's next turn reaches that turn", () =>
   Effect.gen(function* () {
     const f = yield* fixture;
     yield* Effect.gen(function* () {
       const c = yield* Coordinator.RemoteDispatchCoordinator;
       yield* f.launch(c, "next_turn");
-      for (let i = 1; i <= 50; i++) {
+      // #1054: reports held on the worker arrive as one batch, and more land before the turn.
+      const late = Array.from({ length: 46 }, (_, i) => report(i + 4));
+      const batches = [[report(1), report(2)], [report(3)], late, [report(50, "needs_input")]];
+      for (const reports of batches) {
         const call = yield* Queue.take(f.calls);
-        yield* Queue.offer(call.reply, Effect.succeed(answer([report(i)])));
+        yield* Queue.offer(call.reply, Effect.succeed(answer(reports)));
         yield* Queue.take(f.commits);
       }
-      const call = yield* Queue.take(f.calls);
-      yield* Queue.offer(call.reply, Effect.succeed(answer([report(51, "needs_input")])));
-      yield* Queue.take(f.commits);
-      const rows = yield* f.sql<{
-        kind: string;
-        text: string;
-      }>`SELECT kind, text FROM remote_report_inbox ORDER BY id`;
-      assert.equal(rows.length, 2);
-      assert.equal(rows[0]?.kind, "progress");
-      assert.include(rows[0]?.text ?? "", "report-50");
-      assert.equal(rows[1]?.kind, "needs_input");
-    }).pipe(Effect.provide(f.layer));
+      const turn = (yield* (yield* Inbox.RemoteReportInbox).pending(origin)).texts.join("\n\n");
+      const lines = turn.split("\n");
+      for (let i = 1; i <= 50; i++) assert.include(lines, `> report-${i}`);
+      assert.include(turn, "Report 50 from a thread on");
+      // Progress folds into one row per run of reports, so the question is not paged behind it.
+      const rows = yield* f.sql<{ kind: string }>`SELECT kind FROM remote_report_inbox ORDER BY id`;
+      assert.deepEqual(
+        rows.map((row) => row.kind),
+        ["progress", "needs_input"],
+      );
+    }).pipe(Effect.provide(Layer.merge(f.layer, Inbox.layer)));
   }).pipe(Effect.provide(database)),
 );
 

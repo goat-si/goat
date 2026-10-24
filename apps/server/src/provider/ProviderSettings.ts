@@ -27,6 +27,7 @@ import {
   PROVIDER_SETTINGS_HANDOFF_PATH,
   PROVIDER_SETUP_HANDOFF_PATH,
   ProviderAddInput,
+  providerSettingsFixPath,
   ProviderDriverKind,
   type ProviderDiagnoseOnHostInput,
   type ProviderDiagnoseOnHostResult,
@@ -66,6 +67,7 @@ import * as Settings from "../serverSettings.ts";
 import { authorizeApprovalRequest } from "../sshRemote/SshHostAuthorization.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { mayHaveReached, remoteFailure } from "./providerSettingsRemote.ts";
+import { isRecord, mergeConfig, mergeEnvironment } from "./providerSettingsMerge.ts";
 import { BUILT_IN_DRIVERS } from "./builtInDrivers.ts";
 import { instanceFingerprint } from "./CodexRouteService.ts";
 import {
@@ -118,44 +120,12 @@ type Decision =
   | { readonly kind: "direct"; readonly actor: string; readonly profile: string }
   | { readonly kind: "approval" };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
-
 const targetOf = (request: ProviderSettingsRequest) => {
   const subject =
     request.action === "add"
       ? (request.input.instanceId ?? request.input.acpAgentId ?? request.input.driver ?? "new")
       : request.input.instanceId;
   return `${subject}@${request.input.host ?? "local"}`;
-};
-
-const mergeConfig = (base: unknown, patch: Readonly<Record<string, unknown>> = {}) => {
-  const next: Record<string, unknown> = isRecord(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) delete next[key];
-    else next[key] = value;
-  }
-  return next;
-};
-
-const mergeEnvironment = (
-  base: ProviderInstanceConfig["environment"],
-  patch: ProviderUpdateInput["environment"],
-): ProviderInstanceConfig["environment"] => {
-  if (patch === undefined) return base;
-  const byName = new Map((base ?? []).map((variable) => [variable.name, variable]));
-  for (const change of patch) {
-    if (change.value === null) {
-      byName.delete(change.name);
-      continue;
-    }
-    byName.set(change.name, {
-      name: change.name,
-      value: change.value,
-      sensitive: change.sensitive ?? byName.get(change.name)?.sensitive ?? false,
-    });
-  }
-  return [...byName.values()];
 };
 
 const summarize = (
@@ -377,22 +347,24 @@ const make = Effect.gen(function* () {
       .updateProviderInstance(mutation, patch, undefined, authorize)
       .pipe(Effect.mapError(saveFailure));
 
-  const link = Effect.fn("ProviderSettings.link")(function* (
+  /** The cloud entry that uses siblingId for its sign-in, or why cloudId cannot use it. */
+  const planLink = (
+    instances: Readonly<Record<string, ProviderInstanceConfig>>,
     cloudId: ProviderInstanceId,
     siblingId: ProviderInstanceId,
-    authorize: Effect.Effect<void, ServerSettingsError>,
-  ) {
-    const instances = (yield* current).providerInstances;
+  ) => {
     const cloud = resolveEntry(instances, cloudId);
     if (cloud === undefined || !isCloudSiblingDriver(cloud.driver))
-      return yield* invalid(
-        `${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`,
+      return Effect.fail(
+        invalid(`${cloudId} is not a Cursor Cloud, Claude Cloud, or Devin Cloud instance.`),
       );
     const expected = CLOUD_SIBLING_DRIVERS[cloud.driver as keyof typeof CLOUD_SIBLING_DRIVERS];
     const sibling = resolveEntry(instances, siblingId);
     if (sibling === undefined || sibling.driver !== expected)
-      return yield* invalid(
-        `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
+      return Effect.fail(
+        invalid(
+          `${driverName(cloud.driver)} needs a ${driverName(expected)} instance; ${siblingId} is not one.`,
+        ),
       );
     if (
       cloud.driver === "devinCloud" &&
@@ -402,13 +374,28 @@ const make = Effect.gen(function* () {
         config: { ...mergeConfig(sibling.config), enabled: true },
       })
     )
-      return yield* invalid(`ACP instance ${siblingId} does not run Devin.`);
+      return Effect.fail(invalid(`ACP instance ${siblingId} does not run Devin.`));
     const key = cloud.driver === "devinCloud" ? "siblingInstanceId" : "sourceInstanceId";
-    const next: ProviderInstanceConfig = {
+    return Effect.succeed<ProviderInstanceConfig>({
       ...cloud,
       enabled: true,
       config: mergeConfig(cloud.config, { [key]: siblingId }),
-    };
+    });
+  };
+
+  type AddPlan = NonNullable<ProviderSettingsProgress["plan"]>;
+  /** Refuses a plan whose link would fail, before it saves; a resumed plan's target can change. */
+  const checkLink = (instances: Readonly<Record<string, ProviderInstanceConfig>>, plan: AddPlan) =>
+    plan.linkTo === undefined
+      ? Effect.void
+      : planLink({ ...instances, [plan.instanceId]: plan.instance }, plan.linkTo, plan.instanceId);
+
+  const link = Effect.fn("ProviderSettings.link")(function* (
+    cloudId: ProviderInstanceId,
+    siblingId: ProviderInstanceId,
+    authorize: Effect.Effect<void, ServerSettingsError>,
+  ) {
+    const next = yield* planLink((yield* current).providerInstances, cloudId, siblingId);
     yield* save({ operation: "upsert", instanceId: cloudId, instance: next }, {}, authorize);
     return summarize(cloudId, next);
   });
@@ -433,8 +420,6 @@ const make = Effect.gen(function* () {
     ...fields,
     next: { call: "goat_provider_diagnose" },
   });
-
-  type AddPlan = NonNullable<ProviderSettingsProgress["plan"]>;
 
   /** Fixes the instance id and entry an add writes, before any of its effects run. */
   const planAdd = Effect.fn("ProviderSettings.planAdd")(function* (input: ProviderAddInput) {
@@ -469,12 +454,13 @@ const make = Effect.gen(function* () {
       ...(Object.keys(config).length === 0 ? {} : { config }),
       ...(environment === undefined || environment.length === 0 ? {} : { environment }),
     };
-    return {
+    const plan = {
       instanceId,
       instance,
       install: driver === "acpRegistry" && config.source !== "local" && (input.install ?? true),
       ...(input.linkTo === undefined ? {} : { linkTo: input.linkTo }),
     } satisfies AddPlan as AddPlan;
+    return yield* checkLink(instances, plan).pipe(Effect.as(plan));
   });
 
   const addResult = (
@@ -549,6 +535,8 @@ const make = Effect.gen(function* () {
       case "add": {
         const plan = yield* planAdd(request.input);
         const installed = plan.install ? yield* install(plan.instance, plan.instanceId) : undefined;
+        // An install can take minutes, during which the cloud target may change.
+        if (installed !== undefined) yield* checkLink((yield* current).providerInstances, plan);
         yield* save(
           { operation: "create", instanceId: plan.instanceId, instance: plan.instance },
           {},
@@ -680,7 +668,11 @@ const make = Effect.gen(function* () {
   ) {
     const host = request.input.host;
     const decision = yield* decide(scope, host);
-    if (decision.kind === "approval") return yield* requestApproval(request, scope);
+    if (decision.kind === "approval") {
+      // A person should not be asked to approve an add GOAT would refuse.
+      if (request.action === "add" && host === undefined) yield* planAdd(request.input);
+      return yield* requestApproval(request, scope);
+    }
     const outcome = yield* Effect.exit(
       host === undefined
         ? applyLocal(request, recheckCaller(scope, undefined))
@@ -719,7 +711,7 @@ const make = Effect.gen(function* () {
                         fix: {
                           actor: "agent" as const,
                           instruction: `Call ${check.fix.call.tool}${result.host === undefined ? "" : ` with host ${result.host}`}: ${check.fix.instruction}`,
-                          path: `provider.${check.fix.call.tool.replace(/^goat_provider_/u, "")}`,
+                          path: providerSettingsFixPath(check.fix.call),
                           call: {
                             tool: check.fix.call.tool,
                             arguments:
@@ -916,6 +908,8 @@ const make = Effect.gen(function* () {
           `${plan.instanceId} changed after GOAT began saving it, so GOAT cannot tell whether this approval added it.`,
         );
       if (existing === undefined) {
+        const linkable = yield* attempt(stored.pipe(Effect.flatMap((all) => checkLink(all, plan))));
+        if (Exit.isFailure(linkable)) return yield* failed(undefined, linkable.cause);
         yield* mark("save", "started");
         const saved = yield* attempt(
           save(

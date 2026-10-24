@@ -12,9 +12,9 @@ export function selectWorktreeInstall(tools: { readonly vp: boolean; readonly pn
   readonly command: string;
   readonly tool: string;
 } {
-  if (tools.vp) return { command: "vp i --frozen-lockfile -- --yes", tool: "vp" };
+  if (tools.vp) return { command: "vp i --frozen-lockfile", tool: "vp" };
   if (tools.pnpm) return { command: "pnpm install --frozen-lockfile", tool: "pnpm" };
-  return { command: "npx --yes vite-plus i --frozen-lockfile -- --yes", tool: "npx vite-plus" };
+  return { command: "npx --yes vite-plus i --frozen-lockfile", tool: "npx vite-plus" };
 }
 
 function toolOnPath(name: string): boolean {
@@ -87,8 +87,9 @@ async function main(): Promise<void> {
   });
   process.stderr.write(`Worktree setup: installing dependencies with ${selected.tool}.\n`);
   // `shell` resolves the tool through PATH, including Windows command shims.
-  // Setup has no one answering install prompts. Pass pnpm's confirmation flag
-  // through vp and leave stdin closed so other prompts fail instead of hanging.
+  // Setup has no one answering install prompts, so stdin stays closed and a
+  // prompt fails instead of hanging. pnpm 12 never asks to purge node_modules,
+  // and some pnpm 12 builds reject the `--yes` that skipped that pnpm 11 prompt.
   // Install exactly the locked dependencies so setup never rewrites the lockfile.
   // Output is piped, not inherited, so a failure can keep its tail in the marker.
   const install = NodeChildProcess.spawn(selected.command, {
