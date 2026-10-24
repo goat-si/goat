@@ -41,13 +41,13 @@ export function focusTreeRow(host: HTMLElement | null, model: FileTree, path: st
   if (!focusMounted()) requestAnimationFrame(focusMounted);
 }
 
-export function pageSizeFor(host: HTMLElement | null, model: FileTree): number {
+function pageSizeFor(host: HTMLElement | null, model: FileTree): number {
   const itemHeight = model.getItemHeight();
   if (host === null || itemHeight <= 0) return 1;
   return Math.max(1, Math.floor(host.clientHeight / itemHeight) - 1);
 }
 
-export function pagedPath(model: FileTree, direction: 1 | -1, pageSize: number): string | null {
+function pagedPath(model: FileTree, direction: 1 | -1, pageSize: number): string | null {
   const count = model.getVisibleCount();
   if (count === 0) return null;
   const from = Math.max(0, model.getFocusedIndex());
@@ -56,10 +56,7 @@ export function pagedPath(model: FileTree, direction: 1 | -1, pageSize: number):
 }
 
 /** A folder and every known folder below it, as tree paths with a trailing slash. */
-export function descendantDirectories(
-  folderPath: string,
-  directoryPaths: readonly string[],
-): string[] {
+function descendantDirectories(folderPath: string, directoryPaths: readonly string[]): string[] {
   return directoryPaths.filter((path) => path.startsWith(folderPath));
 }
 
