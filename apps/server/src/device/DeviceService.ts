@@ -187,6 +187,9 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
   const settings = yield* ServerSettings.ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const lifecycleLock = yield* Semaphore.make(1);
+  // Closes run one at a time so a close that is still shutting a device down
+  // keeps a concurrent identical close from shutting it down a second time.
+  const closeLock = yield* Semaphore.make(1);
   const readDeviceSettings = settings.getSettings.pipe(
     Effect.map((value) => ({
       enabled: value.enableDeviceSupport,
@@ -718,29 +721,32 @@ export const makeWithHosts = Effect.fn("DeviceService.makeWithHosts")(function* 
     );
   });
 
-  const close: DeviceService["Service"]["close"] = Effect.fn("DeviceService.close")(
-    function* (input) {
-      const { state } = yield* SynchronizedRef.get(stateRef);
-      const closing = state.sessions.filter(
-        (session) =>
-          session.threadId === input.threadId &&
-          (input.hostId === undefined || session.hostId === input.hostId) &&
-          (input.deviceId === undefined || session.deviceId === input.deviceId),
-      );
-      if (closing.length === 0) return;
+  const close: DeviceService["Service"]["close"] = Effect.fn("DeviceService.close")(function* (
+    input,
+  ) {
+    const { state } = yield* SynchronizedRef.get(stateRef);
+    const closing = state.sessions.filter(
+      (session) =>
+        session.threadId === input.threadId &&
+        (input.hostId === undefined || session.hostId === input.hostId) &&
+        (input.deviceId === undefined || session.deviceId === input.deviceId),
+    );
+    if (closing.length === 0) return;
+    if (!input.shutdown) {
       yield* publish((current) => ({
         ...current,
         sessions: current.sessions.filter((session) => !closing.includes(session)),
       }));
-      if (input.shutdown) {
-        yield* Effect.forEach(
-          closing,
-          (session) => shutdownDevice(session.hostId, session.deviceId, session.platform),
-          { discard: true },
-        );
-      }
-    },
-  );
+      return;
+    }
+    // A successful shutdown removes that device's sessions; a failed one
+    // leaves its session in place so the same close can retry it.
+    yield* Effect.forEach(
+      closing,
+      (session) => shutdownDevice(session.hostId, session.deviceId, session.platform),
+      { discard: true },
+    );
+  }, closeLock.withPermit);
 
   const shutdown: DeviceService["Service"]["shutdown"] = Effect.fn("DeviceService.shutdown")(
     function* (input) {

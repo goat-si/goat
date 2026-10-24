@@ -49,7 +49,7 @@ const fixture = Effect.fn("fixture")(function* (
     | DeviceHost.AgentDeviceStartError,
   inspectError = false,
   installTool?: Parameters<typeof DeviceService.makeWithHosts>[3],
-  options: { readonly endsDevices?: boolean } = {},
+  options: { readonly endsDevices?: boolean; readonly rejectedShutdowns?: number } = {},
 ) {
   const settings = yield* Ref.make(DEFAULT_SERVER_SETTINGS);
   const starts: string[] = [];
@@ -61,11 +61,19 @@ const fixture = Effect.fn("fixture")(function* (
   const encoderResult = yield* Ref.make({ code: 0, stdout: " V....D libx264", stderr: "" });
   let booted = false;
   let shutDown = false;
+  let rejectedShutdowns = options.rejectedShutdowns ?? 0;
   const http = HttpClient.make((request) =>
     Effect.gen(function* () {
       requests.push(request.url);
       if (request.url.includes("/api/screenshot")) {
         return HttpClientResponse.fromWeb(request, new Response(new Uint8Array([137, 80, 78, 71])));
+      }
+      if (request.url.endsWith("/shutdown") && rejectedShutdowns > 0) {
+        rejectedShutdowns -= 1;
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json({ ok: false, error: "Emulator is busy" }),
+        );
       }
       if (request.url.endsWith("/shutdown")) {
         shutDown = true;
@@ -599,6 +607,39 @@ it.effect("keeps shutdown successful when subsequent discovery fails", () =>
     const state = yield* service.state;
     expect(state.sessions).toEqual([]);
     expect(state.devices.find((device) => device.id === session.deviceId)?.booted).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("a close whose shutdown fails keeps the session so the same close can retry it", () =>
+  Effect.gen(function* () {
+    const { service, requests } = yield* fixture(
+      Effect.void,
+      undefined,
+      false,
+      undefined,
+      false,
+      undefined,
+      {
+        rejectedShutdowns: 1,
+      },
+    );
+    yield* service.configure({ enabled: true });
+    const threadId = ThreadId.make("close-retry");
+    const session = yield* service.open({
+      threadId,
+      deviceId: "Pixel_API_35",
+      platform: "android",
+    });
+    const input = { threadId, deviceId: session.deviceId, shutdown: true };
+    const shutdowns = () => requests.filter((url) => url.endsWith("/shutdown")).length;
+
+    expect(Exit.isFailure(yield* Effect.exit(service.close(input)))).toBe(true);
+    expect(shutdowns()).toBe(1);
+    expect((yield* service.state).sessions).toEqual([session]);
+
+    yield* service.close(input);
+    expect(shutdowns()).toBe(2);
+    expect((yield* service.state).sessions).toEqual([]);
   }).pipe(Effect.scoped),
 );
 
