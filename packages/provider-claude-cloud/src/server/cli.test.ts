@@ -753,7 +753,6 @@ it.effect.each([
         .pipe(Effect.forkChild);
       yield* h.fake.ready;
       for (const character of output) h.fake.emit(character);
-      // A diagnostic is reported once the CLI exits, so its wrapped lines are complete.
       h.fake.finish(1);
       expect((yield* Fiber.join(fiber).pipe(Effect.flip)).outcome).toBe("uncertain");
       expect(h.starts).toHaveLength(1);
