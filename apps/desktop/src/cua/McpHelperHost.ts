@@ -81,7 +81,7 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
     | {
         process: McpHelperProcess;
         peer: ReturnType<typeof makeStdioMcpClient>;
-        pid?: number;
+        pid: number | undefined;
         ended: boolean;
         detach: () => void;
       }

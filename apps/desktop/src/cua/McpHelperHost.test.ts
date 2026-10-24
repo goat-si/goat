@@ -133,7 +133,9 @@ describe("macOS readiness MCP helper host", () => {
 
   it("bounds a missing service greeting without real-time waits", async (context) => {
     vi.useFakeTimers();
-    context.onTestFinished(() => vi.useRealTimers());
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const test = peer(null);
     const result = test.host.start().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(10_000);

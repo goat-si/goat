@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Bounds native stdio frames before decoding them.
-import type { Readable } from "node:stream";
+import type * as NodeStream from "node:stream";
 
 /** Bounds bytes even when a peer never sends a newline; preserves split UTF-8 sequences. */
 export function readBoundedLines(
-  input: Readable,
+  input: NodeStream.Readable,
   limit: number,
   line: (text: string) => void,
   fail: (error: Error) => void,

@@ -1,6 +1,6 @@
 // @effect-diagnostics globalTimers:off -- Deadlines belong to native stream callbacks outside Effect fibers.
 // @effect-diagnostics nodeBuiltinImport:off -- This client owns one native stdio transport.
-import type { Readable, Writable } from "node:stream";
+import type * as NodeStream from "node:stream";
 import type { ToolResult } from "@trycua/cua-driver";
 
 import { readBoundedLines } from "./boundedJsonLines.ts";
@@ -11,11 +11,10 @@ const PROTOCOL_VERSION = "2025-06-18";
 
 type ErrorCode = "closed" | "timeout" | "protocol_error" | "rpc_error" | "io_error" | "busy";
 export class StdioMcpError extends Error {
-  constructor(
-    readonly code: ErrorCode,
-    message: string,
-  ) {
+  readonly code: ErrorCode;
+  constructor(code: ErrorCode, message: string) {
     super(message);
+    this.code = code;
     this.name = "StdioMcpError";
   }
 }
@@ -61,15 +60,15 @@ function toolResult(value: unknown): ToolResult {
     text: texts.join("\n"),
     images,
     isError: result.isError === true,
-    structuredJson: structured === undefined ? undefined : JSON.stringify(structured),
+    ...(structured === undefined ? {} : { structuredJson: JSON.stringify(structured) }),
     degraded: false,
     rawJson: JSON.stringify(value),
   };
 }
 
 export function makeStdioMcpClient(transport: {
-  readonly stdin: Writable;
-  readonly stdout: Readable;
+  readonly stdin: NodeStream.Writable;
+  readonly stdout: NodeStream.Readable;
   readonly exited: Promise<unknown>;
 }) {
   const pending = new Map<

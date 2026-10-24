@@ -37,7 +37,7 @@ import {
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle, type HelperBundle } from "./ComputerUseHelper.ts";
+import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
@@ -57,23 +57,14 @@ import {
   type DesktopCuaDriverDependencies,
   type NativeHost,
   type Grants,
+  type Engine,
+  type CuaManifestScope,
 } from "./DesktopCuaNative.ts";
-export { bitmapHasContent, type DesktopCuaDriverDependencies } from "./DesktopCuaNative.ts";
-
-/**
- * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
- * driver (D1). "embedded": the SDK spawns it from this Electron process, for builds that do not
- * ship the helper yet.
- */
-type Engine =
-  | { readonly kind: "helper"; readonly bundle: HelperBundle }
-  | { readonly kind: "embedded"; readonly driverPath: string };
-
-/**
- * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
- * one daemon no agent ever holds, so its manifest admits only GOAT, the window it reads.
- */
-export type CuaManifestScope = "agents" | "verify";
+export {
+  bitmapHasContent,
+  type DesktopCuaDriverDependencies,
+  type CuaManifestScope,
+} from "./DesktopCuaNative.ts";
 
 interface OwnedHost {
   readonly host: NativeHost;

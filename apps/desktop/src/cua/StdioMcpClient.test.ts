@@ -1,14 +1,14 @@
 // @effect-diagnostics nodeBuiltinImport:off -- In-memory pipes exercise the MCP wire contract.
-import { PassThrough, Writable } from "node:stream";
+import * as NodeStream from "node:stream";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { makeStdioMcpClient, StdioMcpError } from "./StdioMcpClient.ts";
 
 const peer = (answer?: (request: Record<string, unknown>) => unknown) => {
-  const stdout = new PassThrough();
+  const stdout = new NodeStream.PassThrough();
   const exited = Promise.withResolvers<void>();
   const received: Record<string, unknown>[] = [];
-  const stdin = new Writable({
+  const stdin = new NodeStream.Writable({
     write(chunk, _encoding, done) {
       const request = JSON.parse(chunk.toString()) as Record<string, unknown>;
       received.push(request);
@@ -82,7 +82,9 @@ describe("stdio MCP client", () => {
 
   it("expires a pending call on its deadline without real time waits", async (context) => {
     vi.useFakeTimers();
-    context.onTestFinished(() => vi.useRealTimers());
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const test = peer();
     using client = test.client;
     await client.initialize();

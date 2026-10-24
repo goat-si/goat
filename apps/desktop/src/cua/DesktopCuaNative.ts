@@ -17,8 +17,22 @@ import {
 import { probeWindowsReadiness, windowsDriverPipe } from "./ComputerUseHelperWindows.ts";
 import { resolveHelperBundle } from "./ComputerUseHelperInstall.ts";
 import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
-import type { CuaManifestScope } from "./DesktopCuaDriver.ts";
 import { makeMcpHelperHost } from "./McpHelperHost.ts";
+
+/**
+ * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
+ * driver (D1). "embedded": the SDK spawns it from this Electron process, for builds that do not
+ * ship the helper yet.
+ */
+export type Engine =
+  | { readonly kind: "helper"; readonly bundle: HelperBundle }
+  | { readonly kind: "embedded"; readonly driverPath: string };
+
+/**
+ * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
+ * one process no agent ever holds, so its manifest admits only GOAT, the window it reads.
+ */
+export type CuaManifestScope = "agents" | "verify";
 
 /** The daemon lifecycle both engines share: the SDK's in-process host and the helper app. */
 export interface NativeHost {
