@@ -24,34 +24,11 @@ import { captureRoute } from "./windowCapture.ts";
 import { captureX11Window } from "./x11WindowCapture.ts";
 import {
   detectLinuxSession,
+  SESSION_NAMES,
   linuxCapabilities,
   linuxSessionFacts,
   readGnomeShellVersion,
 } from "./linuxSession.ts";
-
-/** What the driver may see of this process's environment: the session, nothing else. */
-const SESSION_NAMES = [
-  "PATH",
-  "HOME",
-  "USER",
-  "LOGNAME",
-  "LANG",
-  "LC_ALL",
-  "TMPDIR",
-  "DISPLAY",
-  "XAUTHORITY",
-  "WAYLAND_DISPLAY",
-  // The driver captures a Hyprland window by its own export only when it sees this.
-  "HYPRLAND_INSTANCE_SIGNATURE",
-  "XDG_RUNTIME_DIR",
-  "XDG_SESSION_TYPE",
-  "XDG_CURRENT_DESKTOP",
-  "XDG_DATA_DIRS",
-  "XDG_DATA_HOME",
-  "XDG_CACHE_HOME",
-  "XDG_CONFIG_HOME",
-  "DBUS_SESSION_BUS_ADDRESS",
-] as const;
 
 const SETTLE_MS = 300;
 const PARENT_CHECK_MS = 2_000;
