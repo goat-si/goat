@@ -8,8 +8,8 @@ import type { FleetGoal, RuntimeMode } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import type { ActionIssue } from "./goalPlan.ts";
-import { type GoalStore, NOT_SENT } from "./GoalStore.ts";
+import { type ActionIssue, desiredSlots } from "./goalPlan.ts";
+import { type GoalStore, NOT_SENT, type WorkerRecord } from "./GoalStore.ts";
 import {
   effectiveRuntimeMode,
   GoalOwnerAuthorityLost,
@@ -25,6 +25,18 @@ export type ActionKind = "launch" | "followup" | "fallback" | "interrupt";
  * or its worktree, so it is never adopted; with no thread, the same attempt is sent again.
  */
 export const OWNER_REFUSED = "owner_refused";
+
+/**
+ * A slot whose launch was refused before any thread existed: nothing started, so a wanted slot
+ * plans the same attempt again and a dropped slot, or a deleting goal's, just ends.
+ */
+export const refusedBeforeCreate = (goal: FleetGoal, worker: WorkerRecord): WorkerRecord => ({
+  ...worker,
+  state:
+    worker.slot >= desiredSlots(goal).length || goal.deletionRequestedAt !== null
+      ? "superseded"
+      : "placing",
+});
 
 export const isLost = Schema.is(GoalOwnerAuthorityLost);
 

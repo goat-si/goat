@@ -48,7 +48,7 @@ import {
   publicWorker,
   type WorkerRecord,
 } from "./GoalStore.ts";
-import { actionAuthority, isLost, OWNER_REFUSED } from "./GoalAuthority.ts";
+import { actionAuthority, isLost, OWNER_REFUSED, refusedBeforeCreate } from "./GoalAuthority.ts";
 import { renderPrompt } from "./goalPrompt.ts";
 import {
   effectiveRuntimeMode,
@@ -338,13 +338,8 @@ const make = Effect.gen(function* () {
               }
               const refused = (yield* store.claimOf(action.actionId))?.outcome === OWNER_REFUSED;
               if (refused && found.success === null) {
-                // Nothing started: a wanted slot plans the same attempt again, a dropped one ends.
                 yield* store.settle(action.actionId, NOT_SENT, nowIso);
-                const dropped = worker.slot >= desiredSlots(goal).length;
-                return void workers.set(worker.slot, {
-                  ...worker,
-                  state: dropped || goal.deletionRequestedAt !== null ? "superseded" : "placing",
-                });
+                return void workers.set(worker.slot, refusedBeforeCreate(goal, worker));
               }
               if (found.success !== null && !refused) {
                 const thread = found.success;

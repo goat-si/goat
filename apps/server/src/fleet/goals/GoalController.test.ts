@@ -1,327 +1,31 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  EnvironmentAuthorizationError,
-  FleetGoalId,
-  OrchestratorMcpFailure,
-  ProviderInstanceId,
-  RunId,
-  ThreadId,
-} from "@goat/contracts";
+import { FleetGoalId, ProviderInstanceId, RunId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
-import { HubDown, type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
+import { type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
 import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
-import * as SqlitePersistence from "../../persistence/Sqlite.ts";
-import * as ServerSettings from "../../serverSettings.ts";
-import * as FleetDefaults from "../defaults.ts";
-import { Health, type ThreadHealth } from "../health/Health.ts";
-import { Fallback } from "../resources/Fallback.ts";
-import { Placement } from "../resources/Placement.ts";
-import { OWNER_REFUSED } from "./GoalAuthority.ts";
-import { GoalController, layer as controllerLayer } from "./GoalController.ts";
-import { LAUNCH_GRACE_MS, type PullRequestObservation } from "./goalPlan.ts";
-import { GoalRecovery } from "./GoalRecovery.ts";
-import { GoalStore, layer as goalStoreLayer, NOT_SENT } from "./GoalStore.ts";
+import { type ThreadHealth } from "../health/Health.ts";
+import { GoalController } from "./GoalController.ts";
+import { LAUNCH_GRACE_MS } from "./goalPlan.ts";
+import { GoalStore, NOT_SENT } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 import {
-  GoalOwnerAuthorityLost,
-  GoalWorkerRuntime,
-  type LaunchRequest,
-  type OwnerAccess,
-  type WorkerReading,
-} from "./GoalWorkerRuntime.ts";
-
-interface Fake {
-  readonly launches: Array<LaunchRequest & { readonly mode: string }>;
-  readonly followUps: Array<{ readonly actionId: string; readonly message: string }>;
-  readonly interrupts: Array<string>;
-  /** Threads that exist, by launch action id. */
-  readonly threads: Map<string, ThreadId>;
-  /** Threads whose run ended. */
-  readonly ended: Set<string>;
-  crashAfterStart: boolean;
-  failAfterStart: boolean;
-  crashFollowUp: boolean;
-  lookupFails: boolean;
-  /** Owner answers, one per call; the last repeats. */
-  owners: Array<OwnerAccess | { readonly unavailable: string }>;
-  /** Runs once, inside the next launch, after the thread exists. */
-  duringLaunch: Effect.Effect<void> | null;
-  /** Runs once, inside the next launch, follow-up or interrupt, right before its confirm. */
-  beforeConfirm: Effect.Effect<void> | null;
-  /** Makes the next launch create its thread and then lose its owner, as a refused first message does. */
-  loseAfterCreate: boolean | "goalChanged";
-  reading: (threadId: string) => WorkerReading;
-  pullRequest: PullRequestObservation;
-}
-
-const access = (runtimeMode: OwnerAccess["runtimeMode"] = "full-access"): OwnerAccess => ({
-  scope: {} as OwnerAccess["scope"],
-  runtimeMode,
-  canReachHosts: runtimeMode === "full-access",
-});
-
-const running = (threadId: string, fake: Fake): WorkerReading =>
-  fake.ended.has(threadId)
-    ? {
-        kind: "seen",
-        terminal: true,
-        runId: RunId.make("run:1"),
-        runStatus: "interrupted",
-        lastActivityAt: null,
-        result: null,
-      }
-    : {
-        kind: "seen",
-        terminal: false,
-        runId: RunId.make("run:1"),
-        runStatus: "running",
-        lastActivityAt: null,
-        result: null,
-      };
-
-const failedRun = (runId: string): WorkerReading => ({
-  kind: "seen",
-  terminal: true,
-  runId: RunId.make(runId),
-  runStatus: "failed",
-  lastActivityAt: null,
-  result: null,
-});
-
-const makeFake = (): Fake => {
-  const fake: Fake = {
-    launches: [],
-    followUps: [],
-    interrupts: [],
-    threads: new Map(),
-    ended: new Set(),
-    crashAfterStart: false,
-    failAfterStart: false,
-    crashFollowUp: false,
-    lookupFails: false,
-    owners: [access()],
-    duringLaunch: null,
-    beforeConfirm: null,
-    loseAfterCreate: false,
-    reading: (threadId) => running(threadId, fake),
-    pullRequest: { kind: "seen", state: "open", checks: "pending" },
-  };
-  return fake;
-};
-
-/** What the runtime does last before it hands a command over: the controller's confirm. */
-const confirmLast = <E>(fake: Fake, confirm: Effect.Effect<void, E>) =>
-  Effect.suspend(() => {
-    const before = fake.beforeConfirm ?? Effect.void;
-    fake.beforeConfirm = null;
-    return Effect.andThen(before, confirm);
-  });
-
-const runtimeFor = (fake: Fake) =>
-  Layer.succeed(GoalWorkerRuntime, {
-    owner: () =>
-      Effect.sync(() => (fake.owners.length > 1 ? fake.owners.shift()! : fake.owners[0]!)),
-    observeWorker: (_access, _goal, worker) => Effect.sync(() => fake.reading(worker.threadId!)),
-    observePullRequest: () => Effect.sync(() => fake.pullRequest),
-    observeIssue: () => Effect.succeed("open" as const),
-    findLaunched: (_access, _goal, actionId) =>
-      fake.lookupFails
-        ? Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "busy" }))
-        : Effect.sync(() => {
-            const threadId = fake.threads.get(actionId);
-            return threadId === undefined ? null : { host: null, threadId, runId: null };
-          }),
-    launch: (current, request, confirm) =>
-      Effect.gen(function* () {
-        yield* confirmLast(fake, confirm);
-        fake.launches.push({ ...request, mode: current.runtimeMode });
-        const threadId = ThreadId.make("thread:worker-" + fake.launches.length);
-        fake.threads.set(request.actionId, threadId);
-        if (fake.loseAfterCreate !== false) {
-          const goalChanged = fake.loseAfterCreate === "goalChanged";
-          fake.loseAfterCreate = false;
-          if (goalChanged && fake.duringLaunch !== null) {
-            const run = fake.duringLaunch;
-            fake.duringLaunch = null;
-            yield* run;
-          }
-          return yield* new GoalOwnerAuthorityLost({ message: "revoked", goalChanged });
-        }
-        if (fake.duringLaunch !== null) {
-          const run = fake.duringLaunch;
-          fake.duringLaunch = null;
-          yield* run;
-        }
-        if (fake.crashAfterStart) {
-          fake.crashAfterStart = false;
-          return yield* Effect.die("server stopped mid-launch");
-        }
-        if (fake.failAfterStart) {
-          fake.failAfterStart = false;
-          return yield* new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: "lost reply",
-          });
-        }
-        return { host: null, threadId, runId: RunId.make("run:1") };
-      }),
-    followUp: (_access, _goal, _worker, message, actionId, confirm) =>
-      Effect.suspend(() => {
-        if (fake.crashFollowUp) {
-          fake.crashFollowUp = false;
-          return Effect.die("server stopped before the send");
-        }
-        return confirmLast(fake, confirm).pipe(
-          Effect.andThen(Effect.sync(() => void fake.followUps.push({ actionId, message }))),
-        );
-      }),
-    interrupt: (_access, worker, _actionId, confirm) =>
-      confirmLast(fake, confirm).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            fake.interrupts.push(worker.threadId!);
-            fake.ended.add(worker.threadId!);
-          }),
-        ),
-      ),
-  });
-
-/** This machine only, like the design's first release; SSH hosts are refused. */
-/** This machine only, like the design's first release, unless a test asks it to place remotely. */
-const placementFor = (placeRemote: boolean) =>
-  Layer.succeed(Placement, {
-    place: (request) =>
-      Effect.succeed(
-        placeRemote
-          ? {
-              _tag: "Placed" as const,
-              host: "mac-studio",
-              modelSelection: request.modelSelection,
-              reason: undefined,
-            }
-          : (request.hostSelector.hosts ?? [null]).includes(null)
-            ? {
-                _tag: "Placed" as const,
-                host: null,
-                modelSelection: request.modelSelection,
-                reason: undefined,
-              }
-            : {
-                _tag: "Refused" as const,
-                reasons: (request.hostSelector.hosts ?? []).map((host) => ({
-                  host,
-                  reason: {
-                    code: "placement_unavailable" as const,
-                    message: "placement_unavailable",
-                  },
-                })),
-              },
-      ),
-    status: Effect.die("unused"),
-    statusOf: () => Effect.die("unused"),
-  });
-
-const noFallback = Layer.succeed(Fallback, {
-  next: () => Effect.succeed({ _tag: "Exhausted" as const, reason: "No chain." }),
-  reportFailure: () => Effect.void,
-  cooldowns: Effect.succeed([]),
-  coversThreads: Effect.succeed(false),
-  continueThread: () => Effect.succeed(false),
-});
-
-let healthOf = (): ThreadHealth => ({ _tag: "healthy" });
-const healthy = Layer.succeed(Health, {
-  hostCondition: (host) => Effect.succeed({ host, conditions: [], observedAt: "" }),
-  threadHealth: () => Effect.sync(() => healthOf()),
-});
-
-/** Later attempts start like first ones; GoalRecovery.test.ts covers resuming earlier work. */
-const freshStarts = Layer.succeed(GoalRecovery, {
-  capture: () => Effect.void,
-  resume: () => Effect.succeed({ _tag: "Start" as const, workspace: null, note: null }),
-  forget: () => Effect.void,
-});
-
-const persistence = (path: string | undefined) =>
-  path === undefined
-    ? SqlitePersistence.layerMemory
-    : SqlitePersistence.layerFromPath(path).pipe(Layer.provide(NodeServices.layer));
-
-const layerFor = (
-  fake: Fake,
-  options: {
-    readonly enabled?: boolean;
-    readonly path?: string;
-    readonly placeRemote?: boolean;
-    readonly hubDown?: HubDownShape;
-  } = {},
-) =>
-  controllerLayer.pipe(
-    Layer.provide(
-      options.hubDown === undefined ? Layer.empty : Layer.succeed(HubDown, options.hubDown),
-    ),
-    Layer.provideMerge(goalStoreLayer),
-    Layer.provideMerge(persistence(options.path)),
-    Layer.provide(runtimeFor(fake)),
-    Layer.provide(
-      Layer.mergeAll(
-        placementFor(options.placeRemote === true),
-        FleetDefaults.layerRescheduler,
-        noFallback,
-        healthy,
-        freshStarts,
-      ),
-    ),
-    Layer.provide(
-      ServerSettings.ServerSettingsService.layerTest({
-        fleet: { controllerEnabled: options.enabled ?? true },
-      }),
-    ),
-  );
-
-const withWorkers = (id: string, count: number, overrides: Parameters<typeof testSpec>[0] = {}) =>
-  testGoal(id, {
-    spec: testSpec({
-      ...overrides,
-      workers: { ...testSpec().workers, count },
-      limits: { ...testSpec().limits, maxWorkers: Math.max(count, 1) },
-    }),
-  });
-
-const insert = (goal: ReturnType<typeof testGoal>) =>
-  GoalStore.pipe(Effect.flatMap((store) => store.create(goal, "thread:thread:owner", null)));
-
-const record = (id: string) =>
-  GoalStore.pipe(
-    Effect.flatMap((store) => store.get(FleetGoalId.make(id))),
-    Effect.map((found) => found!),
-  );
-
-const pass = (id: string) =>
-  Effect.gen(function* () {
-    const controller = yield* GoalController;
-    return yield* controller.reconcile(yield* record(id), 10);
-  });
-
-const setCount = (id: string, count: number) =>
-  Effect.gen(function* () {
-    const store = yield* GoalStore;
-    const { goal } = yield* record(id);
-    yield* store.updateSpec(
-      {
-        ...goal,
-        spec: { ...goal.spec, workers: { ...goal.spec.workers, count } },
-        generation: goal.generation + 1,
-      },
-      goal.generation,
-    );
-  });
+  access,
+  running,
+  failedRun,
+  makeFake,
+  layerFor,
+  withWorkers,
+  insert,
+  record,
+  pass,
+  setCount,
+  setHealth,
+} from "./GoalController.testkit.ts";
 
 /**
  * A slot row as the controller before #1472 wrote it: launched, its run 5 marked followed up, and
@@ -457,256 +161,6 @@ describe("GoalController", () => {
           threadId: "thread:worker-1",
           state: "superseded",
         });
-      }).pipe(Effect.provide(layerFor(fake)));
-    },
-  );
-
-  describe("acts only with the authority its owner holds when the command goes out (#493)", () => {
-    const blocked = (id: string) =>
-      record(id).pipe(
-        Effect.map(({ goal }) => goal.status.conditions.find((c) => c.type === "Blocked")),
-      );
-
-    it.effect("stops a worker only if its owner can still act after the interrupt's claim", () => {
-      const fake = makeFake();
-      return Effect.gen(function* () {
-        const store = yield* GoalStore;
-        yield* insert(withWorkers("goal_stop", 1));
-        yield* pass("goal_stop");
-        yield* setCount("goal_stop", 0);
-        // Live when the pass looks and plans, gone once the interrupt is claimed.
-        fake.owners = [access(), access(), { unavailable: "The session was revoked." }, access()];
-        yield* pass("goal_stop");
-        expect(fake.interrupts).toEqual([]);
-        const actionId = "goal:goal_stop:s0:a1:run:1:interrupt";
-        expect(yield* store.claimOf(actionId)).toMatchObject({ outcome: NOT_SENT });
-        expect(yield* blocked("goal_stop")).toMatchObject({
-          status: "True",
-          reason: "OwnerAuthorityLost",
-          message: "The session was revoked.",
-        });
-        // Once the owner can act again, the same interrupt goes out.
-        yield* pass("goal_stop");
-        expect(fake.interrupts).toEqual(["thread:worker-1"]);
-      }).pipe(Effect.provide(layerFor(fake)));
-    });
-
-    it.effect(
-      "sends nothing when the owner's mode drops below the plan right before the send",
-      () => {
-        const fake = makeFake();
-        return Effect.gen(function* () {
-          const store = yield* GoalStore;
-          // Full access through the claim; the last confirm finds the owner narrowed.
-          fake.owners = [access(), access(), access(), access("auto-accept-edits")];
-          yield* insert(withWorkers("goal_narrowed", 1));
-          yield* pass("goal_narrowed");
-          expect(fake.launches).toEqual([]);
-          const [claim] = yield* store.launches(FleetGoalId.make("goal_narrowed"));
-          expect(claim).toMatchObject({ outcome: NOT_SENT });
-          expect(yield* blocked("goal_narrowed")).toMatchObject({ reason: "OwnerAuthorityLost" });
-          // The next pass plans at the owner's mode as it is now and launches at that.
-          yield* pass("goal_narrowed");
-          expect(fake.launches.map((launch) => launch.mode)).toEqual(["auto-accept-edits"]);
-        }).pipe(Effect.provide(layerFor(fake)));
-      },
-    );
-
-    it.effect("sends nothing when the session is revoked after the owner was read", () => {
-      const fake = makeFake();
-      return Effect.gen(function* () {
-        const store = yield* GoalStore;
-        // The owner read succeeds, then its session's live grant is gone by the final check.
-        const revokedSince: OwnerAccess = {
-          ...access(),
-          scope: {
-            reauthorize: () =>
-              Effect.fail(
-                new EnvironmentAuthorizationError({
-                  message: "The MCP session is no longer active.",
-                  requiredScope: "orchestration:operate",
-                }),
-              ),
-          } as unknown as OwnerAccess["scope"],
-        };
-        fake.owners = [access(), access(), access(), revokedSince, access()];
-        yield* insert(withWorkers("goal_revoked_late", 1));
-        yield* pass("goal_revoked_late");
-        expect(fake.launches).toEqual([]);
-        const [claim] = yield* store.launches(FleetGoalId.make("goal_revoked_late"));
-        expect(claim).toMatchObject({ outcome: NOT_SENT });
-        expect(yield* blocked("goal_revoked_late")).toMatchObject({ reason: "OwnerAuthorityLost" });
-      }).pipe(Effect.provide(layerFor(fake)));
-    });
-
-    it.effect("sends nothing when the goal changes right before the send, and replans", () => {
-      const fake = makeFake();
-      return Effect.gen(function* () {
-        const store = yield* GoalStore;
-        yield* insert(withWorkers("goal_moved", 1));
-        // An apply lowers the ceiling (a new generation) after the claim, before the send.
-        fake.beforeConfirm = Effect.gen(function* () {
-          const { goal } = yield* record("goal_moved");
-          yield* store.updateSpec(
-            {
-              ...goal,
-              owner: { ...goal.owner, runtimeModeCeiling: "auto-accept-edits" },
-              generation: goal.generation + 1,
-            },
-            goal.generation,
-          );
-        }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
-        yield* pass("goal_moved");
-        expect(fake.launches).toEqual([]);
-        const [claim] = yield* store.launches(FleetGoalId.make("goal_moved"));
-        expect(claim).toMatchObject({ outcome: NOT_SENT });
-        // A changed goal is replanned, not blocked.
-        expect(yield* blocked("goal_moved")).not.toMatchObject({ status: "True" });
-
-        // A follow-up whose goal is paused right before the send is not sent either.
-        yield* pass("goal_moved");
-        expect(fake.launches).toHaveLength(1);
-        fake.reading = () => ({
-          kind: "seen",
-          terminal: true,
-          runId: RunId.make("run:9"),
-          runStatus: "completed",
-          lastActivityAt: null,
-          result: { reported: false, pullRequest: null },
-        });
-        fake.beforeConfirm = Effect.gen(function* () {
-          const { goal } = yield* record("goal_moved");
-          yield* store.updateSpec(
-            { ...goal, spec: { ...goal.spec, paused: true }, generation: goal.generation + 1 },
-            goal.generation,
-          );
-        }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
-        yield* pass("goal_moved");
-        expect(fake.followUps).toEqual([]);
-      }).pipe(Effect.provide(layerFor(fake)));
-    });
-
-    it.effect(
-      "ends an attempt whose thread was created but whose first message was refused",
-      () => {
-        const fake = makeFake();
-        return Effect.gen(function* () {
-          const store = yield* GoalStore;
-          yield* insert(withWorkers("goal_half", 1));
-          fake.loseAfterCreate = true;
-          yield* pass("goal_half");
-          const [claim] = yield* store.launches(FleetGoalId.make("goal_half"));
-          expect(claim).toMatchObject({ outcome: OWNER_REFUSED });
-          expect(yield* blocked("goal_half")).toMatchObject({ reason: "OwnerAuthorityLost" });
-          // The next pass moves the slot on rather than adopt the empty thread, and the one after
-          // starts attempt 2, never attempt 1 again.
-          yield* pass("goal_half");
-          expect((yield* record("goal_half")).workers[0]).toMatchObject({
-            attempt: 2,
-            threadId: null,
-          });
-          yield* pass("goal_half");
-          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
-            "goal:goal_half:s0:a1:launch",
-            "goal:goal_half:s0:a2:launch",
-          ]);
-        }).pipe(Effect.provide(layerFor(fake)));
-      },
-    );
-
-    it.effect.each([false, true])(
-      "never adopts that empty thread when the goal moved on and its status was lost (lookup fails: %s)",
-      (lookupFails) => {
-        const fake = makeFake();
-        return Effect.gen(function* () {
-          const store = yield* GoalStore;
-          yield* insert(withWorkers("goal_half_moved", 1));
-          // The thread exists, then an apply moves the goal on, so the first message is refused and
-          // this pass's status write is refused too.
-          fake.loseAfterCreate = "goalChanged";
-          fake.duringLaunch = Effect.gen(function* () {
-            const { goal } = yield* record("goal_half_moved");
-            yield* store.updateSpec(
-              { ...goal, title: "Renamed", generation: goal.generation + 1 },
-              goal.generation,
-            );
-          }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
-          // The thread lookup right after the refusal may fail too.
-          fake.lookupFails = lookupFails;
-          yield* pass("goal_half_moved");
-          fake.lookupFails = false;
-          yield* pass("goal_half_moved");
-          yield* pass("goal_half_moved");
-          const workers = (yield* record("goal_half_moved")).workers;
-          expect(workers.find((worker) => worker.threadId === "thread:worker-1")).toBeUndefined();
-          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
-            "goal:goal_half_moved:s0:a1:launch",
-            "goal:goal_half_moved:s0:a2:launch",
-          ]);
-        }).pipe(Effect.provide(layerFor(fake)));
-      },
-    );
-  });
-
-  it.effect(
-    "sends the same attempt again, across a restart, when a launch was refused before its thread existed",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = (yield* fs.makeTempDirectoryScoped()) + "/state.sqlite";
-        const fake = makeFake();
-        // Live through the claim; the last confirm finds the owner gone, and the lookup after fails.
-        fake.owners = [access(), access(), access(), { unavailable: "Revoked." }, access()];
-        fake.lookupFails = true;
-        const onlyAttempt = testGoal("goal_refused", {
-          spec: testSpec({ limits: { ...testSpec().limits, maxAttemptsPerWorker: 1 } }),
-        });
-        yield* Effect.gen(function* () {
-          yield* insert(onlyAttempt);
-          yield* pass("goal_refused");
-          const [claim] = yield* (yield* GoalStore).launches(onlyAttempt.id);
-          expect(claim).toMatchObject({ outcome: OWNER_REFUSED });
-        }).pipe(Effect.provide(layerFor(fake, { path })));
-        fake.lookupFails = false;
-        yield* Effect.gen(function* () {
-          // Even past the launch grace, a refusal that started nothing spends no attempt.
-          yield* TestClock.adjust(LAUNCH_GRACE_MS + 1);
-          yield* pass("goal_refused");
-          yield* pass("goal_refused");
-          expect(fake.launches.map((launch) => launch.actionId)).toEqual([
-            "goal:goal_refused:s0:a1:launch",
-          ]);
-          expect((yield* record("goal_refused")).goal.status.phase).not.toBe("failed");
-        }).pipe(Effect.provide(layerFor(fake, { path })));
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect.each(["deleted", "dropped"] as const)(
-    "finishes a slot that is %s after a launch was refused before its thread existed",
-    (change) => {
-      const fake = makeFake();
-      return Effect.gen(function* () {
-        const store = yield* GoalStore;
-        fake.owners = [access(), access(), access(), { unavailable: "Revoked." }, access()];
-        fake.lookupFails = true;
-        yield* insert(withWorkers("goal_refused_gone", 1));
-        yield* pass("goal_refused_gone");
-        fake.lookupFails = false;
-        if (change === "deleted")
-          yield* store.requestDeletion(
-            FleetGoalId.make("goal_refused_gone"),
-            "2026-10-20T00:00:00.000Z",
-          );
-        else yield* setCount("goal_refused_gone", 0);
-        const id = FleetGoalId.make("goal_refused_gone");
-        for (let i = 0; i < 4 && (yield* store.get(id)) !== null; i++) yield* pass(id);
-        expect(fake.launches).toEqual([]);
-        if (change === "deleted")
-          expect(yield* store.get(FleetGoalId.make("goal_refused_gone"))).toBeNull();
-        else
-          expect((yield* record("goal_refused_gone")).workers[0]).toMatchObject({
-            state: "superseded",
-          });
       }).pipe(Effect.provide(layerFor(fake)));
     },
   );
@@ -934,11 +388,11 @@ describe("GoalController", () => {
         result: null,
         usageLimitResetAt: "1970-01-01T00:10:00.000Z",
       });
-      healthOf = () => ({
+      setHealth(() => ({
         _tag: "failed",
         failureClass: "usage_limit",
         runId: RunId.make("run:5"),
-      });
+      }));
       // First the fallback gets the run (none configured), then it waits for the reset.
       yield* pass("goal_limit");
       yield* pass("goal_limit");
@@ -946,7 +400,7 @@ describe("GoalController", () => {
       yield* TestClock.adjust(11 * 60_000);
       yield* pass("goal_limit");
       yield* pass("goal_limit");
-      healthOf = () => ({ _tag: "healthy" });
+      setHealth(() => ({ _tag: "healthy" }));
       expect(fake.followUps).toEqual([
         {
           actionId: "goal:goal_limit:s0:a1:run:5:resume",
@@ -975,10 +429,10 @@ describe("GoalController", () => {
         );
         fake.reading = (threadId) =>
           threadId === "thread:worker-4" ? running(threadId, fake) : failedRun("run:5");
-        healthOf = failedHealth;
+        setHealth(failedHealth);
         for (const id of ["goal_stranded", "goal_hopped", "goal_remote"])
           for (let round = 0; round < 3; round += 1) yield* pass(id);
-        healthOf = () => ({ _tag: "healthy" });
+        setHealth(() => ({ _tag: "healthy" }));
         expect(fake.launches.map((launch) => launch.actionId)).toEqual([
           "goal:goal_stranded:s0:a1:launch",
           "goal:goal_hopped:s0:a1:launch",
@@ -1008,7 +462,7 @@ describe("GoalController", () => {
         const id = "goal:goal_lost:s0:a1:run:5:reschedule";
         yield* legacyRow("goal_lost", id, "refused", "box");
         fake.reading = () => failedRun("run:5");
-        healthOf = failedHealth;
+        setHealth(failedHealth);
         // Observing and acting see the owner; it is gone right after the move is claimed.
         fake.owners = [
           access(),
@@ -1020,7 +474,7 @@ describe("GoalController", () => {
         expect((yield* store.claimOf(id))?.outcome).toBe(NOT_SENT);
         yield* pass("goal_lost");
         yield* pass("goal_lost");
-        healthOf = () => ({ _tag: "healthy" });
+        setHealth(() => ({ _tag: "healthy" }));
         expect((yield* store.claimOf(id))?.outcome).toBe("refused");
         const refusals = (yield* store.events(FleetGoalId.make("goal_lost"), 50)).filter(
           (event) => event.reason === "RescheduleRefused",
@@ -1119,7 +573,7 @@ describe("GoalController", () => {
             "refused",
           );
           fake.reading = () => failedRun("run:5");
-          healthOf = failedHealth;
+          setHealth(failedHealth);
           yield* pass("goal_lost_write");
           // The row as it was before that pass: a spec change in between rejected its write.
           yield* sql`
@@ -1130,7 +584,7 @@ describe("GoalController", () => {
           hub.work = UNAFFECTED;
           yield* pass("goal_lost_write");
           yield* pass("goal_lost_write");
-          healthOf = () => ({ _tag: "healthy" });
+          setHealth(() => ({ _tag: "healthy" }));
           expect(fake.followUps.map((followUp) => followUp.actionId)).toEqual([
             "goal:goal_lost_write:s0:a1:run:5:hub-hop",
           ]);
