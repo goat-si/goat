@@ -191,6 +191,10 @@ export class GoalStore extends Context.Service<
     readonly launches: (
       id: FleetGoalId,
     ) => Effect.Effect<ReadonlyArray<LaunchClaim>, GoalStoreError>;
+    /** Fallbacks that continued their run in its own thread, by action id. */
+    readonly switchedFallbacks: (
+      id: FleetGoalId,
+    ) => Effect.Effect<ReadonlyArray<string>, GoalStoreError>;
     /** When an action was claimed and whether it settled; null when it never was. */
     readonly claimOf: (actionId: string) => Effect.Effect<
       {
@@ -720,6 +724,14 @@ const make = Effect.gen(function* () {
             : { claimedAt: row.claimed_at, settledAt: row.settled_at, outcome: row.outcome },
         ),
       ),
+    switchedFallbacks: (id) =>
+      run(
+        "GoalStore.switchedFallbacks",
+        sql<{ readonly action_id: string }>`
+          SELECT action_id FROM fleet_goal_actions
+          WHERE goal_id = ${id} AND kind = 'fallback' AND outcome = 'switched'
+        `,
+      ).pipe(Effect.map((rows) => rows.map((row) => row.action_id))),
     ownsThread: (threadId) =>
       run(
         "GoalStore.ownsThread",

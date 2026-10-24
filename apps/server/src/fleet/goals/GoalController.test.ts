@@ -821,5 +821,40 @@ describe("GoalController", () => {
         }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
       },
     );
+
+    it.effect(
+      "does not recover a stranded slot again after its hop was sent, even if that pass's status write was lost (#1452)",
+      () => {
+        const fake = makeFake();
+        const own = { instanceId: ProviderInstanceId.make("codex-own"), model: "gpt-6.1-sol" };
+        const { hub, shape } = scriptedHub({ _tag: "Hop", selection: own, notice: "moved" });
+        return Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* legacyRow(
+            "goal_lost_write",
+            "goal:goal_lost_write:s0:a1:run:5:reschedule",
+            "refused",
+          );
+          fake.reading = () => failedRun("run:5");
+          healthOf = failedHealth;
+          yield* pass("goal_lost_write");
+          // The row as it was before that pass: a spec change in between rejected its write.
+          yield* sql`
+            UPDATE fleet_goal_workers
+            SET detail_json = json_remove(detail_json, '$.recoveredRunId')
+            WHERE goal_id = 'goal_lost_write'
+          `;
+          hub.work = UNAFFECTED;
+          yield* pass("goal_lost_write");
+          yield* pass("goal_lost_write");
+          healthOf = () => ({ _tag: "healthy" });
+          expect(fake.followUps.map((followUp) => followUp.actionId)).toEqual([
+            "goal:goal_lost_write:s0:a1:run:5:hub-hop",
+          ]);
+          expect(fake.launches).toHaveLength(1);
+          expect((yield* record("goal_lost_write")).workers[0]).toMatchObject({ attempt: 1 });
+        }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
+      },
+    );
   });
 });

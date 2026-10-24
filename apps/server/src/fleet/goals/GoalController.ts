@@ -197,6 +197,7 @@ const make = Effect.gen(function* () {
         workers,
         launchClaims,
         unmovedReschedules,
+        switchedFallbacks: new Set(yield* store.switchedFallbacks(goal.id)),
         pullRequests,
         issues,
         turns: yield* store.turns(goal.id),

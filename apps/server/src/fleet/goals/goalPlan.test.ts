@@ -24,6 +24,7 @@ const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => (
   workers: new Map(),
   launchClaims: new Map(),
   unmovedReschedules: new Set(),
+  switchedFallbacks: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
   turns: 0,
