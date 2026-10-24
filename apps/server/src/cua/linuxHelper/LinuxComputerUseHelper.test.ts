@@ -23,9 +23,11 @@ import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
+  linuxSessionFacts,
   pngColors,
   type LinuxSessionFacts,
 } from "./linuxSession.ts";
+import { readLinuxReadiness } from "./readiness.ts";
 
 const decodeObservation = Schema.decodeUnknownSync(ComputerUseObservation);
 const decodeResult = Schema.decodeUnknownSync(ComputerUseActionResult);
@@ -353,6 +355,39 @@ async function connect(
     close: async () => (input.end(), served),
   };
 }
+
+describe("Linux session facts", () => {
+  it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
+    let versionReads = 0;
+    const gnomeShellVersion = () => {
+      versionReads++;
+      return "GNOME Shell 50.1\n";
+    };
+    const facts = linuxSessionFacts(
+      { WAYLAND_DISPLAY: "wayland-0", XDG_CURRENT_DESKTOP: "ubuntu:GNOME" },
+      gnomeShellVersion,
+    );
+    const calls: string[] = [];
+    const readiness = await readLinuxReadiness(
+      {
+        session: detectLinuxSession(facts),
+        uinputWritable: async () => true,
+        secureFocus: async () => NOT_SECURE,
+        call: async (tool) => {
+          calls.push(tool);
+          return "unexpected";
+        },
+      },
+      15_000,
+    );
+    expect(facts.gnomeShellMajor).toBe(50);
+    expect(computerUseReady(readiness)).toBe(false);
+    expect(calls).toEqual([]);
+    // Only Wayland GNOME reads the version; X11 never runs gnome-shell.
+    linuxSessionFacts({ DISPLAY: ":0", XDG_CURRENT_DESKTOP: "GNOME" }, gnomeShellVersion);
+    expect(versionReads).toBe(1);
+  });
+});
 
 describe("Linux computer use helper conformance", () => {
   it("hello binds the helper and names every protocol method as supported or unsupported", async () => {

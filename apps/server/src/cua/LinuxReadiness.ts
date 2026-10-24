@@ -9,7 +9,11 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { gdbusRunner, makeSecureFocusProbe } from "./linuxHelper/atspiFocus.ts";
-import { detectLinuxSession } from "./linuxHelper/linuxSession.ts";
+import {
+  detectLinuxSession,
+  linuxSessionFacts,
+  readGnomeShellVersion,
+} from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
 
@@ -40,13 +44,10 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
         ...environment,
         ...Object.fromEntries(display.map(({ name, value }) => [name, value])),
       };
-      const session = detectLinuxSession({
-        display: sessionEnvironment.DISPLAY,
-        waylandDisplay: sessionEnvironment.WAYLAND_DISPLAY,
-        sessionBus: sessionEnvironment.DBUS_SESSION_BUS_ADDRESS,
-        currentDesktop: sessionEnvironment.XDG_CURRENT_DESKTOP,
-        gnomeShellMajor: null,
-      });
+      // The helper's own judgement of this session: GNOME 50+ on Wayland is refused, never probed.
+      const session = detectLinuxSession(
+        linuxSessionFacts(sessionEnvironment, () => readGnomeShellVersion(sessionEnvironment)),
+      );
       const secureFocus = makeSecureFocusProbe(
         gdbusRunner(
           Object.fromEntries(

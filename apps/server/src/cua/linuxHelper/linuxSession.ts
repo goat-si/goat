@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; zlib reads its own capture.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeZlib from "node:zlib";
 
 import {
@@ -77,6 +78,50 @@ export function detectLinuxSession(facts: LinuxSessionFacts): LinuxSession {
   // 0.37.0 ships its Wayland backend off.
   return { ...base, driverEnvironment: { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" } };
 }
+
+/** The session environment variables a Linux session's facts come from. */
+export interface LinuxSessionEnvironment {
+  readonly DISPLAY?: string | undefined;
+  readonly WAYLAND_DISPLAY?: string | undefined;
+  readonly DBUS_SESSION_BUS_ADDRESS?: string | undefined;
+  readonly XDG_CURRENT_DESKTOP?: string | undefined;
+}
+
+/**
+ * The facts the helper and the server's readiness check both judge a session by, so neither can
+ * call a desktop ready that the other refuses. GNOME Shell's version decides only on Wayland GNOME,
+ * so only there is it read.
+ */
+export const linuxSessionFacts = (
+  environment: LinuxSessionEnvironment,
+  gnomeShellVersion: () => string | null,
+): LinuxSessionFacts => {
+  const facts = {
+    display: environment.DISPLAY,
+    waylandDisplay: environment.WAYLAND_DISPLAY,
+    sessionBus: environment.DBUS_SESSION_BUS_ADDRESS,
+    currentDesktop: environment.XDG_CURRENT_DESKTOP,
+  };
+  const waylandGnome =
+    !facts.display &&
+    facts.waylandDisplay !== undefined &&
+    /GNOME/iu.test(facts.currentDesktop ?? "");
+  const version = waylandGnome ? gnomeShellVersion() : null;
+  return { ...facts, gnomeShellMajor: version === null ? null : parseGnomeShellMajor(version) };
+};
+
+/** `gnome-shell --version` in the session's environment, or null when it cannot be read. */
+export const readGnomeShellVersion = (environment: NodeJS.ProcessEnv): string | null => {
+  try {
+    return NodeChildProcess.execFileSync("gnome-shell", ["--version"], {
+      timeout: 2_000,
+      encoding: "utf8",
+      env: environment,
+    });
+  } catch {
+    return null;
+  }
+};
 
 export const parseGnomeShellMajor = (output: string): number | null => {
   const match = /GNOME Shell (\d+)/u.exec(output);

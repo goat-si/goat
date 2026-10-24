@@ -7,7 +7,6 @@
  * its only child. Packaged by scripts/build-computer-use-helper-linux.ts with the driver in
  * ./cua-driver beside this bundle; GOAT_COMPUTER_USE_DRIVER points elsewhere in development.
  */
-import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -20,7 +19,12 @@ import { gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
 import { startDriver } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
-import { detectLinuxSession, linuxCapabilities, parseGnomeShellMajor } from "./linuxSession.ts";
+import {
+  detectLinuxSession,
+  linuxCapabilities,
+  linuxSessionFacts,
+  readGnomeShellVersion,
+} from "./linuxSession.ts";
 
 /** What the driver may see of this process's environment: the session, nothing else. */
 const SESSION_NAMES = [
@@ -48,28 +52,9 @@ const SETTLE_MS = 300;
 const PARENT_CHECK_MS = 2_000;
 
 const environment = process.env;
-const session = (() => {
-  const facts = {
-    display: environment.DISPLAY,
-    waylandDisplay: environment.WAYLAND_DISPLAY,
-    sessionBus: environment.DBUS_SESSION_BUS_ADDRESS,
-    currentDesktop: environment.XDG_CURRENT_DESKTOP,
-    gnomeShellMajor: null as number | null,
-  };
-  if (!facts.display && facts.waylandDisplay && /GNOME/iu.test(facts.currentDesktop ?? "")) {
-    try {
-      facts.gnomeShellMajor = parseGnomeShellMajor(
-        NodeChildProcess.execFileSync("gnome-shell", ["--version"], {
-          timeout: 2_000,
-          encoding: "utf8",
-        }),
-      );
-    } catch {
-      facts.gnomeShellMajor = null;
-    }
-  }
-  return detectLinuxSession(facts);
-})();
+const session = detectLinuxSession(
+  linuxSessionFacts(environment, () => readGnomeShellVersion(environment)),
+);
 
 const driverEnvironment: Record<string, string> = {};
 for (const name of SESSION_NAMES) {
