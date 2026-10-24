@@ -48,6 +48,21 @@ says so; approving it lets the agent act on anything the screen shows.
 an action sequence. The agent gets the screen back on its next turn, within the
 apps you approved.
 
+## Watching agents
+
+While agents use the built-in browser or this computer, GOAT shows them in a
+stack at the right of the window, one tile each, with what the agent works on,
+its thread and whether the agent or you are in control. Browser tiles show a
+small live picture; it pauses while the stack is hidden or GOAT is in the
+background. Click a browser tile to open its full preview, where **Take
+control** hands it to you.
+
+**Stop** on a tile stops that agent until you choose **Hand back**. **Stop all**
+at the top of the stack stops every agent on this computer, including approved
+work that runs on its own. While a page asks for a password, a one-time code or
+a passkey, its tile reads **Private (paused)** and agents can neither see nor
+use the page until you leave that field.
+
 ## The Computer Use skill
 
 Every turn that gets the computer use tools also gets GOAT's built-in
