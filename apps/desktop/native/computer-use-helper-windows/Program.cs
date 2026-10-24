@@ -100,9 +100,13 @@ namespace Goat.ComputerUse
                 }
             }
             catch (IOException) { }
-            // The host is gone; a helper that exits clears every target of its generation.
-            signals.Unwatch(delegate { });
-            service.Stop();
+            finally
+            {
+                // The host is gone. Nothing more is written (a helper that exits clears every
+                // target of its generation), and the driver stops even if listening does not.
+                try { signals.Shutdown(); }
+                finally { service.Stop(); }
+            }
             return 0;
         }
 
@@ -131,17 +135,18 @@ namespace Goat.ComputerUse
             {
                 switch ((string)method)
                 {
-                    // The answer goes out inside the watch change, between clearing and new state.
+                    // The signals queue writes the answer in order: after the clears it owes the
+                    // old watch, before the new watch's state.
                     case "watch":
                         reply["result"] = new Dictionary<string, object>();
                         object watchId;
                         if (!parameters.TryGetValue("watchId", out watchId) || !(watchId is string) || ((string)watchId).Trim().Length == 0)
                             throw new HelperException("bad_request", "watch needs a watchId.");
-                        signals.Watch((string)watchId, Targets(parameters), delegate { Emit(reply); });
+                        signals.Watch((string)watchId, Targets(parameters), reply);
                         return;
                     case "unwatch":
                         reply["result"] = new Dictionary<string, object>();
-                        signals.Unwatch(delegate { Emit(reply); });
+                        signals.Unwatch(reply);
                         return;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
@@ -179,13 +184,14 @@ namespace Goat.ComputerUse
             return failure;
         }
 
-        /// <summary>watch's targets, at least one; one window per process, as the session holds them.</summary>
-        static Dictionary<int, long> Targets(Dictionary<string, object> parameters)
+        /// <summary>watch's targets, at least one, each an exact window of a process.</summary>
+        static List<Signals.Target> Targets(Dictionary<string, object> parameters)
         {
             object raw;
             if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]) || ((object[])raw).Length == 0)
                 throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...].");
-            var targets = new Dictionary<int, long>();
+            var targets = new List<Signals.Target>();
+            var seen = new HashSet<string>();
             foreach (object entry in (object[])raw)
             {
                 var target = entry as Dictionary<string, object>;
@@ -193,7 +199,8 @@ namespace Goat.ComputerUse
                 if (target == null || !target.TryGetValue("pid", out pid) || !(pid is int) ||
                     !target.TryGetValue("windowId", out windowId) || !(windowId is int || windowId is long))
                     throw new HelperException("bad_request", "Each watch target needs an integer pid and windowId.");
-                targets[(int)pid] = Convert.ToInt64(windowId);
+                var next = new Signals.Target { Pid = (int)pid, WindowId = Convert.ToInt64(windowId) };
+                if (seen.Add(next.Key)) targets.Add(next);
             }
             return targets;
         }
