@@ -205,6 +205,8 @@ export function makeAgentInputLog() {
   };
   return {
     prune,
+    /** Whether the log still holds every call that could cover an event at "at". */
+    remembers: (at: number, now: number) => now - at < KEEP_MS,
     started: (key: string, at: number, kinds: ReadonlyArray<InputKind> = BOTH) => {
       // A repeated start for one call ends the earlier record first, so every open has its close.
       const earlier = open.get(key);

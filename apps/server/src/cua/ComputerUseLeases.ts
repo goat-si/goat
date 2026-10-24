@@ -739,6 +739,10 @@ const make = Effect.gen(function* () {
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
       if (!(yield* nearNow(at))) return "refused" as const;
+      // The calls that could have covered an older event are forgotten, so it cannot be judged:
+      // an agent's own late event would pass for a person's. A person still at the machine makes
+      // newer ones.
+      if (!agentInputs.remembers(at, yield* Clock.currentTimeMillis)) return "refused" as const;
       // Another agent's input on this host shows up in every helper; only a live control's
       // calls count.
       const live = new Set(

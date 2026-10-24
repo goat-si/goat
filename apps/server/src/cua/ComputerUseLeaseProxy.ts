@@ -38,6 +38,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -619,18 +620,34 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const report = options.onHumanInput;
       // Once the server took one, this child is done: the pause that follows stops it.
       let told = false;
+      // Every event goes to the server, even one this agent's own call could explain: only the
+      // server sees every agent's calls, and with them when a run of cover is too long. Reports
+      // are slower than events, so the newest unsent event of each kind waits here: a burst of
+      // one kind never pushes out another's, and nothing waits behind a backlog.
+      const unsent = new Map<ComputerUseHumanInputSource, { readonly at: number }>();
+      const wake = yield* Queue.sliding<void>(1);
       yield* driver.humanInput.pipe(
         Stream.runForEach((input) =>
-          Effect.gen(function* () {
-            if (told || finished !== undefined || paused !== undefined || running !== current)
-              return;
-            // Every event goes to the server, even one this agent's own call could explain: only
-            // the server sees every agent's calls, and with them when a run of cover is too long.
-            told = yield* report(input);
+          Effect.suspend(() => {
+            if ((unsent.get(input.source)?.at ?? -Infinity) <= input.at)
+              unsent.set(input.source, input);
+            return Queue.offer(wake, undefined);
           }),
         ),
         Effect.forkIn(child),
       );
+      yield* Effect.gen(function* () {
+        while (!told) {
+          yield* Queue.take(wake);
+          const batch = [...unsent].sort(([, a], [, b]) => a.at - b.at);
+          unsent.clear();
+          for (const [source, { at }] of batch) {
+            if (told || finished !== undefined || paused !== undefined || running !== current)
+              break;
+            told = yield* report({ source, at });
+          }
+        }
+      }).pipe(Effect.forkIn(child));
     }
     // A new helper draws nothing yet.
     overlay = initialOverlayState;

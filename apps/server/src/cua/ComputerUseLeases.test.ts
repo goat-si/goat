@@ -952,6 +952,21 @@ it.effect("back-to-back agent calls hide a person's input for ten seconds at mos
 );
 
 it.effect(
+  "refuses an input event older than the calls the server remembers, since it cannot be judged",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.stopAll;
+      const mine = yield* leases.control(thread, Option.none());
+      yield* TestClock.adjust(30_000);
+      // An event from 12 s ago: any call that covered it is forgotten by now.
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 18_000, "pointer"), "refused");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 29_900, "pointer"), "paused");
+    }).pipe(Effect.provide(freshLeases)),
+);
+
+it.effect(
   "two agents taking turns hide a person's input for ten seconds at most between them",
   () =>
     Effect.gen(function* () {

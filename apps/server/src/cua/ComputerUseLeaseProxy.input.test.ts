@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -23,6 +24,28 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
         assert.equal(yield* h.person, "pointer");
         yield* h.hid("keyboard");
         assert.equal(yield* h.person, "keyboard");
+      }),
+  );
+
+  it.effect(
+    "a person's key is not lost behind a burst of the agent's events while a report is slow",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ humanInput: true, acceptHuman: () => false, humanGate: gate });
+        yield* h.push(active());
+        yield* h.hid("pointer");
+        // The server holds this report while more events arrive than the helper's feed keeps.
+        assert.equal(yield* h.person, "pointer");
+        // Events a millisecond apart, as the helper sends them.
+        const event = (source: "pointer" | "keyboard") =>
+          TestClock.adjust(1).pipe(Effect.andThen(h.hid(source)));
+        for (let count = 0; count < 20; count++) yield* event("pointer");
+        yield* event("keyboard");
+        for (let count = 0; count < 20; count++) yield* event("pointer");
+        yield* Deferred.succeed(gate, undefined);
+        // The newest of each kind is reported next, the key included.
+        assert.sameMembers([yield* h.person, yield* h.person], ["pointer", "keyboard"]);
       }),
   );
 
