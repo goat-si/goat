@@ -22,6 +22,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess } from "effect/process";
 
 import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
+import { withDevMaxHttpHeaderSize } from "./lib/dev-max-header-size.ts";
 import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -344,16 +345,15 @@ export const createDevRunnerEnv = Effect.fn("dev-runner.createDevRunnerEnv")(fun
     delete output.GOAT_HOME;
   }
 
-  // A dev-runner server is never launcher-managed. When the shell that runs
-  // this script was itself spawned by the machine's managed goat service (an
-  // agent working inside GOAT), these leak through and the child server
-  // fails startup with "The service launcher started a different goat version."
-  // (serviceLauncherClient.ts resolveStartup).
+  // A dev-runner server is never launcher-managed. A shell the managed goat service spawned (an
+  // agent inside GOAT) leaks these, and the child then fails with "The service launcher started
+  // a different goat version." (serviceLauncherClient.ts resolveStartup).
   delete output.GOAT_SERVICE_LAUNCHER_CONTEXT;
   delete output.GOAT_BOOT_SERVICE_UNIT;
 
   if (!isDesktopMode) {
     output.GOAT_PORT = String(serverPort);
+    output.NODE_OPTIONS = withDevMaxHttpHeaderSize(output.NODE_OPTIONS);
     // HOST is Vite's own bind address, and the desktop branch below is the
     // only place we set it. An inherited one (an exported HOST, a container,
     // a `HOST=0.0.0.0 npm start` habit) would otherwise reach Vite and pin
