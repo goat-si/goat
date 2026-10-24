@@ -63,9 +63,11 @@ and `goat_call` and `resident` names the other tools the registry lists as core.
 is the server setting `agentToolListing`, so both arms share one provider instance. With
 `listingSettings` set to the eval server's `settings.json`, the runner writes each run's
 listing there before launching it; the server reloads the file. Either way it then lists tools
-with its own client, records what it saw as `observedListing`, and marks the run contaminated
-when that is not the arm's listing. A harness can only call what it was listed, so a core arm
-that calls any other GOAT tool directly is contaminated too. Which tools are resident is the
+with its own client and reads from the result the listing agents get, since clients themselves
+keep the full listing (D22 in [agent-surface.md](../internals/agent-surface.md)). It records
+that as `observedListing` and marks the run contaminated when it is not the arm's listing. A
+harness can only call what it was listed, so a core arm that calls any other GOAT tool
+directly is contaminated too. Which tools are resident is the
 registry's `listing: "core"` field, so a "core plus one tool" arm needs a server built with
 that change; it is not a campaign setting.
 

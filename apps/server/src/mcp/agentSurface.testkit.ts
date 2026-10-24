@@ -395,6 +395,14 @@ const serveVia = <ET, RT>(
         } while (cursor !== undefined && cursor !== null);
         return tools;
       }),
+      /** The _meta of the caller's first tools/list page. */
+      listResultMeta: Effect.fn(function* (caller: string) {
+        yield* ensureSession(caller);
+        const page = (yield* post(caller, "tools/list", {})).result as {
+          readonly _meta?: Readonly<Record<string, unknown>>;
+        };
+        return page._meta;
+      }),
     };
   });
 
