@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process outside the server's runtime.
+// @effect-diagnostics globalDate:off -- Request deadlines are wall-clock budgets in a plain Node process.
 // @effect-diagnostics globalTimers:off -- Settle waits and the parent check are plain process timers.
 /**
  * goat-computer-use for Linux: the helper GOAT spawns to observe and act on one desktop
@@ -102,6 +103,7 @@ const helper = makeLinuxHelper({
     ),
   settle: () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS)),
   newId: () => NodeCrypto.randomUUID(),
+  now: () => Date.now(),
 });
 
 let ending = false;

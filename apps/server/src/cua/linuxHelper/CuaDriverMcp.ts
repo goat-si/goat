@@ -26,12 +26,15 @@ export interface DriverToolResult {
 export interface DriverClient {
   readonly pid: number;
   readonly version: string;
-  /** "deadline" when the driver did not answer in time; the call may still have acted. */
+  /**
+   * "unsent" when the driver was already gone, so nothing reached it. "deadline" when it did not
+   * answer in time and "lost" when it exited before answering: both may still have acted.
+   */
   readonly call: (
     tool: string,
     args: Readonly<Record<string, unknown>>,
     deadlineMs: number,
-  ) => Promise<DriverToolResult | "deadline">;
+  ) => Promise<DriverToolResult | "deadline" | "lost" | "unsent">;
   /** Closes stdin, the driver's own end signal, and kills its process group after a grace period. */
   readonly close: () => Promise<void>;
   readonly exited: Promise<void>;
@@ -112,7 +115,8 @@ export async function startDriver(options: {
     if (!gone) child.stdin.write(JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n");
   };
   const rpc = (method: string, params: object, deadlineMs: number) =>
-    new Promise<Record<string, unknown> | "gone" | "deadline">((resolve) => {
+    new Promise<Record<string, unknown> | "gone" | "deadline" | "unsent">((resolve) => {
+      if (gone) return resolve("unsent");
       const id = ++serial;
       const timer = setTimeout(() => {
         pending.delete(id);
@@ -152,7 +156,7 @@ export async function startDriver(options: {
     },
     START_TIMEOUT_MS,
   );
-  if (init === "gone" || init === "deadline" || child.pid === undefined) {
+  if (typeof init === "string" || child.pid === undefined) {
     await close();
     throw new DriverStartError(
       init === "deadline" ? "Cua Driver did not answer." : "Cua Driver exited before it answered.",
@@ -176,14 +180,8 @@ export async function startDriver(options: {
     version,
     call: async (tool, args, deadlineMs) => {
       const answer = await rpc("tools/call", { name: tool, arguments: args }, deadlineMs);
-      if (answer === "deadline") return "deadline";
-      if (answer === "gone")
-        return {
-          isError: true,
-          text: "Cua Driver exited.",
-          structured: { code: "driver_exited" },
-          images: [],
-        };
+      if (answer === "deadline" || answer === "unsent") return answer;
+      if (answer === "gone") return "lost";
       if (answer.error !== undefined)
         return {
           isError: true,

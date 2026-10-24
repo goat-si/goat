@@ -46,6 +46,7 @@ export interface LinuxHelperDependencies {
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
   readonly newId: () => string;
+  readonly now: () => number;
 }
 
 export interface HelperAnswer {
@@ -103,9 +104,11 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   let observations: ObservationTracker = makeObservationTracker(deps.newId);
   const lastReads = new Map<string, LastRead>();
   let queue: Promise<unknown> = Promise.resolve();
+  let closed = false;
   const blocked = deps.session.unavailable ?? deps.session.unsupported;
 
   const ensureDriver = () => {
+    if (closed) return Promise.reject(new Error("The helper is shutting down."));
     if (!driver) {
       const generation = ++driverGeneration;
       driver = deps.startDriver();
@@ -130,7 +133,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     tool: string,
     args: Readonly<Record<string, unknown>>,
     deadlineMs: number,
-  ): Promise<DriverToolResult | "deadline" | ComputerUseRefusal> => {
+  ): Promise<DriverToolResult | "deadline" | "lost" | ComputerUseRefusal> => {
     let client: DriverClient;
     try {
       client = await ensureDriver();
@@ -140,7 +143,10 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         error instanceof Error ? error.message : "Cua Driver did not start.",
       );
     }
-    return client.call(tool, args, deadlineMs);
+    const answer = await client.call(tool, args, deadlineMs);
+    return answer === "unsent"
+      ? refusal("helperUnavailable", "Cua Driver exited; nothing was sent. Try again.")
+      : answer;
   };
   const isRefusal = (value: unknown): value is ComputerUseRefusal =>
     field(value, "outcome") === "refused";
@@ -150,6 +156,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   ): Promise<ReadonlyArray<DriverWindow> | ComputerUseRefusal> => {
     const answer = await call("list_windows", {}, deadlineMs);
     if (answer === "deadline") return refusal("busy", "Listing windows took too long.");
+    if (answer === "lost") return refusal("helperUnavailable", "Cua Driver exited.");
     if (isRefusal(answer)) return answer;
     const list = field(answer.structured, "windows");
     return Array.isArray(list) ? (list as DriverWindow[]) : [];
@@ -181,10 +188,13 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     return { window, epoch };
   };
 
-  /** Private when a password field has focus, or when focus is unknown and one is present. */
-  const privateFor = async (pid: number, secureInTree: boolean) => {
+  /**
+   * Private when a password field has focus, and whenever AT-SPI cannot say what has focus: a
+   * filtered or truncated read cannot prove the window has no password field.
+   */
+  const privateFor = async (pid: number) => {
     const focus = await deps.secureFocus(pid);
-    return focus.secure || (!focus.known && secureInTree);
+    return focus.secure || !focus.known;
   };
 
   const read = async (input: {
@@ -211,6 +221,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     );
     if (answer === "deadline")
       return { result: refusal("busy", "Reading the window took too long.") };
+    if (answer === "lost") return { result: refusal("helperUnavailable", "Cua Driver exited.") };
     if (isRefusal(answer)) return { result: answer };
     const decoded = decodeRead(answer.structured);
     if (answer.isError || decoded._tag === "None") {
@@ -225,8 +236,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     }
     const state = decoded.value;
-    const secureInTree = (state.elements ?? []).some((element) => element.role === SECURE_ROLE);
-    const privateMode = await privateFor(input.pid, secureInTree);
+    const privateMode = await privateFor(input.pid);
     // A password field's value never leaves, even when it does not have focus.
     const elements = (state.elements ?? []).map((element) => {
       if (element.role !== SECURE_ROLE || element.value === undefined) return element;
@@ -273,7 +283,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     };
     if (blocked === undefined) {
       const permissions = await call("check_permissions", {}, deadlineMs);
-      if (permissions !== "deadline" && !isRefusal(permissions)) {
+      if (typeof permissions !== "string" && !isRefusal(permissions)) {
         const flag = (name: string) => field(permissions.structured, name) === true;
         facts.driver = { x11: flag("x11"), wayland: flag("wayland"), atspi: flag("atspi") };
         const list = await windows(deadlineMs);
@@ -295,7 +305,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
             deadlineMs,
           );
           const image =
-            capture === "deadline" || isRefusal(capture) ? undefined : capture.images[0];
+            typeof capture === "string" || isRefusal(capture) ? undefined : capture.images[0];
           const colors = image ? pngColors(Buffer.from(image.data, "base64")) : undefined;
           facts.capture = image === undefined ? "failed" : (colors ?? "varied");
         }
@@ -312,8 +322,9 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   const act = async (
     method: ComputerUseMethod,
     params: unknown,
-    deadlineMs: number,
+    left: () => number,
   ): Promise<HelperAnswer> => {
+    const generation = driverGeneration;
     const decoded = decodeAction(params);
     if (decoded._tag === "None")
       return {
@@ -328,7 +339,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         ),
       };
     const { pid, windowId } = request.target;
-    const now = await locate(pid, windowId, deadlineMs);
+    const now = await locate(pid, windowId, left());
     if (isRefusal(now)) return { result: now };
     if (now.epoch !== request.target.epoch) {
       observations.forget(pid, windowId);
@@ -340,24 +351,37 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       };
     }
     const last = lastReads.get(pid + ":" + windowId);
-    const secureInTree = [...(last?.elements.values() ?? [])].some(
-      (element) => element.role === SECURE_ROLE,
-    );
+    const privateMode = await privateFor(pid);
     const call_ = linuxDriverCall(request, {
       observations,
       elements: last?.elements ?? new Map(),
-      privateMode: await privateFor(pid, secureInTree),
+      privateMode,
       pointerAndKeysInBackground: deps.session.pointerAndKeysInBackground,
     });
     if (isRefusal(call_)) return { result: call_ };
-    const answer = await call(call_.tool, call_.args, deadlineMs);
+    // Last check before input leaves: a stop, a driver restart or a passed deadline sends nothing.
+    if (closed || generation !== driverGeneration)
+      return {
+        result: refusal("helperUnavailable", "The helper stopped or restarted. Observe again."),
+      };
+    if (left() <= 0)
+      return { result: refusal("busy", "The deadline passed before anything was sent.") };
+    const answer = await call(call_.tool, call_.args, left());
     if (answer === "deadline") return { result: computerUseDeadlineResult(request.delivery) };
+    if (answer === "lost")
+      return {
+        result: {
+          ...computerUseDeadlineResult(request.delivery),
+          detail: "Cua Driver exited after the action was sent.",
+        },
+      };
     // The driver did not start, so nothing was sent.
     if (isRefusal(answer)) return { result: answer };
     const sent = linuxActionResult(request, answer, undefined);
     if (sent.outcome === "refused" || !last) return { result: sent };
     // Read the window back the way the agent last read it, as a diff of that observation.
     await deps.settle();
+    if (closed) return { result: sent };
     const after = await read({
       pid,
       windowId,
@@ -366,7 +390,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       screenshot: last.screenshot,
       query: last.query,
       maxElements: last.maxElements,
-      deadlineMs,
+      deadlineMs: Math.max(1, left()),
     });
     const observation = isRefusal(after.result) ? undefined : after.result;
     const result = linuxActionResult(request, answer, observation);
@@ -376,8 +400,12 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   const handleNow = async (
     method: ComputerUseMethod,
     params: unknown,
-    deadlineMs: number,
+    expiry: number,
   ): Promise<HelperAnswer> => {
+    const left = () => expiry - deps.now();
+    if (left() <= 0)
+      return { result: refusal("busy", "The deadline passed while the request waited.") };
+    const deadlineMs = left();
     if (method === "capabilities") return { result: linuxCapabilities(deps.session) };
     if (method === "permissions") return { result: await readiness(deadlineMs) };
     if (deps.session.unsupported !== undefined)
@@ -424,17 +452,26 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         deadlineMs,
       });
     }
-    if (ACTIONS.has(method)) return act(method, params, deadlineMs);
+    if (ACTIONS.has(method)) return act(method, params, left);
     return { result: refusal("invalidRequest", method + " is not a computer use method.") };
   };
 
   return {
     handle: (method, params, deadlineMs) => {
-      const next = queue.then(() => handleNow(method, params, deadlineMs));
+      // One expiry from receipt: time spent queued behind other requests counts against it.
+      const expiry = deps.now() + deadlineMs;
+      const next = queue.then((): Promise<HelperAnswer> =>
+        closed
+          ? Promise.resolve({
+              result: refusal("helperUnavailable", "The helper is shutting down."),
+            })
+          : handleNow(method, params, expiry),
+      );
       queue = next.catch(() => undefined);
       return next;
     },
     close: async () => {
+      closed = true;
       const current = driver;
       driver = undefined;
       driverGeneration++;

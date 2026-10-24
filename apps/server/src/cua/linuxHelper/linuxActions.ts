@@ -278,8 +278,6 @@ const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {
   invalid_arguments: "invalidRequest",
   invalid_action_target: "invalidRequest",
   window_id_required: "invalidRequest",
-  driver_exited: "helperUnavailable",
-  driver_error: "helperUnavailable",
   session_required: "helperUnavailable",
   session_not_started: "helperUnavailable",
   session_ended: "helperUnavailable",
@@ -309,14 +307,15 @@ export function linuxActionResult(
   const code = driverRefusalCode(structured);
   const effect = field(structured, "effect");
   const detail = result.text.trim().split("\n", 1)[0] || undefined;
+  // A refusal only when the driver says it sent nothing; any other error may follow input.
+  const known = code === undefined ? undefined : REFUSAL_CODES[code];
   if (
     field(structured, "status") === "refused" ||
     effect === "refused" ||
-    (result.isError && code !== undefined)
+    (result.isError && known)
   ) {
-    const reason = code === undefined ? undefined : REFUSAL_CODES[code];
     return refusal(
-      reason ?? "targetRefused",
+      known ?? "targetRefused",
       detail ?? "Cua Driver refused: " + (code ?? "no reason") + ".",
     );
   }
@@ -335,10 +334,34 @@ export function linuxActionResult(
   if (effect === "suspected_noop" || effect === "not_applied" || effect === "no_drop")
     return { ...extra, outcome: "suspected_noop", dispatch: "verified" };
   // The driver could not tell; the helper's own diff after settling decides. A full read is not
-  // comparable with what the agent saw, so it decides nothing.
+  // comparable with what the agent saw, so it decides nothing. Only a change to the element the
+  // action named is evidence of its effect: other changes may come from the app itself.
   if (after === undefined || after.kind === "full")
     return { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
-  return after.added.length + after.changed.length + after.removed.length > 0
-    ? { ...extra, outcome: "confirmed", dispatch: "verified" }
-    : { ...extra, outcome: "suspected_noop", dispatch: "verified" };
+  const target = targetElement(request);
+  if (
+    target !== undefined &&
+    (after.changed.some((element) => element.ref === target) || after.removed.includes(target))
+  )
+    return { ...extra, outcome: "confirmed", dispatch: "verified" };
+  return after.added.length + after.changed.length + after.removed.length === 0
+    ? { ...extra, outcome: "suspected_noop", dispatch: "verified" }
+    : { ...extra, outcome: "unverifiable", dispatch: "dispatched_unknown" };
+}
+
+/** The element ref an action names, when it names one. */
+function targetElement(request: ComputerUseActionRequest): string | undefined {
+  switch (request.action) {
+    case "setValue":
+    case "performAction":
+      return request.element;
+    case "drag":
+      return "element" in request.from ? request.from.element : undefined;
+    case "pressKey":
+      return undefined;
+    case "typeText":
+      return request.at && "element" in request.at ? request.at.element : undefined;
+    default:
+      return "element" in request.at ? request.at.element : undefined;
+  }
 }

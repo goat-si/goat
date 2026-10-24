@@ -26,7 +26,9 @@ const ROOT = "/org/a11y/atspi/accessible/root";
 const FOCUSED_STATES = "[4096, 0]";
 // AtspiRole PASSWORD_TEXT.
 const ROLE_PASSWORD_TEXT = 40;
-const MAX_WINDOWS = 16;
+// More windows than this and the scan would be slow enough to stall observation; focus is then
+// reported unknown, which the helper treats as private.
+const MAX_WINDOWS = 64;
 
 /** `('unix:path=...',)` from org.a11y.Bus.GetAddress. */
 function parseAddress(output: string): string | null {
@@ -110,7 +112,8 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       if (bus === null) return { known: false, secure: false };
       const windows = parseReferences(
         await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"),
-      ).slice(0, MAX_WINDOWS);
+      );
+      if (windows.length > MAX_WINDOWS) return { known: false, secure: false };
       for (const window of windows) {
         const matches = parseReferences(
           await call(
