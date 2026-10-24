@@ -33,6 +33,7 @@ import * as Settings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Inbox from "./DecisionInbox.ts";
 import * as Profiles from "./PermissionProfiles.ts";
+import { origin, fixture as inboxFixture, transport } from "./DecisionDestination.testkit.ts";
 
 // A provider approval on a full-access thread, projected into the inbox as a human-required item.
 const target = ThreadId.make("pending-thread");
@@ -216,4 +217,67 @@ it.effect("refuses an outside client without approvals and a thread credential",
       expect(commands).toEqual([]);
     }
   }),
+);
+
+it.effect("#1405 destination paging retains the facade's 201st row and proves truncation", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql.withTransaction(
+      Effect.gen(function* () {
+        for (let index = 0; index < 202; index += 1) {
+          yield* sql`INSERT INTO decision_items
+          (id, title, context, options_json, required_profile, status, created_at, updated_at)
+          VALUES (${`decision:${String(index).padStart(3, "0")}`}, 'Placement', '', '[{"id":"wait","label":"Wait","consequence":"Paused"}]', 'worker', 'open', '1970-01-01T00:00:00.000Z', '1970-01-01T00:00:00.000Z')`;
+        }
+      }),
+    );
+    const page = yield* (yield* Inbox.DecisionInbox).list(transport, {
+      transportEnvironmentId: origin,
+      localOnly: true,
+      limit: 201,
+    });
+    expect(page.items).toHaveLength(201);
+    expect(page.items[200]!.id).toBe("decision:200");
+    expect(page).toMatchObject({ truncated: true, unavailableHosts: [] });
+  }).pipe(Effect.provide(inboxFixture())),
+);
+
+it.effect.each([
+  ["baseline-failing: narrow forwarded ceiling", "auto", "full-access", false],
+  ["preservation: narrow session ceiling", "full-access", "auto-accept-edits", false],
+  ["preservation: matching ceilings", "full-access", "full-access", true],
+] as const)(
+  "#1405 an approve-scoped transport respects %s",
+  ([_name, forwarded, access, accepted]) =>
+    Effect.gen(function* () {
+      const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const inbox = yield* Inbox.DecisionInbox;
+        const item = (yield* inbox.list(person, {})).items[0]!;
+        const profile = (yield* (yield* Settings.ServerSettingsService).getSettings).goatclaw
+          .profiles.worker!;
+        const input = {
+          id: item.id,
+          decision: "accept" as const,
+          reason: "Authorized at the origin ceiling",
+          transportEnvironmentId: origin,
+          permissionProfileCeiling: { ...profile, runtimeModeCeiling: forwarded },
+        };
+        const result = yield* inbox.answer(outsideClient(true, access), input).pipe(Effect.result);
+        if (accepted) {
+          expect(result).toMatchObject({ _tag: "Success", success: { answeredBy: "mcp:bot" } });
+          expect(yield* Ref.get(commands)).toMatchObject([
+            { type: "runtime-request.respond", decision: "accept" },
+          ]);
+        } else {
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { code: "orchestration_error" },
+          });
+          expect(yield* Ref.get(commands)).toEqual([]);
+          expect((yield* inbox.get(person, item.id)).status).toBe("open");
+        }
+      }).pipe(Effect.provide(fixture(commands)));
+    }),
 );

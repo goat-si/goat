@@ -200,8 +200,27 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
       collect,
       milestone,
       output: () => Buffer.concat(chunks).toString(),
+      diagnostics: () => errors,
     };
   };
+
+  it("identifies the readiness service before its driver starts without polluting MCP stdout", async () => {
+    const session = await start();
+    session.collect();
+    session.child.stdin.end();
+    expect((await session.closed).code).toBe(0);
+    const lines = session.diagnostics().trimEnd().split("\n");
+    const greeting = JSON.parse(lines[0]);
+    expect(greeting).toEqual({
+      type: "hello",
+      protocol: 1,
+      pid: expect.any(Number),
+      bundleId: "si.goat.relay.fixture.computer-use",
+    });
+    expect(greeting.pid).toBeGreaterThan(1);
+    expect(lines[1]).toBe(`driver-parent:${greeting.pid}`);
+    expect(session.output()).toBe(ready);
+  });
 
   it("refuses non-object, malformed and non-UTF8 frames before driver dispatch", async () => {
     for (const frame of [

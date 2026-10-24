@@ -72,6 +72,7 @@ export type GoatMcpToolSummaryAction =
   | "connection-add"
   | "connection-remove"
   | "attachment-prepare"
+  | "attachment-list"
   | "attachment-discard"
   | "attachment-send"
   | "link-pr"
@@ -220,8 +221,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "thread-watch-list",
   ),
   goat_origin_report: tool(["Report", "Reporting", "Reported", "to the origin"], "thread-send"),
+  goat_origin_report_receipt: tool(
+    ["Read", "Reading", "Read", "an origin report receipt"],
+    "thread-read",
+  ),
   goat_origin_reports_wait: tool(
     ["Wait", "Waiting", "Waited", "for origin reports"],
+    "thread-wait",
+  ),
+  goat_origin_resolve_binding: tool(
+    ["Resolve", "Resolving", "Resolved", "a lost remote launch"],
     "thread-wait",
   ),
   goat_workflow_stop: tool(
@@ -440,6 +449,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Repair", "Repairing", "Repaired", "a hub device"],
     "environment-update",
   ),
+  goat_hub_opencodex_sync: tool(
+    ["Sync", "Syncing", "Synced", "OpenCodex models"],
+    "environment-update",
+  ),
   goat_scheduler_status: tool(["Read", "Reading", "Read", "scheduler status"], "host-status"),
   goat_fallback_chain_get: tool(["Read", "Reading", "Read", "fallback chains"], "environment-read"),
   goat_fallback_chain_set: tool(
@@ -618,6 +631,10 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   goat_attachment_prepare_upload: tool(
     ["Prepare", "Preparing", "Prepared", "an attachment upload"],
     "attachment-prepare",
+  ),
+  goat_attachment_pending_list: tool(
+    ["List", "Listing", "Listed", "pending attachment uploads"],
+    "attachment-list",
   ),
   goat_attachment_discard: tool(
     ["Discard", "Discarding", "Discarded", "a pending attachment"],

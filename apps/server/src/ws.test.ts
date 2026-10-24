@@ -1,4 +1,4 @@
-import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
@@ -10,6 +10,7 @@ import * as Handoffs from "./handoffs/Handoffs.ts";
 import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as HubParity from "./hub/HubParity.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
+import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -499,6 +500,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(OpenCodexSync.OpenCodexSync)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
@@ -563,7 +565,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),
   Layer.mock(WorktreeCheckoutHealth.WorktreeCheckoutHealth)({

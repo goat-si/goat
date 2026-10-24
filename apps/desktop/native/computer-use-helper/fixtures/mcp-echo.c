@@ -19,6 +19,7 @@ int main(void) {
   char *line = NULL;
   size_t capacity = 0;
   ssize_t length;
+  fprintf(stderr, "driver-parent:%d\n", getppid());
   puts("{\"jsonrpc\":\"2.0\",\"method\":\"fixture/ready\"}");
   fflush(stdout);
   while ((length = getline(&line, &capacity, stdin)) >= 0) {

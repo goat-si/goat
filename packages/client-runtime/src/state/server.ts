@@ -1,6 +1,5 @@
 import {
   type EnvironmentId,
-  type DecisionListInput,
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
@@ -40,6 +39,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
+import { createDecisionEnvironmentAtoms } from "./decisionRpc.ts";
 import {
   isRpcClientError,
   request,
@@ -50,6 +50,7 @@ import {
 } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -1059,28 +1060,9 @@ export function createServerEnvironmentAtoms<R, E>(
       onSuccess: refreshCloudMachines,
     });
 
-  const listDecisions = createEnvironmentRpcCommand(runtime, {
-    label: "environment-data:decision:list",
-    tag: WS_METHODS.decisionList,
-  });
-  const queryDecisions = Effect.fn("DecisionInbox.list")(function* (target: {
-    environmentId: EnvironmentId;
-    input: DecisionListInput;
-  }) {
-    const registry = yield* AtomRegistry.AtomRegistry;
-    const result = yield* Effect.promise(() => listDecisions.run(registry, target));
-    return result._tag === "Success" ? result.value : yield* Effect.failCause(result.cause);
-  });
-  const decisionItems = createEnvironmentQueryAtomFamily(runtime, {
-    label: "environment-data:decision:list:query",
-    idleTtlMs: 0,
-    execute: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
-      queryDecisions(target),
-    refreshTrigger: (target) => listDecisions.permissionAtom(target.environmentId),
-  });
-
   return {
     cloudMachines,
+    ...createOpenCodexSyncAtoms(runtime),
     cloudAgentRuns,
     configureCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesConfigure),
     disconnectCloudMachines: cloudMachineCommand(WS_METHODS.cloudMachinesDisconnect),
@@ -1243,12 +1225,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.remoteLaunchesList,
       staleTimeMs: 5_000,
     }),
-    decisionItems: (target: { environmentId: EnvironmentId; input: DecisionListInput }) =>
-      decisionItems({ environmentId: target.environmentId, input: target }),
-    answerDecision: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:decision:answer",
-      tag: WS_METHODS.decisionAnswer,
-    }),
+    ...createDecisionEnvironmentAtoms(runtime),
     verifyHubDevice: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:hub:device-verify",
       tag: WS_METHODS.hubDeviceVerify,

@@ -16,6 +16,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
+import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
 import { create } from "zustand";
 import {
   useLayoutEffect,
@@ -59,6 +60,7 @@ import { readEnvironmentScope } from "../../state/session";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import type { ChatComposerHandle } from "./ChatComposer";
 
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -365,6 +367,7 @@ export function usePendingThreadRequests(input: {
     if (userInputResponsesInFlight.current.has(responseKey)) return;
     const attachmentsByQuestionId = new Map<string, UserInputAttachments[string]>();
     const providerAnswers = { ...answers };
+    const entries = appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries;
     for (const question of pendingInput.questions) {
       const target = questionAttachmentDraftId(
         environmentId,
@@ -375,16 +378,33 @@ export function usePendingThreadRequests(input: {
       if ((useQuestionAttachmentPreparation.getState().counts[target] ?? 0) > 0) return;
       const draft = useComposerDraftStore.getState().getComposerDraft(target);
       // An optional question left blank has no answer and must stay absent from the command.
-      if (answers[question.id] !== undefined)
-        providerAnswers[question.id] = projectPendingUserInputAnswer(
-          answers[question.id],
-          settleThreadContextsForAgent({
-            records: draft?.threadContexts ?? [],
-            agentEnvironmentId: environmentId,
-            entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
-            isDesktopRenderer: window.desktopBridge !== undefined,
-          }),
-        );
+      const answer = answers[question.id];
+      if (typeof answer === "string") {
+        const threadContexts = settleThreadContextsForAgent({
+          records: draft?.threadContexts ?? [],
+          agentEnvironmentId: environmentId,
+          entries,
+          isDesktopRenderer: window.desktopBridge !== undefined,
+        });
+        const strandedThread = threadContextsOutsideEnvironment({
+          text: answer,
+          records: threadContexts,
+          environmentId,
+          hostRoutingEnvironmentId: environmentId,
+        })[0];
+        if (strandedThread) {
+          const owner = entries.get(strandedThread.environmentId)?.target.label ?? "its machine";
+          toastManager.add(
+            stackedThreadToast({
+              type: "warning",
+              title: "Attached thread is on another machine",
+              description: `This machine's agent can't read "${strandedThread.title}". Remove it, or switch back to ${owner} to send.`,
+            }),
+          );
+          return;
+        }
+        providerAnswers[question.id] = projectPendingUserInputAnswer(answer, threadContexts);
+      }
       const attachments = draft ? [...draft.images, ...draft.files] : [];
       if (attachments.length === 0) continue;
       const uploaded = getUploadedAttachments({ environmentId, images: attachments });

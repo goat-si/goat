@@ -50,18 +50,13 @@ const state = vi.hoisted(() => ({
   empty: [] as never[],
 }));
 export { state };
-const { reportMockFactoryFailure } = await vi.hoisted(
-  () => import("../../test/reportMockFactoryFailure"),
-);
 // Browser importActual resolves shared helpers from a URL; root paths keep those mocks resolvable.
 vi.mock("/src/components/ui/toast", () => ({
   toastManager: { add: state.toast },
   stackedThreadToast: (v: unknown) => v,
 }));
 vi.mock("@tanstack/react-router", async (original) => ({
-  ...(await reportMockFactoryFailure("@tanstack/react-router", () =>
-    original<typeof import("@tanstack/react-router")>(),
-  )),
+  ...(await original<typeof import("@tanstack/react-router")>()),
   useRouter: () => ({ latestLocation: { pathname: "/", state: {} } }),
   useNavigate: () => state.navigate,
   useLocation: ({ select }: { select: (v: unknown) => unknown }) =>
@@ -69,9 +64,7 @@ vi.mock("@tanstack/react-router", async (original) => ({
   useParams: () => ({}),
 }));
 vi.mock("/src/hooks/useSettings", async (original) => ({
-  ...(await reportMockFactoryFailure("~/hooks/useSettings", () =>
-    original<typeof import("~/hooks/useSettings")>(),
-  )),
+  ...(await original<typeof import("~/hooks/useSettings")>()),
   useEnvironmentSettings: () => ({
     ...DEFAULT_SERVER_SETTINGS,
     ...DEFAULT_CLIENT_SETTINGS,
@@ -92,24 +85,18 @@ vi.mock("/src/hooks/useTheme", () => ({
 vi.mock("/src/hooks/useRemoveClonedProject", () => ({ useRemoveClonedProject: () => vi.fn() }));
 vi.mock("/src/hooks/useHandleNewThread", () => ({ useNewThreadHandler: () => vi.fn() }));
 vi.mock("/src/hooks/useThreadActions", async (original) => ({
-  ...(await reportMockFactoryFailure("~/hooks/useThreadActions", () =>
-    original<typeof import("~/hooks/useThreadActions")>(),
-  )),
+  ...(await original<typeof import("~/hooks/useThreadActions")>()),
   useThreadActions: () => ({}),
   useAcknowledgeThreadWoke: () => vi.fn(),
 }));
 vi.mock("/src/state/session", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/session", () =>
-    original<typeof import("~/state/session")>(),
-  )),
+  ...(await original<typeof import("~/state/session")>()),
   useEnvironmentScope: () => true,
   readEnvironmentScope: () => true,
   readPreparedConnection: () => Option.none(),
 }));
 vi.mock("/src/state/query", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/query", () =>
-    original<typeof import("~/state/query")>(),
-  )),
+  ...(await original<typeof import("~/state/query")>()),
   useEnvironmentQuery: () => ({
     data: null,
     isPending: false,
@@ -131,31 +118,23 @@ vi.mock("/src/state/use-atom-command", () => ({
         : state.noopCommand,
 }));
 vi.mock("/src/state/terminalSessions", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/terminalSessions", () =>
-    original<typeof import("~/state/terminalSessions")>(),
-  )),
+  ...(await original<typeof import("~/state/terminalSessions")>()),
   useKnownTerminalSessions: () => null,
   useThreadRunningTerminalIds: () => [],
 }));
 vi.mock("/src/state/projectClones", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/projectClones", () =>
-    original<typeof import("~/state/projectClones")>(),
-  )),
+  ...(await original<typeof import("~/state/projectClones")>()),
   useProjectClone: () => null,
 }));
 vi.mock("/src/state/device", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/device", () =>
-    original<typeof import("~/state/device")>(),
-  )),
+  ...(await original<typeof import("~/state/device")>()),
   useDeviceState: () => ({
     state: { onboardingCompleted: false, hosts: [], sessions: {} },
     isReady: true,
   }),
 }));
 vi.mock("/src/state/environments", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/environments", () =>
-    original<typeof import("~/state/environments")>(),
-  )),
+  ...(await original<typeof import("~/state/environments")>()),
   useEnvironments: () => ({
     environments: [
       state.primaryConnection
@@ -170,9 +149,7 @@ vi.mock("/src/state/environments", async (original) => ({
     new Map([[local, state.data!.primary.serverConfig?.providers ?? []]]),
 }));
 vi.mock("/src/state/entities", async (original) => ({
-  ...(await reportMockFactoryFailure("~/state/entities", () =>
-    original<typeof import("~/state/entities")>(),
-  )),
+  ...(await original<typeof import("~/state/entities")>()),
   useProject: () => state.data!.project,
   useProjects: () => [state.data!.project],
   useThreadShell: () => null,
@@ -195,9 +172,7 @@ vi.mock("/src/hooks/useScratchProject", () => ({
   useScratchProject: () => ({ scratchWorkspaceRootFor: () => null, openScratchProject: vi.fn() }),
 }));
 vi.mock("/src/remoteOpen", async (original) => ({
-  ...(await reportMockFactoryFailure("~/remoteOpen", () =>
-    original<typeof import("~/remoteOpen")>(),
-  )),
+  ...(await original<typeof import("~/remoteOpen")>()),
   useRemoteOpenState: () => ({}),
 }));
 vi.mock("/src/components/chat/useAutoBalanceUpdateBanner", () => ({
@@ -223,9 +198,7 @@ vi.mock("/src/components/ui/sidebar", () => ({
 }));
 // Browser mocks snapshot exports; forward method reads to the registry under test.
 vi.mock("/src/rpc/atomRegistry", async (original) => {
-  const actual = await reportMockFactoryFailure("~/rpc/atomRegistry", () =>
-    original<typeof import("~/rpc/atomRegistry")>(),
-  );
+  const actual = await original<typeof import("~/rpc/atomRegistry")>();
   state.registry = actual.appAtomRegistry;
   return {
     ...actual,
@@ -246,9 +219,7 @@ import {
   environmentServerConfigsAtom,
 } from "~/state/server";
 vi.mock("@effect/atom-react", async (original) => {
-  const actual = await reportMockFactoryFailure("@effect/atom-react", () =>
-    original<typeof import("@effect/atom-react")>(),
-  );
+  const actual = await original<typeof import("@effect/atom-react")>();
   return {
     ...actual,
     useAtomValue: (atom: Atom.Atom<unknown>) => {

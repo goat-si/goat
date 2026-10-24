@@ -151,10 +151,12 @@ const isHandoffError = Schema.is(HandoffError);
 
 /**
  * What a person is told when their answer to a handoff fails. An approved provider change that
- * failed, or may have landed, says which, so nobody approves a half-applied change again.
+ * failed, or may have landed, says which, so nobody approves a half-applied change again; a
+ * conflict the server explained, such as another thread holding an app, says what is in the way.
  */
 export function handoffRespondErrorMessage(error: unknown): string {
-  return isHandoffError(error) && error.outcome !== undefined
+  return isHandoffError(error) &&
+    (error.outcome !== undefined || (error.reason === "conflict" && error.detail !== undefined))
     ? error.message
     : "Could not update this handoff. It may already be resolved or expired.";
 }

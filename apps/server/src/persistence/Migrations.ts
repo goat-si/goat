@@ -111,6 +111,11 @@ import Migration0099 from "./Migrations/099_DecisionInbox.ts";
 import Migration0100 from "./Migrations/100_HumanStepRecords.ts";
 import Migration0101 from "./Migrations/101_McpRequestReservations.ts";
 import Migration0102 from "./Migrations/102_RemoteReportInboxRunId.ts";
+import Migration0103 from "./Migrations/103_RemoteReportReceipts.ts";
+import Migration0104 from "./Migrations/104_PendingAttachmentUploads.ts";
+import Migration0105 from "./Migrations/105_ScheduledTaskWebhookSecretRef.ts";
+import Migration0106 from "./Migrations/106_RemoteReportFences.ts";
+import Migration0107 from "./Migrations/107_HubProvisionedLinks.ts";
 
 export const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -218,6 +223,11 @@ export const migrationEntries = [
   [100, "HumanStepRecords", Migration0100],
   [101, "McpRequestReservations", Migration0101],
   [102, "RemoteReportInboxRunId", Migration0102],
+  [103, "RemoteReportReceipts", Migration0103],
+  [104, "PendingAttachmentUploads", Migration0104],
+  [105, "ScheduledTaskWebhookSecretRef", Migration0105],
+  [106, "RemoteReportFences", Migration0106],
+  [107, "HubProvisionedLinks", Migration0107],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

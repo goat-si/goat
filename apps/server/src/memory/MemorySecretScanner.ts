@@ -1,3 +1,7 @@
+import * as Effect from "effect/Effect";
+
+import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+
 /** Scanner reports rule identifiers only; inspected strings never leave this boundary. */
 export type MemoryScanResult =
   | { readonly kind: "allowed" }
@@ -48,3 +52,27 @@ export function scanMemoryValue(value: unknown): MemoryScanResult {
     ? { kind: "allowed" }
     : { kind: "blocked", ruleIds: [...found].sort(), inspectedBytes };
 }
+
+/**
+ * Memory text this environment writes holds no GOAT MCP credential: an agent can paste its own
+ * thread credential into a memory, a model can repeat one it read, and memories sync to other
+ * devices (#1297). Callers apply this before an operation is built and hashed. Received
+ * operations are signed by their author and are never rewritten.
+ */
+export const redactMemoryText = <T extends { readonly text: string; readonly judgment?: string }>(
+  value: T,
+): T => ({
+  ...value,
+  text: redactGoatCredentials(value.text),
+  ...(value.judgment === undefined ? {} : { judgment: redactGoatCredentials(value.judgment) }),
+});
+
+/** A summary or resolution generation whose result is passed through {@link redactMemoryText}. */
+export const redacted = <
+  O extends { readonly result: Parameters<typeof redactMemoryText>[0] },
+  E,
+  R,
+>(
+  generation: Effect.Effect<O, E, R>,
+): Effect.Effect<O, E, R> =>
+  Effect.map(generation, (output) => ({ ...output, result: redactMemoryText(output.result) }));

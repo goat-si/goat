@@ -10,6 +10,7 @@ import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseRequestInput,
   type ComputerUseRequestResult,
+  cuaAgentBlockMessage,
   type ProviderInstanceId,
   type ThreadId,
 } from "@goat/contracts";
@@ -39,14 +40,29 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       reason: "disabled",
       message: "Computer use is off on this host. A person turns it on in Settings.",
     } satisfies ComputerUseRequestResult;
+  // An approval would not help: the desktop will not start the driver until macOS allows it.
+  // A block the helper's newer readiness has seen granted since no longer refuses.
+  const block = yield* cua.value.block;
+  if (block !== undefined)
+    return {
+      kind: "refused",
+      reason: "not_granted",
+      block,
+      message: cuaAgentBlockMessage(block),
+    } satisfies ComputerUseRequestResult;
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
-  const held = yield* leases.holder(input.threadId);
+  // Admissions to different apps hold at once; an app, or the whole screen, is one thread's.
+  const held = yield* leases.holder(input.threadId, input.request.apps);
   if (Option.isSome(held))
     return {
       kind: "refused",
       reason: "held",
       holderThreadId: held.value.threadId,
-      message: `Thread ${held.value.threadId} holds computer use on this host until ${DateTime.formatIso(held.value.expiresAt)}. Ask again after it ends.`,
+      message: `${ComputerUseLeases.describeHolder(held.value)} ${
+        held.value.apps === undefined
+          ? "Ask again after it ends."
+          : "Ask only for apps it does not hold, or ask again after it ends."
+      }`,
     } satisfies ComputerUseRequestResult;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const origin = yield* computerUseOrigin(

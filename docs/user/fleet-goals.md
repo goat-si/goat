@@ -16,6 +16,12 @@ An agent running inside a GOAT thread declares a goal with `goat_call {path:"goa
 that thread: workers never get more access than the thread had when it declared the goal, and later
 updates can only lower that. Workers run on this machine for now.
 
+An agent outside GOAT can declare a goal too, with its MCP sign-in or a
+[client token](outside-agents.md#long-running-orchestrators) approved for more than read-only
+access. The goal then acts as that client and is capped by the access it was approved with. It
+stops acting while the client's session is revoked or expired, so a goal that should outlive a
+token needs a token that lasts as long.
+
 This goal starts two workers, each on its own branch from `dev`, and is done when the pull
 requests they open are merged and each has reported its result:
 
@@ -47,8 +53,8 @@ with its `id`. Pass `dryRun: true` to check a spec without saving it.
 
 The `goal.get` path shows a goal's phase (`pending`, `progressing`, `blocked`, `degraded`,
 `succeeded`, `failed`, `paused` or `deleting`), its workers and their threads, and its
-recent events, which say what GOAT did and why. `goal.list` lists the goals your thread
-declared.
+recent events, which say what GOAT did and why. `goal.list` lists the goals you declared, from
+your thread or your outside client.
 
 Each worker run gets at most one follow-up: when CI fails on its pull request, or when it finished
 without opening a pull request or reporting. A run a person interrupted is left alone. A goal stops
@@ -59,5 +65,5 @@ and 24 hours).
 
 `goal.pause` stops GOAT from acting on a goal until `goal.resume`. `goal.delete`
 interrupts the goal's running workers and then removes it; `force: true` removes it at once. Threads,
-worktrees and branches always stay. Only the thread that declared a goal, or a thread with full
-access, can pause or delete it.
+worktrees and branches always stay. Only whoever declared a goal, or a GOAT thread with full
+access, can pause or delete it; an outside client sees and changes only its own goals.

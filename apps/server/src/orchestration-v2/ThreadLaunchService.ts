@@ -25,7 +25,6 @@ import {
   type ScheduledTaskId,
   ThreadId,
   describeWorktreesDirectoryUnavailable,
-  GitCommandError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -67,6 +66,8 @@ import {
   type PreparationLog,
   renderPreparationLog,
 } from "./preparationLog.ts";
+import { confirmLaunchStep, type LaunchConfirm } from "./goat/LaunchConfirm.ts";
+import { classifyPreparationFailure } from "./goat/PreparationFailure.ts";
 
 export type ThreadLaunchWorkspaceStrategy =
   | { readonly type: "root"; readonly branch?: string | undefined }
@@ -126,6 +127,8 @@ export interface ThreadLaunchInput {
   readonly launchedBy?: OrchestrationV2ThreadLauncher | undefined;
   /** Who started a registered cloud run outside GOAT; descriptive only. */
   readonly externalLauncher?: string | undefined;
+  /** Server-set: see LaunchConfirm. */
+  readonly confirm?: LaunchConfirm;
 }
 
 type PreparationInput = Pick<
@@ -274,25 +277,8 @@ function failureDetail(error: unknown): string {
   return `Workspace preparation failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-const isGitCommandError = Schema.is(GitCommandError);
-
-/**
- * Most preparation failures are a request this machine cannot satisfy, such as a missing
- * base ref. A stalled or timed-out Git command is a slow or stuck host instead, which a
- * later attempt can get past, so it is retryable and must not read as a bad request.
- */
-export function preparationFailureClass(error: unknown): {
-  readonly class: "validation_error" | "unknown";
-  readonly code: string | null;
-  readonly retryable: boolean;
-} {
-  const cause = isThreadLaunchError(error) ? error.cause : error;
-  if (isGitCommandError(cause) && cause.reason === "stalled")
-    return { class: "unknown", code: "git_stalled", retryable: true };
-  if (isGitCommandError(cause) && cause.reason === "timed_out")
-    return { class: "unknown", code: "git_timed_out", retryable: true };
-  return { class: "validation_error", code: null, retryable: false };
-}
+export const preparationFailureClass = (error: unknown) =>
+  classifyPreparationFailure(isThreadLaunchError(error) ? error.cause : error);
 
 const withPreparationLog = (
   failure: OrchestrationV2ProviderFailure,
@@ -1283,6 +1269,10 @@ const make = Effect.gen(function* () {
                   ? {}
                   : { externalLauncher: input.externalLauncher }),
               });
+        yield* confirmLaunchStep(
+          input.confirm,
+          mapError(input, "create-thread", candidateThreadId),
+        );
         const claimed = yield* claimDispatch.pipe(
           Effect.mapError(
             mapError(
@@ -1310,6 +1300,7 @@ const make = Effect.gen(function* () {
             (yield* ids.allocate
               .message({ threadId, ordinal: 1 })
               .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId))));
+          yield* confirmLaunchStep(input.confirm, mapError(input, "dispatch-message", threadId));
           const dispatched = yield* threads
             .dispatch({
               type: "message.dispatch",

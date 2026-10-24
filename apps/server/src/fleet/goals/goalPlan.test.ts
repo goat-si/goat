@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 import {
   type GoalObservation,
@@ -11,16 +12,19 @@ import {
   repairWorkers,
   type SlotObservation,
 } from "./goalPlan.ts";
-import type { WorkerRecord } from "./GoalStore.ts";
+import { WorkerRecord } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 
 const NOW = Date.parse("2026-10-20T01:00:00.000Z");
+const decodeWorker = Schema.decodeUnknownSync(WorkerRecord);
 
 const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => ({
   now: NOW,
   owner: { available: true },
   workers: new Map(),
   launchClaims: new Map(),
+  unmovedReschedules: new Set(),
+  switchedFallbacks: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
   turns: 0,
@@ -195,6 +199,58 @@ describe("planGoal", () => {
     ]);
   });
 
+  it("stops orphaned earlier attempts before launching the attempts that wait on them", () => {
+    const goal = testGoal("goal_order", {
+      spec: testSpec({ workers: { ...testSpec().workers, count: 3 } }),
+    });
+    const successors = [0, 1, 2].map((slot) => newWorker(goal, slot, null, 2));
+    const orphans = [0, 1, 2].map((slot) => running(goal, ORPHAN_SLOT_BASE + slot));
+    const plan = planGoal(
+      goal,
+      [...successors, ...orphans],
+      observe({
+        workers: new Map(
+          orphans.map((worker) => [
+            worker.slot,
+            seen({ terminal: false, runStatus: "running", result: null }),
+          ]),
+        ),
+      }),
+    );
+    expect(
+      plan.actions.map((action) => [action.type, "slot" in action ? action.slot : null]),
+    ).toEqual([
+      ["interrupt", ORPHAN_SLOT_BASE],
+      ["interrupt", ORPHAN_SLOT_BASE + 1],
+      ["interrupt", ORPHAN_SLOT_BASE + 2],
+    ]);
+    expect(plan.truncated).toBe(true);
+  });
+
+  it("gives each run of an orphan its own interrupt, so a run that started later is stopped too", () => {
+    const goal = testGoal("goal_reruns");
+    const orphan = running(goal, ORPHAN_SLOT_BASE);
+    const idFor = (runId: string) =>
+      planGoal(
+        goal,
+        [orphan],
+        observe({
+          workers: new Map([
+            [
+              ORPHAN_SLOT_BASE,
+              seen({ terminal: false, runStatus: "running", runId: RunId.make(runId) }),
+            ],
+          ]),
+        }),
+      ).actions.find((action) => action.type === "interrupt");
+    expect(idFor("run:1")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:1:interrupt",
+    });
+    expect(idFor("run:2")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:2:interrupt",
+    });
+  });
+
   it("succeeds when every doneWhen holds and stops acting", () => {
     const goal = testGoal("goal_f", {
       spec: testSpec({
@@ -254,7 +310,7 @@ describe("planGoal", () => {
       }),
     );
     expect(shrink.actions).toEqual([
-      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:interrupt" },
+      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:run:1:interrupt" },
     ]);
     // It stays live until the interrupt is confirmed.
     expect(shrink.workers[1]!.state).toBe("running");
@@ -263,7 +319,7 @@ describe("planGoal", () => {
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, live]]) }))
         .actions,
     ).toEqual([
-      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:interrupt" },
+      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:run:1:interrupt" },
     ]);
     expect(
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, seen()]]) }))
@@ -429,7 +485,7 @@ describe("planGoal", () => {
         type: "interrupt",
         slot: ORPHAN_SLOT_BASE,
         attempt: 1,
-        actionId: "goal:goal_n:s10000:a1:interrupt",
+        actionId: "goal:goal_n:s10000:a1:run:1:interrupt",
       },
     ]);
   });
@@ -504,5 +560,43 @@ describe("planGoal", () => {
         observe({ workers: new Map([[0, limited("2026-10-20T00:30:00.000Z")]]) }),
       ).actions,
     ).toEqual([]);
+  });
+
+  it("recovers once a failed run an earlier controller marked followed up after a refused move (#1452)", () => {
+    const goal = testGoal("goal_q");
+    // The row the controller before #1472 left behind: the run is recorded as followed up both
+    // when its reschedule was refused and when a same-thread fallback was sent.
+    const { recoveredRunId: _absent, ...legacy } = running(goal, 0);
+    const followedUp = decodeWorker({
+      ...legacy,
+      followedUpRunId: "run:1",
+      lastRunId: "run:1",
+    });
+    const failed = seen({
+      runStatus: "failed",
+      health: { _tag: "failed", failureClass: "unknown", runId: RunId.make("run:1") },
+      result: null,
+    });
+    const refused = observe({
+      workers: new Map([[0, failed]]),
+      unmovedReschedules: new Set(["goal:goal_q:s0:a1:run:1:reschedule"]),
+    });
+    expect(planGoal(goal, [followedUp], refused).actions).toEqual([
+      {
+        type: "recover",
+        slot: 0,
+        attempt: 1,
+        runId: RunId.make("run:1"),
+        reason: "failed",
+        failureClass: "unknown",
+      },
+    ]);
+    // A sent fallback whose message waits held behind the failed run still shows that run.
+    expect(
+      planGoal(goal, [followedUp], observe({ workers: new Map([[0, failed]]) })).actions,
+    ).toEqual([]);
+    // Once this controller records the recovery's outcome, the run is not recovered again.
+    const settled = { ...followedUp, recoveredRunId: RunId.make("run:1") };
+    expect(planGoal(goal, [settled], refused).actions).toEqual([]);
   });
 });

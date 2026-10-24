@@ -1,6 +1,7 @@
 import {
   BuiltInSkillName,
   COMPUTER_USE_PROVIDER_DRIVERS,
+  type CuaAgentBlock,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
@@ -17,7 +18,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
-import type * as CuaDriver from "./CuaDriver.ts";
+import * as CuaDriver from "./CuaDriver.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
 
@@ -27,6 +28,8 @@ export type ComputerUseRefusal =
   | "plan"
   | "read-only"
   | "unavailable"
+  /** The desktop would not start the driver: macOS has not granted what it needs (#1399). */
+  | "not-granted"
   | "needs-approval"
   /** Another thread holds the screen for unattended work; one does at a time. */
   | "held"
@@ -43,6 +46,8 @@ export type ComputerUseAttachment =
   | {
       readonly _tag: "none";
       readonly reason: ComputerUseRefusal;
+      /** Which grants, for "not-granted"; every surface that explains the refusal reads it. */
+      readonly block?: CuaAgentBlock;
       /** An unattended turn without a lease: a `cua-driver` the user configured must not run. */
       readonly blockUserConfig: boolean;
     }
@@ -106,7 +111,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (unattended && !everyApp && Option.isNone(lease)) return none("needs-approval", true);
   if (unattended && everyApp && Option.isSome(leases)) {
     const held = yield* leases.value
-      .holder(input.threadId)
+      .holder(input.threadId, undefined)
       .pipe(Effect.orElseSucceed(() => Option.some(undefined)));
     if (Option.isSome(held)) return none("held", true);
   }
@@ -118,7 +123,18 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   if (Option.isNone(leases) || leases.value.proxy === undefined)
     return none("unavailable", unattended);
   const mcp = yield* cua.value.acquire;
-  if (Option.isNone(mcp)) return none("unavailable", unattended);
+  if (Option.isNone(mcp)) {
+    const block = CuaDriver.agentBlock(yield* cua.value.lastFailure);
+    // The trace says why a turn ran without computer use, not only that it did.
+    yield* Effect.annotateCurrentSpan({
+      "computerUse.refusal": block === undefined ? "unavailable" : "not-granted",
+      ...(block === undefined ? {} : { "computerUse.missing": block.missing.join(",") }),
+    });
+    if (block === undefined) return none("unavailable", unattended);
+    // The session list shows the turn as waiting for the grant while it runs.
+    yield* leases.value.blocked(input.threadId, block);
+    return { ...none("not-granted", unattended), block };
+  }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
   // Names this build does not know are ignored.

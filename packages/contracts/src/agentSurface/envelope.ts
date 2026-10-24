@@ -240,6 +240,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   not_unattended: before("failed_precondition"),
   // The host cannot tell when a person types a secret or uses the desktop (#1235).
   detection_unsupported: before("failed_precondition"),
+  // macOS has not granted what computer use needs; a person allows it in System Settings (#1399).
+  not_granted: before("failed_precondition"),
   // Browser preview control (PreviewAutomationControlReason)
   agentMismatch: before("conflict"),
   humanControl: before("conflict"),

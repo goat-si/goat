@@ -44,6 +44,7 @@ const fakeLeases = (input: {
   readonly claimLost?: boolean;
 }) => {
   const minted: Array<Option.Option<ComputerUseLeases.ComputerUseLease>> = [];
+  const blocked: Array<{ readonly threadId: string; readonly block: unknown }> = [];
   /** Every control on every app asked for, by whether it was for unattended work. */
   const everyApp: Array<boolean> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
@@ -78,6 +79,9 @@ const fakeLeases = (input: {
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
+    callReservation: () => Effect.die("unused"),
+    humanInput: () => Effect.die("unused"),
+    agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),
@@ -92,8 +96,10 @@ const fakeLeases = (input: {
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
     proxy: "proxy" in input ? input.proxy : proxy,
+    blocked: (threadId, block) => Effect.sync(() => void blocked.push({ threadId, block })),
+    blockedTurns: Effect.die("unused"),
   });
-  return { leases: Option.some(service), minted, everyApp };
+  return { leases: Option.some(service), minted, blocked, everyApp };
 };
 const interactiveControl = {
   controlId: "control:interactive",
@@ -105,6 +111,7 @@ const fakeDriver = (input: {
   readonly enabled: boolean;
   readonly running: boolean;
   readonly x11Display?: CuaDriver.CuaX11Display;
+  readonly failure?: CuaDriver.CuaDriverError;
 }) => {
   const calls = { acquire: 0 };
   const service = CuaDriver.CuaDriver.of({
@@ -116,7 +123,8 @@ const fakeDriver = (input: {
       calls.acquire++;
       return input.running ? Option.some(mcp) : Option.none();
     }),
-    lastFailure: Effect.succeed(Option.none()),
+    lastFailure: Effect.succeed(Option.fromUndefinedOr(input.failure)),
+    block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: input.running }),
     computerUse: Effect.die("unused"),
     admitEnable: Effect.die("unused"),
@@ -385,6 +393,36 @@ describe("computerUseAttachment", () => {
         blockUserConfig: false,
       });
     }),
+  );
+
+  it.effect(
+    "says which grant is missing when the desktop would not start the driver for it (#1399)",
+    () =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const driver = fakeDriver({
+          enabled: true,
+          running: false,
+          failure: new CuaDriver.CuaDriverHostError({
+            operation: "desktop",
+            cause: "Allow it.",
+            block,
+          }),
+        });
+        const leases = fakeLeases({});
+        assert.deepEqual(yield* decide(driver, { leases: leases.leases }), {
+          _tag: "none",
+          reason: "not-granted",
+          block,
+          blockUserConfig: false,
+        });
+        // The session list shows the turn as waiting for the grant.
+        assert.deepEqual(leases.blocked, [{ threadId: "thread-cua", block }]);
+      }),
   );
 
   it.effect("gives an unattended turn nothing without a lease, and blocks a user's driver", () =>

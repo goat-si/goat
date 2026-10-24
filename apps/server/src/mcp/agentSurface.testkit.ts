@@ -5,7 +5,7 @@ import {
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as DecisionService from "../goatclaw/DecisionService.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
@@ -41,6 +41,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
 import * as FleetPlacement from "../fleet/resources/Placement.ts";
@@ -76,6 +77,8 @@ import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReview
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import type { Project } from "@goat/contracts";
 import { McpSchema } from "effect/ai";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
@@ -147,7 +150,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -182,6 +185,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(OpenCodexSync.OpenCodexSync)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),
   Layer.mock(FleetPlacement.Placement)({}),
@@ -246,6 +250,18 @@ const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies
 const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
 /**
+ * The calling thread's project exists and grants Agent device access, so a device handler runs
+ * past its per-call access check. Merge it after `dependencies`.
+ */
+export const deviceAccessGranted = Layer.mergeAll(
+  Layer.mock(ProjectService.ProjectService)({
+    getById: (id) => Effect.succeed(Option.some({ id } as Project)),
+  }),
+  Layer.mock(Settings.ServerSettingsService)({
+    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, enableAgentDeviceAccess: true }),
+  }),
+);
+/**
  * The same inert services with goatclaw on, so the capability gate holds threads to their
  * profiles. The caller provides SqlClient (with the calling thread seeded) and the
  * ServerSettingsService both the gate and the handlers read, and can change the policy through it.
@@ -293,6 +309,8 @@ const serveVia = <ET, RT>(
   Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
     scopes: Readonly<Record<string, McpInvocationScope>>,
     registrations: Layer.Layer<never, E, R>,
+    /** Headers a caller sends on every request, the way a configured MCP client does. */
+    headersOf: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
   ) {
     const scopeOf = new Map(
       Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
@@ -330,6 +348,7 @@ const serveVia = <ET, RT>(
       const session = sessions.get(caller);
       const response = yield* http.post("/mcp", {
         headers: {
+          ...headersOf[caller],
           accept: "application/json, text/event-stream",
           authorization: `Bearer ${caller}.token`,
           ...(session === undefined
@@ -416,7 +435,8 @@ const serveOverHttpWithProfiles = serveVia(
 const serveWith = <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
-) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
+  headersOf?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)), headersOf);
 
 /** Default settings, with the tool listing a test chooses; /mcp reads it for tools/list. */
 const settingsListing = (agentToolListing: AgentToolListing) =>
@@ -427,7 +447,9 @@ const settingsListing = (agentToolListing: AgentToolListing) =>
 export const serveCatalogOverHttp = (
   scopes: Readonly<Record<string, McpInvocationScope>>,
   agentToolListing: AgentToolListing = DEFAULT_AGENT_TOOL_LISTING,
-) => serveWith(scopes, servicesOff).pipe(Effect.provide(settingsListing(agentToolListing)));
+  headersOf?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+) =>
+  serveWith(scopes, servicesOff, headersOf).pipe(Effect.provide(settingsListing(agentToolListing)));
 
 /**
  * serveCatalogOverHttp with goatclaw enforcing, in tools/list as in calls; see

@@ -13,6 +13,8 @@ import {
   type AuthSessionId,
   WS_METHODS,
   type ComputerUseRefusalReason,
+  type CuaAgentBlock,
+  cuaAgentBlockLists,
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
@@ -70,14 +72,41 @@ const parseBrowserId = (id: string) => {
 
 type Base = Pick<PreviewSession, "environmentId" | "host" | "platform">;
 
+/**
+ * A running turn the desktop gave no driver for want of a grant (#1399). It holds no control, so
+ * there is nothing to stop or take over; the tile says which grant a person must allow.
+ */
+export const blockedSession = (
+  base: Base,
+  threadId: ThreadId,
+  block: CuaAgentBlock,
+): PreviewSession => ({
+  id: `${DESKTOP_PREFIX}blocked:${threadId}`,
+  kind: "desktop",
+  ...base,
+  threadId,
+  target: {
+    kind: "desktop",
+    title: `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`,
+  },
+  owner: "agent",
+  status: "permission-needed",
+  reason: "permissionsNotGranted",
+  capabilities: { controls: [], frames: false, privateMode: false, humanInput: false },
+});
+
 /** An agent's browser tab as a session; a person's own tab is not one. */
 export const browserSession = (
   base: Base,
   tab: ServerBrowserSessionView,
 ): PreviewSession | undefined => {
   if (tab.agentId === null) return undefined;
-  const status =
-    tab.private || tab.humanControls ? "paused" : tab.agentStopped ? "stopped" : "acting";
+  // A stopped agent stays stopped while a person holds the tab or types a secret in it.
+  const status = tab.agentStopped
+    ? "stopped"
+    : tab.private || tab.humanControls
+      ? "paused"
+      : "acting";
   const controls: ReadonlyArray<PreviewSessionControl> = tab.agentStopped
     ? ["handBack", "stopAll"]
     : tab.humanControls
@@ -196,6 +225,8 @@ const make = Effect.gen(function* () {
         const session = desktopSession(base, control, state, detection);
         if (session) sessions.push(session);
       }
+      for (const { threadId, block } of yield* leases.value.blockedTurns)
+        sessions.push(blockedSession(base, threadId, block));
     }
     return { sessions };
   }).pipe(Effect.withSpan("PreviewSessions.snapshot"));
@@ -229,8 +260,11 @@ const make = Effect.gen(function* () {
     if (input.control === "stopAll") {
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
-      yield* stopAllComputerUse(leases, handoffs, sessionId);
-      return { applied: true };
+      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
+      // A grant left alive lets its thread take the screen again on its next turn.
+      return failed === 0
+        ? { applied: true }
+        : ({ applied: false, reason: "not_allowed" } as const);
     }
     if (input.control === "requestHandoff")
       return { applied: false, reason: "not_allowed" } as const;

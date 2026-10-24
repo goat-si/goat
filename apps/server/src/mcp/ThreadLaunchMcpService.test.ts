@@ -2,6 +2,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import { expect, it } from "@effect/vitest";
 import {
+  BUILTIN_PERMISSION_PROFILES,
   ChannelDispatchTarget,
   ChannelInboundMessage,
   ChannelRequester,
@@ -268,8 +269,15 @@ function fixture(
   registered?: Layer.Layer<ProviderRegistry.ProviderRegistry>,
   profile?: string,
   callerOverrides: Partial<OrchestrationV2ThreadShell> = {},
-  behavior?: { readonly failLaunches?: boolean; readonly childThreadVisible?: boolean },
+  behavior?: {
+    readonly failLaunches?: boolean;
+    readonly childThreadVisible?: boolean;
+    /** The first launch creates its thread, then its first message is refused. */
+    readonly createdThenRefused?: { readonly sql: () => SqlClient.SqlClient };
+    readonly maxLanes?: number;
+  },
 ) {
+  let refusedOnce = false;
   const launched: ThreadLaunch.ThreadLaunchInput[] = [];
   const attempted: ThreadLaunch.ThreadLaunchInput[] = [];
   const sources: Parameters<CloudSource.CloudTaskSourceService["Service"]["resolve"]>[0][] = [];
@@ -277,7 +285,20 @@ function fixture(
   const deps = Layer.mergeAll(
     NodeServices.layer,
     ServerSettings.layerTest({
-      goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
+      goatclaw: {
+        enabled: profile !== undefined,
+        defaultProfile: profile ?? "worker",
+        ...(profile === undefined || behavior?.maxLanes === undefined
+          ? {}
+          : {
+              profiles: {
+                [profile]: {
+                  ...BUILTIN_PERMISSION_PROFILES[profile]!,
+                  maxLanes: behavior.maxLanes,
+                },
+              },
+            }),
+      },
     }),
     ServerConfig.layerTest("/repo", { prefix: "goat-cloud-launch-ci-" }).pipe(
       Layer.provide(NodeServices.layer),
@@ -361,33 +382,59 @@ function fixture(
           attempted.push(input);
         }).pipe(
           Effect.andThen(
-            behavior?.failLaunches === true
-              ? Effect.fail(
-                  new ThreadLaunch.ThreadLaunchError({
-                    operation:
-                      behavior.childThreadVisible === true ? "dispatch-message" : "resolve-project",
-                    commandId: input.commandId,
-                    projectId: input.projectId,
-                    cause: new Error("fixture launch failure"),
-                  }),
-                )
-              : Effect.sync(() => {
-                  launched.push(input);
-                  return {
-                    threadId: input.threadId,
-                    resumed: false,
-                    projection: {
-                      thread: { id: input.threadId, projectId, title: input.title, modelSelection },
-                      runs: [
-                        {
-                          id: "run:cloud-launched",
-                          userMessageId: input.initialMessage?.messageId,
-                          status: "starting",
+            behavior?.createdThenRefused !== undefined && !refusedOnce
+              ? Effect.suspend(() => {
+                  refusedOnce = true;
+                  const sql = behavior.createdThenRefused!.sql();
+                  return sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+                    VALUES (${input.threadId!}, ${projectId}, 'Refused', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`.pipe(
+                    Effect.orDie,
+                    Effect.andThen(
+                      Effect.fail(
+                        new ThreadLaunch.ThreadLaunchError({
+                          operation: "dispatch-message",
+                          commandId: input.commandId,
+                          projectId: input.projectId,
+                          cause: "The launcher may no longer start this work.",
+                        }),
+                      ),
+                    ),
+                  );
+                })
+              : behavior?.failLaunches === true
+                ? Effect.fail(
+                    new ThreadLaunch.ThreadLaunchError({
+                      operation:
+                        behavior.childThreadVisible === true
+                          ? "dispatch-message"
+                          : "resolve-project",
+                      commandId: input.commandId,
+                      projectId: input.projectId,
+                      cause: new Error("fixture launch failure"),
+                    }),
+                  )
+                : Effect.sync(() => {
+                    launched.push(input);
+                    return {
+                      threadId: input.threadId,
+                      resumed: false,
+                      projection: {
+                        thread: {
+                          id: input.threadId,
+                          projectId,
+                          title: input.title,
+                          modelSelection,
                         },
-                      ],
-                    },
-                  } as unknown as ThreadLaunch.ThreadLaunchResult;
-                }),
+                        runs: [
+                          {
+                            id: "run:cloud-launched",
+                            userMessageId: input.initialMessage?.messageId,
+                            status: "starting",
+                          },
+                        ],
+                      },
+                    } as unknown as ThreadLaunch.ThreadLaunchResult;
+                  }),
           ),
         ),
     }),
@@ -693,6 +740,46 @@ it.effect(
       });
       expect(f.launched).toHaveLength(0);
       expect(yield* sql`SELECT id FROM goatclaw_lane_reservations`).toEqual([]);
+    }).pipe(Effect.provide(f.layer));
+  },
+);
+
+it.effect(
+  "regression #493: a launch refused after its thread was created holds no lane while that thread does not run",
+  () => {
+    let sqlRef: SqlClient.SqlClient | undefined;
+    const f = fixture(
+      false,
+      "published-ref",
+      undefined,
+      "owner",
+      {},
+      {
+        createdThenRefused: { sql: () => sqlRef! },
+        maxLanes: 1,
+      },
+    );
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      sqlRef = sql;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES (${callerId}, ${projectId}, 'Caller', 'codex', 'full-access', 'default', '2026-10-21', '2026-10-21', '{}')`;
+      // The fixture's adapter is a cloud one, which goatclaw admits only in a turn a person started.
+      yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+    VALUES ('caller-run', ${callerId}, 1, 'codex', 'running', '2026-10-21', '{"userMessageId":"caller-message"}')`;
+      yield* sql`INSERT INTO orchestration_v2_projection_messages (message_id, thread_id, run_id, role, streaming, created_at, updated_at, payload_json)
+    VALUES ('caller-message', ${callerId}, 'caller-run', 'user', 0, '2026-10-21', '2026-10-21', '{"createdBy":"user","creationSource":"web"}')`;
+      const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+      const launch = (message: string) =>
+        service.launch(
+          scope,
+          { title: "Cloud", message, standingInstructions: false },
+          { runtimeMode: "full-access", interactionMode: "default" },
+        );
+      yield* launch("Refused after its thread exists").pipe(Effect.flip);
+      // The refused thread has no run, so the profile's only lane is free for the next launch.
+      yield* launch("Inspect");
+      expect(f.launched).toHaveLength(1);
     }).pipe(Effect.provide(f.layer));
   },
 );

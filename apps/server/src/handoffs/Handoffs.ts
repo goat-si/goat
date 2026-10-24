@@ -345,7 +345,7 @@ const make = Effect.gen(function* () {
     return handoff;
   });
   const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
-    input: HandoffReadInput,
+    input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
     sessionId: AuthSessionId,
   ) {
     const record = yield* read(input);
@@ -364,8 +364,10 @@ const make = Effect.gen(function* () {
           : record.target.path.startsWith("provider.")
             ? ("providers:manage" as const)
             : // Admitting an unattended thread to the screen, or changing the hub's members, is as
-              // strong as changing this environment's settings.
-              record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
+              // strong as changing this environment's settings. Ending a screen grant only narrows
+              // what agents may do, so whoever may stop agents can end it (Stop all).
+              (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                  input.action !== "cancelled") ||
                 isHubDeviceHandoffPath(record.target.path)
               ? ("settings:write" as const)
               : ("orchestration:operate" as const);
@@ -390,14 +392,24 @@ const make = Effect.gen(function* () {
       const label = yield* clientLabel(input, sessionId);
       const record = yield* read(input);
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
-      // One unattended thread per host holds the screen; a second approval waits for it to end.
+      // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
       if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
         const held = Option.isNone(computerUseLeases)
           ? Option.none()
           : yield* computerUseLeases.value
-              .holder(record.requestedBy.threadId)
+              .holder(record.requestedBy.threadId, record.apps)
               .pipe(Effect.mapError(unavailable));
-        if (Option.isSome(held)) return yield* new HandoffError({ reason: "conflict" });
+        if (Option.isSome(held)) {
+          const rows = yield* sql<{ readonly title: string | null }>`
+            SELECT title FROM orchestration_v2_projection_threads
+            WHERE thread_id = ${held.value.threadId}
+          `.pipe(Effect.orElseSucceed(() => []));
+          const title = rows[0]?.title?.trim();
+          return yield* new HandoffError({
+            reason: "conflict",
+            detail: `${ComputerUseLeases.describeHolderForPerson(held.value, title || undefined)} End that admission first, or deny this one.`,
+          });
+        }
       }
       if (
         input.action === "completed" &&

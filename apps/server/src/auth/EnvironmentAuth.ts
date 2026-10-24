@@ -41,6 +41,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
+import { reauthorizeSession } from "./McpClientAuthority.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
@@ -1313,27 +1314,7 @@ export const make = Effect.gen(function* () {
                   ? (session.runtimeModeCeiling ?? "approval-required")
                   : "read-only",
                 grantedScopes: session.scopes,
-                reauthorize: (required) =>
-                  sessions.readActiveScopes(session.sessionId).pipe(
-                    Effect.mapError(
-                      () =>
-                        new EnvironmentAuthorizationError({
-                          message: "The MCP session is no longer active.",
-                          requiredScope: required[0] ?? "memory:read",
-                        }),
-                    ),
-                    Effect.flatMap((scopes) =>
-                      required.every((scope) => scopes.includes(scope))
-                        ? Effect.void
-                        : Effect.fail(
-                            new EnvironmentAuthorizationError({
-                              message: "The MCP session does not grant the required scope.",
-                              requiredScope:
-                                required.find((scope) => !scopes.includes(scope)) ?? "memory:read",
-                            }),
-                          ),
-                    ),
-                  ),
+                reauthorize: reauthorizeSession(sessions, session.sessionId),
                 approvals:
                   session.scopes.includes(AuthOrchestrationOperateScope) &&
                   session.scopes.includes(AuthOrchestrationApproveScope),

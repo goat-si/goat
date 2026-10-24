@@ -1,7 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { CuaHostStatus } from "./cua.ts";
+import {
+  ComputerUseCallReservation,
+  ComputerUseCallAdmission,
+  ComputerUseLeaseUpdate,
+  CuaHostStatus,
+  DesktopCuaWatch,
+} from "./cua.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
 
@@ -27,6 +33,44 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("roundtrips execution ownership and refuses malformed or unknown reservation actions", () => {
+    const decode = Schema.decodeUnknownSync(ComputerUseCallReservation);
+    const request = {
+      action: "reserve",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      callId: "one",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "type_text",
+      args: { pid: 42, window_id: 7 },
+    };
+    expect(decode(request)).toEqual(request);
+    const { idleEpoch: _idleEpoch, ...missingIdleEpoch } = request;
+    for (const invalid of [
+      missingIdleEpoch,
+      { ...request, action: "steal" },
+      { ...request, connectionId: "" },
+      { ...request, interruptions: -1 },
+      { ...request, idleEpoch: -1 },
+      { ...request, name: "" },
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const refusal = { status: "refused", detail: "target_busy", holderThreadId: "thread:holder" };
+    expect(Schema.decodeUnknownSync(ComputerUseCallAdmission)(refusal)).toEqual(refusal);
+    expect(
+      Schema.decodeUnknownSync(ComputerUseLeaseUpdate)({ state: "idle", controlId: "control:one" }),
+    ).toEqual({ state: "idle", controlId: "control:one" });
+  });
+  it("accepts watch messages from older servers and preserves optional approved app ids", () => {
+    const decode = Schema.decodeUnknownSync(DesktopCuaWatch);
+    const watch = { version: 1, type: "cuaWatch", seq: 1, active: true };
+    expect(decode(watch)).toEqual(watch);
+    const apps = ["com.example.notes", "C:\\work\\fixture.exe"];
+    expect(decode({ ...watch, apps })).toEqual({ ...watch, apps });
+    expect(() => decode({ ...watch, apps: [7] })).toThrow();
+  });
+
   it("preserves reported readiness and signals, and drops future optional shapes independently", () => {
     const decode = Schema.decodeUnknownSync(CuaHostStatus);
     const readiness = {

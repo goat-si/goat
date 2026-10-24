@@ -6,6 +6,7 @@
 // and exactly one reply each, and driverExited as the only event. On Windows it also answers
 // what only a process on the user's desktop can know: readiness (an interactive session, a
 // usable input desktop, UI Automation) and one window's identity and admission facts.
+// While the host asks for frames, frame and frameUnavailable lines carry them (FrameSource.cs).
 //
 // The helper runs exactly one embedded Cua Driver daemon from the files this build pinned, in
 // a job object that ends with the helper. stdin EOF means the host is gone.
@@ -27,18 +28,25 @@ namespace Goat.ComputerUse
         const int MaxLineBytes = 1 << 20;
         /// <summary>Names this helper process; replies and events are trusted only with it.</summary>
         public static readonly string Generation = Guid.NewGuid().ToString("N");
-        static readonly object OutputLock = new object();
-        static readonly Stream Output = Console.OpenStandardOutput();
+        static HelperOutput output;
         static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
 
+        /// <summary>Queues a line for the host (HelperOutput); never waits on stdout.</summary>
         static void Emit(Dictionary<string, object> message)
         {
-            byte[] line = new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
-            lock (OutputLock)
-            {
-                Output.Write(line, 0, line.Length);
-                Output.Flush();
-            }
+            object type;
+            output.Add(Encode(message), message.TryGetValue("type", out type) && (type as string) == "frame");
+        }
+
+        /// <summary>Signal lines: paced, so a stalled host leaves them coalescing in SignalOutbox.</summary>
+        static void EmitSignal(Dictionary<string, object> message)
+        {
+            output.AddPaced(Encode(message));
+        }
+
+        static byte[] Encode(Dictionary<string, object> message)
+        {
+            return new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
         }
 
         static Dictionary<string, object> Message(string type)
@@ -67,16 +75,35 @@ namespace Goat.ComputerUse
                     return 78;
                 }
             }
+            DriverService service = null;
+            Signals signals = null;
+            FrameSource frames = null;
+            // A host that stopped reading altogether: stop the driver and leave, as on EOF.
+            output = new HelperOutput(Console.OpenStandardOutput(), delegate
+            {
+                try
+                {
+                    if (frames != null) frames.Shutdown();
+                    if (signals != null) signals.Shutdown();
+                }
+                finally
+                {
+                    if (service != null) service.Stop();
+                    Environment.Exit(75);
+                }
+            });
             if (refusal != null)
             {
                 var refused = Message("refused");
                 refused["reason"] = "untrusted_parent";
                 refused["message"] = refusal;
                 Emit(refused);
+                output.Drain(2000);
                 return 77;
             }
-            var service = new DriverService(executable, Emit);
-            var signals = new Signals(Emit);
+            service = new DriverService(executable, Emit);
+            signals = new Signals(EmitSignal);
+            frames = new FrameSource(service, Emit);
             var hello = Message("hello");
             hello["protocol"] = ProtocolVersion;
             hello["pid"] = System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -85,6 +112,9 @@ namespace Goat.ComputerUse
             hello["platform"] = "windows";
             hello["generation"] = Generation;
             hello["signals"] = Signals.Capabilities();
+            // Methods beyond protocol 1's first set, as the macOS helper lists them; the host
+            // starts a private-mode watch only for a helper that lists watch (#1415).
+            hello["features"] = new[] { "watch", "frames" };
             Emit(hello);
 
             Stream input = Console.OpenStandardInput();
@@ -104,7 +134,7 @@ namespace Goat.ComputerUse
                         start = i + 1;
                         byte[] line = buffer.ToArray();
                         buffer.SetLength(0);
-                        if (line.Length > 0) Handle(service, signals, new UTF8Encoding(false, true).GetString(line));
+                        if (line.Length > 0) Handle(service, signals, frames, new UTF8Encoding(false, true).GetString(line));
                     }
                     buffer.Write(chunk, start, read - start);
                     if (buffer.Length > MaxLineBytes)
@@ -122,13 +152,15 @@ namespace Goat.ComputerUse
             {
                 // The host is gone. Nothing more is written (a helper that exits clears every
                 // target of its generation), and the driver stops even if listening does not.
-                try { signals.Shutdown(); }
+                try { frames.Shutdown(); signals.Shutdown(); }
                 finally { service.Stop(); }
             }
+            // A last error line, if any, still reaches a host that reads.
+            output.Drain(1000);
             return 0;
         }
 
-        static void Handle(DriverService service, Signals signals, string line)
+        static void Handle(DriverService service, Signals signals, FrameSource frames, string line)
         {
             Dictionary<string, object> request = null;
             try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
@@ -165,6 +197,10 @@ namespace Goat.ComputerUse
                     case "unwatch":
                         reply["result"] = new Dictionary<string, object>();
                         signals.Unwatch(reply);
+                        return;
+                    // The frames queue writes the answer behind the old request's last frame.
+                    case "frames":
+                        frames.Frames(parameters, reply);
                         return;
                     // Windows has no grant to prompt for; "prompt" is accepted and ignored.
                     case "permissions": reply["result"] = WindowsFacts.Readiness(); break;
@@ -213,12 +249,15 @@ namespace Goat.ComputerUse
             return failure;
         }
 
-        /// <summary>watch's targets, at least one, each an exact window of a process.</summary>
+        /// <summary>
+        /// watch's targets, each an exact window of a process; none watches the whole desktop,
+        /// which is how the desktop host asks (as on macOS).
+        /// </summary>
         static List<Signals.Target> Targets(Dictionary<string, object> parameters)
         {
             object raw;
-            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]) || ((object[])raw).Length == 0)
-                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...].");
+            if (!parameters.TryGetValue("targets", out raw) || !(raw is object[]))
+                throw new HelperException("bad_request", "watch needs targets: [{pid, windowId}, ...] or [].");
             var targets = new List<Signals.Target>();
             var seen = new HashSet<string>();
             foreach (object entry in (object[])raw)

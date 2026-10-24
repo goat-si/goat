@@ -3,9 +3,13 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   OrchestratorMcpFailure,
   RemoteOriginReportInput,
+  RemoteOriginReportReceiptInput,
+  RemoteOriginReportReceiptResult,
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
+  RemoteResolveBindingInput,
+  RemoteResolveBindingResult,
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 import * as RemoteReportService from "../../../remoteReports/RemoteReportService.ts";
@@ -27,10 +31,27 @@ const ReportTool = Tool.make(agentSurfaceRegistry["origin.report"].name, {
   parameters: RemoteOriginReportInput,
   success: RemoteOriginReportResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report"]));
+const ReceiptTool = Tool.make(agentSurfaceRegistry["origin.report_receipt"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["origin.report_receipt"].description,
+  parameters: RemoteOriginReportReceiptInput,
+  success: RemoteOriginReportReceiptResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report_receipt"]));
 const WaitTool = Tool.make(agentSurfaceRegistry["origin.report_wait"].name, {
   ...shared,
   description: agentSurfaceRegistry["origin.report_wait"].description,
   parameters: RemoteOriginReportsWaitInput,
   success: RemoteOriginReportsWaitResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report_wait"]));
-export const RemoteReportToolkit = Toolkit.make(ReportTool, WaitTool);
+const ResolveBindingTool = Tool.make(agentSurfaceRegistry["origin.resolve_binding"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["origin.resolve_binding"].description,
+  parameters: RemoteResolveBindingInput,
+  success: RemoteResolveBindingResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.resolve_binding"]));
+export const RemoteReportToolkit = Toolkit.make(
+  ReportTool,
+  ReceiptTool,
+  WaitTool,
+  ResolveBindingTool,
+);

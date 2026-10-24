@@ -1,7 +1,6 @@
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
-import * as DecisionInbox from "./goatclaw/DecisionInbox.ts";
+import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
-import * as PendingQuestionsMcpService from "./mcp/PendingQuestionsMcpService.ts";
 // @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
@@ -113,6 +112,9 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
+import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
+import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
@@ -343,6 +345,15 @@ const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
 const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
   Layer.provide(layerServerSettings),
+  Layer.provide(LinuxHelperReport.layer),
+);
+
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
+
+// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
+const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
+  Layer.provide(layerCuaDriver),
+  Layer.provide(LinuxHelperReport.layer),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -796,20 +807,13 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
   Layer.provideMerge(LinkedHosts.layer),
   Layer.provideMerge(
-    DecisionInbox.layerRunning.pipe(
-      Layer.provideMerge(DecisionInbox.layer),
-      Layer.provide(PermissionProfiles.layer),
+    DecisionLayers.layer.pipe(
       Layer.provide(
-        PendingQuestionsMcpService.layer.pipe(
-          Layer.provide(HostThreadsMcpService.layer),
-          Layer.provide(
-            OrchestratorMcpService.layer.pipe(
-              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
-            ),
-          ),
-          Layer.provide(ThreadResultService.layer),
+        OrchestratorMcpService.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
         ),
       ),
+      Layer.provide(ThreadResultService.layer),
       Layer.provide(RemoteDispatchCoordinator.layer),
       Layer.provide(layerLaunchWatches),
       // The first build of the thread services, which layer memoization shares with every
@@ -837,7 +841,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
+      layerLinuxFrameSource,
+      ComputerUseLeases.layer.pipe(
+        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(layerLinuxFrameSource),
+        Layer.provide(layerLinuxHelperHost),
+      ),
       CloudProviderAutoSetup.layer,
     ),
   ),

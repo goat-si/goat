@@ -4,6 +4,8 @@ import {
   EnvironmentId,
   type GoatHostStatusResult,
   type HostStatusEntry,
+  type HubNode,
+  type HubNodesSnapshot,
   type HubParityResult,
   type OpenCodexInventorySnapshot,
   type ServerSettings,
@@ -20,6 +22,9 @@ import "../../index.css";
 const state = vi.hoisted(() => ({
   settings: new Map<string, unknown>(),
   hosts: undefined as unknown,
+  hostsByEnvironment: new Map<string, unknown>(),
+  nodes: new Map<string, unknown>(),
+  checkNodes: vi.fn(),
   permission: vi.fn(),
   update: vi.fn(),
   verify: vi.fn(),
@@ -39,8 +44,29 @@ vi.mock("../../state/server", () => ({
     joinHubDevice: { label: "hub:join", run: state.join, permissionAtom: state.permission },
     leaveHubDevice: { label: "hub:leave", run: state.leave, permissionAtom: state.permission },
     repairHubDevice: { label: "hub:repair", run: state.repair, permissionAtom: state.permission },
+    hubNodesLive: ({ environmentId }: { environmentId: string }) => state.nodes.get(environmentId),
+    checkHubNodes: {
+      label: "nodes:check",
+      run: state.checkNodes,
+      permissionAtom: state.permission,
+    },
+    addHubNode: { label: "nodes:add", run: vi.fn(), permissionAtom: state.permission },
+    removeHubNode: { label: "nodes:remove", run: vi.fn(), permissionAtom: state.permission },
+    dismissHubNodeNotice: {
+      label: "nodes:dismiss",
+      run: vi.fn(),
+      permissionAtom: state.permission,
+    },
   },
 }));
+// Sync OpenCodex has its own dialog; these tests cover the hub's device rows.
+vi.mock("../opencodex/OpenCodexSyncDialog", () => ({ OpenCodexSyncButton: () => null }));
+vi.mock("~/connection/catalog", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { environmentCatalog: { catalogValueAtom: Atom.make({ entries: new Map() }) } };
+});
+// Phone access through the hub has its own tests; it needs a live connection runtime.
+vi.mock("./HubProxyNodesSettings", () => ({ HubProxyNodeAccess: () => null }));
 vi.mock("~/hooks/useSettings", async () => {
   const { useAtomValue } = await import("@effect/atom-react");
   return {
@@ -50,7 +76,7 @@ vi.mock("~/hooks/useSettings", async () => {
 });
 vi.mock("~/state/hostStatus", () => ({
   HOST_STATUS_REFRESH_MS: 15_000,
-  hostStatusAtom: () => state.hosts,
+  hostStatusAtom: (id: string) => state.hostsByEnvironment.get(id) ?? state.hosts,
   refreshHostStatus: () => undefined,
 }));
 // macmini-ts has its own GOAT connection; lidge-ts does not.
@@ -67,6 +93,7 @@ vi.mock("~/state/session", () => ({ useEnvironmentScope: () => true }));
 vi.mock("./SettingsScopeContext", () => ({ useSettingsScope: state.scope }));
 vi.mock("./settingsLayout", () => ({
   SettingsPageContainer: ({ children }: { children: ReactNode }) => <main>{children}</main>,
+  SettingsSearchTarget: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   SettingsSection: (props: { title: string; children: ReactNode; headerAction?: ReactNode }) => (
     <section>
       <h2>{props.title}</h2>
@@ -184,6 +211,11 @@ function setup() {
   const hosts = Atom.make((get) => get(source));
   state.settings = settings;
   state.hosts = hosts;
+  state.hostsByEnvironment = new Map();
+  state.nodes = new Map(
+    [environmentId, macminiEnvironment].map((id) => [id, Atom.make(nodesOf(id, []))]),
+  );
+  state.checkNodes.mockReset().mockResolvedValue({ _tag: "Success", value: { nodes: [] } });
   state.permission.mockReset().mockReturnValue(Atom.make(true));
   state.scope.mockReset().mockReturnValue({
     environment: {
@@ -243,6 +275,118 @@ function setup() {
 
 const device = (screen: Awaited<ReturnType<typeof render>>, alias: string) =>
   screen.getByRole("listitem").filter({ hasText: alias });
+
+function nodesOf(hub: EnvironmentId, nodes: ReadonlyArray<HubNode>) {
+  return AsyncResult.success<HubNodesSnapshot>({ hubEnvironmentId: hub, nodes, notices: [] });
+}
+
+function hubNode(nodeId: string, label: string, target: HubNode["routes"][number]["target"]) {
+  const name = target.kind === "linked" ? target.name : target.alias;
+  return {
+    nodeId,
+    environmentId: null,
+    label,
+    kind: target.kind,
+    routes: [
+      {
+        routeId: `${target.kind}:${name}`,
+        source: target.kind === "cloud" ? "cloud-machine" : "registered",
+        target,
+        status: "online",
+        checkedAt: null,
+        lastSeenAt: null,
+        lastError: null,
+      },
+    ],
+    status: "online",
+    lastSeenAt: null,
+    addedBy: null,
+  } as HubNode;
+}
+
+const sshTarget = (alias: string) =>
+  ({ kind: "ssh", alias, hostname: null, username: null, port: null }) as const;
+
+it("lists the selected hub's devices once each, with OpenCodex link state and why a cloud machine is not a Child yet", async () => {
+  using fixture = setup();
+  state.nodes.set(
+    environmentId,
+    Atom.make(
+      nodesOf(environmentId, [
+        hubNode("node-macmini", "Mac mini", sshTarget("macmini-ts")),
+        hubNode("node-pi", "pi", sshTarget("pi-ts")),
+        hubNode("node-boat", "boat-7", { kind: "cloud", alias: "boat-7" } as const),
+      ]),
+    ),
+  );
+  fixture.registry.set(
+    fixture.source,
+    AsyncResult.success<GoatHostStatusResult>({
+      hosts: [
+        host(null),
+        host("macmini-ts", degraded),
+        host("lidge-ts"),
+        {
+          host: "boat-7",
+          reachability: "unreachable",
+          opencodexChild: {
+            state: "blocked",
+            reason: "npm_missing",
+            message: "npm is not installed on boat-7.",
+            checkedAt: Date.parse("2026-10-21T08:00:00.000Z"),
+          },
+        },
+      ],
+    }),
+  );
+  // The same machine pair, read from the Mac mini as the selected environment.
+  state.nodes.set(
+    macminiEnvironment,
+    Atom.make(nodesOf(macminiEnvironment, [hubNode("node-nas", "nas", sshTarget("nas"))])),
+  );
+  state.hostsByEnvironment.set(
+    macminiEnvironment,
+    Atom.make(AsyncResult.success<GoatHostStatusResult>({ hosts: [] })),
+  );
+  const hubs = () => (
+    <RegistryContext value={fixture.registry}>
+      <HubSettings />
+    </RegistryContext>
+  );
+  await using screen = await render(hubs());
+  const list = screen.getByRole("list", { name: "Hub devices" });
+
+  const macmini = device(screen, "Mac mini");
+  await expect.element(macmini.getByText("Remote Link Child")).toBeVisible();
+  await expect.element(macmini.getByText("SSH macmini-ts")).toBeVisible();
+  await expect.element(macmini.getByText("Parity degraded (P6)")).toBeVisible();
+  await expect.element(device(screen, "pi").getByText("Not linked to OpenCodex")).toBeVisible();
+  const boat = device(screen, "boat-7");
+  await expect.element(boat.getByText(/OpenCodex Child setup blocked: npm missing/)).toBeVisible();
+  await expect.element(boat.getByText("npm is not installed on boat-7.")).toBeVisible();
+  // Only OpenCodex knows lidge-ts; it keeps its row.
+  await expect.element(device(screen, "lidge-ts").getByText("Remote Link Child")).toBeVisible();
+  await expect.element(list.getByRole("heading", { name: "macmini-ts" })).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Check pi" }));
+  expect(state.checkNodes.mock.calls[0]?.[1]).toEqual({
+    environmentId,
+    input: { nodeId: "node-pi" },
+  });
+
+  state.scope.mockReturnValue({
+    environment: {
+      environmentId: macminiEnvironment,
+      label: "Mac mini",
+      connection: { phase: "connected" },
+      serverConfig: {},
+      entry: { target: { _tag: "SavedConnectionTarget" } },
+    },
+  });
+  await screen.rerender(hubs());
+  await expect.element(device(screen, "nas").getByText("SSH nas")).toBeVisible();
+  await expect.element(screen.getByText("pi", { exact: true })).not.toBeInTheDocument();
+});
 
 it("shows each device's verdict and failing checks, and Verify replaces a missing verdict", async () => {
   using fixture = setup();

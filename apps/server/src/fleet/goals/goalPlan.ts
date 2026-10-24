@@ -54,8 +54,28 @@ const resumeActionId = (
   attempt: number,
   runId: string,
 ) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":resume";
-const interruptActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
-  "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":interrupt";
+/** One reschedule per run, or per reason when no run is known; claimed as a launch. */
+export const rescheduleActionId = (
+  goal: Pick<FleetGoal, "id">,
+  slot: number,
+  attempt: number,
+  runOrReason: string,
+) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runOrReason + ":reschedule";
+/** Names the run it stops: the id is the interrupt's command id, so a later run gets a new one. */
+const interruptActionId = (
+  goal: Pick<FleetGoal, "id">,
+  slot: number,
+  attempt: number,
+  runId: string | null,
+) =>
+  "goal:" +
+  goal.id +
+  ":s" +
+  slot +
+  ":a" +
+  attempt +
+  (runId === null ? "" : ":" + runId) +
+  ":interrupt";
 
 export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>
   goal.spec.workers.workspace.branchPrefix.replace(/\/+$/, "") + "/s" + slot + "-a" + attempt;
@@ -190,6 +210,10 @@ export interface GoalObservation {
     string,
     { readonly claimedAt: number; readonly settled: boolean } | null
   >;
+  /** Reschedules claimed that did not move their slot: refused, never sent, or never settled. */
+  readonly unmovedReschedules: ReadonlySet<string>;
+  /** Fallbacks and hub hops that continued their run in its own thread, by action id. */
+  readonly switchedFallbacks: ReadonlySet<string>;
   readonly pullRequests: ReadonlyMap<number, PullRequestObservation>;
   readonly issues: ReadonlyMap<number, "open" | "closed" | "unknown">;
   readonly turns: number;
@@ -289,6 +313,7 @@ export const newWorker = (
   reported: false,
   followUps: 0,
   followedUpRunId: null,
+  recoveredRunId: null,
   steeredRunId: null,
   resumedRunId: null,
   lastRunId: null,
@@ -386,6 +411,22 @@ export function planGoal(
       note: null,
     };
     const fresh = seen.runId !== null && worker.followedUpRunId !== seen.runId;
+    // Each run is recovered once. A row an earlier controller wrote marks a run followed up both
+    // after a same-thread fallback it sent and after a move that did not happen; only the move
+    // left it without a way forward (#1452). A sent fallback's receipt also outlives a lost status
+    // write, while its message may wait held behind the failed run.
+    const runPrefix = (runId: string) =>
+      "goal:" + goal.id + ":s" + worker.slot + ":a" + worker.attempt + ":" + runId + ":";
+    const switched = (runId: string) =>
+      [...observation.switchedFallbacks].some((id) => id.startsWith(runPrefix(runId)));
+    const unrecovered =
+      seen.runId !== null &&
+      worker.recoveredRunId !== seen.runId &&
+      !switched(seen.runId) &&
+      (fresh ||
+        observation.unmovedReschedules.has(
+          rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId),
+        ));
     const followUp = (message: string): WorkerRecord => {
       if (seen.runId === null || !fresh) return worker;
       if (worker.followUps >= MAX_FOLLOW_UPS)
@@ -403,11 +444,11 @@ export function planGoal(
     const recover = (
       reason: "failed" | "stalled" | "host_unreachable",
       failureClass: OrchestrationV2ProviderFailureClass,
-      // A stall was already steered on this run, so it is no longer fresh; the reschedule's
-      // next-attempt launch id dedupes it instead.
-      requireFresh = true,
+      // A steered stall and a lost host ask again on every pass; the reschedule's next-attempt
+      // launch id dedupes them instead.
+      once = true,
     ) => {
-      if (fresh || !requireFresh)
+      if (!once || unrecovered)
         actions.push({
           type: "recover",
           slot: worker.slot,
@@ -555,6 +596,20 @@ export function planGoal(
     const seen = observation.workers.get(worker.slot);
     return worker.threadId !== null && seen?.kind === "seen" && !seen.terminal;
   };
+  const interrupt = (worker: WorkerRecord): GoalAction => {
+    const seen = observation.workers.get(worker.slot);
+    return {
+      type: "interrupt",
+      slot: worker.slot,
+      attempt: worker.attempt,
+      actionId: interruptActionId(
+        goal,
+        worker.slot,
+        worker.attempt,
+        seen?.kind === "seen" ? seen.runId : null,
+      ),
+    };
+  };
   /** Known to have stopped: no thread was ever started, the run ended, or the thread is gone. */
   const confirmedDone = (worker: WorkerRecord) => {
     if (worker.state === "launch_unknown") return false;
@@ -583,13 +638,7 @@ export function planGoal(
       workers.push({ ...worker, state: "launch_unknown" });
       continue;
     }
-    if (isLive(worker))
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    if (isLive(worker)) actions.push(interrupt(worker));
     workers.push(confirmedDone(worker) ? { ...worker, state: "superseded" } : worker);
   }
   if (deleting) {
@@ -598,13 +647,7 @@ export function planGoal(
     actions.length = 0;
     actions.push(...resolving);
     const live = workers.filter(isLive);
-    for (const worker of live)
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    for (const worker of live) actions.push(interrupt(worker));
     // Like a finalizer: the row goes only once every attempt is known to have stopped. A worker
     // that cannot be read keeps the goal as a tombstone; goat_goal_delete with force drops it.
     if (workers.every(confirmedDone)) actions.push({ type: "delete_row" });
@@ -740,7 +783,13 @@ export function planGoal(
               (action) => action.type === "interrupt" || action.type === "resolve_launch",
             )
           : actions;
-  const bounded = allowed.slice(0, MAX_ACTIONS_PER_GOAL);
+  // Stopping and finding earlier attempts goes first: a later attempt's launch waits on them.
+  const cleanup = (action: GoalAction) =>
+    action.type === "interrupt" || action.type === "resolve_launch";
+  const bounded = [
+    ...allowed.filter(cleanup),
+    ...allowed.filter((action) => !cleanup(action)),
+  ].slice(0, MAX_ACTIONS_PER_GOAL);
 
   if (phase !== goal.status.phase)
     event(

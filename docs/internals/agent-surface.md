@@ -146,7 +146,8 @@ has no `clientRequestId`.
 where the declaration admits the write, after every caller check, so direct calls
 and `goat_call` share it and a replay passes the checks again. A handler that
 authorizes inside its body (SSH launch's profile and role checks, the worktree
-credential) declares `admission: "handler"` and admits after them. Services also
+credential, a schedule update's task checks) declares `admission: "handler"`
+and admits after them. Services also
 authorize inside (provider settings, lane claims), so the reservation records the
 caller's grant as the launch resolves it: its runtime and interaction modes, its
 goatclaw capabilities, ceiling and host allowlist (narrowed by a forwarded ceiling
@@ -163,8 +164,7 @@ it, on the same host for a routed write. Only completed keys expire, after
 
 Every other write records an `idempotencyReason` in the registry instead, and
 [idempotency.test.ts](../../packages/contracts/src/agentSurface/idempotency.test.ts)
-fails a write that has neither, apart from an allowlist of writes not yet
-converted (#1029) that only shrinks. A keyed write's reconcile read must be a
+fails a write that has neither. A keyed write's reconcile read must be a
 registered read, host-routable when the write is. Writes that deduplicate in
 their own domain keep that store on purpose. Thread send, interrupt, retry and
 update, thread create-many, task create and cancel, review findings and
@@ -174,7 +174,10 @@ reservation statement cannot, and lives longer than 24 hours. Routed thread
 writes forward the key, so the host that runs them deduplicates it there. Goal
 apply stores the key with the goal it creates, channel ingest uses it as the
 message key in the channel ledger, and a secret request's key is how a later
-call collects the answer. Moving these onto the reservation would add a second,
+call collects the answer. An origin report stores the key as a receipt with
+its report row or the launcher's inbox entry, and derives a launcher wake's
+command id from it, so the receipt outlives the origin acknowledging the
+report. Moving these onto the reservation would add a second,
 weaker record of the same request.
 
 **Proposed.** A write that takes `clientRequestId` follows the rules payment APIs
@@ -383,6 +386,20 @@ terminal, which a profile bounds only through its runtime-mode ceiling. A goatcl
 role launch is refused when the narrowed profile lacks a capability the role's work
 uses ([RoleTemplates.ts](../../apps/server/src/goatclaw/RoleTemplates.ts)), so a
 merge manager is never started without `pr.merge`.
+A supervisor keeps `pr.merge` from its own profile when only its caller's stored
+profile lacks it, so a person's worker thread can still get merges through one; a
+launch snapshot or forwarded ceiling without it still removes it. That is safe only
+while `pr.merge` gates nothing but role launches, so gating a tool on it would hand
+that tool to every supervisor.
+Every check that compares a role thread's grant with its caller's, such as the
+recheck before an SSH launch and a send's target check and rebinding, derives it
+with the same `roleProfile`; comparing against the caller's plain profile reads the
+kept capability as a narrowing, refusing the launch or send or stripping it.
+Creating and cloning a project are the one environment write a calling thread at
+`auto` may run, because worker agents run at `auto` at most. When goatclaw governs
+the thread its profile decides, full access included, before and again after
+admission: it must allow `worktree.create` and leave the thread at `auto` or above
+after its runtime ceiling. Every other environment write still needs full access.
 With goatclaw on, the served handle refuses a GOAT thread whose effective profile
 lacks the declared capability, before arguments decode, so `goat_call` and anything
 else that calls through the server inherit the check
@@ -405,8 +422,10 @@ examples as tests.
 through `goat_call`; each tool also stays callable by its own names. MCP clients, including
 other GOAT hosts, keep the full listing (D22): a host's dispatch reads a remote's `tools/list` to
 learn which launch arguments and memory tools it supports, and hosts on older versions have no
-other way. A client's `tools/list` result names the listing agents get in
-`_meta["goat/agentToolListing"]`, which is how the D8 runner checks a core arm.
+other way. An outside agent that does not need that sends `x-goat-tool-listing: core` on its
+`/mcp` requests and is listed only the core tools; calls never read the header. A client's
+`tools/list` result names the listing agents get in `_meta["goat/agentToolListing"]`, which is
+how the D8 runner checks a core arm.
 
 **Proposed.** `goat_describe { path?, query?, host? }` answers at three depths:
 
@@ -443,14 +462,15 @@ with a resource as `path` it searches only that resource. See
 visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays
 callable ([toolListing.ts](../../apps/server/src/mcp/toolListing.ts)). Both listings hide what
 `available.now` refuses for the caller, except that a profile that does not resolve hides
-nothing, because a client keeps its listing for the session. The server setting `agentToolListing` picks `full` (every
-other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
+nothing, because a client keeps its listing for the session. The server setting
+`agentToolListing` picks the listing of the agents GOAT runs: `full` (every other tool) or `core` (entries whose registry `listing` is `core`); core entries carry
 `_meta["anthropic/alwaysLoad"]` in both, so harnesses that defer tools keep them resident. Every
 tool stays callable by each of its names. The default is `core` (D21), `full` is the rollback for
 a harness that regresses, and a change to the setting or to the goatclaw policy sends
 `notifications/tools/list_changed`.
 [context-budget.ts](../../scripts/agent-surface/context-budget.ts) measures what each harness
-receives under the default listing, and `goat-ci` fails when a harness goes over 6 KiB of
+receives under the default listing and what an outside client that asks for core receives, and
+`goat-ci` fails when a harness goes over 6 KiB of
 instructions, 6 KiB of listing, 12 KiB for its first prompt, or 300 B on each later turn.
 
 Known risk of the core default: an agent in a shell harness that does not find a tool in its
@@ -1024,7 +1044,7 @@ every gate runs per step (D7).
 | D19 | Off-grammar names keep their paths except verb synonyms; `cloud_agent` stays the resource, so its canonical names are `goat_cloud_agent_*`                                         | The path is the stable identity agents already use through `goat_call`; `cloud` alone would read as a sibling of `cloud_machine`                                                                                                                                                                                                                            | Renaming paths to match shipped names                                                        |
 | D20 | Legacy names are unlisted aliases resolved at `/mcp` to the listed tool, whose checks and result apply; analytics keep the shipped name                                            | One handle keeps refusals identical by construction; the listing and provider instructions change together at the flip                                                                                                                                                                                                                                      | Registering alias tools, which would list them                                               |
 | D21 | Every agent GOAT runs gets the core listing by default (`goat_describe`, `goat_call`), with `agentToolListing: "full"` as the rollback; CI fails a harness over its context budget | Supervisor decision, 2026-10-23: always-injected context falls from about 300 KB to under 12 KiB per harness; D8 verifies the default and tunes the core set rather than gating it                                                                                                                                                                          | Opt-in core, measured before it became the default                                           |
-| D22 | The core listing applies to thread callers (agents GOAT runs); MCP clients, including SSH dispatch, linked hosts, and outside agents, keep the full listing                        | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed; the diet targets what GOAT injects into the agents it runs. Follow-up: [#1066](https://github.com/goat-si/goat/issues/1066) lets outside clients opt into core and moves remotes to a versioned capability record | Origins learning launch arguments through `goat_describe`, which does not help older origins |
+| D22 | Thread callers (agents GOAT runs) get the core listing; MCP clients, including SSH dispatch and linked hosts, keep the full one unless they send `x-goat-tool-listing: core`       | An origin of any version reads a remote's `tools/list` to learn launch arguments and memory support, and an older origin cannot be fixed. Outside agents opt into core with the header ([#1066](https://github.com/goat-si/goat/issues/1066)); a versioned capability record for remotes cannot change the no-header default while any older origin remains | Origins learning launch arguments through `goat_describe`, which does not help older origins |
 
 ## Open questions
 

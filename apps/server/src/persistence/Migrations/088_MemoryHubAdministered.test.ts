@@ -47,6 +47,11 @@ it.effect("082 participates in the migration ledger and preserves its flag on re
       [100, "HumanStepRecords"],
       [101, "McpRequestReservations"],
       [102, "RemoteReportInboxRunId"],
+      [103, "RemoteReportReceipts"],
+      [104, "PendingAttachmentUploads"],
+      [105, "ScheduledTaskWebhookSecretRef"],
+      [106, "RemoteReportFences"],
+      [107, "HubProvisionedLinks"],
     ]);
     yield* sql`INSERT INTO memory_hub_administration_state VALUES(1,1)`;
     assert.deepStrictEqual(yield* runMigrations(), []);

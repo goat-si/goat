@@ -61,6 +61,10 @@ export type RemoteReport = typeof RemoteReport.Type;
 export const RemoteOriginReportInput = Schema.Struct({
   status: RemoteReportKind,
   summary: Summary,
+  clientRequestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))).annotate({
+    description:
+      "Idempotency key. A repeat with the same key and report returns the first receipt without reporting again; the same key with another report is refused. Use a new key for each new report.",
+  }),
 });
 export type RemoteOriginReportInput = typeof RemoteOriginReportInput.Type;
 export const RemoteOriginReportResult = Schema.Struct({
@@ -72,6 +76,28 @@ export const RemoteOriginReportResult = Schema.Struct({
   delivery: Schema.optional(Schema.Literal("launcher")),
 });
 export type RemoteOriginReportResult = typeof RemoteOriginReportResult.Type;
+export const RemoteOriginReportReceiptInput = Schema.Struct({
+  clientRequestId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+export type RemoteOriginReportReceiptInput = typeof RemoteOriginReportReceiptInput.Type;
+/** A keyed report this thread made. It outlives the origin's acknowledgement and the inbox. */
+export const RemoteOriginReportReceipt = Schema.Struct({
+  clientRequestId: TrimmedNonEmptyString,
+  status: RemoteReportKind,
+  sequence: NonNegativeInt,
+  delivery: Schema.Literals(["origin", "launcher"]),
+  /**
+   * False only for a launcher wake that was recorded but not yet confirmed sent. Repeating the
+   * report with the same clientRequestId sends it at most once.
+   */
+  delivered: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+export type RemoteOriginReportReceipt = typeof RemoteOriginReportReceipt.Type;
+export const RemoteOriginReportReceiptResult = Schema.Struct({
+  receipt: Schema.NullOr(RemoteOriginReportReceipt),
+});
+export type RemoteOriginReportReceiptResult = typeof RemoteOriginReportReceiptResult.Type;
 /**
  * What still holds a finished run's thread open: provider background work and a
  * restart continuation still to come. Present only for a terminal run; an older
@@ -127,6 +153,27 @@ export const RemoteOriginReportsWaitInput = Schema.Struct({
   timeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 600000 })),
 });
 export type RemoteOriginReportsWaitInput = typeof RemoteOriginReportsWaitInput.Type;
+/**
+ * The origin asks the destination to settle a correlation whose launch outcome was lost:
+ * return its binding and thread/run state, or durably fence the id so a late bind is
+ * refused. The read key authorizes the caller; a fence remembers its hash.
+ */
+export const RemoteResolveBindingInput = Schema.Struct({
+  correlationId: CorrelationId,
+  readKey: HexKey,
+});
+export type RemoteResolveBindingInput = typeof RemoteResolveBindingInput.Type;
+export const RemoteResolveBindingResult = Schema.Union([
+  Schema.TaggedStruct("bound", {
+    threadId: ThreadId,
+    originThreadId: ThreadId,
+    threadExists: Schema.Boolean,
+    threadDeleted: Schema.Boolean,
+    activeRunId: Schema.NullOr(RunId),
+  }),
+  Schema.TaggedStruct("fenced", {}),
+]);
+export type RemoteResolveBindingResult = typeof RemoteResolveBindingResult.Type;
 export const RemoteOriginReportsWaitResult = Schema.Struct({
   threadId: ThreadId,
   reports: Schema.Array(RemoteReport),

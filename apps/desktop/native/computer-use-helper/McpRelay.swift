@@ -91,6 +91,15 @@ func runMcp() -> Never {
   guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else {
     mcpFail(78, "Could not isolate Cua Driver's descriptors.")
   }
+  // Readiness binds the driver's reported parent to this service. Send our identity before
+  // the driver can write to shared stderr; stdout remains exclusively MCP.
+  let greeting: [String: Any] = [
+    "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
+    "bundleId": service.bundleId,
+  ]
+  if let data = try? JSONSerialization.data(withJSONObject: greeting) {
+    try? FileHandle.standardError.write(contentsOf: data + Data([0x0A]))
+  }
   let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
   argv.forEach { free($0) }
   envp.forEach { free($0) }

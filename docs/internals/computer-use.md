@@ -216,7 +216,9 @@ PreviewSession {
   `autocomplete=current-password` or WebAuthn in the browser; `AXSecureTextField`, UI Automation
   `IsPassword` or the AT-SPI password role on desktops. Observation, frame streaming and recording
   pause, in-flight results from before the switch are dropped by generation, and the agent gets
-  `privateMode` refusals until it ends. Only the person's explicit action ends it.
+  `privateMode` refusals until it ends. In this design only the person's explicit action ends
+  it. What ships today on the desktop path lifts the pause by itself once the field loses focus
+  (`apps/server/src/cua/ComputerUseLeases.ts`), and the built-in skill teaches that.
 - Ego Lite level for the browser means: a task space that groups an agent's tabs and keeps their
   login state together (profile policy shared, isolated per task, or incognito, each explained),
   a text-only snapshot, and a handoff in which a person finishes a step in the same tab and the
@@ -331,11 +333,19 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   session for the same thread waits for the cleanup report.
 - **Physical kill switch.** On macOS the helper can arm a listen-only Escape tap while an agent
   session is active. A keyboard event tap needs Input Monitoring, a third grant, so the switch is
-  optional: onboarding offers it, and without it the Stop controls remain.
+  optional: onboarding offers it, and without it the Stop controls remain. Not implemented yet
+  (#1505).
 - **Input collision.** When a person uses the same desktop while an agent acts, the agent pauses
-  and the session moves to `waiting-for-human`. On macOS the helper samples HID idle time, which
-  needs no extra grant. Whether the helper's own foreground input resets that timer is a
-  qualification item; background delivery to a process does not go through the HID system state.
+  and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
+  every mouse button press to its lease proxy with its own time, from a listen-only event tap
+  that needs no grant and reads only each event's type (#1488). Keys, moves, drags and scrolls
+  are only sampled, as the HID system state's newest event age per kind every 250 ms: a
+  keyboard tap would need Input Monitoring, which the helper does not use, and the dense pointer
+  streams would queue the reports. So a person's key, move or scroll right before an agent's of
+  the same kind can still hide behind it. The driver posts some input through the same system, so the
+  server takes an event for an agent's only while one of its input calls of that kind covers it
+  (`apps/server/src/cua/agentInputLog.ts`), and pauses every agent otherwise. Calls known only
+  to read never hide a person's input.
 - **Takeover and hand-back.** Takeover fences new agent input immediately and drops in-flight
   results by generation. Hand-back rechecks the lease and its expiry and requires a fresh
   observation before the next action. Disconnects and retries never hand control back by

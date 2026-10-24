@@ -66,6 +66,8 @@ import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as HubOcx from "../hub/HubOcx.ts";
 import * as OpenCodexManagedUpdate from "../hub/OpenCodexManagedUpdate.ts";
+import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
+import * as OpenCodexUpdateHost from "../hub/OpenCodexUpdateHost.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as RemoteReportService from "../remoteReports/RemoteReportService.ts";
@@ -79,6 +81,7 @@ import {
 } from "../telemetry/ProviderDimensions.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryInventory from "../project/RepositoryInventory.ts";
 import * as RepositoryReferences from "../project/RepositoryReferences.ts";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
@@ -792,6 +795,8 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
 const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreenshot")(function* () {
   const devices = yield* DeviceService.DeviceService;
   const threads = yield* ThreadManagementService.ThreadManagementService;
+  const projects = yield* ProjectService.ProjectService;
+  const settings = yield* Settings.ServerSettingsService;
   const built = yield* decodeAsAdvertised(DeviceScreenshotToolkit);
   yield* registerImageTool(
     DeviceScreenshotTool,
@@ -803,6 +808,8 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
       effect.pipe(
         Effect.provideService(DeviceService.DeviceService, devices),
         Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+        Effect.provideService(ProjectService.ProjectService, projects),
+        Effect.provideService(Settings.ServerSettingsService, settings),
       ),
     "screenshot",
     "Device screenshot failed.",
@@ -1294,7 +1301,10 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
     HubMembership.layer.pipe(Layer.provide(HubOcx.layer), Layer.provide(Profiles.layer)),
   ),
   Layer.provide(RepositoryInventory.layer),
-  Layer.provideMerge(OpenCodexManagedUpdate.layer),
+  Layer.provideMerge(OpenCodexManagedUpdate.layerService),
+  // One sync for the update window, the ws RPCs and the agent tool, so runs never overlap.
+  Layer.provideMerge(OpenCodexSync.layer.pipe(Layer.provide(HubOcx.layer))),
+  Layer.provide(OpenCodexUpdateHost.layerHost),
   Layer.provideMerge(HubParity.layer),
   // Shared with the hub-down policy, so both read one inventory cache.
   Layer.provideMerge(OpenCodexInventory.layer.pipe(Layer.provide(ProcessRunner.layer))),

@@ -316,7 +316,8 @@ describe("ComputerUseHelper daemon admission", () => {
       capabilityManifestPath: "/state/manifest.yaml",
       environment: [],
       spawn: () => helper.process,
-      // Something else answered on the socket.
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      // Something else answered on the pipe.
       readMetadata: async () => ({ ...metadata, pid: 4 }),
     });
     const error = await helperError(host.start());

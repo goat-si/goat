@@ -13,13 +13,19 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A standalone harness around child processes and files.
 // @effect-diagnostics globalTimers:off -- Waits for windows the harness itself opened.
 // @effect-diagnostics globalConsole:off -- Prints progress to the person running it by hand.
+// @effect-diagnostics globalDate:off -- Times the gap between live frames the helper sends.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as NodeURL from "node:url";
 
-import type { ComputerUseElement, ComputerUseObservation } from "@goat/contracts";
+import {
+  computerUseImageInfo,
+  PREVIEW_SESSION_FRAME_LIMITS,
+  type ComputerUseElement,
+  type ComputerUseObservation,
+} from "@goat/contracts";
 import {
   makeObservationTracker,
   type DriverWindowState,
@@ -81,6 +87,9 @@ const pidsOf = (image: string) => processes(["/fi", "imagename eq " + image]).ma
 
 interface Helper {
   readonly call: (method: string, params?: object) => Promise<unknown>;
+  readonly bundleId: string;
+  /** frame and frameUnavailable lines; returns the unsubscribe. */
+  readonly onFrame: (listener: (message: Record<string, unknown>) => void) => () => void;
   readonly close: () => Promise<void>;
 }
 
@@ -90,16 +99,21 @@ async function openHelper(): Promise<Helper> {
     windowsHide: true,
   });
   const pending = new Map<string, (reply: { result?: unknown; error?: unknown }) => void>();
+  const frameListeners = new Set<(message: Record<string, unknown>) => void>();
   let greet: (hello: Record<string, unknown>) => void = () => undefined;
   const hello = new Promise<Record<string, unknown>>((resolve) => (greet = resolve));
   NodeReadline.createInterface({ input: child.stdout }).on("line", (line) => {
     const message = JSON.parse(line);
     if (message.type === "hello" || message.type === "refused") return greet(message);
+    if (message.type === "frame" || message.type === "frameUnavailable")
+      for (const listener of frameListeners) listener(message);
     if (typeof message.id === "string") pending.get(message.id)?.(message);
   });
   const greeting = await hello;
   record("hello", greeting);
   if (greeting.type !== "hello") fail("The helper refused: " + JSON.stringify(greeting));
+  if (!(greeting.features as ReadonlyArray<string> | undefined)?.includes("frames"))
+    fail("The helper does not offer live frames.");
   let next = 0;
   const call = async (method: string, params: object = {}) => {
     const id = String(++next);
@@ -113,6 +127,11 @@ async function openHelper(): Promise<Helper> {
   const exited = new Promise((resolve) => child.once("exit", resolve));
   return {
     call,
+    bundleId: String(greeting.bundleId),
+    onFrame: (listener) => {
+      frameListeners.add(listener);
+      return () => frameListeners.delete(listener);
+    },
     close: async () => {
       child.stdin.end();
       await exited;
@@ -121,6 +140,23 @@ async function openHelper(): Promise<Helper> {
 }
 
 type Elements = ReadonlyArray<ComputerUseElement>;
+/** The parts of the desktop's helper session this smoke drives (apps/desktop ComputerUseHelper). */
+interface HostEvent {
+  readonly type: string;
+  readonly active?: boolean;
+  readonly target?: { readonly pid: number; readonly windowId: number };
+}
+interface HostSession {
+  readonly canWatch: boolean;
+  readonly watch: (watchId: string) => Promise<void>;
+  readonly unwatch: () => Promise<void>;
+  readonly onEvent: (listener: (event: HostEvent) => void) => () => void;
+  readonly close: () => Promise<void>;
+}
+const until = async (test: () => boolean, failure: string) => {
+  for (let attempt = 0; attempt < 40 && !test(); attempt++) await sleep(250);
+  if (!test()) fail(failure);
+};
 const fullElements = (observation: ComputerUseObservation): Elements =>
   observation.kind === "full" ? observation.elements : fail("Expected a full observation.");
 const labelled = (elements: Elements, pattern: RegExp) =>
@@ -197,6 +233,77 @@ async function main(
       record("observe " + label, observation);
       return observation;
     };
+    let framesId = 0;
+    /**
+     * One frames request for one window (#1370), cleared again before returning. A frame must be
+     * a JPEG of exactly the size it claims, within the tile limits, and come no faster than the
+     * interval; a no-picture reason must be the expected one and be told once. Nothing may arrive
+     * for the request after it is cleared.
+     */
+    const frame = async (
+      label: string,
+      expected: string,
+      target: {
+        readonly pid: number;
+        readonly windowId: number;
+        readonly maxWidth: number;
+        readonly apps?: ReadonlyArray<string>;
+      },
+    ) => {
+      const id = ++framesId;
+      const seen: Array<{ readonly at: number; readonly message: Record<string, unknown> }> = [];
+      const unsubscribe = helper.onFrame((message) => {
+        if (message.framesId === id) seen.push({ at: Date.now(), message });
+      });
+      const params = { key: label, intervalMs: 500, ...target };
+      await helper.call("frames", { framesId: id, targets: [params] });
+      const frames = () => seen.filter(({ message }) => message.type === "frame");
+      const enough = () => (expected === "frame" ? frames().length >= 2 : seen.length >= 1);
+      for (let attempt = 0; attempt < 60 && !enough(); attempt++) await sleep(250);
+      // A reason is told once, however many intervals pass.
+      if (expected !== "frame") await sleep(1_200);
+      await helper.call("frames", { framesId: ++framesId, targets: [] });
+      const cleared = seen.length;
+      await sleep(1_200);
+      unsubscribe();
+      if (seen.length === 0) fail("No frames answer for " + label + ".");
+      if (seen.length !== cleared) fail("Frames for " + label + " kept coming after the clear.");
+      if (expected !== "frame") {
+        record("frame " + label, seen[0]?.message);
+        if (seen.length !== 1 || seen[0]?.message.reason !== expected)
+          fail("frames " + label + " should be " + expected + " once, got " + JSON.stringify(seen));
+        return;
+      }
+      // Only frames, each a JPEG of exactly its reported size within the limits, each about
+      // one interval after the last.
+      if (seen.some(({ message }) => message.type !== "frame") || seen.length < 2)
+        fail("frames " + label + " should be frames only, got " + JSON.stringify(seen));
+      seen.forEach(({ at, message }, index) => {
+        const data = String(message.data);
+        const bytes = Buffer.from(data, "base64");
+        const info = computerUseImageInfo(data);
+        const gap = index === 0 ? undefined : at - (seen[index - 1]?.at ?? 0);
+        record("frame " + label + " #" + (index + 1), {
+          width: message.width,
+          height: message.height,
+          bytes: bytes.length,
+          gap,
+        });
+        if (index === 0) NodeFS.writeFileSync(NodePath.join(out, "frame-" + label + ".jpg"), bytes);
+        if (
+          message.key !== label ||
+          info?.mimeType !== "image/jpeg" ||
+          info.width !== message.width ||
+          info.height !== message.height ||
+          info.width > Math.min(PREVIEW_SESSION_FRAME_LIMITS.maxWidth, params.maxWidth) ||
+          bytes.length > PREVIEW_SESSION_FRAME_LIMITS.maxBytes ||
+          (gap !== undefined && !(gap >= 450 && gap < 5_000))
+        )
+          fail(
+            "frames " + label + " #" + (index + 1) + " is wrong: " + JSON.stringify({ info, gap }),
+          );
+      });
+    };
     /** One element action through a tracker ref. A refusal is returned and nothing is sent. */
     const act = async (
       name: string,
@@ -267,6 +374,37 @@ async function main(
         image: NodePath.basename(fixtureExe),
       });
       const fw = await windowOf([fixture.pid ?? 0], /GOAT computer use fixture/u);
+      const fixtureTarget = { pid: fw.pid, windowId: fw.window_id };
+      // The app name the driver lists for the fixture, which an approval would carry.
+      const listed = (
+        (await helper.call("listApps")) as { apps: Array<{ pid: number; name: string }> }
+      ).apps;
+      const fixtureApp =
+        listed.find((app) => app.pid === fw.pid)?.name ??
+        fail("list_apps does not name the fixture.");
+      await frame("fixture", "frame", { ...fixtureTarget, maxWidth: 480 });
+      await frame("fixture-narrow", "frame", { ...fixtureTarget, maxWidth: 200 });
+      await frame("fixture-approved", "frame", {
+        ...fixtureTarget,
+        maxWidth: 480,
+        apps: [fixtureApp],
+      });
+      await frame("fixture-other-app", "appNotApproved", {
+        ...fixtureTarget,
+        maxWidth: 480,
+        apps: ["Calculator"],
+      });
+      await frame("wrong-pid", "windowGone", {
+        pid: process.pid,
+        windowId: fw.window_id,
+        maxWidth: 480,
+      });
+      // Past a Windows pid's range: no process has it, so it is gone, not a malformed request.
+      await frame("pid-out-of-range", "windowGone", {
+        pid: 2 ** 40,
+        windowId: fw.window_id,
+        maxWidth: 480,
+      });
       const first = await observe("fixture-1", fw.pid, fw.window_id);
       const firstElements = fullElements(first);
       // State the driver gives (Agree's ToggleState) and what only the helper reads (#1286).
@@ -332,6 +470,32 @@ async function main(
         hidden.screenshot !== undefined
       )
         fail("A focused password field must withhold the whole window.");
+      // 1b. The desktop host's own private-mode watch (#1415), through the very client GOAT's
+      // desktop uses, against a second helper process: it must be offered, accept the host's
+      // desktop-wide watch, and report this password field's process.
+      const client = (await import(
+        NodeURL.pathToFileURL(NodePath.join(repo, "apps/desktop/src/cua/ComputerUseHelper.ts")).href
+      )) as {
+        openHelperSession: (process: unknown, bundleId: string) => Promise<HostSession>;
+        spawnHelperProcess: (executable: string, platform: NodeJS.Platform) => unknown;
+      };
+      const host = await client.openHelperSession(
+        client.spawnHelperProcess(NodePath.join(helperDir, "GOAT Computer Use.exe"), "win32"),
+        helper.bundleId,
+      );
+      closeButtons.push(() => host.close());
+      const heard: Array<HostEvent> = [];
+      host.onEvent((event) => void heard.push(event));
+      if (!host.canWatch) fail("The helper does not offer the desktop host's private-mode watch.");
+      await host.watch("smoke-host-watch");
+      const privateFor = (on: boolean) => () =>
+        heard.some(
+          (event) =>
+            event.type === "privateMode" && event.active === on && event.target?.pid === fw.pid,
+        );
+      await until(privateFor(true), "The host watch did not report the focused password field.");
+      record("host watch while the password field has focus", heard);
+      await frame("fixture-private", "private", { ...fixtureTarget, maxWidth: 480 });
       await refused(
         "privateMode",
         "set_value",
@@ -365,6 +529,9 @@ async function main(
         hidden.observationId,
       );
       if (again.privateMode) fail("Private mode did not end when focus left the password field.");
+      await until(privateFor(false), "The host watch did not clear when focus left the field.");
+      record("host watch after focus left", heard);
+      await host.unwatch();
 
       // Notepad is not used: it restores unsaved tabs and open files on its next start, so any
       // run would leave text behind for the person who uses this computer.

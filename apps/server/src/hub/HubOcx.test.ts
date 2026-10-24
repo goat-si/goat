@@ -14,11 +14,13 @@ import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   countLinkTunnels,
   deviceScript,
+  guardedSyncScript,
   healthScript,
   HubOcx,
   layer as hubOcxLayer,
   parseDeviceOutput,
   platformOf,
+  SYNC_EXIT,
 } from "./HubOcx.ts";
 
 const services = ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer));
@@ -224,4 +226,127 @@ it.effect("counts only OpenCodex's ssh -R tunnel for the link", () =>
     // mini's Home-initiated link as the Home ran it, before its revoke.
     expect(countLinkTunnels(`${processes}\n${tunnel(52889, "mini")}`, "mini", 52889)).toBe(1);
   }),
+);
+
+const LINK = "lnk_781ccea3cdb84745";
+const linkStatus = (overrides: Record<string, unknown> = {}) =>
+  JSON.stringify(
+    {
+      state: "connected",
+      transport: "link",
+      link: { linkId: LINK, tunnelPort: 54365 },
+      serverUrl: "http://127.0.0.1:54365",
+      catalog: "present",
+      ...overrides,
+    },
+    null,
+    2,
+  );
+
+/**
+ * A Child as the guarded sync finds it: `ocx connect status --json` answers from `statuses` in
+ * order (the last answer repeats), and `ocx sync` prints `syncOutput`. Only the temporary
+ * home's tools are on PATH, so the developer's own OpenCodex is never found.
+ */
+const guardedChild = Effect.fn("HubOcxTest.guardedChild")(function* (
+  statuses: ReadonlyArray<string>,
+  syncOutput = "Remote Link Home catalog synchronized.",
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-guarded-sync-" });
+  const bin = path.join(home, "bin");
+  yield* fs.makeDirectory(bin);
+  const log = path.join(home, "calls.log");
+  for (const [index, status] of statuses.entries())
+    yield* fs.writeFileString(path.join(home, `status${index + 1}`), status);
+  yield* fs.writeFileString(
+    path.join(bin, "ocx"),
+    [
+      "#!/bin/sh",
+      `printf 'ocx %s\\n' "$*" >> '${log}'`,
+      'case "$1" in',
+      "  connect)",
+      `    goat_n=$(cat '${home}/count' 2>/dev/null || echo 0); goat_n=$((goat_n + 1))`,
+      `    echo "$goat_n" > '${home}/count'`,
+      `    [ "$goat_n" -gt ${statuses.length} ] && goat_n=${statuses.length}`,
+      `    cat "${home}/status$goat_n" ;;`,
+      `  sync) printf '%s\\n' '${syncOutput}' ;;`,
+      "esac",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  for (const tool of ["sh", "cat", "grep"]) {
+    for (const directory of ["/bin", "/usr/bin"]) {
+      const candidate = path.join(directory, tool);
+      if (yield* fs.exists(candidate)) {
+        yield* fs.symlink(candidate, path.join(bin, tool));
+        break;
+      }
+    }
+  }
+  const output = yield* (yield* ProcessRunner.ProcessRunner).run({
+    command: "/bin/sh",
+    args: ["-s"],
+    stdin: guardedSyncScript(LINK, true, { candidates: ['"$HOME/bin/ocx"'], searchPath: "" }),
+    env: { HOME: home, PATH: bin },
+  });
+  const calls = yield* fs.readFileString(log).pipe(
+    Effect.map((text) => text.trim().split("\n")),
+    Effect.orElseSucceed((): ReadonlyArray<string> => []),
+  );
+  return { result: parseDeviceOutput(output.stdout), calls };
+});
+
+it.live("syncs a Child only while it is connected over the expected link", () =>
+  Effect.gen(function* () {
+    const { result, calls } = yield* guardedChild([linkStatus()]);
+    expect(result).toEqual({ code: 0, stdout: "Remote Link Home catalog synchronized." });
+    expect(calls).toEqual([
+      "ocx connect status --json",
+      "ocx sync --restart-codex",
+      "ocx connect status --json",
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live.each([
+  { name: "disconnected", status: linkStatus({ state: "disconnected" }) },
+  { name: "a Hub-mode client", status: linkStatus({ transport: "hub" }) },
+  {
+    name: "linked to another Home",
+    status: linkStatus({ link: { linkId: "lnk_another_home", tunnelPort: 1 } }),
+  },
+  { name: "unreadable", status: "not json" },
+])("never runs ocx sync on a machine that is $name", ({ status }) =>
+  Effect.gen(function* () {
+    const { result, calls } = yield* guardedChild([status]);
+    expect(result?.code).toBe(SYNC_EXIT.notConnected);
+    expect(calls).toEqual(["ocx connect status --json"]);
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("reports a connection that moved while the sync ran", () =>
+  Effect.gen(function* () {
+    const { result, calls } = yield* guardedChild([
+      linkStatus(),
+      linkStatus({ state: "disconnected" }),
+    ]);
+    expect(result?.code).toBe(SYNC_EXIT.connectionChanged);
+    expect(calls).toContain("ocx sync --restart-codex");
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.live("passes on OpenCodex's notice that it kept the last remote catalog", () =>
+  Effect.gen(function* () {
+    const stale =
+      "Home unavailable; retained and applied the last-known-good remote catalog (stale).";
+    const { result } = yield* guardedChild([linkStatus()], stale);
+    expect(result).toEqual({ code: 0, stdout: stale });
+  }).pipe(Effect.scoped, Effect.provide(services)),
+);
+
+it.effect("refuses a link id the guard could not match literally", () =>
+  Effect.sync(() => expect(() => guardedSyncScript("lnk.1'", true)).toThrow(TypeError)),
 );
