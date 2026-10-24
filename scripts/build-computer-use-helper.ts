@@ -326,6 +326,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      path.join(sourceDir, "McpRelay.swift"),
+      path.join(sourceDir, "McpFraming.swift"),
       // The agent cursor overlay (#1214); main.swift runs it in agent connection mode.
       path.join(sourceDir, "Overlay.swift"),
       // Single-window live pictures (#1370), requested with the frames method.
