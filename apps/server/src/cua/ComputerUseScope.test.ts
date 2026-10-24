@@ -80,29 +80,34 @@ describe("learnApps", () => {
     assert.deepEqual(readCalculator(listed), { _tag: "allow" });
   });
 
-  it("judges a process without a desktop id by its window's app name, not its command", () => {
+  it("names a process without a desktop id by its listed name, never by what its windows say", () => {
     const listed = new Map<number, ListedApp>();
+    // A window titles its app however it likes, even as another app's desktop id.
     const fixture = {
       pid: 3731239,
       bundle_id: null,
       name: "python3",
-      windows: [{ app_name: "goat-cu-fixture.py", pid: 3731239, window_id: 4194307 }],
+      windows: [{ app_name: "org.example.Editor", pid: 3731239, window_id: 4194307 }],
     };
     learnApps(
       { apps: [fixture], processes: [{ name: "python3", pid: fixture.pid }] },
       listed,
       true,
     );
-    assert.deepEqual(
+    const read = (apps: ReadonlyArray<string>) =>
       scopeVerdict({
         name: "get_window_state",
         args: { pid: fixture.pid, window_id: 4194307 },
-        apps: approvedApps(["goat-cu-fixture.py"]),
+        apps: approvedApps(apps),
         appOf: (pid) => listed.get(pid),
         bundleIds: false,
-      }),
-      { _tag: "allow" },
-    );
+      });
+    assert.deepEqual(read(["org.example.Editor"]), {
+      _tag: "refuse",
+      reason: "app_not_approved",
+      app: "python3",
+    });
+    assert.deepEqual(read(["python3"]), { _tag: "allow" });
   });
 });
 
