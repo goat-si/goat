@@ -117,21 +117,24 @@ export const replyPlacement = Effect.fnUntraced(function* (
 
 /**
  * Runs a call's registration and write unless its child is no longer current ("stale") or it
- * takes the screen while another thread shares it ("shared"); the caller answers either as not
- * run. The checks and the write run with no scheduler yield between them (#1496), so neither a
+ * takes the screen while another thread shares it ("shared"), or its permission expired; the caller
+ * answers as not run. The checks and the write run with no scheduler yield between them (#1496), so neither a
  * pause, a narrowed approval nor the update that shares the screen can land in between.
  */
-export const sendUnlessShared = (
-  takesScreen: boolean,
-  shared: () => boolean,
-  current: () => boolean,
-  send: Effect.Effect<void>,
-  permissionDeadline = Infinity,
-) =>
-  Effect.gen(function* () {
+// Already traced by the proxy's call handler; this is its final per-call scheduling barrier.
+export const sendUnlessShared = Effect.fnUntraced(
+  function* (
+    takesScreen: boolean,
+    shared: () => boolean,
+    current: () => boolean,
+    send: Effect.Effect<void>,
+    permissionDeadline = Infinity,
+  ) {
     if (!current()) return "stale" as const;
     if (takesScreen && shared()) return "shared" as const;
     if ((yield* Clock.currentTimeMillis) >= permissionDeadline) return "expired" as const;
     yield* send;
     return "sent" as const;
-  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
+  },
+  Effect.provideService(Scheduler.PreventSchedulerYield, true),
+);
