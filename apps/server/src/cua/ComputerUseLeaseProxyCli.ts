@@ -7,7 +7,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 
@@ -209,7 +209,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         ? {}
         : {
             manifestStamp: Effect.promise(() =>
-              NodeFS.stat(manifestPath).then(
+              NodeFSP.stat(manifestPath).then(
                 (info) => info.ino + ":" + info.size + ":" + info.mtimeMs,
                 () => undefined,
               ),
