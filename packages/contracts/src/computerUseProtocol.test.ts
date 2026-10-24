@@ -267,6 +267,20 @@ describe("computer use readiness and reply images", () => {
     { name: "a JPEG whose frame header is cut short", data: "/9j/wAARCAAGAAg=" },
     { name: "a JPEG frame header of length zero", data: "/9j/wAAACAAGAAgDAAAAAAAAAAAA" },
     { name: "a JPEG with a frame header after its end", data: "/9j/2f/AABEIAAYACAMBIgACEQEDEQE=" },
+    // Checksummed correctly, so only the method checks can refuse them.
+    {
+      name: "a PNG with an undefined compression method",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIBAABwpSKbAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC",
+    },
+    {
+      name: "a PNG with an undefined filter method",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAQBofHntAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC",
+    },
+    {
+      name: "a PNG with an undefined interlace method",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAAKfaSmAAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC",
+    },
+    { name: "a JPEG frame header too short for one component", data: "/9j/wAAC" },
   ])("refuses $name", ({ data }) => {
     expect(computerUseImageInfo(data)).toBeUndefined();
   });

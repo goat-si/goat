@@ -573,7 +573,10 @@ export function computerUseImageInfo(data: string):
     const width = long(16);
     const height = long(20);
     const depths = PNG_DEPTHS[byte(25)];
-    if (!depths?.includes(byte(24)) || long(29) !== crc32(binary, 12, 29)) return undefined;
+    // Compression and filter method 0 are the only ones PNG defines; interlace is 0 or 1.
+    const methods = byte(26) === 0 && byte(27) === 0 && (byte(28) === 0 || byte(28) === 1);
+    if (!depths?.includes(byte(24)) || !methods || long(29) !== crc32(binary, 12, 29))
+      return undefined;
     return width > 0 && height > 0 && width < 2 ** 31 && height < 2 ** 31
       ? { mimeType: "image/png", width, height }
       : undefined;
@@ -600,6 +603,8 @@ export function computerUseImageInfo(data: string):
     if (length < 2 || index + 2 + length > binary.length) return undefined;
     // Start of frame, except DHT (C4), JPG (C8) and DAC (CC).
     if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      // Precision, height, width, component count and at least one component.
+      if (length < 11) return undefined;
       const components = byte(index + 9);
       if (length !== 8 + 3 * components || ![1, 3, 4].includes(components)) return undefined;
       const height = word(index + 5);
