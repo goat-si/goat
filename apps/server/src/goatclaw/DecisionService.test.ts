@@ -285,6 +285,7 @@ it.effect("preservation #1405: explicit remote writes refuse read-only clients",
           .handle("goat_decision_answer", {
             id: "decision:collision",
             optionId: "wait",
+            host: "beta",
             reason: "Wait",
           })
           .pipe(Stream.unwrap, Stream.runCollect),

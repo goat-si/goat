@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -109,7 +108,7 @@ it.each([
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  using cleanup = {
+  using _cleanup = {
     [Symbol.dispose]() {
       act(() => root.unmount());
       container.remove();
