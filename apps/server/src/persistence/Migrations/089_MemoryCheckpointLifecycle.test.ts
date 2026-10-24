@@ -7,7 +7,7 @@ import {
   refreshCheckpointAccounting,
 } from "../../memory/MemoryCheckpointAccounting.ts";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./088_MemoryCheckpointLifecycle.ts";
+import migration from "./089_MemoryCheckpointLifecycle.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const space = "00000000-0000-4000-8000-000000000001";
@@ -105,23 +105,23 @@ it.effect("083 ignores ordinary total updates, unchanged markers and unrelated c
 it.effect("083 participates in the migration ledger and leaves healthy spaces unqueued", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 87 });
+    yield* runMigrations({ toMigrationInclusive: 88 });
     yield* sql`INSERT INTO memory_quota_counters VALUES (${space},'checkpoint_initialized','',1),(${space},'hub_snapshot_bytes','',0),(${space},'hub_snapshot_rows','',0)`;
     assert.deepStrictEqual(yield* runMigrations(), [
-      [88, "MemoryCheckpointLifecycle"],
-      [89, "FleetGoals"],
-      [90, "FleetHealth"],
-      [91, "ThreadRunObservedChecks"],
-      [92, "RemoteDispatchObservation"],
-      [93, "MemoryRevisionCheckpointSize"],
-      [94, "HubNodes"],
-      [95, "MemorySummaryWorkThreadIndex"],
-      [96, "ThreadHistoryArchives"],
-      [97, "PermissionProfiles"],
-      [98, "DecisionInbox"],
-      [99, "HumanStepRecords"],
-      [100, "McpRequestReservations"],
-      [101, "RemoteReportInboxRunId"],
+      [89, "MemoryCheckpointLifecycle"],
+      [90, "FleetGoals"],
+      [91, "FleetHealth"],
+      [92, "ThreadRunObservedChecks"],
+      [93, "RemoteDispatchObservation"],
+      [94, "MemoryRevisionCheckpointSize"],
+      [95, "HubNodes"],
+      [96, "MemorySummaryWorkThreadIndex"],
+      [97, "ThreadHistoryArchives"],
+      [98, "PermissionProfiles"],
+      [99, "DecisionInbox"],
+      [100, "HumanStepRecords"],
+      [101, "McpRequestReservations"],
+      [102, "RemoteReportInboxRunId"],
     ]);
     assert.deepStrictEqual(yield* pending, []);
     yield* sql.withTransaction(refreshCheckpointAccounting());

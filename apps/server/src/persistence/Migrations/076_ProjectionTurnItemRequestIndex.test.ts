@@ -4,14 +4,14 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import ProjectionTurnItemRequestIndex from "./075_ProjectionTurnItemRequestIndex.ts";
+import ProjectionTurnItemRequestIndex from "./076_ProjectionTurnItemRequestIndex.ts";
 
 it.effect(
   "indexes existing request bodies on upgrade from 69 and can run again after relocation",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 74 });
+      yield* runMigrations({ toMigrationInclusive: 75 });
       yield* sql`
       INSERT INTO orchestration_v2_projection_turn_items
         (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json)
@@ -31,33 +31,33 @@ it.effect(
     `;
 
       assert.deepStrictEqual(yield* runMigrations(), [
-        [75, "ProjectionTurnItemRequestIndex"],
-        [76, "Memory"],
-        [77, "MemoryHubSync"],
-        [78, "MemorySearchCounters"],
-        [79, "MemoryTaskGrantCeiling"],
-        [80, "MemoryImportLineage"],
-        [81, "MemoryCheckpointAccounting"],
-        [82, "MemoryReportLifecycle"],
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-        [99, "HumanStepRecords"],
-        [100, "McpRequestReservations"],
-        [101, "RemoteReportInboxRunId"],
+        [76, "ProjectionTurnItemRequestIndex"],
+        [77, "Memory"],
+        [78, "MemoryHubSync"],
+        [79, "MemorySearchCounters"],
+        [80, "MemoryTaskGrantCeiling"],
+        [81, "MemoryImportLineage"],
+        [82, "MemoryCheckpointAccounting"],
+        [83, "MemoryReportLifecycle"],
+        [84, "MemoryUsageCounters"],
+        [85, "MemoryRevertResults"],
+        [86, "HandoffLookupIndex"],
+        [87, "MemoryLastReadySpace"],
+        [88, "MemoryHubAdministered"],
+        [89, "MemoryCheckpointLifecycle"],
+        [90, "FleetGoals"],
+        [91, "FleetHealth"],
+        [92, "ThreadRunObservedChecks"],
+        [93, "RemoteDispatchObservation"],
+        [94, "MemoryRevisionCheckpointSize"],
+        [95, "HubNodes"],
+        [96, "MemorySummaryWorkThreadIndex"],
+        [97, "ThreadHistoryArchives"],
+        [98, "PermissionProfiles"],
+        [99, "DecisionInbox"],
+        [100, "HumanStepRecords"],
+        [101, "McpRequestReservations"],
+        [102, "RemoteReportInboxRunId"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
       assert.deepStrictEqual(yield* runMigrations(), []);

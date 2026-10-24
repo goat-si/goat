@@ -38,33 +38,33 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 78 });
+      yield* runMigrations({ toMigrationInclusive: 79 });
       yield* insertTask;
       yield* insertDispatches;
       assert.deepStrictEqual(yield* runMigrations(), [
-        [79, "MemoryTaskGrantCeiling"],
-        [80, "MemoryImportLineage"],
-        [81, "MemoryCheckpointAccounting"],
-        [82, "MemoryReportLifecycle"],
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-        [99, "HumanStepRecords"],
-        [100, "McpRequestReservations"],
-        [101, "RemoteReportInboxRunId"],
+        [80, "MemoryTaskGrantCeiling"],
+        [81, "MemoryImportLineage"],
+        [82, "MemoryCheckpointAccounting"],
+        [83, "MemoryReportLifecycle"],
+        [84, "MemoryUsageCounters"],
+        [85, "MemoryRevertResults"],
+        [86, "HandoffLookupIndex"],
+        [87, "MemoryLastReadySpace"],
+        [88, "MemoryHubAdministered"],
+        [89, "MemoryCheckpointLifecycle"],
+        [90, "FleetGoals"],
+        [91, "FleetHealth"],
+        [92, "ThreadRunObservedChecks"],
+        [93, "RemoteDispatchObservation"],
+        [94, "MemoryRevisionCheckpointSize"],
+        [95, "HubNodes"],
+        [96, "MemorySummaryWorkThreadIndex"],
+        [97, "ThreadHistoryArchives"],
+        [98, "PermissionProfiles"],
+        [99, "DecisionInbox"],
+        [100, "HumanStepRecords"],
+        [101, "McpRequestReservations"],
+        [102, "RemoteReportInboxRunId"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT memory_grant_ceiling FROM scheduled_tasks`, [
         { memory_grant_ceiling: "none" },
@@ -127,7 +127,7 @@ it.effect("rejects an unreleased ceiling ledger without changing grants or its e
     yield* sql`UPDATE scheduled_tasks SET memory_grant_ceiling='read'`;
     yield* sql`UPDATE remote_dispatches SET memory_grant_ceiling='read'`;
     yield* sql`DELETE FROM effect_sql_migrations WHERE name='MemorySearchCounters'`;
-    yield* sql`UPDATE effect_sql_migrations SET migration_id=78 WHERE name='MemoryTaskGrantCeiling'`;
+    yield* sql`UPDATE effect_sql_migrations SET migration_id=79 WHERE name='MemoryTaskGrantCeiling'`;
     const before =
       yield* sql`SELECT migration_id,name FROM effect_sql_migrations ORDER BY migration_id`;
     const result = yield* Effect.flip(reconcileGoatMigrationIds(migrationEntries));

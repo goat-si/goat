@@ -12,11 +12,11 @@ import migration, {
   memoryUsageSummary,
   memoryUsagePayloadLive,
   memoryUsageRevisionItemMatch,
-} from "./083_MemoryUsageCounters.ts";
+} from "./084_MemoryUsageCounters.ts";
 import * as Store from "../../memory/MemoryStore.ts";
 import { assertUsageCounters } from "../../memory/MemoryUsageScan.testkit.ts";
 
-const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 82 })).pipe(
+const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 83 })).pipe(
   Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 const live = Store.layer.pipe(Layer.provideMerge(database));
@@ -49,25 +49,25 @@ it.effect(
         before,
       );
       assert.deepStrictEqual(yield* runMigrations(), [
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-        [99, "HumanStepRecords"],
-        [100, "McpRequestReservations"],
-        [101, "RemoteReportInboxRunId"],
+        [84, "MemoryUsageCounters"],
+        [85, "MemoryRevertResults"],
+        [86, "HandoffLookupIndex"],
+        [87, "MemoryLastReadySpace"],
+        [88, "MemoryHubAdministered"],
+        [89, "MemoryCheckpointLifecycle"],
+        [90, "FleetGoals"],
+        [91, "FleetHealth"],
+        [92, "ThreadRunObservedChecks"],
+        [93, "RemoteDispatchObservation"],
+        [94, "MemoryRevisionCheckpointSize"],
+        [95, "HubNodes"],
+        [96, "MemorySummaryWorkThreadIndex"],
+        [97, "ThreadHistoryArchives"],
+        [98, "PermissionProfiles"],
+        [99, "DecisionInbox"],
+        [100, "HumanStepRecords"],
+        [101, "McpRequestReservations"],
+        [102, "RemoteReportInboxRunId"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import ChannelLedgerMigration from "./071_ChannelLedger.ts";
+import ChannelLedgerMigration from "./072_ChannelLedger.ts";
 
 const channelTables = [
   "channel_bindings",
@@ -20,12 +20,12 @@ const channelTables = [
 it.effect("adds the channel ledger to a database at schema 65 and keeps existing rows", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 70 });
+    yield* runMigrations({ toMigrationInclusive: 71 });
     yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
       (provider_thread_id, provider, status, updated_at, payload_json)
       VALUES ('existing', 'codex', 'idle', '2026-10-12', '{}')`;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 71 }), [
-      [71, "ChannelLedger"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 72 }), [
+      [72, "ChannelLedger"],
     ]);
     const tables = yield* sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'channel_%' ORDER BY name`;
@@ -36,7 +36,7 @@ it.effect("adds the channel ledger to a database at schema 65 and keeps existing
     const kept = yield* sql<{ provider_thread_id: string }>`
       SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads`;
     assert.deepStrictEqual(kept, [{ provider_thread_id: "existing" }]);
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 71 }), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 72 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
