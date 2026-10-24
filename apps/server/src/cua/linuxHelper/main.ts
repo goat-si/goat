@@ -13,12 +13,14 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { COMPUTER_USE_MAX_FRAME_BYTES } from "@goat/contracts";
+import { COMPUTER_USE_MAX_FRAME_BYTES, type ComputerUseWindowTarget } from "@goat/contracts";
 import { cuaDriverListingEnvironment, cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 
 import { gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
 import { startDriver } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
+import { openGnomeIdle, openX11Idle } from "./idleSource.ts";
+import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import { detectLinuxSession, linuxCapabilities, parseGnomeShellMajor } from "./linuxSession.ts";
 
@@ -86,6 +88,34 @@ const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const driverPath =
   environment.GOAT_COMPUTER_USE_DRIVER?.trim() || NodePath.join(here, "cua-driver", "cua-driver");
 
+// The idle counter for human input: the X server's on X11 and XWayland, Mutter's on GNOME
+// Wayland. Opened once; without one, humanInput is unsupported.
+const gdbus = gdbusRunner(driverEnvironment);
+const idle =
+  session.unavailable === undefined && session.unsupported === undefined
+    ? ((await openX11Idle(environment)) ??
+      (session.displayServer === "wayland" ? await openGnomeIdle(gdbus) : undefined))
+    : undefined;
+const generation = NodeCrypto.randomUUID();
+const secureFocus = makeSecureFocusProbe(gdbus);
+let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
+  undefined;
+const signals = makeSignalMonitor({
+  secureFocus,
+  windowOpen: (target) => windowOpen(target),
+  idle,
+  now: () => Date.now(),
+  every: (ms, task) => {
+    const timer = setInterval(() => void task(), ms);
+    return () => clearInterval(timer);
+  },
+  afterReply: (task) => void setImmediate(task),
+  // Events are a few hundred bytes, far inside any frame limit.
+  emit: (watchId, event) =>
+    process.stdout.write(JSON.stringify({ generation, watchId, event }) + "\n"),
+});
+const capabilities = linuxCapabilities(session, idle !== undefined);
+
 const helper = makeLinuxHelper({
   session,
   screen: environment.DISPLAY || environment.WAYLAND_DISPLAY || "none",
@@ -95,7 +125,7 @@ const helper = makeLinuxHelper({
       environment: driverEnvironment,
       expectedVersion: driverVersion,
     }),
-  secureFocus: makeSecureFocusProbe(gdbusRunner(driverEnvironment)),
+  secureFocus,
   uinputWritable: () =>
     NodeFS.promises.access("/dev/uinput", NodeFS.constants.W_OK).then(
       () => true,
@@ -104,13 +134,19 @@ const helper = makeLinuxHelper({
   settle: () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS)),
   newId: () => NodeCrypto.randomUUID(),
   now: () => Date.now(),
+  signals,
+  capabilities,
 });
+windowOpen = helper.windowOpen;
 
 let ending = false;
 const end = (code: number) => {
   if (ending) return;
   ending = true;
-  void helper.close().finally(() => process.exit(code));
+  void helper.close().finally(() => {
+    idle?.close();
+    process.exit(code);
+  });
 };
 process.once("SIGTERM", () => end(0));
 process.once("SIGINT", () => end(0));
@@ -128,9 +164,9 @@ void serveHelperChannel({
     executable:
       environment.GOAT_COMPUTER_USE_EXECUTABLE?.trim() || process.argv[1] || process.execPath,
     pid: process.pid,
-    generation: NodeCrypto.randomUUID(),
+    generation,
   },
-  capabilities: linuxCapabilities(session),
+  capabilities,
   maxFrameBytes: COMPUTER_USE_MAX_FRAME_BYTES,
   helper,
 }).then(() => end(0));

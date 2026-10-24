@@ -8,8 +8,11 @@ import type { IdleSource } from "./idleSource.ts";
  * D7). Nothing runs until watch: the focus probe and the idle counter are read only while a
  * session asks for them, and neither records what was typed.
  *
- * Private mode follows AT-SPI focus per watched window and is sent when it changes, the first
- * reading included. Focus that cannot be read counts as private, the same as observation.
+ * Private mode follows AT-SPI focus per watched window. Right after a watch is answered, every
+ * target's state is reported once; after that, only changes. Focus that cannot be read counts
+ * as private, as in observation. Before a target leaves (its window closes, a new watch drops
+ * it, or unwatch), an active one is reported inactive under the watch it belonged to, and the
+ * new watch or unwatch is answered only after that.
  *
  * Human input comes from the desktop's idle counter: input newer than the last reading that
  * does not fall inside one of the helper's own dispatches was a person's. The counter cannot
@@ -25,72 +28,104 @@ const HUMAN_INPUT_QUIET_MS = 1_000;
 
 export interface SignalMonitorDependencies {
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
+  /** False once the window is gone; undefined when that cannot be told right now. */
+  readonly windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined>;
   /** Undefined when this desktop offers no idle counter: humanInput is unsupported. */
   readonly idle: IdleSource | undefined;
   readonly now: () => number;
   /** Runs task every ms until the returned function is called. */
   readonly every: (ms: number, task: () => Promise<void>) => () => void;
-  readonly emit: (event: ComputerUseEvent) => void;
+  /** Runs task after the current reply has been written. */
+  readonly afterReply: (task: () => void) => void;
+  readonly emit: (watchId: string, event: ComputerUseEvent) => void;
 }
 
 export interface SignalMonitor {
-  readonly watch: (targets: ReadonlyArray<ComputerUseWindowTarget>) => void;
-  readonly unwatch: () => void;
+  /** Ends the current watch's targets that are not in the new one, then starts it. */
+  readonly watch: (
+    watchId: string,
+    targets: ReadonlyArray<ComputerUseWindowTarget>,
+  ) => Promise<void>;
+  /** Clears every active target, then stops reading. */
+  readonly unwatch: () => Promise<void>;
   readonly watching: () => ReadonlyArray<ComputerUseWindowTarget>;
   /** Marks a span in which input the helper sent may reset the idle counter. */
   readonly dispatching: () => () => void;
 }
 
+const keyOf = (target: ComputerUseWindowTarget) => target.pid + ":" + target.windowId;
+
 export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonitor {
-  let targets: ReadonlyArray<ComputerUseWindowTarget> = [];
-  const privateState = new Map<string, boolean>();
+  let watchId: string | undefined;
+  let targets: ComputerUseWindowTarget[] = [];
+  const active = new Map<string, boolean>();
   const spans: Array<{ start: number; end: number | undefined }> = [];
   let stops: Array<() => void> = [];
   let lastInputAt = 0;
   let lastEventAt = -Infinity;
-  let reading = { focus: false, idle: false };
+  let busy = { focus: false, idle: false };
 
   const ours = (at: number) =>
-    spans.some(({ start, end }) => at >= start && (end === undefined || at <= end + DISPATCH_TAIL_MS));
+    spans.some(
+      ({ start, end }) => at >= start && (end === undefined || at <= end + DISPATCH_TAIL_MS),
+    );
+
+  /** Reports a target inactive if it was active, and forgets it. */
+  const release = (id: string, target: ComputerUseWindowTarget) => {
+    const key = keyOf(target);
+    if (active.get(key)) deps.emit(id, { type: "privateMode", active: false, target });
+    active.delete(key);
+  };
+
+  const readFocus = async (id: string, target: ComputerUseWindowTarget, report: boolean) => {
+    const focus = await deps.secureFocus(target.pid);
+    // The watch may have changed while AT-SPI answered.
+    if (watchId !== id || !targets.includes(target)) return;
+    const now = focus.secure || !focus.known;
+    const key = keyOf(target);
+    if (!report && active.get(key) === now) return;
+    active.set(key, now);
+    deps.emit(id, { type: "privateMode", active: now, target });
+  };
 
   const checkFocus = async () => {
-    if (reading.focus) return;
-    reading.focus = true;
+    const id = watchId;
+    if (id === undefined || busy.focus) return;
+    busy.focus = true;
     try {
-      for (const target of targets) {
-        const focus = await deps.secureFocus(target.pid);
-        const active = focus.secure || !focus.known;
-        const key = target.pid + ":" + target.windowId;
-        if (privateState.get(key) === active) continue;
-        const first = !privateState.has(key);
-        privateState.set(key, active);
-        // A first reading that is not private says nothing new.
-        if (!first || active) deps.emit({ type: "privateMode", active, target });
+      for (const target of [...targets]) {
+        if ((await deps.windowOpen(target)) === false && watchId === id) {
+          release(id, target);
+          targets = targets.filter((entry) => entry !== target);
+          continue;
+        }
+        await readFocus(id, target, false);
       }
     } finally {
-      reading.focus = false;
+      busy.focus = false;
     }
   };
 
   const checkIdle = async () => {
     const idle = deps.idle;
-    if (!idle || reading.idle) return;
-    reading.idle = true;
+    const id = watchId;
+    if (!idle || id === undefined || busy.idle) return;
+    busy.idle = true;
     try {
       const ms = await idle.idleMs();
-      if (ms === undefined) return;
+      if (ms === undefined || watchId !== id) return;
       const now = deps.now();
       const inputAt = now - ms;
       // Readings jitter by a few milliseconds; only a clearly newer input counts.
       if (inputAt <= lastInputAt + 20) return;
       lastInputAt = inputAt;
-      const cutoff = now - 5 * DISPATCH_TAIL_MS;
-      while (spans.length > 0 && (spans[0]?.end ?? Infinity) < cutoff) spans.shift();
+      while (spans.length > 0 && (spans[0]?.end ?? Infinity) < now - 5 * DISPATCH_TAIL_MS)
+        spans.shift();
       if (ours(inputAt) || now - lastEventAt < HUMAN_INPUT_QUIET_MS) return;
       lastEventAt = now;
-      deps.emit({ type: "humanInput", source: "unknown" });
+      deps.emit(id, { type: "humanInput", source: "unknown" });
     } finally {
-      reading.idle = false;
+      busy.idle = false;
     }
   };
 
@@ -100,28 +135,40 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
   };
 
   return {
-    watch: (next) => {
+    watch: async (id, next) => {
       stop();
+      const previous = watchId;
+      const kept = new Set(next.map(keyOf));
+      if (previous !== undefined)
+        for (const target of targets) if (!kept.has(keyOf(target))) release(previous, target);
+      watchId = id;
       targets = [...next];
-      privateState.clear();
-      // Input before the session started is not this session's concern.
+      active.clear();
+      // Input from before this watch is not its concern.
       lastInputAt = deps.now();
       lastEventAt = -Infinity;
-      reading = { focus: false, idle: false };
-      stops = [
-        deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
-        ...(deps.idle ? [deps.every(HUMAN_INPUT_EVERY_MS, checkIdle)] : []),
-      ];
-      void checkFocus();
+      busy = { focus: false, idle: false };
+      deps.afterReply(() => {
+        if (watchId !== id) return;
+        for (const target of targets) void readFocus(id, target, true);
+        stops = [
+          deps.every(PRIVATE_MODE_EVERY_MS, checkFocus),
+          ...(deps.idle ? [deps.every(HUMAN_INPUT_EVERY_MS, checkIdle)] : []),
+        ];
+      });
     },
-    unwatch: () => {
+    unwatch: async () => {
       stop();
+      if (watchId !== undefined) for (const target of targets) release(watchId, target);
+      watchId = undefined;
       targets = [];
-      privateState.clear();
     },
     watching: () => targets,
     dispatching: () => {
-      const span: { start: number; end: number | undefined } = { start: deps.now(), end: undefined };
+      const span: { start: number; end: number | undefined } = {
+        start: deps.now(),
+        end: undefined,
+      };
       spans.push(span);
       return () => {
         span.end = deps.now();
@@ -129,4 +176,3 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     },
   };
 }
-

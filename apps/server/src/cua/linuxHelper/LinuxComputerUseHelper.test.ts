@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The helper's channel is a Node stream; the test feeds it one.
+// @effect-diagnostics globalTimers:off -- A macrotask stands in for "after the reply is written".
 import * as NodeCrypto from "node:crypto";
 import * as NodeStream from "node:stream";
 import * as NodeZlib from "node:zlib";
@@ -12,6 +13,7 @@ import {
   ComputerUseReadiness,
   computerUseReady,
   type ComputerUseActionRequest,
+  type ComputerUseWindowTarget,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
@@ -20,6 +22,7 @@ import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverToolResult } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
+import { makeSignalMonitor } from "./linuxSignals.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
@@ -90,6 +93,7 @@ function fixtureDriver() {
     imageData: SHOT,
     setValueEffect: "confirmed",
     loseNext: false,
+    windowOpen: true,
     calls: [] as Array<{ tool: string; args: Readonly<Record<string, unknown>> }>,
     /** Answers the next input call instead of the fixture's own behavior. */
     nextAnswer: undefined as DriverToolResult | undefined,
@@ -106,15 +110,17 @@ function fixtureDriver() {
     if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
     if (tool === "list_windows")
       return ok({
-        windows: [
-          {
-            pid: 10,
-            window_id: 20,
-            title: "GOAT CU Fixture",
-            app_name: "fixture.py",
-            is_on_screen: state.onScreen,
-          },
-        ],
+        windows: !state.windowOpen
+          ? []
+          : [
+              {
+                pid: 10,
+                window_id: 20,
+                title: "GOAT CU Fixture",
+                app_name: "fixture.py",
+                is_on_screen: state.onScreen,
+              },
+            ],
       });
     if (tool === "get_window_state") {
       if (args.include_accessibility_tree === false)
@@ -216,7 +222,11 @@ type ActionInput = ComputerUseActionRequest extends infer Request
     : never
   : never;
 
-type Reply = { result: Record<string, unknown>; image?: { mimeType: string; data: string } };
+type Reply = {
+  id: string;
+  result: Record<string, unknown>;
+  image?: { mimeType: string; data: string };
+};
 
 /** One helper behind its real channel, and a client that speaks the protocol to it. */
 async function connect(
@@ -226,6 +236,8 @@ async function connect(
     readonly clientApiVersion?: number;
     readonly maxFrameBytes?: number;
     readonly helloPadding?: number;
+    /** False: this desktop has no idle counter. */
+    readonly idleCounter?: boolean;
   } = {},
 ) {
   const session = detectLinuxSession(options.session ?? X11);
@@ -241,6 +253,29 @@ async function connect(
   };
   let starts = 0;
   let id = 0;
+  /** Every line the channel and the monitor wrote, in order. */
+  const log: Array<Record<string, unknown>> = [];
+  const tasks = new Set<() => Promise<void>>();
+  const lastInput = { at: 0 };
+  const idleCounter = options.idleCounter ?? true;
+  let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
+    undefined;
+  let write: (line: string) => void = () => undefined;
+  const signals = makeSignalMonitor({
+    secureFocus: async () => focus.current,
+    windowOpen: (target) => windowOpen(target),
+    idle: idleCounter
+      ? { idleMs: async () => clock.now - lastInput.at, close: () => undefined }
+      : undefined,
+    now: () => clock.now,
+    every: (_ms, task) => {
+      tasks.add(task);
+      return () => tasks.delete(task);
+    },
+    afterReply: (task) => void setTimeout(task, 0),
+    emit: (watchId, event) => write(JSON.stringify({ generation: "g1", watchId, event }) + "\n"),
+  });
+  const capabilities = linuxCapabilities(session, idleCounter);
   const helper = makeLinuxHelper({
     session,
     screen: ":91",
@@ -260,24 +295,29 @@ async function connect(
     settle: async () => undefined,
     newId: () => "o" + ++id,
     now: () => clock.now,
+    signals,
+    capabilities,
   });
+  windowOpen = helper.windowOpen;
   const input = new NodeStream.PassThrough();
   const ended = new Promise<void>((resolve) => input.once("end", () => resolve()));
   const replies = new Map<string, Reply>();
   const sizes: number[] = [];
   const lines: Array<Record<string, unknown>> = [];
   let wake: () => void = () => undefined;
+  write = (line) => {
+    sizes.push(Buffer.byteLength(line));
+    const value = JSON.parse(line) as Record<string, unknown>;
+    log.push(value);
+    if (typeof value.id === "string") replies.set(value.id, value as Reply);
+    else if (!("event" in value)) lines.push(value);
+    wake();
+  };
   const served = serveHelperChannel({
     input,
-    write: (line) => {
-      sizes.push(Buffer.byteLength(line));
-      const value = JSON.parse(line) as Record<string, unknown>;
-      if (typeof value.id === "string") replies.set(value.id, value as Reply);
-      else lines.push(value);
-      wake();
-    },
+    write: (line) => write(line),
     binding: { executable: "/opt/goat/goat-computer-use", pid: 77, generation: "g1" },
-    capabilities: linuxCapabilities(session),
+    capabilities,
     maxFrameBytes: options.maxFrameBytes ?? 1024 * 1024,
     helper,
   });
@@ -343,6 +383,18 @@ async function connect(
     clock,
     gate,
     starts: () => starts,
+    log,
+    lastInput,
+    /** Runs every armed signal check once, as its timer would. */
+    tick: async () => {
+      for (const task of [...tasks]) await task();
+    },
+    armed: () => tasks.size,
+    /** Events written so far, after the reply settles any afterReply work. */
+    events: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return log.filter((entry) => "event" in entry);
+    },
     sizes,
     input,
     /** Ends stdin and waits until the channel has seen it, as a launcher closing the pipe. */
@@ -811,6 +863,133 @@ describe("Linux computer use helper conformance", () => {
   });
 });
 
+describe("Linux safety signals", () => {
+  const target = { pid: 10, windowId: 20 };
+  const watch = (helper: Awaited<ReturnType<typeof connect>>, watchId: string) =>
+    helper.request("watch", { watchId, targets: [target] });
+
+  it("names both signals in capabilities, and humanInput is unsupported without an idle counter", async () => {
+    const withIdle = await connect();
+    expect(withIdle.hello).toMatchObject({
+      capabilities: { signals: { privateMode: "supported", humanInput: "supported" } },
+    });
+    await withIdle.close();
+    const without = await connect({ idleCounter: false });
+    expect(without.hello).toMatchObject({
+      capabilities: { signals: { privateMode: "supported", humanInput: "unsupported" } },
+    });
+    await without.close();
+    const headless = await connect({ session: { ...X11, display: undefined } });
+    expect(headless.hello).toMatchObject({
+      capabilities: { signals: { privateMode: "unsupported", humanInput: "unsupported" } },
+    });
+    await headless.close();
+  });
+
+  it("reads nothing until watched, then reports every target once after the reply", async () => {
+    const helper = await connect();
+    expect(helper.armed()).toBe(0);
+    const reply = await watch(helper, "w1");
+    expect(reply.result).toEqual({ watchId: "w1", watching: [target] });
+    expect(await helper.events()).toEqual([
+      { generation: "g1", watchId: "w1", event: { type: "privateMode", active: false, target } },
+    ]);
+    const replyAt = helper.log.findIndex((entry) => entry.id === reply.id);
+    const eventAt = helper.log.findIndex((entry) => "event" in entry);
+    expect(eventAt).toBeGreaterThan(replyAt);
+    await helper.close();
+  });
+
+  it("reports a password field taking and leaving focus once each", async () => {
+    const helper = await connect();
+    await watch(helper, "w1");
+    await helper.events();
+    helper.focus.current = { known: true, secure: true, windows: 1 };
+    await helper.tick();
+    await helper.tick();
+    helper.focus.current = NOT_SECURE;
+    await helper.tick();
+    const states = (await helper.events()).map(
+      (entry) => (entry.event as { active?: boolean }).active,
+    );
+    expect(states).toEqual([false, true, false]);
+    await helper.close();
+  });
+
+  it("clears an active target under the old watch before answering the watch that drops it", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
+    await watch(helper, "w1");
+    await helper.events();
+    const other = { pid: 11, windowId: 21 };
+    const reply = await helper.request("watch", { watchId: "w2", targets: [other] });
+    const clearAt = helper.log.findIndex(
+      (entry) => entry.watchId === "w1" && (entry.event as { active?: boolean }).active === false,
+    );
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeLessThan(helper.log.findIndex((entry) => entry.id === reply.id));
+    await helper.close();
+  });
+
+  it("clears an active target before answering unwatch, and stops reading", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
+    await watch(helper, "w1");
+    await helper.events();
+    const reply = await helper.request("unwatch", {});
+    const clearAt = helper.log.findIndex(
+      (entry) => entry.watchId === "w1" && (entry.event as { active?: boolean }).active === false,
+    );
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeLessThan(helper.log.findIndex((entry) => entry.id === reply.id));
+    expect(helper.armed()).toBe(0);
+    await helper.close();
+  });
+
+  it("clears an active target whose window closed and stops watching it", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
+    await watch(helper, "w1");
+    await helper.events();
+    helper.driver.state.windowOpen = false;
+    await helper.tick();
+    const last = (await helper.events()).at(-1);
+    expect(last).toMatchObject({
+      watchId: "w1",
+      event: { type: "privateMode", active: false, target },
+    });
+    await helper.close();
+  });
+
+  it("reports a person's input, but not input inside the helper's own dispatch", async () => {
+    const helper = await connect();
+    const first = await helper.observe();
+    await watch(helper, "w1");
+    await helper.events();
+    // The helper's own click resets the counter while it is being sent.
+    helper.clock.now = 1_000;
+    helper.lastInput.at = 1_000;
+    await helper.act(
+      { action: "click", at: { element: helper.ref(first.observation, "Increment") } },
+      first.observation,
+    );
+    helper.clock.now = 1_200;
+    await helper.tick();
+    expect(
+      (await helper.events()).filter(
+        (entry) => (entry.event as { type: string }).type === "humanInput",
+      ),
+    ).toEqual([]);
+    // A person types two seconds later.
+    helper.clock.now = 3_200;
+    helper.lastInput.at = 3_100;
+    await helper.tick();
+    expect((await helper.events()).at(-1)).toEqual({
+      generation: "g1",
+      watchId: "w1",
+      event: { type: "humanInput", source: "unknown" },
+    });
+    await helper.close();
+  });
+});
+
 describe("makeLinuxHelper shutdown", () => {
   it("every close waits for the one driver shutdown, so a signal during EOF cleanup cannot exit early", async () => {
     const { client } = fixtureDriver();
@@ -824,6 +1003,16 @@ describe("makeLinuxHelper shutdown", () => {
       settle: async () => undefined,
       newId: () => "o",
       now: () => 0,
+      signals: makeSignalMonitor({
+        secureFocus: async () => NOT_SECURE,
+        windowOpen: async () => undefined,
+        idle: undefined,
+        now: () => 0,
+        every: () => () => undefined,
+        afterReply: () => undefined,
+        emit: () => undefined,
+      }),
+      capabilities: linuxCapabilities(detectLinuxSession(X11), false),
     });
     await helper.handle("listWindows", {}, 1_000);
     let done = 0;

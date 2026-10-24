@@ -11,6 +11,7 @@ import {
   type ComputerUseReadiness,
   type ComputerUseRefusalReason,
   type ComputerUseWindow,
+  type ComputerUseWindowTarget,
   COMPUTER_USE_ACTIONS,
   type ComputerUseMethod,
   unsupportedComputerUseMethod,
@@ -68,6 +69,8 @@ export interface LinuxHelper {
     params: unknown,
     deadlineMs: number,
   ) => Promise<HelperAnswer>;
+  /** Whether a watched window is still open, for the safety signals; undefined if unknown. */
+  readonly windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined>;
   /** Ends the driver; its runtime, input devices and held keys go with it. */
   readonly close: () => Promise<void>;
 }
@@ -494,11 +497,13 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       const decoded = decodeWatch(params);
       if (decoded._tag === "None")
         return { result: refusal("invalidRequest", "watch needs at least one window target.") };
-      deps.signals.watch(decoded.value.targets);
-      return { result: { watching: deps.signals.watching() } };
+      await deps.signals.watch(decoded.value.watchId, decoded.value.targets);
+      return {
+        result: { watchId: decoded.value.watchId, watching: deps.signals.watching() },
+      };
     }
     if (method === "unwatch") {
-      deps.signals.unwatch();
+      await deps.signals.unwatch();
       return { result: { watching: [] } };
     }
     if (ACTIONS.has(method)) return act(method, params, left);
@@ -506,6 +511,13 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
   };
 
   return {
+    windowOpen: async (target) => {
+      if (closed) return undefined;
+      const list = await windows(2_000);
+      return isRefusal(list)
+        ? undefined
+        : list.some((entry) => entry.window_id === target.windowId && entry.pid === target.pid);
+    },
     handle: (method, params, deadlineMs) => {
       // One expiry from receipt: time spent queued behind other requests counts against it.
       const expiry = deps.now() + deadlineMs;
@@ -523,7 +535,7 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     close: () =>
       (closing ??= (async () => {
         closed = true;
-        deps.signals.unwatch();
+        await deps.signals.unwatch();
         const current = driver;
         driver = undefined;
         driverGeneration++;
@@ -535,5 +547,3 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
       })()),
   };
 }
-
-

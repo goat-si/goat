@@ -95,9 +95,7 @@ export function linuxCapabilities(
     methods: Object.fromEntries(
       COMPUTER_USE_METHODS.map((method) => [
         method,
-        session.unsupported !== undefined &&
-        method !== "capabilities" &&
-        method !== "permissions"
+        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
           ? "unsupported"
           : "supported",
       ]),
@@ -270,4 +268,3 @@ function paeth(a: number, b: number, c: number) {
   const pc = Math.abs(p - c);
   return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
 }
-

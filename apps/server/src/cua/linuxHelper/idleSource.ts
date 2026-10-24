@@ -143,7 +143,6 @@ export async function openX11Idle(environment: {
   };
 }
 
-
 /** `(uint64 N,)` from org.gnome.Mutter.IdleMonitor.GetIdletime. */
 export const parseUint64 = (output: string): number | undefined => {
   const match = /\(uint64 (\d+),\)/u.exec(output);
@@ -170,4 +169,3 @@ export async function openGnomeIdle(
     ]).then(parseUint64, () => undefined);
   return (await ask()) === undefined ? undefined : { idleMs: ask, close: () => undefined };
 }
-
