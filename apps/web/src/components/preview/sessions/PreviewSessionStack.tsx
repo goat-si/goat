@@ -10,6 +10,7 @@ import {
   previewSessionChip,
   ThreadId,
 } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
@@ -80,6 +81,10 @@ function PreviewSessionTile(props: {
       ? expand?.()
       : props.onControl(control);
   const actions = session.capabilities.controls.filter((control) => control in CONTROL_LABEL);
+  // Read-only connections see the tile but not controls the server would refuse.
+  const canControl = useAtomValue(
+    previewSessionsEnvironment.control.permissionAtom(session.environmentId),
+  );
   const tile = useRef<HTMLElement>(null);
   // Each request scrolls again, even to the tile already focused.
   const focusRequest = props.focused ? props.focusRequest : 0;
@@ -127,7 +132,13 @@ function PreviewSessionTile(props: {
       </button>
       <div className="flex items-center gap-1.5 p-2">
         {actions.map((control) => (
-          <Button key={control} variant="outline" size="compact" onClick={() => act(control)}>
+          <Button
+            key={control}
+            variant="outline"
+            size="compact"
+            disabled={!canControl}
+            onClick={() => act(control)}
+          >
             {CONTROL_LABEL[control]}
           </Button>
         ))}
@@ -136,6 +147,7 @@ function PreviewSessionTile(props: {
             className="ml-auto"
             variant="destructive-outline"
             size="compact"
+            disabled={!canControl}
             onClick={() => props.onControl("stop")}
           >
             <SquareIcon />
@@ -176,6 +188,25 @@ function useMiniPlayerTop(frame: unknown) {
     };
   }, [frame]);
   return frame === null ? null : top;
+}
+
+function StopAllButton(props: {
+  readonly environmentId: EnvironmentId;
+  readonly onStop: () => void;
+}) {
+  const canControl = useAtomValue(
+    previewSessionsEnvironment.control.permissionAtom(props.environmentId),
+  );
+  return (
+    <Button
+      variant="destructive-outline"
+      size="compact"
+      disabled={!canControl}
+      onClick={props.onStop}
+    >
+      Stop all
+    </Button>
+  );
 }
 
 /**
@@ -239,13 +270,7 @@ export function PreviewSessionStack(props: {
         <span className="flex-1 font-medium text-xs">
           Agents on screen <span className="text-muted-foreground">{sessions.length}</span>
         </span>
-        <Button
-          variant="destructive-outline"
-          size="compact"
-          onClick={() => send({ control: "stopAll" })}
-        >
-          Stop all
-        </Button>
+        <StopAllButton environmentId={environmentId} onStop={() => send({ control: "stopAll" })} />
         <Button
           variant="ghost-muted"
           size="icon-xs"
