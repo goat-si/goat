@@ -112,6 +112,7 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     threadId: "thread-1",
     title: "Fix login flow",
   },
+  capability: { ...base, kind: "capability", label: "Computer", capability: "computer-use" },
 };
 
 describe("ComposerContextRecord", () => {
