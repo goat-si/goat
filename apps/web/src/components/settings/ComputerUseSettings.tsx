@@ -9,6 +9,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
+import { ComputerUseReadiness } from "../computerUse/ComputerUseReadiness";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { CuaSetupDialog } from "./CuaSetupDialog";
@@ -206,6 +207,12 @@ function ComputerUseControls({
             />
           </div>
         }
+      />
+      <ComputerUseReadiness
+        platform={host.status?.platform}
+        readiness={host.status?.readiness}
+        tools={host.status?.tools}
+        signals={host.status?.signals}
       />
       {setupOpen && host.canConfigure ? (
         <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />

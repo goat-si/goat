@@ -35,12 +35,23 @@ const makeDebuggee = () => {
   const emitter = new NodeEvents.EventEmitter();
   const pending: Array<() => void> = [];
   const sent: Array<unknown> = [];
+  /** Commands the host sends on its own (no relay id), such as ending an input hold. */
+  const own: Array<{ method: string; params: unknown }> = [];
   const sendWaiters: Array<() => void> = [];
   const debuggee = Object.assign(emitter, {
     sendCommand: (method: string, params?: { id?: number }) =>
       new Promise((resolve) => {
         if (method === "Target.getTargetInfo") {
           resolve({ targetInfo: { targetId: "GUEST" } });
+          return;
+        }
+        const expression = (params as { expression?: string } | undefined)?.expression;
+        if (
+          method === "Input.setIgnoreInputEvents" ||
+          (method === "Runtime.evaluate" && expression?.includes("__goatAgentInputHeld"))
+        ) {
+          own.push({ method, params });
+          resolve({});
           return;
         }
         sent.push(params?.id);
@@ -65,6 +76,7 @@ const makeDebuggee = () => {
     navigate: () => webContents.emit("did-navigate"),
     /** Ids of the commands the debugger received, in order. */
     sent,
+    own,
     nextSend: () => new Promise<void>((resolve) => sendWaiters.push(resolve)),
     release: () => pending.splice(0).forEach((resolve) => resolve()),
     releaseFirst: () => pending.shift()?.(),
@@ -214,6 +226,19 @@ describe("DesktopBrowserHost", () => {
       debuggee.releaseFirst();
       expect(yield* Queue.take(replies)).toBe(2);
       expect(debuggee.sent).toEqual([1, 2, 3]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("ends an input hold the released relay can no longer end", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee();
+      host.attach(key, debuggee.tab);
+      yield* host.handleCommandLine(encodeJson({ type: "release", ...key }));
+      expect(debuggee.own.map(({ method, params }) => [method, params])).toEqual([
+        ["Input.setIgnoreInputEvents", { ignore: false }],
+        ["Runtime.evaluate", { expression: "globalThis.__goatAgentInputHeld = 0" }],
+      ]);
     }).pipe(Effect.scoped),
   );
 

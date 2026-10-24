@@ -116,6 +116,27 @@ describe("searchSettings", () => {
     expect(searchSettings("update track")).toEqual([]);
   });
 
+  it("hides System glass when the desktop bridge has no material API", () => {
+    const item: SettingsSearchItem = {
+      id: "desktop-system-material",
+      title: "System glass",
+      to: "/settings/appearance",
+      requiresDesktopWindowMaterial: true,
+    };
+    try {
+      vi.stubGlobal("window", { desktopBridge: {} });
+      expect(searchSettings("system glass", [item])).toEqual([]);
+      vi.stubGlobal("window", {
+        desktopBridge: { getWindowMaterialState: vi.fn(), onWindowMaterialStateChanged: vi.fn() },
+      });
+      expect(searchSettings("system glass", [item]).map((result) => result.id)).toEqual([
+        "desktop-system-material",
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("hides settings whose controls are unavailable", () => {
     const available = filterAvailableSettingsSearchItems({
       hasCloudPublicConfig: false,
