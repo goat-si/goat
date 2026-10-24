@@ -213,7 +213,7 @@ namespace Goat.ComputerUse
         void ClearAnywhere()
         {
             if (watchId != null && anywhereActive.HasValue)
-                outbox.Add(Frame(watchId, PrivateMode(anywhereActive.Value, false)), PrivateKey(watchId, anywhereActive.Value));
+                outbox.Add(Frame(watchId, PrivateMode(anywhereActive.Value, false)), AnywhereKey(watchId));
             anywhereActive = null;
         }
 
@@ -268,7 +268,7 @@ namespace Goat.ComputerUse
             anywhereActive = now;
             Target reported = now ?? new Target { Pid = 0, WindowId = 0 };
             if (now.HasValue || all)
-                outbox.Add(Frame(watchId, PrivateMode(reported, now.HasValue)), PrivateKey(watchId, reported));
+                outbox.Add(Frame(watchId, PrivateMode(reported, now.HasValue)), AnywhereKey(watchId));
         }
 
         /// <summary>
@@ -468,6 +468,16 @@ namespace Goat.ComputerUse
         static string PrivateKey(string forWatch, Target target)
         {
             return forWatch + "|private|" + target.Key;
+        }
+
+        /// <summary>
+        /// An anywhere watch reports one state, the host's, not one per window: its unsent
+        /// frames coalesce under one key, so a stalled reader gets the latest state and never a
+        /// stale clear of a window focus already left (A, then B, then A again ends private).
+        /// </summary>
+        static string AnywhereKey(string forWatch)
+        {
+            return forWatch + "|private|anywhere";
         }
 
         static Dictionary<string, object> PrivateMode(Target target, bool on)
