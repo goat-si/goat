@@ -12,6 +12,7 @@ import threadRunResultsMigration from "../persistence/Migrations/074_ThreadRunRe
 import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
 import observedChecksMigration from "../persistence/Migrations/092_ThreadRunObservedChecks.ts";
 import inboxRunIdMigration from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
+import fencesMigration from "../persistence/Migrations/106_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const binding = (correlationId: string) => ({
@@ -29,6 +30,7 @@ it.effect("a relay asking for turn capabilities goes only to an origin that deli
   Effect.gen(function* () {
     for (const step of [migration, dispatchMigration, threadRunResultsMigration]) yield* step;
     for (const step of [observedChecksMigration, relayMigration, inboxRunIdMigration]) yield* step;
+    yield* fencesMigration;
     const orchestrator = Layer.mock(Orchestrator.OrchestratorV2)({
       getThreadShell: (threadId) =>
         Effect.succeed({

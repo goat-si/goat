@@ -19,6 +19,7 @@ import {
   type ComputerUseControlEnd,
   type ComputerUseHumanInputSource,
   type ComputerUsePauseReason,
+  type CuaAgentBlock,
   Handoff,
   type ThreadId,
   type TurnItemId,
@@ -241,6 +242,14 @@ export class ComputerUseLeases extends Context.Service<
         readonly state: ComputerUseControlState;
       }>
     >;
+    /**
+     * Records a turn the desktop gave no driver for want of a grant, so the session list can
+     * say so while the turn runs (#1399). A control for the thread or the turn's end clears it.
+     */
+    readonly blocked: (threadId: ThreadId, block: CuaAgentBlock) => Effect.Effect<void>;
+    readonly blockedTurns: Effect.Effect<
+      ReadonlyArray<{ readonly threadId: ThreadId; readonly block: CuaAgentBlock }>
+    >;
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly changed: Effect.Effect<void>;
@@ -310,6 +319,8 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  /** Turns the desktop gave no driver for want of a grant, while they run (#1399). */
+  const blockedTurns = new Map<ThreadId, CuaAgentBlock>();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
@@ -379,6 +390,8 @@ const make = Effect.gen(function* () {
     if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
       return undefined;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
+    // A driver started for this thread after all; the session list drops the blocked entry.
+    if (blockedTurns.delete(threadId)) yield* changed;
     const existing = controls.get(threadId);
     if (
       existing !== undefined &&
@@ -597,6 +610,7 @@ const make = Effect.gen(function* () {
       // What the desktop last heard; it starts out not watching. After a failed write it may
       // have heard either value, so the current one goes out until a write succeeds.
       let delivered = false;
+      let deliveredApps: ReadonlyArray<string> = [];
       let unsure = false;
       for (;;) {
         // A grant cancelled or expired under a control ends it, though nothing here ended it.
@@ -614,20 +628,41 @@ const make = Effect.gen(function* () {
         }
         // Proxies waiting on a pause hear their control ended.
         if (endedAny) yield* PubSub.publish(signals, undefined);
+        // Read approvals independently of pause state: a paused helper must keep watching. A
+        // failed read never holds back whether the desktop watches (secret fields, #1235): the
+        // apps it last heard stand, and the read is tried again.
+        const listed = yield* live().pipe(Effect.option);
+        const grants = Option.getOrElse(listed, () => []);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const expiries = [...controls.values()]
-          .filter(acting)
-          .map((record) => DateTime.toEpochMillis(record.expiresAt))
-          .filter((expiresAt) => expiresAt > now);
-        const active = expiries.length > 0;
+        const current = [...controls.values()].filter(
+          (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
+        );
+        const expiries = current.map((record) => DateTime.toEpochMillis(record.expiresAt));
+        const approved = new Set<string>();
+        for (const record of current) {
+          if (record.everyApp !== undefined) continue;
+          const held = grants.filter(
+            (grant) =>
+              grant.threadId === record.threadId &&
+              (record.handoffId === undefined || grant.handoffId === record.handoffId),
+          );
+          for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
+          for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
+        }
+        const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
+        const appsChanged =
+          apps.length !== deliveredApps.length ||
+          apps.some((app, index) => app !== deliveredApps[index]);
+        const active = current.length > 0;
         let retry = false;
-        if (active !== delivered || unsure) {
-          const sent = yield* receiver.setCuaWatch(active).pipe(
+        if (active !== delivered || appsChanged || unsure) {
+          const sent = yield* receiver.setCuaWatch(active, apps).pipe(
             Effect.as(true),
             Effect.orElseSucceed(() => false),
           );
           if (sent) {
             delivered = active;
+            deliveredApps = apps;
             unsure = false;
           } else {
             unsure = true;
@@ -637,7 +672,8 @@ const make = Effect.gen(function* () {
         const waits = [
           ...(active ? [Math.min(...expiries) - now] : []),
           // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
-          ...(retry ? [WATCH_RETRY_MS] : []),
+          // So is a failed approval read.
+          ...(retry || Option.isNone(listed) ? [WATCH_RETRY_MS] : []),
         ];
         const woken = PubSub.take(kicks);
         yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
@@ -645,12 +681,12 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
-  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
-    const before = controls.get(threadId);
-    if (before === undefined || before.ended !== undefined) return false;
-    // Native subagents work through the parent's provider session, and so its control, on
-    // their own child threads; one can outlive a failed parent run. Delegated tasks hold
-    // controls of their own.
+  /**
+   * Whether the thread still has a run, provider turn or native subagent open. Native subagents
+   * work through the parent's provider session, and so its control, on their own child threads;
+   * one can outlive a failed parent run. Delegated tasks hold controls of their own.
+   */
+  const openWork = Effect.fn("ComputerUseLeases.openWork")(function* (threadId: ThreadId) {
     const open = yield* sql<{ readonly one: number }>`
       WITH RECURSIVE native(child_thread_id, status) AS (
         SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
@@ -671,7 +707,13 @@ const make = Effect.gen(function* () {
         AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
       LIMIT 1
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    if (open.length > 0) return false;
+    return open.length > 0;
+  });
+
+  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
+    const before = controls.get(threadId);
+    if (before === undefined || before.ended !== undefined) return false;
+    if (yield* openWork(threadId)) return false;
     // The read yields: a turn that minted or reused the control since then keeps it.
     const after = controls.get(threadId);
     if (
@@ -787,11 +829,34 @@ const make = Effect.gen(function* () {
             ),
           ),
         { discard: true },
+      ).pipe(
+        // A blocked turn has no control; it leaves the list once nothing of it is open.
+        Effect.andThen(
+          Effect.forEach(
+            [...blockedTurns.keys()],
+            (threadId) =>
+              openWork(threadId).pipe(
+                Effect.flatMap((open) =>
+                  open || !blockedTurns.delete(threadId) ? Effect.void : changed,
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("blocked computer use turn kept until the next end", {
+                    threadId,
+                    cause,
+                  }),
+                ),
+              ),
+            { discard: true },
+          ),
+        ),
       ),
     ),
-    disable: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "disabled"))).pipe(
-      Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void)),
-    ),
+    disable: Effect.sync(() => {
+      const listed = blockedTurns.size > 0;
+      blockedTurns.clear();
+      const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
+      return listed || ended.length > 0;
+    }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
     grants: live(),
     pause,
     detection,
@@ -818,6 +883,11 @@ const make = Effect.gen(function* () {
     subscribe: PubSub.subscribe(signals),
     changed,
     proxy,
+    blocked: (threadId, block) =>
+      Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
+    blockedTurns: Effect.sync(() =>
+      [...blockedTurns].map(([threadId, block]) => ({ threadId, block })),
+    ),
   });
 });
 

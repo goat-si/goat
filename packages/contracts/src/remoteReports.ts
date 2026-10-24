@@ -153,6 +153,27 @@ export const RemoteOriginReportsWaitInput = Schema.Struct({
   timeoutMs: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 600000 })),
 });
 export type RemoteOriginReportsWaitInput = typeof RemoteOriginReportsWaitInput.Type;
+/**
+ * The origin asks the destination to settle a correlation whose launch outcome was lost:
+ * return its binding and thread/run state, or durably fence the id so a late bind is
+ * refused. The read key authorizes the caller; a fence remembers its hash.
+ */
+export const RemoteResolveBindingInput = Schema.Struct({
+  correlationId: CorrelationId,
+  readKey: HexKey,
+});
+export type RemoteResolveBindingInput = typeof RemoteResolveBindingInput.Type;
+export const RemoteResolveBindingResult = Schema.Union([
+  Schema.TaggedStruct("bound", {
+    threadId: ThreadId,
+    originThreadId: ThreadId,
+    threadExists: Schema.Boolean,
+    threadDeleted: Schema.Boolean,
+    activeRunId: Schema.NullOr(RunId),
+  }),
+  Schema.TaggedStruct("fenced", {}),
+]);
+export type RemoteResolveBindingResult = typeof RemoteResolveBindingResult.Type;
 export const RemoteOriginReportsWaitResult = Schema.Struct({
   threadId: ThreadId,
   reports: Schema.Array(RemoteReport),

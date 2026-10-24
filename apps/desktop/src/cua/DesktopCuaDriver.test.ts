@@ -12,7 +12,8 @@ import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { afterEach, vi } from "vite-plus/test";
 
-import { bitmapHasContent, prepareDesktopManifest } from "./DesktopCuaDriver.ts";
+import { bitmapHasContent } from "./DesktopCuaDriver.ts";
+import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
 
 import {
   privacyEnvironment,
@@ -105,8 +106,15 @@ describe("DesktopCuaDriver", () => {
         yield* test.request("denied");
         const denied = yield* test.next;
         assert.equal(denied.status, "unavailable");
-        if (denied.status !== "ready")
+        if (denied.status !== "ready") {
           assert.match(denied.message ?? "", /Accessibility|Screen Recording/);
+          // The typed reason the tile, Settings and the agent name (#1399).
+          assert.deepEqual(denied.block, {
+            reason: "permissionsNotGranted",
+            missing: ["accessibility", "screenRecording"],
+            holder: "app",
+          });
+        }
         assert.isEmpty(test.constructors);
         yield* test.grantPermissions;
         yield* test.restart;

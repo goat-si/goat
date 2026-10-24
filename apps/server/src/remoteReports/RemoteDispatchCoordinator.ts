@@ -50,6 +50,7 @@ import {
   recoverUnknownRemoteTaskLaunch,
 } from "./recordRemoteTaskResult.ts";
 import * as RemoteDispatchRow from "./remoteDispatchRow.ts";
+import { resolveLostThreadLaunches } from "./remoteDispatchRecovery.ts";
 import {
   REPORTING_NOTE,
   frameLiteral,
@@ -217,6 +218,12 @@ export class RemoteDispatchCoordinator extends Context.Service<
       threadId: string,
     ) => Effect.Effect<boolean, RemoteDispatchError>;
     readonly resume: (host: string, threadId: string) => Effect.Effect<void, RemoteDispatchError>;
+    /**
+     * One pass settling lost thread launches with their destinations: a row lost long enough
+     * for an in-flight launch to have bound is rebound (running) or fenced (cancelled). The
+     * coordinator runs it on its own schedule; an inconclusive row is asked again after a backoff.
+     */
+    readonly resolveLostLaunches: Effect.Effect<void>;
   }
 >()("goat/remoteReports/RemoteDispatchCoordinator") {}
 
@@ -230,6 +237,7 @@ const make = Effect.gen(function* () {
   const launchWatches = yield* LaunchWatchService.LaunchWatchService;
   const inFlight = new Map<string, Deferred.Deferred<void, RemoteDispatchError>>();
   const drains = yield* FiberMap.make<string, void, RemoteDispatchError>();
+  const resolveRetryAt = new Map<string, number>();
   const hosts = new Map<string, Semaphore.Semaphore>();
   const taskHosts = new Map<string, Semaphore.Semaphore>();
   // Relayed sends must not wait behind report long-polls to the same host.
@@ -1196,10 +1204,22 @@ const make = Effect.gen(function* () {
     WHERE kind = 'thread' AND reports_supported = 0 AND state = 'running'`);
   const active = yield* rows(sql`SELECT * FROM remote_dispatches WHERE state = 'running'`);
   for (const r of active) yield* start(r.correlation_id, r.launched_run_id === null);
+  const resolveLostLaunches = resolveLostThreadLaunches({ retryAt: resolveRetryAt, start }).pipe(
+    Effect.provideService(SqlClient.SqlClient, sql),
+    Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+    Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+  );
+  // No pass at startup: a row the restart just marked lost is too young to ask about.
+  yield* Effect.sleep("1 minute").pipe(
+    Effect.andThen(resolveLostLaunches),
+    Effect.forever,
+    Effect.forkScoped,
+  );
   return RemoteDispatchCoordinator.of({
     launch,
     cancel,
     resume,
+    resolveLostLaunches,
     taskOrigin,
     isTaskThread: (host, threadId) =>
       db(

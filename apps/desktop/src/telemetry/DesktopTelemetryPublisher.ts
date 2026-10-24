@@ -79,6 +79,8 @@ export class DesktopTelemetryPublisher extends Context.Service<
      * then each change. Losing that server reads as false.
      */
     readonly cuaWatch: Stream.Stream<boolean>;
+    /** Approved named apps from the local server; cleared when it disconnects. */
+    readonly cuaWatchApps: Stream.Stream<ReadonlyArray<string>>;
     /**
      * The windows this host's own server wants captured (#1370): the current request, then each
      * newer one. Losing that server reads as a request for none.
@@ -235,6 +237,19 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       ),
       Effect.asVoid,
     );
+  const cuaWatchApps = yield* Ref.make<ReadonlyArray<string>>([]);
+  const cuaWatchAppsChanges = yield* PubSub.sliding<ReadonlyArray<string>>(1);
+  const setCuaWatchApps = Effect.fn("desktop.telemetryPublisher.setCuaWatchApps")(
+    (apps: ReadonlyArray<string>) =>
+      Ref.getAndSet(cuaWatchApps, apps).pipe(
+        Effect.flatMap((previous) =>
+          previous.length === apps.length && previous.every((app, i) => app === apps[i])
+            ? Effect.void
+            : PubSub.publish(cuaWatchAppsChanges, apps),
+        ),
+        Effect.asVoid,
+      ),
+  );
   const noFrames: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
   const cuaFramesRequest = yield* Ref.make(noFrames);
   const cuaFramesChanges = yield* PubSub.sliding<DesktopCuaFrames>(1);
@@ -252,6 +267,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     cuaSource = undefined;
     // No server, no agent controlling this host through it.
     yield* setCuaWatching(false);
+    yield* setCuaWatchApps([]);
     // No server, nobody watching a window either.
     yield* setCuaFrames(noFrames);
     if (source.requestId)
@@ -449,7 +465,11 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !source) return Effect.void;
           if (source.watchSeq !== undefined && message.seq < source.watchSeq) return Effect.void;
           source.watchSeq = message.seq;
-          return setCuaWatching(message.active);
+          return setCuaWatching(message.active).pipe(
+            Effect.andThen(
+              setCuaWatchApps(message.active ? [...new Set(message.apps ?? [])].sort() : []),
+            ),
+          );
         });
       case "cuaFrames":
         return Effect.suspend(() => {
@@ -582,6 +602,15 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         const subscription = yield* PubSub.subscribe(cuaWatchChanges);
         return Stream.concat(
           Stream.make(yield* Ref.get(cuaWatching)),
+          Stream.fromSubscription(subscription),
+        );
+      }),
+    ),
+    cuaWatchApps: Stream.unwrap(
+      Effect.gen(function* () {
+        const subscription = yield* PubSub.subscribe(cuaWatchAppsChanges);
+        return Stream.concat(
+          Stream.make(yield* Ref.get(cuaWatchApps)),
           Stream.fromSubscription(subscription),
         );
       }),

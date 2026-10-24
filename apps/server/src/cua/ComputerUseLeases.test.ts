@@ -189,6 +189,71 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
+  it.effect(
+    "lists a turn the desktop blocked while it runs, until a driver starts for it or the turn ends (#1399)",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const sql = yield* SqlClient.SqlClient;
+        const blocked = ThreadId.make("thread-blocked");
+        yield* run(blocked, "run-blocked-1", 1, "running");
+        yield* leases.blocked(blocked, block);
+        assert.deepEqual(yield* leases.blockedTurns, [{ threadId: blocked, block }]);
+        // Still running: the turn stays listed.
+        yield* leases.settle;
+        assert.lengthOf(yield* leases.blockedTurns, 1);
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run-blocked-1'`;
+        yield* leases.settle;
+        assert.deepEqual(yield* leases.blockedTurns, []);
+
+        // A later turn that gets a driver is no longer blocked.
+        const granted = ThreadId.make("thread-granted");
+        yield* leases.blocked(granted, block);
+        yield* leases.control(granted, Option.none());
+        assert.deepEqual(yield* leases.blockedTurns, []);
+      }),
+  );
+
+  it.effect("wakes the session list whenever a blocked turn is listed or cleared (#1399)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["accessibility"],
+          holder: "helper",
+        } as const;
+        const subscription = yield* leases.subscribe;
+        const woke = Effect.gen(function* () {
+          const count = yield* PubSub.remaining(subscription);
+          if (count > 0) yield* PubSub.takeAll(subscription);
+          return count > 0;
+        });
+        const first = ThreadId.make("thread-blocked-first");
+        yield* leases.blocked(first, block);
+        assert.isTrue(yield* woke);
+        // Its first control clears it.
+        yield* leases.control(first, Option.none());
+        assert.isTrue(yield* woke);
+        yield* leases.stop(first);
+        yield* woke;
+        // Turning computer use off with only a blocked turn listed clears it too.
+        yield* leases.blocked(ThreadId.make("thread-blocked-off"), block);
+        yield* woke;
+        yield* leases.disable;
+        assert.isTrue(yield* woke);
+        assert.deepEqual(yield* leases.blockedTurns, []);
+      }),
+    ),
+  );
+
   it.effect("ends every control when computer use is turned off", () =>
     Effect.gen(function* () {
       yield* runMigrations();
@@ -433,6 +498,94 @@ it.effect(
                 NodeServices.layer,
                 DesktopTelemetryReceiver.layerTest({
                   setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("sends the union of named approvals, updating apps while controls stay active", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<{
+      active: boolean;
+      apps: ReadonlyArray<string> | undefined;
+    }>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // A whole-screen approval contributes nothing to the named union.
+      yield* grant(other, "handoff:screen");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.control(thread, Option.none());
+      yield* grant(thread, "handoff:first", ["com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+      yield* grant(thread, "handoff:second", ["com.example.new", "com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), {
+        active: true,
+        apps: ["com.example.new", "com.example.notes"],
+      });
+      yield* leases.stop(thread);
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.stop(other);
+      assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active, apps) =>
+                  Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "removes expired approved apps while the interactive control keeps watching through a pause",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<{
+        active: boolean;
+        apps: ReadonlyArray<string> | undefined;
+      }>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* grant(thread, "handoff:earlier", ["com.example.notes"]);
+        yield* TestClock.adjust("30 minutes");
+        const control = yield* leases.control(thread, Option.none());
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+        yield* leases.pause("human_input");
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
+        yield* TestClock.adjust("31 minutes");
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active, apps) =>
+                    Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
                 }),
               ),
             ),
