@@ -1,9 +1,11 @@
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import { matchComposerCapabilityItems } from "@goat/client-runtime/composerCapabilityItems";
 import type {
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   PullRequestListInput,
+  ProviderInteractionMode,
   ServerProvider,
   ThreadId,
   ThreadPullRequestLink,
@@ -34,6 +36,7 @@ import {
   rankPullRequestMatches,
 } from "../pullRequest/pullRequestList.logic";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
+import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import {
   searchSlashCommandItems,
   slashCommandItemsForPromptPosition,
@@ -60,6 +63,7 @@ export function useComposerMenuItems({
   selectedProviderSkills,
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
+  interactionMode,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -75,6 +79,7 @@ export function useComposerMenuItems({
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
+  readonly interactionMode: ProviderInteractionMode;
 }) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
@@ -90,6 +95,11 @@ export function useComposerMenuItems({
   const settledPullRequestTextQuery =
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
+  const capabilityContext = useComposerCapabilityContext({
+    environmentId,
+    interactionMode,
+    active: isPathTrigger,
+  });
   const environmentThreadShells = useThreadShells(isPathTrigger);
   const workspaceEntries = useComposerPathSearch({
     environmentId,
@@ -159,6 +169,7 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
+        ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           environmentId,

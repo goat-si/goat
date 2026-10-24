@@ -1,5 +1,6 @@
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import type { ComposerPathSearchTarget } from "@goat/client-runtime/state/threads";
+import type { ComposerCapabilityItem } from "@goat/client-runtime/composerCapabilityItems";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -15,7 +16,9 @@ import {
 import {
   BlocksIcon,
   FolderIcon,
+  GlobeIcon,
   MessagesSquareIcon,
+  MonitorIcon,
   PackageIcon,
   SettingsIcon,
   UserRoundIcon,
@@ -77,7 +80,8 @@ export type ComposerCommandItem =
       thread: ScopedThreadRef;
       label: string;
       description: string;
-    };
+    }
+  | ComposerCapabilityItem;
 
 export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   listId: string;
@@ -174,13 +178,16 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     props.triggerKind === "slash-command" && props.item.type === "skill" ? props.item.skill : null;
   const pullRequestPresentation =
     props.item.type === "pull-request" ? resolvePullRequestState(props.item.pullRequest) : null;
+  const unavailableReason = props.item.type === "capability" ? props.item.unavailableReason : null;
 
   return (
     <CommandItem
       render={<div id={props.optionId} />}
       aria-selected={props.isActive}
+      aria-description={unavailableReason ?? undefined}
       value={props.item.id}
       data-composer-item-id={props.item.id}
+      data-unavailable={unavailableReason === null ? undefined : "true"}
       active={props.isActive}
       onMouseMove={() => {
         if (!props.isActive) props.onHighlight(props.item.id);
@@ -202,6 +209,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       {props.item.type === "thread" ? (
         <MessagesSquareIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
       ) : null}
+      {props.item.type === "capability" ? (
+        props.item.capability === "computer-use" ? (
+          <MonitorIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+        ) : (
+          <GlobeIcon aria-hidden="true" className="size-4 shrink-0 text-secondary-label" />
+        )
+      ) : null}
       {pullRequestPresentation ? (
         <pullRequestPresentation.Icon
           role="img"
@@ -210,7 +224,12 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
         />
       ) : null}
       <span className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium">
+        <span
+          className={cn(
+            "min-w-0 max-w-[45%] shrink-0 truncate font-sans text-xs font-medium",
+            unavailableReason !== null && "text-secondary-label",
+          )}
+        >
           {isSlashSkill ? (
             <>
               <span className="text-secondary-label">/skill:</span>
@@ -221,8 +240,13 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
           )}
         </span>
         <span className="min-w-0 flex-1 truncate text-left text-secondary-label text-xs">
-          {props.item.description}
+          {unavailableReason ?? props.item.description}
         </span>
+        {unavailableReason !== null ? (
+          <Badge className="ms-auto" variant="outline">
+            Set up
+          </Badge>
+        ) : null}
         {skillSourceKind ? (
           <SkillSourceBadge
             kind={skillSourceKind}
