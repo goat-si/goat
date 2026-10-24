@@ -198,20 +198,18 @@ export const make = Effect.gen(function* () {
       const listed = (directory: string) =>
         entries.some((entry) => sameWindowsPath(entry, directory));
       if (owned !== undefined && !sameWindowsPath(owned, binDirectory) && listed(owned)) {
-        // The other channel's folder takes this one's place, so `goat` keeps its PATH position
-        // instead of resolving to the other channel's launcher listed first.
-        const next: Array<string> = [];
-        for (const entry of entries) {
-          const value = sameWindowsPath(entry, owned) ? binDirectory : entry;
-          if (
-            sameWindowsPath(value, binDirectory) &&
-            next.some((kept) => sameWindowsPath(kept, value))
-          )
-            continue;
-          next.push(value);
+        // Another channel's folder would resolve `goat` first. This folder takes its place, keeping
+        // its PATH position; one the user already listed stays theirs and unclaimed.
+        if (listed(binDirectory)) {
+          yield* writeUserPath(entries.filter((entry) => !sameWindowsPath(entry, owned)).join(";"));
+          yield* fs.remove(ownedPathMarker).pipe(Effect.ignore);
+        } else {
+          const next = entries.map((entry) =>
+            sameWindowsPath(entry, owned) ? binDirectory : entry,
+          );
+          yield* writeUserPath(next.join(";"));
+          yield* recordOwnedPathEntry;
         }
-        yield* writeUserPath(next.join(";"));
-        yield* recordOwnedPathEntry;
       } else if (!listed(binDirectory)) {
         yield* writeUserPath([...entries, binDirectory].join(";"));
         yield* recordOwnedPathEntry;

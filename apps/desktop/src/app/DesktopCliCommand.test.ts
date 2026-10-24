@@ -249,4 +249,30 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
         expect(registry.path).toBe("C:\\Tools;C:\\Later");
       }).pipe(Effect.scoped),
   );
+
+  it.effect(
+    "switching to Nightly on Windows leaves a Nightly folder the user added unclaimed",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped();
+        const baseDir = path.join(home, ".goat", "desktop");
+        const appVersion = "1.2.4-nightly.20261024.1";
+        const nightlyFolder = path.dirname(
+          DesktopCliShim.launcherPath(
+            environmentFor(path, { home, baseDir, platform: "win32", appVersion }),
+          ),
+        );
+        const { registry, spawner } = fakePowerShell("C:\\Tools");
+        yield* (yield* commandIn({ home, baseDir, platform: "win32" }, spawner)).install;
+        registry.path = `${registry.path};${nightlyFolder}`;
+
+        const nightly = yield* commandIn({ home, baseDir, platform: "win32", appVersion }, spawner);
+        yield* nightly.install;
+        expect(registry.path).toBe(`C:\\Tools;${nightlyFolder}`);
+        yield* nightly.uninstall;
+        expect(registry.path).toBe(`C:\\Tools;${nightlyFolder}`);
+      }).pipe(Effect.scoped),
+  );
 });
