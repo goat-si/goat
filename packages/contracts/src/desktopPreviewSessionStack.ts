@@ -43,3 +43,8 @@ export interface DesktopPreviewSessionStackBridge {
   request: (input: DesktopPreviewSessionStackRequest) => Promise<DesktopPreviewSessionStackState>;
   onState: (listener: (state: DesktopPreviewSessionStackState) => void) => () => void;
 }
+
+/** The desktop bridge's part for the stack; absent outside the desktop app. */
+export interface DesktopPreviewSessionStackHost {
+  readonly previewSessionStack?: DesktopPreviewSessionStackBridge;
+}
