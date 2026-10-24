@@ -5,6 +5,8 @@ import {
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
+import type { DriverWindowState } from "./computerUseObservation.ts";
+
 /**
  * What GOAT Computer Use.exe (apps/desktop/native/computer-use-helper-windows) knows that the
  * driver does not, turned into protocol terms: which window an epoch names, whether a password
@@ -31,6 +33,80 @@ const refuse = (reason: ComputerUseRefusalReason, message: string): ComputerUseR
   reason,
   message,
 });
+
+/**
+ * A Windows driver read in protocol terms. Cua Driver 0.37.0 reports a toggle control's UIA
+ * ToggleState as selected (On true, Off false, Indeterminate left out), and SelectionItem's
+ * IsSelected otherwise; on an element that toggles it is the checked state (#1286). What the
+ * driver leaves out, an Indeterminate toggle and expand/collapse state, comes from the helper's
+ * elementStates, joined by screen rectangle, role and name; an entry that matches more than one
+ * way is not used.
+ */
+export function windowsDriverRead(
+  read: DriverWindowState,
+  states?: WindowsElementStates,
+): DriverWindowState {
+  if (read.elements === undefined) return read;
+  const key = (role: string, label: string | undefined, frame: Frame) =>
+    [role, label ?? "", frame.x, frame.y, frame.w, frame.h].join("|");
+  const byKey = new Map<string, WindowsElementStates["elements"][number] | null>();
+  for (const entry of states?.elements ?? []) {
+    const at = key(entry.role, entry.label, entry.frame);
+    byKey.set(at, byKey.has(at) ? null : entry);
+  }
+  return {
+    ...read,
+    elements: read.elements.map(({ selected, ...element }) => {
+      const known = element.frame
+        ? byKey.get(key(element.role, element.label, element.frame))
+        : undefined;
+      const checked =
+        known?.toggle === "indeterminate"
+          ? "mixed"
+          : known?.toggle
+            ? known.toggle === "on"
+            : selected;
+      const toggles = element.actions?.includes("toggle") || known?.toggle !== undefined;
+      return {
+        ...element,
+        ...(toggles
+          ? checked === undefined
+            ? {}
+            : { checked }
+          : selected === undefined
+            ? {}
+            : { selected }),
+        // PartiallyExpanded counts as open; a leaf cannot expand, so it has no expanded at all.
+        ...(known?.expand === undefined || known.expand === "leaf"
+          ? {}
+          : { expanded: known.expand !== "collapsed" }),
+      };
+    }),
+  };
+}
+
+const Frame = Schema.Struct({
+  x: Schema.Number,
+  y: Schema.Number,
+  w: Schema.Number,
+  h: Schema.Number,
+});
+type Frame = typeof Frame.Type;
+
+/** The helper's answer to elementStates: what UI Automation says the driver did not. */
+export const WindowsElementStates = Schema.Struct({
+  elements: Schema.Array(
+    Schema.Struct({
+      frame: Frame,
+      role: Schema.String,
+      label: Schema.optionalKey(Schema.String),
+      toggle: Schema.optionalKey(Schema.Literals(["on", "off", "indeterminate"])),
+      expand: Schema.optionalKey(Schema.Literals(["collapsed", "expanded", "partial", "leaf"])),
+    }),
+  ),
+  truncated: Schema.Boolean,
+});
+export type WindowsElementStates = typeof WindowsElementStates.Type;
 
 /**
  * The epoch and private mode for observing or acting on a window, or why the helper refuses to
