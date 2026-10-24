@@ -240,7 +240,14 @@ it.effect(
         ...DEFAULT_SERVER_SETTINGS,
         goatclaw: { ...goatclaw, enabled: !goatclaw.enabled },
       };
-      const listing = { ...policy, agentToolListing: "core" as const };
+      // The listing that differs from the shipped default, so the change is a real one.
+      const listing = {
+        ...policy,
+        agentToolListing:
+          DEFAULT_SERVER_SETTINGS.agentToolListing === "core"
+            ? ("full" as const)
+            : ("core" as const),
+      };
       yield* Queue.offerAll(changes, [unchanged, policy, listing]);
       const relisted = yield* listingChanges(Option.some(settings)).pipe(
         Stream.take(2),
