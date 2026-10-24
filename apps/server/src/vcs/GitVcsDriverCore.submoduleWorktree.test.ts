@@ -90,12 +90,15 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
       Effect.map((contents) => contents.trim().split("\n")),
       Effect.orElseSucceed(() => []),
     );
-  const createWorktree = Effect.fn("test.createWorktree")(function* (name: string) {
+  const createWorktree = Effect.fn("test.createWorktree")(function* (
+    name: string,
+    relative = false,
+  ) {
     const worktreePath = path.join(root, name);
     yield* driver.createWorktree({
       cwd: checkout,
       // Git resolves a relative destination against the checkout.
-      path: path.relative(checkout, worktreePath),
+      path: relative ? path.relative(checkout, worktreePath) : worktreePath,
       refName: head,
       newRefName: `feature/${name}`,
     });
@@ -140,7 +143,7 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         const configBefore = yield* repo.readConfig();
         assert.isTrue(Option.isNone(configBefore[1]));
 
-        const worktreePath = yield* repo.createWorktree(mode);
+        const worktreePath = yield* repo.createWorktree(mode, mode === "full");
 
         yield* assertCheckedOutInPlace(worktreePath, {
           gitDir: repo.gitDir,
