@@ -85,7 +85,7 @@ const apply = () => {
   for (const path of trackedFiles()) {
     const text = readText(path);
     if (text === undefined) continue;
-    const result = applyTextRules(path, text, textRules);
+    const result = applyTextRules(path, text, textRules, KEEP_RULES);
     if (result.text !== text) {
       NodeFS.writeFileSync(NodePath.join(root, path), result.text);
       changedFiles += 1;
