@@ -136,6 +136,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * replacement can land in between.
    */
   readonly manifestStamp?: () => string | undefined;
+  /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
+  readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -606,13 +608,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* options.leaseUpdates.pipe(
     Stream.runForEach((update) =>
       lifecycle.withPermits(1)(
-        update.state !== "ended" && update.controlId !== options.controlId
+        (update.state !== "ended" && update.controlId !== options.controlId
           ? end("lost")
           : update.state === "active"
             ? activate(update)
             : update.state === "paused"
               ? pause(update.reason)
-              : end(update.reason === "unauthorized" ? "lost" : update.reason),
+              : end(update.reason === "unauthorized" ? "lost" : update.reason)
+        ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
       ),
     ),
     Effect.catchCause(() => Effect.void),

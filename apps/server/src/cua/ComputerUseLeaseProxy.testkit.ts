@@ -76,6 +76,8 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const taken = yield* Queue.unbounded<string>();
+  const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const proxy = yield* runLeaseProxy({
@@ -97,7 +99,11 @@ export const harness = Effect.fn(function* (
             Queue.offer(agentCalls, report.state + " " + report.call),
         }
       : {}),
-    leaseUpdates: Stream.fromQueue(updates),
+    // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
+    leaseUpdates: Stream.fromQueue(updates).pipe(
+      Stream.tap((update) => Queue.offer(taken, update.state)),
+    ),
+    onLeaseUpdateApplied: (update) => Queue.offer(applied, update.state).pipe(Effect.asVoid),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
         toDriver: yield* Queue.unbounded<string>(),
@@ -181,6 +187,11 @@ export const harness = Effect.fn(function* (
     killed: Effect.suspend(() => Deferred.await(first.killed)),
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
+    /** The state of the next lease update the proxy pulled, before acting on it. */
+    taken: Queue.take(taken),
+    /** The state of the next lease update the proxy finished applying. */
+    applied: Queue.take(applied),
+    appliedQueued: Queue.size(applied),
     /** Driver children started and not killed. */
     liveDrivers: Effect.suspend(() =>
       Effect.forEach(drivers, (driver) => Deferred.isDone(driver.killed)).pipe(

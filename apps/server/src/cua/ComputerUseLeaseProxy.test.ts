@@ -679,11 +679,17 @@ describe("ComputerUseLeaseProxy", () => {
         const forwarded = yield* h
           .send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
           .pipe(Effect.forkChild);
+        assert.equal(yield* h.taken, "active");
+        assert.equal(yield* h.applied, "active");
         // The refresh is stopping the first child; the person takes the screen and hands it back.
         yield* h.killed;
         yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        // The proxy has the pause, but waits for the refresh to finish before acting on it.
+        assert.equal(yield* h.taken, "paused");
+        assert.equal(yield* h.appliedQueued, 0);
         yield* h.push(active());
         yield* Deferred.succeed(gate, undefined);
+        assert.equal(yield* h.applied, "paused");
         yield* Fiber.join(forwarded);
         const answer = yield* h.nextToProvider;
         assert.deepInclude((answer.result as Record<string, unknown>).structuredContent as object, {
