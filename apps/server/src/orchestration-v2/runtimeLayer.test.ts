@@ -3869,6 +3869,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       let remainingStatus: "pending" | "success" = "pending";
       const host = Layer.mergeAll(
         NodeServices.layer,
+        ServerSettings.layerTest(),
         Layer.mock(PullRequestService.PullRequestService)({
           detail: () =>
             Effect.sync(() => ({

@@ -42,21 +42,6 @@ const minimalDesktopFlags = (baseDir: string) => ({
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
 
-const minimalDesktopFlags = (baseDir: string) => ({
-  mode: Option.some("desktop" as const),
-  port: Option.some(4888),
-  host: Option.none<string>(),
-  baseDir: Option.some(baseDir),
-  cwd: Option.none<string>(),
-  devUrl: Option.none<URL>(),
-  noBrowser: Option.none<boolean>(),
-  bootstrapFd: Option.none<number>(),
-  autoBootstrapProjectFromCwd: Option.none<boolean>(),
-  logWebSocketEvents: Option.none<boolean>(),
-  tailscaleServeEnabled: Option.none<boolean>(),
-  tailscaleServePort: Option.none<number>(),
-});
-
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -566,7 +551,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-config-otlp-settings-" });
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "goat-cli-config-otlp-settings-",
+      });
       const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(

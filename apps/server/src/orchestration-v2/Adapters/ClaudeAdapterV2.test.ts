@@ -3266,12 +3266,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           assert.equal(parentResult?.behavior, "allow");
           if (parentResult?.behavior === "allow")
             assert.equal(parentResult.toolUseID, "parent-command");
-        }).pipe(
-          Effect.scoped,
-          Effect.provide(
-            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-          ),
-        ),
+        }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
     );
 
     it.effect("still captures ExitPlanMode when Plan approvals are never allowed", () =>
