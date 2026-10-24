@@ -132,6 +132,11 @@ it.effect("a blocked turn names only the grants still missing, and leaves once a
       // Every grant is back while the turn still runs: the preview has nothing to show.
       yield* Ref.set(accepted, Option.some(report("granted", "granted")));
       assert.deepEqual(yield* leases.blockedTurns, []);
+      // A block on GOAT itself is not the helper's: the helper's grants say nothing about it.
+      const app = ThreadId.make("thread-blocked-app");
+      const appBlock = { ...block, holder: "app" } as const;
+      yield* leases.blocked(app, appBlock);
+      assert.deepEqual(yield* leases.blockedTurns, [{ threadId: app, block: appBlock }]);
     }).pipe(
       Effect.provide(
         ComputerUseLeases.layer.pipe(
