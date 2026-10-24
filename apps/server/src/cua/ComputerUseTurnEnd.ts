@@ -15,7 +15,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
-const OPEN_RUN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
+const OPEN = new Set(["preparing", "queued", "starting", "running", "waiting", "pending"]);
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -25,7 +25,9 @@ export const layer = Layer.effectDiscard(
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* forkParked(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
-        event.type === "run.updated" && !OPEN_RUN.has(event.payload.status)
+        // A run's end, or a native subagent's turn that outlived it.
+        (event.type === "run.updated" || event.type === "provider-turn.updated") &&
+        !OPEN.has(event.payload.status)
           ? leases.value.turnEnded(event.threadId).pipe(
               Effect.catch((cause) =>
                 Effect.logWarning("computer use control left to expire", {

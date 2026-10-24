@@ -121,6 +121,32 @@ layer("ComputerUseLeases controls", (it) => {
       }),
   );
 
+  it.effect(
+    "keeps a control live while a native subagent still runs after its parent run failed",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const parent = ThreadId.make("thread-parent");
+        const control = yield* leases.control(parent, Option.none());
+        yield* run(parent, "run-parent-1", 1, "failed");
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+        INSERT INTO orchestration_v2_projection_provider_turns
+          (provider_turn_id, thread_id, provider_thread_id, node_id, ordinal, status, payload_json)
+        VALUES ('turn-child', ${parent}, 'native-child', 'node-child', 1, 'running', '{}')
+      `;
+        assert.isFalse(yield* leases.turnEnded(parent));
+        const listed = (yield* leases.sessions).find(
+          (entry) => entry.control.controlId === control.controlId,
+        );
+        assert.isUndefined(listed?.control.idle);
+
+        yield* sql`UPDATE orchestration_v2_projection_provider_turns SET status = 'completed' WHERE provider_turn_id = 'turn-child'`;
+        assert.isTrue(yield* leases.turnEnded(parent));
+      }),
+  );
+
   it.effect("ends every control when computer use is turned off", () =>
     Effect.gen(function* () {
       yield* runMigrations();

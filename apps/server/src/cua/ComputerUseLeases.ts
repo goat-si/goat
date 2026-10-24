@@ -492,10 +492,14 @@ const make = Effect.gen(function* () {
     turnEnded: Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId) {
       const before = controls.get(threadId);
       if (before === undefined || before.ended !== undefined) return false;
+      // A native subagent keeps working after a failed parent run, through the same control.
       const open = yield* sql<{ readonly one: number }>`
         SELECT 1 AS one FROM orchestration_v2_projection_runs
         WHERE thread_id = ${threadId}
           AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+        UNION ALL
+        SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
+        WHERE thread_id = ${threadId} AND status IN ('pending', 'running')
         LIMIT 1
       `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
       if (open.length > 0) return false;
