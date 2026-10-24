@@ -144,16 +144,25 @@ describe("computer use skill against what agents receive today", () => {
       "max_elements",
       "max_depth",
       "element_token",
+      // A screenshot-only read keeps the snapshot's tokens; a tree read retires them.
+      "include_accessibility_tree: false",
     ])
       expect(codeSpans, argument).toContain(argument);
-    expect(guidance).toMatch(/tree read of a window issues a new snapshot id and retires/);
-    expect(guidance).toMatch(/screenshot-only read .* keeps them/);
   });
 
-  it("waits on an expected outcome with verify_state and never promises a wait for absence", () => {
-    // verify_state refuses element exists:false: an incomplete walk cannot prove absence.
-    expect(codeSpans).toContain("verify_state");
-    expect(guidance).toMatch(/cannot wait for something to disappear/);
+  it("waits with verify_state for a closed window but never for an element to disappear", () => {
+    // The driver refuses element exists:false (an incomplete walk cannot prove absence) and
+    // accepts window exists:false.
+    const line = guidance.split("\n").find((entry) => entry.includes("`verify_state`")) ?? "";
+    expect(line).toMatch(/element[^.]*disappear/);
+    expect(line).toMatch(/window[^.]*gone/);
+  });
+
+  it("warns that a newline or tab in typed text presses a key", () => {
+    // The driver types a newline as Return and a tab as Tab; a draft can be sent by accident.
+    const line = guidance.split("\n").find((entry) => entry.startsWith("- `type_text`")) ?? "";
+    expect(line).toMatch(/newline[^.]*Return/);
+    expect(line).toMatch(/tab[^.]*Tab/);
   });
 
   it("teaches no tool an approved-app turn refuses", () => {
