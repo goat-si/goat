@@ -66,7 +66,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     enabled: options.enabled ?? false,
     // The settings stream echoes each saved value right away unless a test holds it back.
     echo: true,
-    refresh: () => {},
+    stream: new EventTarget(),
     localMac: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
@@ -76,7 +76,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
         const value = patch.enableCua;
         if (value !== undefined && f.echo) {
           f.enabled = value;
-          queueMicrotask(f.refresh);
+          queueMicrotask(() => f.stream.dispatchEvent(new Event("echo")));
         }
         return null as string | null;
       },
@@ -101,7 +101,9 @@ type Fixture = ReturnType<typeof setup>;
 function Harness({ f }: { f: Fixture }) {
   const [, setEchoes] = useState(0);
   useEffect(() => {
-    f.refresh = () => setEchoes((count) => count + 1);
+    const onEcho = () => setEchoes((count) => count + 1);
+    f.stream.addEventListener("echo", onEcho);
+    return () => f.stream.removeEventListener("echo", onEcho);
   }, [f]);
   return (
     <ComputerUsePanel
@@ -434,24 +436,39 @@ it("a System Settings pane that cannot open says so and keeps the Open button", 
   await open.click();
   expect(f.openGuide).toHaveBeenCalledTimes(2);
 });
-it("On right after Off is saved only once the Off has landed, so its echo cannot cancel the setup", async () => {
+it("an older Off echo after both saves answered never cancels the newer setup", async () => {
   const f = setup({ enabled: true });
   f.echo = false;
-  const off = deferred<string | null>();
   await using screen = await render(panel(f));
-  f.save.mockImplementationOnce(() => off.promise);
   await clickSwitch("Computer use");
   await clickSwitch("Computer use");
-  await act(() => off.resolve(null));
-  // Both answers could beat the stream; the On save waits for the Off echo instead.
-  expect(f.save).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(f.save).toHaveBeenCalledTimes(2));
+  expect(f.save.mock.calls.map(([patch]) => patch)).toEqual([
+    { enableCua: false },
+    { enableCua: true },
+  ]);
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  // The stream catches up late: first the Off, then the On.
   f.enabled = false;
   await screen.rerender(panel(f));
-  await vi.waitFor(() => expect(f.save).toHaveBeenLastCalledWith({ enableCua: true }));
-  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
-  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
   f.enabled = true;
   await screen.rerender(panel(f));
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
   await expect.element(screen.getByRole("switch", { name: "Computer use" })).toBeChecked();
-  expect(statusText()).toMatch(/^Ready/);
+  expect(f.verify).toHaveBeenCalledOnce();
+});
+
+it("an Off chosen while On is still saving is saved even after the panel closes", async () => {
+  const f = setup();
+  f.echo = false;
+  const firstSave = deferred<string | null>();
+  f.save.mockImplementationOnce(() => firstSave.promise);
+  await using screen = await render(panel(f));
+  await clickSwitch("Computer use");
+  await clickSwitch("Computer use");
+  expect(f.save).toHaveBeenCalledOnce();
+  await screen.unmount();
+  await act(() => firstSave.resolve(null));
+  await vi.waitFor(() => expect(f.save).toHaveBeenLastCalledWith({ enableCua: false }));
+  expect(f.verify).not.toHaveBeenCalled();
 });

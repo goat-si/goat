@@ -61,52 +61,47 @@ type EnableChoiceResult =
   | { readonly kind: "superseded" };
 
 /**
- * The person's latest On/Off choice, shown until it lands: its save succeeded and the settings
- * stream shows its value. Settings carry no generation, so the echo of an older save looks the
- * same as the newer one. Choices therefore go out one at a time, each after the previous one
- * landed, so no older echo can follow a newer save; a choice replaced while waiting is skipped.
+ * The person's latest On/Off choice. Saves go out in click order, each after the previous one
+ * answered, on a queue that outlives the panel, so the host always ends on the last choice. The
+ * switch shows that choice until its save answers; after that the settings stream wins as soon
+ * as it shows the choice or moves at all. Settings carry no generation, so an older echo can
+ * still arrive afterwards; it can flicker the switch but never cancels setup.
  */
 function useEnableChoice(enabled: boolean, save: (value: boolean) => Promise<string | null>) {
-  const [desired, setDesired] = useState<{ readonly id: number; readonly value: boolean } | null>(
-    null,
-  );
-  const [saves, setSaves] = useState(0);
+  const [desired, setDesired] = useState<{
+    readonly id: number;
+    readonly value: boolean;
+    /** What the stream showed when the save answered; null while the save is out. */
+    readonly streamedAtSave: boolean | null;
+  } | null>(null);
   const latest = useRef(0);
-  const queue = useRef<Promise<void>>(Promise.resolve());
-  const landing = useRef<{ readonly value: boolean; readonly land: () => void } | null>(null);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const streamed = useRef(enabled);
   useEffect(() => {
-    const current = landing.current;
-    if (current === null || current.value !== enabled) return;
-    landing.current = null;
-    current.land();
-  }, [enabled, saves]);
+    streamed.current = enabled;
+  }, [enabled]);
+  if (
+    desired !== null &&
+    desired.streamedAtSave !== null &&
+    (desired.value === enabled || desired.streamedAtSave !== enabled)
+  )
+    setDesired(null);
 
   const choose = async (value: boolean): Promise<EnableChoiceResult> => {
     latest.current += 1;
     const id = latest.current;
-    setDesired({ id, value });
-    let release = () => {};
-    const released = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const previous = queue.current;
-    queue.current = released;
-    const land = () => {
-      release();
-      setDesired((current) => (current?.id === id ? null : current));
-    };
-    await previous;
-    if (id !== latest.current) {
-      release();
-      return { kind: "superseded" };
-    }
-    const failure = await save(value).catch(() => SAVE_FAILED);
+    setDesired({ id, value, streamedAtSave: null });
+    const saved = queue.current.then(() => save(value)).catch(() => SAVE_FAILED);
+    queue.current = saved;
+    const failure = await saved;
+    if (id !== latest.current) return { kind: "superseded" };
     if (failure !== null) {
-      land();
-      return { kind: "failed", message: failure, latest: id === latest.current };
+      setDesired(null);
+      return { kind: "failed", message: failure, latest: true };
     }
-    landing.current = { value, land };
-    setSaves((count) => count + 1);
+    setDesired((current) =>
+      current?.id === id ? { ...current, streamedAtSave: streamed.current } : current,
+    );
     return { kind: "saved" };
   };
 
@@ -157,17 +152,11 @@ export function useComputerUseAutoSetup({
   const missing = holder ? (CUA_PERMISSIONS.find((id) => !cuaGranted(holder, id)) ?? null) : null;
 
   if (opened !== null && holder !== null && cuaGranted(holder, opened)) setOpened(null);
-  // Turned off elsewhere: whatever this client was doing no longer applies. A failure stays
-  // until Retry or the switch, so the person can read it.
-  if (!on && phase.step !== "idle" && phase.step !== "failed") setPhase({ step: "idle" });
   // A grant revoked in System Settings, or one still missing when the page opens, asks again.
   if (on && missing !== null && (phase.step === "idle" || phase.step === "ready"))
     setPhase({ step: "granting", afterRead: polled.reads });
   // Only a new check restores Ready once the host has reported against it.
   if (phase.step === "ready" && hostRejects) setPhase({ step: "idle" });
-  useEffect(() => {
-    if (!on) run.current += 1;
-  }, [on]);
   useEffect(
     () => () => {
       run.current += 1;

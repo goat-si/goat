@@ -29,7 +29,10 @@ import {
 
 export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-advanced-open";
 // Settings search jumps that land on a row inside Advanced.
-const ADVANCED_TARGETS: ReadonlyArray<string> = ["computer-use-skill", "computer-use-full-access"];
+const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
+  "computer-use-skill",
+  "computer-use-full-access",
+]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
@@ -93,13 +96,14 @@ function setupLine(input: {
 }): StatusLine | null {
   const { setup, status, error, localMac } = input;
   const { phase } = setup;
-  if (setup.busy) return { text: "Setting up…" };
   if (phase.step === "failed")
     return { text: phase.message, error: true, retry: true, relaunch: phase.relaunch };
+  // Off, here or elsewhere, outranks whatever setup this client still has in flight.
   if (!setup.on) {
     const text = computerUseStatusText({ enabled: false, status, error });
     return text ? { text } : null;
   }
+  if (setup.busy) return { text: "Setting up…" };
   if (localMac && setup.unusable) return { text: setup.unusable, error: true, retry: true };
   if (localMac && setup.missing)
     return {
@@ -148,7 +152,7 @@ function useAdvancedOpen() {
   const [handled, setHandled] = useState<string | null>(null);
   if (
     searchTargetId !== null &&
-    ADVANCED_TARGETS.includes(searchTargetId) &&
+    ADVANCED_TARGETS.has(searchTargetId) &&
     handled !== searchTargetId
   ) {
     setHandled(searchTargetId);
