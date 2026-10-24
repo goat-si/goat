@@ -9,7 +9,8 @@ namespace Goat.ComputerUse
     /// thread. While a reader is slow, state frames coalesce instead of piling up: an unsent
     /// frame with the same key (one target's private mode under one watch, or one input source)
     /// takes the newer content in place, so what waits is bounded by the watched targets and
-    /// the requests the host sent. Answers never coalesce and never drop.
+    /// the requests the host sent. Answers never coalesce and never drop, and each answer is a
+    /// barrier: nothing queued after it merges into a frame queued before it.
     /// </summary>
     internal sealed class SignalOutbox
     {
@@ -49,6 +50,7 @@ namespace Goat.ComputerUse
         {
             lock (gate)
             {
+                if (coalesceKey == null) unsent.Clear();
                 LinkedListNode<Entry> waiting;
                 if (coalesceKey != null && unsent.TryGetValue(coalesceKey, out waiting))
                 {

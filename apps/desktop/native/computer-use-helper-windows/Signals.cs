@@ -92,13 +92,16 @@ namespace Goat.ComputerUse
         readonly Dictionary<string, bool> active = new Dictionary<string, bool>();
         AutomationFocusChangedEventHandler focusHandler;
         HookWorker hooks;
+        /// <summary>While watching, checks that each private target's window still exists.</summary>
+        Timer liveness;
+        int livenessPending;
         HookProc keyboardProc, mouseProc;
 
-        // Hook callbacks read these under attribution.
+        // Hook callbacks read and write these under attribution.
         string inputWatch;
-        int focusPending;
         long lastKeyboard, lastPointer;
         int sawKeyboard, sawPointer;
+        int focusPending;
 
         public Signals(Action<Dictionary<string, object>> emit)
         {
@@ -163,6 +166,8 @@ namespace Goat.ComputerUse
                 targets = nextTargets;
                 active.Clear();
                 inputWatch = nextWatchId;
+                sawKeyboard = 0;
+                sawPointer = 0;
                 outbox.Add(reply, null);
             }
             Reconcile(true);
@@ -204,16 +209,51 @@ namespace Goat.ComputerUse
             bool known = WindowsFacts.Focus(out pid, out password);
             foreach (Target target in targets)
             {
-                int owner;
-                IntPtr window = new IntPtr(target.WindowId);
-                bool exists = NativeMethods.IsWindow(window) &&
-                    NativeMethods.GetWindowThreadProcessId(window, out owner) != 0 && owner == target.Pid;
-                bool now = exists && (!known || (password && pid == target.Pid));
+                bool now = WindowAlive(target) && (!known || (password && pid == target.Pid));
                 bool was;
                 if (!all && active.TryGetValue(target.Key, out was) && was == now) continue;
                 active[target.Key] = now;
                 outbox.Add(Frame(watchId, PrivateMode(target, now)), PrivateKey(watchId, target));
             }
+        }
+
+        /// <summary>
+        /// A watched window can close without focus moving (another window of the same process
+        /// keeps a password field focused), so window liveness is checked on its own clock.
+        /// Coalesced, and cheap: no UI Automation, only the window handle and its owner.
+        /// </summary>
+        void PostLivenessCheck()
+        {
+            if (Interlocked.Exchange(ref livenessPending, 1) == 1) return;
+            try
+            {
+                inbox.Add(delegate
+                {
+                    Interlocked.Exchange(ref livenessPending, 0);
+                    ClearGoneTargets();
+                });
+            }
+            catch (InvalidOperationException) { }
+        }
+
+        void ClearGoneTargets()
+        {
+            if (watchId == null) return;
+            foreach (Target target in targets)
+            {
+                bool was;
+                if (!active.TryGetValue(target.Key, out was) || !was || WindowAlive(target)) continue;
+                active[target.Key] = false;
+                outbox.Add(Frame(watchId, PrivateMode(target, false)), PrivateKey(watchId, target));
+            }
+        }
+
+        static bool WindowAlive(Target target)
+        {
+            int owner;
+            IntPtr window = new IntPtr(target.WindowId);
+            return NativeMethods.IsWindow(window) &&
+                NativeMethods.GetWindowThreadProcessId(window, out owner) != 0 && owner == target.Pid;
         }
 
         void OnFocusChanged(object sender, AutomationFocusChangedEventArgs args)
@@ -235,6 +275,7 @@ namespace Goat.ComputerUse
         {
             string failure = StartHooks();
             if (failure != null) return failure;
+            if (liveness == null) liveness = new Timer(delegate { PostLivenessCheck(); }, null, 500, 500);
             if (focusHandler == null)
             {
                 focusHandler = OnFocusChanged;
@@ -245,6 +286,11 @@ namespace Goat.ComputerUse
 
         void StopListening()
         {
+            if (liveness != null)
+            {
+                liveness.Dispose();
+                liveness = null;
+            }
             if (focusHandler != null)
             {
                 Automation.RemoveAutomationFocusChangedEventHandler(focusHandler);
@@ -348,14 +394,16 @@ namespace Goat.ComputerUse
         void Human(string source, ref long last, ref int seen)
         {
             long now = Stopwatch.GetTimestamp();
-            if (Interlocked.Exchange(ref seen, 1) == 1 && now - Interlocked.Read(ref last) < HumanInputInterval) return;
-            Interlocked.Exchange(ref last, now);
-            var signal = new Dictionary<string, object>();
-            signal["type"] = "humanInput";
-            signal["source"] = source;
             lock (attribution)
             {
+                // Only input during a watch spends that watch's throttle.
                 if (inputWatch == null) return;
+                if (seen == 1 && now - last < HumanInputInterval) return;
+                seen = 1;
+                last = now;
+                var signal = new Dictionary<string, object>();
+                signal["type"] = "humanInput";
+                signal["source"] = source;
                 outbox.Add(Frame(inputWatch, signal), inputWatch + "|human|" + source);
             }
         }
