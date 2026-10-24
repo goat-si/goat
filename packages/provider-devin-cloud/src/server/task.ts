@@ -475,17 +475,19 @@ export const makeTaskObserver = Effect.fn("DevinCloud.makeTaskObserver")(functio
           });
           // startTurn fails next, and the base stops ingesting before this thread's event lands.
           // Without a durable commit it would finalize the stale running task as unknown.
-          if (input?.commitCloudTask && thread?.cloudTask) {
-            yield* input
-              .commitCloudTask(thread.cloudTask, {
-                nativeThreadRef: thread.nativeThreadRef,
-                nativeConversationHeadRef: thread.nativeConversationHeadRef,
+          const turn = input;
+          const rejected = thread;
+          if (turn?.commitCloudTask && rejected?.cloudTask) {
+            yield* turn
+              .commitCloudTask(rejected.cloudTask, {
+                nativeThreadRef: rejected.nativeThreadRef,
+                nativeConversationHeadRef: rejected.nativeConversationHeadRef,
               })
               .pipe(
                 Effect.catch(() =>
                   Effect.logWarning("Devin cloud source rejection could not be persisted", {
-                    runId: input!.runId,
-                    providerThreadId: thread!.id,
+                    runId: turn.runId,
+                    providerThreadId: rejected.id,
                   }),
                 ),
               );
