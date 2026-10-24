@@ -33,7 +33,14 @@ describe("Linux computer use helper conformance", () => {
     expect(Object.keys(hello.capabilities.methods).toSorted()).toEqual(
       [...COMPUTER_USE_METHODS].toSorted(),
     );
-    expect(hello.capabilities).toMatchObject({ platform: "linux", backgroundDelivery: true });
+    // watch and unwatch are served, and the signals they arm are named (#1235); the stopgap
+    // that marked them unsupported (#1294) is replaced by the real implementation.
+    expect(hello.capabilities).toMatchObject({
+      platform: "linux",
+      backgroundDelivery: true,
+      methods: { watch: "supported", unwatch: "supported" },
+      signals: { privateMode: "supported", humanInput: "supported" },
+    });
     await helper.close();
   });
 
