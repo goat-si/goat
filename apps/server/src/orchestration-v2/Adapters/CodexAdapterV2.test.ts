@@ -4732,9 +4732,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         yield* harness.awaitSleep(30_000);
         yield* TestClock.adjust("30 seconds");
         yield* harness.consumerBarrier;
-        // The first child turn finished inside the root turn; only the resume wakes it.
-        assert.lengthOf(harness.continuationRequests, 1);
-        assert.include(harness.continuationRequests[0]?.detail, "CODEX_RESUME_DONE");
+        assert.lengthOf(harness.continuationRequests, 0);
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
 
@@ -6374,23 +6372,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: RESUME_PROMPT,
           }),
         );
-        yield* harness.awaitTerminal(1);
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
         assert.equal(harness.terminalEvents()[0]?.status, "completed");
         assert.lengthOf(harness.continuationRequests, 0);
 
         yield* TestClock.adjust("60 seconds");
-        yield* harness.until(
+        yield* harness.awaitUntil(
           () => harness.subagentUpdates().at(-1)?.subagent.result === "NATIVE_CHILD_16900_DONE",
+          "replay condition",
         );
         assert.equal(harness.subagentUpdates().at(-1)?.subagent.status, "completed");
         assert.lengthOf(harness.continuationRequests, 1);
         assert.include(harness.continuationRequests[0]?.detail, "NATIVE_CHILD_16900_DONE");
         assert.equal(harness.continuationRequests[0]?.delivery, "message_text");
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -6460,20 +6455,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: RESUME_PROMPT,
           }),
         );
-        yield* harness.awaitTerminal(1);
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
         yield* TestClock.adjust("60 seconds");
-        yield* harness.until(() => harness.continuationRequests.length > 0);
+        yield* harness.awaitUntil(
+          () => harness.continuationRequests.length > 0,
+          "replay condition",
+        );
         const subagent = harness.subagentUpdates().at(-1)?.subagent;
         assert.equal(subagent?.prompt, "");
         assert.equal(
           harness.continuationRequests[0]?.detail,
           `Subagent completed: ${subagent?.id}\n\nResult:\nUNPROMPTED_CHILD_DONE`,
         );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -6571,23 +6565,24 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             text: RESUME_PROMPT,
           }),
         );
-        yield* harness.awaitTerminal(1);
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
 
         yield* TestClock.adjust("30 seconds");
-        yield* harness.until(() =>
-          harness.subagentUpdates().some((event) => event.subagent.result === "GRANDCHILD_DONE"),
+        yield* harness.awaitUntil(
+          () =>
+            harness.subagentUpdates().some((event) => event.subagent.result === "GRANDCHILD_DONE"),
+          "replay condition",
         );
         assert.lengthOf(harness.continuationRequests, 0);
 
         yield* TestClock.adjust("30 seconds");
-        yield* harness.until(() => harness.continuationRequests.length > 0);
+        yield* harness.awaitUntil(
+          () => harness.continuationRequests.length > 0,
+          "replay condition",
+        );
         assert.lengthOf(harness.continuationRequests, 1);
         assert.include(harness.continuationRequests[0]?.detail, "CHILD_AFTER_GRANDCHILD");
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -6656,16 +6651,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             };
           });
         yield* harness.runtime.startTurn(yield* turnInput(1, RESUME_PROMPT));
-        yield* harness.awaitTerminal(1);
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "turn 1 terminal");
         yield* harness.runtime.startTurn(yield* turnInput(2, secondPrompt));
-        yield* harness.awaitTerminal(2);
+        yield* harness.awaitUntil(() => harness.terminalEvents().length >= 2, "turn 2 terminal");
         assert.equal(harness.subagentUpdates().at(-1)?.subagent.result, "CHILD_DURING_SECOND_TURN");
         assert.lengthOf(harness.continuationRequests, 0);
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -6911,7 +6902,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         }, "resumed subagent completion");
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
         assert.lengthOf(harness.terminalEvents(), 1);
-        assert.lengthOf(harness.continuationRequests, 0);
+        // The first child turn finished inside the root turn; only the resume wakes it.
+        assert.lengthOf(harness.continuationRequests, 1);
+        assert.include(harness.continuationRequests[0]?.detail, "CODEX_RESUME_DONE");
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

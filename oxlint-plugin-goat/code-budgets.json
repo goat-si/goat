@@ -281,7 +281,7 @@
     "nonNull": 12
   },
   "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts": { "lines": 10960, "nonNull": 4 },
-  "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts": { "lines": 9061 },
+  "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts": { "lines": 9054 },
   "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts": { "lines": 8615, "nonNull": 3 },
   "apps/server/src/orchestration-v2/Adapters/MuseAdapterV2.testkit.ts": { "nonNull": 3 },
   "apps/server/src/orchestration-v2/Adapters/OpenCode2AdapterV2.test.ts": { "lines": 4941 },
@@ -334,7 +334,7 @@
   "apps/server/src/orchestration-v2/assistantStreaming.ts": { "nonNull": 2 },
   "apps/server/src/orchestration-v2/legacy/LegacyV1Cutover.integration.test.ts": { "lines": 1031 },
   "apps/server/src/orchestration-v2/pullRequestWatch.ts": { "nonNull": 1 },
-  "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8353 },
+  "apps/server/src/orchestration-v2/runtimeLayer.test.ts": { "lines": 8355 },
   "apps/server/src/orchestration-v2/testkit/FakeCloudAdapter.ts": { "nonNull": 4 },
   "apps/server/src/orchestration-v2/testkit/ProviderReplayHarness.ts": { "nonNull": 1 },
   "apps/server/src/orchestration-v2/testkit/ProviderSwitch.integration.test.ts": { "lines": 2957 },

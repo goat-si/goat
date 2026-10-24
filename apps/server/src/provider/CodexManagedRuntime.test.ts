@@ -300,6 +300,7 @@ it.effect(
           ServerConfig.layerTest(process.cwd(), { prefix: "managed-home-reject-" }),
           Layer.mock(ServerSecretStore.ServerSecretStore)({}),
           Layer.mock(ServerEnvironment.ServerEnvironmentIdentity)({}),
+          Layer.mock(CodexManagedTokenBroker.CodexManagedTokenBroker)({}),
           Layer.succeed(
             HttpClient.HttpClient,
             HttpClient.make(() => Effect.die("No HTTP before managed route rejection")),
