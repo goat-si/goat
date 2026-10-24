@@ -32,6 +32,7 @@ import {
   type OrchestratorMcpThreadWatch,
   type OrchestratorMcpThreadWatchInput,
   type ThreadId,
+  type RuntimeMode,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -51,6 +52,7 @@ import { rearmAfterRetry, rearmAfterSend, watchKeyOf } from "./launchWatchRearm.
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
+import * as HostToolAuthorization from "./HostToolAuthorization.ts";
 import {
   assertLiveCaller,
   readCaller,
@@ -228,6 +230,8 @@ export interface HostThreadsMcpServiceShape {
       readonly requireReady?: true;
       /** Ask the host for a session that may answer approvals; see SshHostToolCall. */
       readonly approvals?: boolean;
+      /** Rechecked with the caller's existing authorization; may only narrow its ceiling. */
+      readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -250,6 +254,8 @@ export interface HostThreadsMcpServiceShape {
       readonly tool: string;
       readonly arguments: Readonly<Record<string, unknown>>;
       readonly approvals?: boolean;
+      /** Rechecked with the caller's existing authorization; may only narrow its ceiling. */
+      readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,
   ) => Effect.Effect<A & { readonly host: string }, OrchestratorMcpFailure>;
@@ -259,27 +265,6 @@ export class HostThreadsMcpService extends Context.Service<
   HostThreadsMcpService,
   HostThreadsMcpServiceShape
 >()("goat/mcp/HostThreadsMcpService") {}
-
-/**
- * The caller's current runtime mode, reloaded each time. Changing a thread on
- * another machine also needs default interaction mode: the remote session
- * carries only a runtime-mode ceiling, and the remote treats an outside client
- * as default, so it could not hold a plan-mode caller to plan mode.
- */
-const authorize = (writes: boolean) =>
-  readCaller().pipe(
-    Effect.tap(assertLiveCaller),
-    Effect.flatMap((caller) =>
-      writes && caller.limits.interactionMode !== "default"
-        ? Effect.fail(
-            failure(
-              "interaction_mode_escalation_denied",
-              `Changing a thread on another machine needs a caller in default interaction mode; this caller is in ${caller.limits.interactionMode} mode.`,
-            ),
-          )
-        : Effect.succeed(caller.limits.runtimeMode),
-    ),
-  );
 
 const make = Effect.gen(function* () {
   const local = yield* OrchestratorMcpService.OrchestratorMcpService;
@@ -365,7 +350,7 @@ const make = Effect.gen(function* () {
     ) =>
     (originLabel: string) =>
       Effect.gen(function* () {
-        yield* authorize(true).pipe(
+        yield* HostToolAuthorization.authorize(true).pipe(
           Effect.provideService(McpInvocationContext, scope),
           Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
         );
@@ -414,6 +399,7 @@ const make = Effect.gen(function* () {
       readonly timeoutMs?: number;
       readonly requireReady?: true;
       readonly approvals?: boolean;
+      readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
       /** Only goat_thread_send relays through the origin. */
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
     },
@@ -429,7 +415,7 @@ const make = Effect.gen(function* () {
           ...(input.requireReady === true ? { requireReady: true } : {}),
           ...(input.approvals === true ? { approvals: true } : {}),
         },
-        authorize(input.writes).pipe(
+        HostToolAuthorization.authorize(input.writes, input.authorize).pipe(
           Effect.provideService(McpInvocationContext, scope),
           Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
         ),
@@ -455,6 +441,7 @@ const make = Effect.gen(function* () {
       readonly timeoutMs?: number;
       readonly requireReady?: true;
       readonly approvals?: boolean;
+      readonly authorize?: Effect.Effect<RuntimeMode, OrchestratorMcpFailure>;
       readonly relay?: (originLabel: string) => Effect.Effect<unknown, OrchestratorMcpFailure>;
     },
     decode: (value: unknown) => Effect.Effect<A, E>,

@@ -100,6 +100,42 @@ export const ComputerUseLeaseTarget = Schema.Struct({
 });
 export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 
+/** Milliseconds since the Unix epoch on the host's clock, which the proxy and server share. */
+const EpochMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
+
+/**
+ * Proxy -> server, on the same route: a keyboard or pointer event at `at` that the lease
+ * proxy's helper saw while the control was live, outside the proxy's own input calls (#1235).
+ * The server drops it when another agent's input covers `at`, else every agent pauses. Only the
+ * kind of input, never what was typed or where.
+ */
+export const ComputerUseLeaseHumanInput = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource, at: EpochMillis }),
+});
+export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
+
+/**
+ * Proxy -> server: one of the proxy's calls that can post input started or ended at `at`, so a
+ * person's input reported by any agent's helper can be told apart from every agent's own.
+ */
+export const ComputerUseLeaseAgentInput = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  agentInput: Schema.Struct({
+    call: TrimmedNonEmptyString,
+    state: Schema.Literals(["start", "end"]),
+    at: EpochMillis,
+  }),
+});
+export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
+
+export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeaseTarget,
+  ComputerUseLeaseHumanInput,
+  ComputerUseLeaseAgentInput,
+]);
+export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
+
 /**
  * Why the desktop would not give agents a driver, in a form every surface can act on: the
  * preview tile, Settings and onboarding, the agent's own computer_use request, and the trace
