@@ -5,7 +5,7 @@ import {
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as DecisionService from "../goatclaw/DecisionService.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
@@ -149,7 +149,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
