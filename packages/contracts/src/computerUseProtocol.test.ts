@@ -254,6 +254,23 @@ describe("computer use readiness and reply images", () => {
     expect(computerUseReady(blocked)).toBe(false);
   });
 
+  it.each([
+    { name: "a PNG cut off inside its header", data: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAG" },
+    {
+      name: "a PNG whose IHDR has the wrong length",
+      data: "iVBORw0KGgoAAAAMSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC",
+    },
+    {
+      name: "a PNG whose IHDR checksum is wrong",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAACOZ0isAAAAD0lEQVR4nGNowAEYBlICABnRSAEtC4j6AAAAAElFTkSuQmCC",
+    },
+    { name: "a JPEG whose frame header is cut short", data: "/9j/wAARCAAGAAg=" },
+    { name: "a JPEG frame header of length zero", data: "/9j/wAAACAAGAAgDAAAAAAAAAAAA" },
+    { name: "a JPEG with a frame header after its end", data: "/9j/2f/AABEIAAYACAMBIgACEQEDEQE=" },
+  ])("refuses $name", ({ data }) => {
+    expect(computerUseImageInfo(data)).toBeUndefined();
+  });
+
   it("reads an image's real format and size from its bytes", () => {
     expect(computerUseImageInfo(PNG_8X6)).toEqual({ mimeType: "image/png", width: 8, height: 6 });
     expect(computerUseImageInfo(JPEG_8X6)).toEqual({ mimeType: "image/jpeg", width: 8, height: 6 });

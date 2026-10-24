@@ -528,9 +528,30 @@ export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
 
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+const crc32 = (binary: string, start: number, end: number) => {
+  let c = 0xffffffff;
+  for (let index = start; index < end; index++)
+    c = (CRC_TABLE[(c ^ binary.charCodeAt(index)) & 0xff] ?? 0) ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+/** Bit depths each PNG color type allows. */
+const PNG_DEPTHS: Readonly<Record<number, ReadonlyArray<number>>> = {
+  0: [1, 2, 4, 8, 16],
+  2: [8, 16],
+  3: [1, 2, 4, 8],
+  4: [8, 16],
+  6: [8, 16],
+};
+
 /**
- * The format and size an image's own bytes declare, read from the PNG header or the JPEG
- * start-of-frame segment; undefined for anything else, or bytes that are not one of those.
+ * The format and size an image's own bytes declare: a PNG's complete IHDR chunk (length, depth
+ * and color type, CRC), or a JPEG's start-of-frame segment reached through well-formed segments
+ * before any scan. Undefined for anything else or anything malformed.
  */
 export function computerUseImageInfo(data: string):
   | {
@@ -544,37 +565,48 @@ export function computerUseImageInfo(data: string):
   const binary = atob(data);
   const byte = (index: number) => binary.charCodeAt(index);
   const word = (index: number) => (byte(index) << 8) | byte(index + 1);
-  if (
-    binary.length >= 24 &&
-    binary.startsWith("\x89PNG\r\n\x1a\n") &&
-    binary.slice(12, 16) === "IHDR"
-  ) {
-    const width = (word(16) << 16) | word(18);
-    const height = (word(20) << 16) | word(22);
-    return width > 0 && height > 0 ? { mimeType: "image/png", width, height } : undefined;
+  const long = (index: number) => word(index) * 0x10000 + word(index + 2);
+
+  if (binary.startsWith("\x89PNG\r\n\x1a\n")) {
+    // Signature (8), length (4), "IHDR" (4), 13 bytes of data, CRC (4).
+    if (binary.length < 33 || long(8) !== 13 || binary.slice(12, 16) !== "IHDR") return undefined;
+    const width = long(16);
+    const height = long(20);
+    const depths = PNG_DEPTHS[byte(25)];
+    if (!depths?.includes(byte(24)) || long(29) !== crc32(binary, 12, 29)) return undefined;
+    return width > 0 && height > 0 && width < 2 ** 31 && height < 2 ** 31
+      ? { mimeType: "image/png", width, height }
+      : undefined;
   }
+
   if (byte(0) !== 0xff || byte(1) !== 0xd8) return undefined;
   let index = 2;
-  while (index + 3 < binary.length) {
+  while (index + 1 < binary.length) {
     if (byte(index) !== 0xff) return undefined;
     const marker = byte(index + 1);
-    // Fill bytes, and markers that carry no length.
     if (marker === 0xff) {
-      index += 1;
+      index += 1; // fill byte
       continue;
     }
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) {
+    // Restart markers and TEM carry no length; a second SOI, EOI or a scan before any frame is
+    // not a readable image.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
       index += 2;
       continue;
     }
+    if (marker === 0xd8 || marker === 0xd9 || marker === 0xda) return undefined;
+    if (index + 3 >= binary.length) return undefined;
+    const length = word(index + 2);
+    if (length < 2 || index + 2 + length > binary.length) return undefined;
     // Start of frame, except DHT (C4), JPG (C8) and DAC (CC).
     if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      if (index + 8 >= binary.length) return undefined;
+      const components = byte(index + 9);
+      if (length !== 8 + 3 * components || ![1, 3, 4].includes(components)) return undefined;
       const height = word(index + 5);
       const width = word(index + 7);
       return width > 0 && height > 0 ? { mimeType: "image/jpeg", width, height } : undefined;
     }
-    index += 2 + word(index + 2);
+    index += 2 + length;
   }
   return undefined;
 }
