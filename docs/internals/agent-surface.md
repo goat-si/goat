@@ -140,10 +140,8 @@ has no `clientRequestId`.
 
 ### Idempotency
 
-**Now.** Writes the registry marks `idempotency: "key"` (thread and SSH thread
-launch, provider add, update, link and remove, worktree remove, project delete,
-cloud machine create)
-reserve their key in `mcp_request_reservations` through
+**Now.** Writes the registry marks `idempotency: "key"` reserve their key in
+`mcp_request_reservations` through
 [ToolAdmission.ts](../../apps/server/src/mcp/ToolAdmission.ts). The key is taken
 where the declaration admits the write, after every caller check, so direct calls
 and `goat_call` share it and a replay passes the checks again. A handler that

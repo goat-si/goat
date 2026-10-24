@@ -1,3 +1,18 @@
+import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
+import * as HubMembership from "../hub/HubMembership.ts";
+import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
+import * as SshSetup from "../sshRemote/SshHostSetup.ts";
+import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import * as Environment from "../environment/ServerEnvironment.ts";
+import * as Guides from "../pullRequest/PullRequestReviewGuideService.ts";
+import * as Projects from "../project/ProjectService.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import {
+  catalog,
+  client as catalogClient,
+  dependencies as catalogDependencies,
+} from "./agentSurface.testkit.ts";
 import { expect, it } from "@effect/vitest";
 import {
   AuthProvidersManageScope,
@@ -10,6 +25,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   ProviderInstanceId,
+  ProjectId,
   ThreadId,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -47,8 +63,9 @@ class Probe extends Context.Service<
 
 // A keyed write (project.delete: idempotency "key", settings.write) whose outcome the test picks.
 const keyed = agentSurfaceRegistry["project.delete"];
-const routed = agentSurfaceRegistry["worktree.remove"];
-const probeTool = (name: typeof keyed.name | typeof routed.name) =>
+const routed = agentSurfaceRegistry["provider.update"];
+const nonRouted = agentSurfaceRegistry["ssh.runtime_update"];
+const probeTool = <const Name extends string>(name: Name) =>
   Tool.make(name, {
     parameters: Schema.Struct({
       projectId: Schema.String,
@@ -64,7 +81,11 @@ const probeTool = (name: typeof keyed.name | typeof routed.name) =>
     failureMode: "return",
     dependencies: [Probe],
   });
-const ProbeToolkit = Toolkit.make(probeTool(keyed.name), probeTool(routed.name));
+const ProbeToolkit = Toolkit.make(
+  probeTool(keyed.name),
+  probeTool(nonRouted.name),
+  probeTool(routed.name),
+);
 
 const outcomes: Readonly<Record<string, OrchestratorMcpFailure>> = {
   pressure: new OrchestratorMcpFailure({ code: "host_pressure", message: "busy" }),
@@ -79,21 +100,23 @@ const outcomes: Readonly<Record<string, OrchestratorMcpFailure>> = {
   }),
 };
 
+const writeProbe = McpToolAccess.writesWithCapability(
+  ({ projectId }: { readonly projectId: string }) =>
+    Effect.gen(function* () {
+      const probe = yield* Probe;
+      const run = yield* Ref.updateAndGet(probe.runs, (runs) => runs + 1);
+      if (projectId === "park") {
+        yield* Deferred.succeed(probe.started, undefined);
+        yield* Deferred.await(probe.release);
+      }
+      const failure = outcomes[projectId];
+      return failure === undefined ? { run } : yield* failure;
+    }),
+);
 const handlers = {
-  [keyed.name]: McpToolAccess.writesWithCapability(
-    ({ projectId }: { readonly projectId: string }) =>
-      Effect.gen(function* () {
-        const probe = yield* Probe;
-        const run = yield* Ref.updateAndGet(probe.runs, (runs) => runs + 1);
-        if (projectId === "park") {
-          yield* Deferred.succeed(probe.started, undefined);
-          yield* Deferred.await(probe.release);
-        }
-        const failure = outcomes[projectId];
-        return failure === undefined ? { run } : yield* failure;
-      }),
-  ),
-  [routed.name]: McpToolAccess.writesWithCapability(() => Effect.succeed({ run: 1 })),
+  [keyed.name]: writeProbe,
+  [nonRouted.name]: writeProbe,
+  [routed.name]: writeProbe,
 } as unknown as McpToolAccess.Handlers<typeof ProbeToolkit.tools>;
 
 /** The calling thread's modes, which its user may change between a call and its replay. */
@@ -613,41 +636,24 @@ it.effect(
     }).pipe(Effect.provide(served("owner"))),
 );
 
-it.effect.each([keyed, routed])(
-  "$path names a reconcile host only when host is its routing argument",
-  (entry) =>
-    Effect.gen(function* () {
-      yield* seed;
-      const sql = yield* SqlClient.SqlClient;
-      const digest = yield* argumentsDigest({ projectId: "a", host: "box" });
-      yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
-        client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id,
-        created_at, expires_at)
-        VALUES ('environment', ${`thread:${caller}`}, ${entry.path}, 'k', 'receipt:host',
-          ${entry.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}',
-          'running', 'boot:stopped', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
-      const result = yield* callTool(entry.name, {
-        projectId: "a",
-        host: "box",
-        clientRequestId: "k",
-      });
-      expect(result).toMatchObject({ reason: "outcome_unknown" });
-      expect(result).toMatchObject({
-        message: entry.hostRoutable
-          ? expect.stringContaining("with host box")
-          : expect.not.stringContaining("with host box"),
-      });
-      expect(yield* runs).toBe(0);
-    }).pipe(Effect.provide(served("owner"))),
-);
-
-it.effect.each([keyed, routed])("$path records a host only when it routes there", (entry) =>
+it.effect("names the host to read when a routed write's outcome is unknown", () =>
   Effect.gen(function* () {
     yield* seed;
-    yield* callTool(entry.name, { projectId: "a", host: "box", clientRequestId: "k" });
     const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ host: string | null }>`SELECT host FROM mcp_request_reservations`;
-    expect(rows).toEqual([{ host: entry.hostRoutable ? "box" : null }]);
+    const digest = yield* argumentsDigest({ projectId: "a", host: "box" });
+    yield* sql`INSERT INTO mcp_request_reservations (environment_id, principal, path,
+      client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id,
+      created_at, expires_at)
+      VALUES ('environment', ${`thread:${caller}`}, ${routed.path}, 'k', 'receipt:routed',
+        ${routed.name}, ${digest}, '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":null,"readOnly":false}',
+        'running', 'boot:stopped', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
+    expect(
+      yield* callTool(routed.name, { projectId: "a", host: "box", clientRequestId: "k" }),
+    ).toMatchObject({
+      reason: "outcome_unknown",
+      message: expect.stringContaining("with host box"),
+    });
+    expect(yield* runs).toBe(0);
   }).pipe(Effect.provide(served("owner"))),
 );
 
@@ -710,3 +716,227 @@ it.effect("still refuses a role launch's replay once goatclaw is turned off", ()
     expect(yield* runs).toBe(1);
   }).pipe(Effect.provide(served("owner"))),
 );
+
+it.effect("keeps a local write's domain host out of its receipt and reconciliation route", () =>
+  Effect.gen(function* () {
+    yield* seed;
+    const args = { projectId: "uncertain", host: "box", clientRequestId: "local-host" };
+    yield* callTool(nonRouted.name, args);
+    const replay = yield* callTool(nonRouted.name, args);
+    expect(replay).toMatchObject({ reason: "outcome_unknown" });
+    expect(JSON.stringify(replay)).not.toContain("with host box");
+    const sql = yield* SqlClient.SqlClient;
+    const rows =
+      yield* sql`SELECT host FROM mcp_request_reservations WHERE path = ${nonRouted.path}`;
+    expect(rows).toEqual([{ host: null }]);
+    expect(yield* runs).toBe(1);
+  }).pipe(Effect.provide(served("owner"))),
+);
+
+const environmentId = EnvironmentId.make("environment:retry-test");
+const operationsScope: McpInvocationContext.McpInvocationScope = {
+  environmentId,
+  requestNamespace: "retry-test",
+  issuedAt: 0,
+  capabilities: new Set(["orchestration", "pull-requests"]),
+  client: undefined,
+  thread: {
+    threadId: ThreadId.make("thread:retry-test"),
+    providerSessionId: "provider:retry-test",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+};
+const at = "2026-10-24T00:00:00.000Z";
+const request = {
+  title: "Choose",
+  context: "Context",
+  options: [{ id: "go", label: "Go", consequence: "Proceed" }],
+  requiredProfile: "owner",
+};
+
+it.effect.each([
+  ["goat_decision_request", request],
+  ["goat_channel_bot_home_claim", {}],
+  ["goat_hub_device_join", { deviceAlias: "box" }],
+  ["goat_hub_device_leave", { deviceAlias: "box" }],
+  ["goat_hub_device_repair", { deviceAlias: "box" }],
+  ["goat_host_link_create", { name: "box", url: "https://example.test", code: "test-code" }],
+  ["goat_ssh_runtime_update", { host: "box", mode: "when_idle" }],
+  [
+    "goat_pull_request_guide_update",
+    { pullRequests: [{ url: "https://github.com/example/repo/pull/1" }] },
+  ],
+] as const)("%s retries a registered write once and rechecks access", ([name, args]) => {
+  const invocation = { ...operationsScope, capabilities: new Set(operationsScope.capabilities) };
+  const runs: Array<unknown> = [];
+  const record = (input: unknown) =>
+    Effect.sync(() => {
+      runs.push(input);
+    });
+  const hub =
+    (action: "join" | "leave" | "repair") =>
+    (_scope: McpInvocationContext.McpInvocationScope, input: { readonly deviceAlias: string }) =>
+      record(input).pipe(
+        Effect.as({
+          deviceAlias: input.deviceAlias,
+          action,
+          state: "ready" as const,
+          message: "Done",
+          steps: [],
+        }),
+      );
+  const overrides = Layer.mergeAll(
+    catalogDependencies,
+    ServerSettings.layerTest(),
+    Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
+    Layer.mock(DecisionInbox.DecisionInbox)({
+      create: (_caller, input) =>
+        record(input).pipe(
+          Effect.as({
+            ...request,
+            id: "decision:1",
+            source: "decision" as const,
+            from: {},
+            recommended: null,
+            expiresAt: null,
+            status: "open" as const,
+            answer: null,
+            answeredBy: null,
+            createdAt: at,
+            updatedAt: at,
+            humanRequired: false,
+          }),
+        ),
+    }),
+    Layer.mock(ChannelBotHome.ChannelBotHome)({
+      claimHere: (check) =>
+        check.pipe(
+          Effect.andThen(record({})),
+          Effect.as({
+            claimed: true,
+            home: { environmentId, claimedAt: 1, claimId: "claim:1" },
+            environmentId,
+          }),
+        ),
+    }),
+    Layer.mock(HubMembership.HubMembership)({
+      join: hub("join"),
+      leave: hub("leave"),
+      repair: hub("repair"),
+    }),
+    Layer.mock(LinkedHosts.LinkedHosts)({
+      link: (input) =>
+        record(input).pipe(
+          Effect.as({
+            host: {
+              name: "box",
+              baseUrl: "https://example.test",
+              environmentId: "remote",
+              label: "Box",
+              serverVersion: "1",
+              access: "approval-required" as const,
+              linkedAt: at,
+              expiresAt: at,
+            },
+            replaced: false,
+          }),
+        ),
+    }),
+    Layer.mock(Dispatch.SshRemoteDispatch)({ listHosts: () => Effect.succeed([]) }),
+    Layer.mock(SshSetup.SshHostSetup)({
+      update: (input) =>
+        record(input).pipe(
+          Effect.as({
+            kind: "ok" as const,
+            status: {
+              host: "box",
+              state: "stopped" as const,
+              runtimeVersion: "1",
+              requestedVersion: "2",
+            },
+          }),
+        ),
+    }),
+    Layer.mock(Environment.ServerEnvironment)({
+      getDescriptor: Effect.succeed({
+        environmentId,
+        label: "Test",
+        serverVersion: "1",
+        platform: { os: "darwin", arch: "arm64" },
+        capabilities: { repositoryIdentity: true },
+      }),
+    }),
+    Layer.mock(Orchestrator.OrchestratorV2)({ getThreadShell: () => Effect.succeed(null) }),
+    Layer.mock(Projects.ProjectService)({
+      listShells: () =>
+        Effect.succeed([
+          {
+            id: ProjectId.make("project:1"),
+            title: "Test",
+            workspaceRoot: "/test",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: at,
+            updatedAt: at,
+            repositoryIdentity: {
+              canonicalKey: "github.com/example/repo",
+              locator: {
+                source: "git-remote" as const,
+                remoteName: "origin",
+                remoteUrl: "https://github.com/example/repo.git",
+              },
+              provider: "github",
+              displayName: "example/repo",
+              owner: "example",
+              name: "repo",
+            },
+          },
+        ]),
+    }),
+    Layer.mock(Guides.PullRequestReviewGuideService)({
+      generate: (input) =>
+        record(input).pipe(
+          Effect.as({ guide: null, run: null, currentHeadSha: "head", started: true }),
+        ),
+    }),
+  );
+  const call = (key: string, as = invocation) =>
+    McpServer.McpServer.pipe(
+      Effect.flatMap((server) =>
+        server.callTool({ name, arguments: { ...args, clientRequestId: key } }),
+      ),
+      Effect.provideService(McpSchema.McpServerClient, catalogClient),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, as),
+    );
+  return Effect.gen(function* () {
+    const first = yield* call("request-1");
+    expect(first.isError, JSON.stringify(first.content)).not.toBe(true);
+    expect(runs).toHaveLength(1);
+    expect((yield* call("request-1")).content).toEqual(first.content);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).not.toHaveProperty("clientRequestId");
+    const denied = yield* call("request-1", { ...invocation, readOnly: true });
+    expect(JSON.stringify(denied.content)).toContain("capability_denied");
+    expect(runs).toHaveLength(1);
+    if (name === "goat_pull_request_guide_update") {
+      invocation.capabilities.delete("pull-requests");
+      const withoutCapability = yield* call("request-1");
+      expect(withoutCapability.isError).toBe(true);
+      expect(withoutCapability.content).toEqual([
+        { type: "text", text: "MCP credential does not grant the pull-requests capability." },
+      ]);
+      invocation.capabilities.add("pull-requests");
+      expect(runs).toHaveLength(1);
+    }
+    yield* call("request-2");
+    expect(runs).toHaveLength(2);
+  }).pipe(
+    Effect.provide(
+      catalog.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(overrides),
+        Layer.provideMerge(Sqlite.layerMemory),
+      ),
+    ),
+  );
+});

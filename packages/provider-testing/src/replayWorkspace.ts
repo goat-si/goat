@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.remove has no retry option.
+import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { isolatedGitEnv } from "@goat/shared/testing/gitEnv";
 import * as Effect from "effect/Effect";
@@ -71,8 +73,14 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
 const removeCheckpointWorkspaceEffect = Effect.fn("removeCheckpointWorkspace")(function* (
   cwd: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* fs.remove(cwd, { recursive: true });
+  // Windows refuses to remove a directory that is still a process's cwd. After a session
+  // release the replay agent can finish exiting just after the test's scope closes, so let
+  // Node retry EBUSY on its own timers (the test clock may be paused). A process that never
+  // exits still fails the removal. Whether release should await that exit: #1164.
+  // The release already dies on failure, so a rejection is a defect here.
+  yield* Effect.promise(() =>
+    NodeFS.promises.rm(cwd, { recursive: true, maxRetries: 10, retryDelay: 50 }),
+  );
 });
 
 export const checkpointWorkspace = (fixtureName: string, files?: ReplayWorkspaceFiles) =>

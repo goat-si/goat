@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
@@ -112,7 +113,7 @@ const ChannelBotHomeClaimTool = Tool.make(agentSurfaceRegistry["channel.bot_home
   ...shared,
   dependencies: [...shared.dependencies, ChannelBotHome.ChannelBotHome],
   description: agentSurfaceRegistry["channel.bot_home_claim"].description,
-  parameters: Tool.EmptyParams,
+  parameters: withClientRequestId(Schema.Struct({})),
   success: ChannelBotHomeClaimResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.bot_home_claim"]));
 

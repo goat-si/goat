@@ -55,7 +55,7 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  expect(entries).toHaveLength(202); // Includes current memory, browser, provider (with provider settings), SSH runtime, GOAT Bot home, fleet goal, resource and health, notes (with note update), hub, permission profile and goatclaw sync, computer use, decision, lane, preparation retry, and operation tools.
+  expect(entries).toHaveLength(203); // Includes saved HTML page reconciliation alongside the existing agent tools.
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
