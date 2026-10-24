@@ -543,19 +543,25 @@ const make = Effect.gen(function* () {
       Effect.sync(() => end(threadId, "stopped")).pipe(
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
-    setTarget: (threadId, controlId, target) =>
-      Effect.suspend(() => {
-        const record = controls.get(threadId);
-        if (record?.controlId !== controlId || record.ended !== undefined)
-          return Effect.succeed(false);
-        if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
-          return Effect.succeed(true);
-        controls.set(threadId, {
-          ...record,
-          target: { pid: target.pid, windowId: target.windowId },
-        });
-        return changed.pipe(Effect.as(true));
-      }),
+    setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
+      threadId: ThreadId,
+      controlId: string,
+      target: { readonly pid: number; readonly windowId: number },
+    ) {
+      const record = controls.get(threadId);
+      if (record?.controlId !== controlId || record.ended !== undefined) return false;
+      // An expired control is ended to every reader even before anything marks it so.
+      const now = yield* DateTime.now;
+      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return false;
+      if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
+        return true;
+      controls.set(threadId, {
+        ...record,
+        target: { pid: target.pid, windowId: target.windowId },
+      });
+      yield* changed;
+      return true;
+    }),
     stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
       Effect.tap(() => changed),
     ),

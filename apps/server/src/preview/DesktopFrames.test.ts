@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import { type DesktopCuaFrame, type DesktopCuaFrames, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -11,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -66,6 +68,10 @@ const fixture = Effect.fnUntraced(function* () {
   const requests = yield* Queue.unbounded<DesktopCuaFrames["targets"]>();
   const fromDesktop = yield* PubSub.unbounded<DesktopCuaFrame>();
   const seq = yield* Ref.make(0);
+  const failNext = yield* Ref.make(false);
+  const hold = yield* Ref.make<
+    Option.Option<{ reading: Deferred.Deferred<void>; release: Deferred.Deferred<void> }>
+  >(Option.none());
   const unused = Effect.die("unused");
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     active: () => unused,
@@ -84,7 +90,16 @@ const fixture = Effect.fnUntraced(function* () {
     pause: () => unused,
     detection: Effect.succeed(detects),
     resume: unused,
-    sessions: Ref.get(state).pipe(Effect.map((current) => [{ control, state: current }])),
+    // A held read returns the state it saw before it was held, like a read awaiting the database.
+    sessions: Effect.gen(function* () {
+      const current = yield* Ref.get(state);
+      const held = yield* Ref.getAndSet(hold, Option.none());
+      if (Option.isSome(held)) {
+        yield* Deferred.succeed(held.value.reading, undefined);
+        yield* Deferred.await(held.value.release);
+      }
+      return [{ control, state: current }];
+    }),
     subscribe: PubSub.subscribe(signals),
     changed: PubSub.publish(signals, undefined).pipe(Effect.asVoid),
     proxy: undefined,
@@ -92,7 +107,25 @@ const fixture = Effect.fnUntraced(function* () {
   const desktop = DesktopTelemetryReceiver.layerTest({
     cuaFrames: Stream.fromPubSub(fromDesktop),
     setCuaFrames: (targets) =>
-      Queue.offer(requests, targets).pipe(Effect.andThen(Ref.updateAndGet(seq, (n) => n + 1))),
+      Queue.offer(requests, targets).pipe(
+        // The receiver keeps what it was asked for and sends it again when the desktop reconnects.
+        Effect.andThen(Ref.updateAndGet(seq, (n) => n + 1)),
+        Effect.andThen((next) =>
+          Ref.getAndSet(failNext, false).pipe(
+            Effect.flatMap((fail) =>
+              fail
+                ? Effect.fail(
+                    new DesktopTelemetryReceiver.DesktopTelemetryControlFailed({
+                      fd: 4,
+                      operation: "cuaFrames",
+                      cause: "write failed",
+                    }),
+                  )
+                : Effect.succeed(next),
+            ),
+          ),
+        ),
+      ),
   });
   const service = yield* Layer.build(
     layer.pipe(
@@ -109,6 +142,17 @@ const fixture = Effect.fnUntraced(function* () {
     send: (message: DesktopCuaFrame) => PubSub.publish(fromDesktop, message),
     set: (next: ComputerUseLeases.ComputerUseControlState) =>
       Ref.set(state, next).pipe(Effect.andThen(leases.changed)),
+    /** A change nothing signals, such as a control reaching its expiry. */
+    quietly: (next: ComputerUseLeases.ComputerUseControlState) => Ref.set(state, next),
+    failNextWrite: Ref.set(failNext, true),
+    holdNextRead: Effect.gen(function* () {
+      const held = {
+        reading: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      yield* Ref.set(hold, Option.some(held));
+      return held;
+    }),
   };
 });
 
@@ -136,6 +180,7 @@ describe("DesktopFrames", () => {
 
         yield* f.set(active);
         assert.deepEqual(yield* f.requested, [target]);
+        yield* TestClock.adjust("500 millis");
         yield* f.send(frame(yield* f.seq, "TkVX"));
         assert.deepInclude(yield* next, { type: "frame", seq: 2, data: "TkVX" });
 
@@ -153,6 +198,73 @@ describe("DesktopFrames", () => {
       assert.deepEqual(yield* f.requested, [target]);
       yield* Scope.close(viewer, Exit.void);
       assert.deepEqual(yield* f.requested, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("never shows a frame whose check overlapped a privacy pause", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const next = yield* watch(f.service);
+      assert.deepEqual(yield* f.requested, [target]);
+      const held = yield* f.holdNextRead;
+      yield* f.send(frame(yield* f.seq));
+      yield* Deferred.await(held.reading);
+      yield* f.set({ _tag: "paused", reason: "private" });
+      yield* Deferred.succeed(held.release, undefined);
+      assert.deepEqual(yield* next, { type: "unavailable", reason: "private" });
+      assert.deepEqual(yield* f.requested, []);
+
+      yield* f.set(active);
+      assert.deepEqual(yield* f.requested, [target]);
+      yield* f.send(frame(yield* f.seq, "TkVX"));
+      assert.deepInclude(yield* next, { type: "frame", data: "TkVX" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("withdraws a capture whose request failed to send, and sends it again", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const first = yield* Scope.make();
+      yield* f.failNextWrite;
+      yield* watch(f.service).pipe(Effect.provideService(Scope.Scope, first), Effect.asVoid);
+      assert.deepEqual(yield* f.requested, [target]);
+      // The receiver may still hold the failed request and replay it when the desktop reconnects.
+      yield* Scope.close(first, Exit.void);
+      assert.deepEqual(yield* f.requested, []);
+
+      yield* f.failNextWrite;
+      yield* Effect.asVoid(watch(f.service));
+      assert.deepEqual(yield* f.requested, [target]);
+      yield* TestClock.adjust("1 second");
+      assert.deepEqual(yield* f.requested, [target]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("shows at most one frame per interval however fast the desktop sends them", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const next = yield* watch(f.service);
+      assert.deepEqual(yield* f.requested, [target]);
+      const seq = yield* f.seq;
+      yield* f.send(frame(seq));
+      assert.deepInclude(yield* next, { type: "frame", seq: 1 });
+      yield* f.send(frame(seq, "QkJC"));
+      yield* TestClock.adjust("500 millis");
+      yield* f.send(frame(seq, "Q0ND"));
+      assert.deepInclude(yield* next, { type: "frame", seq: 2, data: "Q0ND" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("withdraws the capture when the control lapses, without waiting for a signal", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.quietly({ ...active, wakeAt: 1_000 });
+      const next = yield* watch(f.service);
+      assert.deepEqual(yield* f.requested, [target]);
+      yield* f.quietly({ _tag: "ended", reason: "expired" });
+      yield* TestClock.adjust("1 second");
+      assert.deepEqual(yield* f.requested, []);
+      assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
     }).pipe(Effect.scoped),
   );
 
@@ -184,7 +296,7 @@ describe("DesktopFrames", () => {
   });
 
   it("asks for the widest and most frequent viewer, never past the limits, and only for open gates", () => {
-    const open = { _tag: "open", pid: 7, windowId: 3, apps: undefined } as const;
+    const open = { _tag: "open", pid: 7, windowId: 3, apps: undefined, wakeAt: 60_000 } as const;
     const targets = planFrames(
       new Map<string, FrameGate>([
         ["desktop:b", open],
@@ -213,12 +325,21 @@ describe("DesktopFrames", () => {
 
   it("drops a frame from before a stop or for another window, and refuses an oversized one", () => {
     const current = { seq: 4, targets: [target] };
-    const open = { _tag: "open", pid: 7, windowId: 3, apps: undefined } as const;
+    const open = {
+      _tag: "open",
+      pid: 7,
+      windowId: 3,
+      apps: ["com.apple.calculator"],
+      wakeAt: 60_000,
+    } as const;
     assert.isDefined(admitFrame(frame(4), current, open));
     assert.isUndefined(admitFrame(frame(3), current, open));
     assert.isUndefined(admitFrame(frame(4), current, { _tag: "closed", reason: "paused" }));
     assert.isUndefined(admitFrame(frame(4), current, { ...open, windowId: 9 }));
     assert.isUndefined(admitFrame({ ...frame(4), key: "desktop:other" }, current, open));
+    // Grants narrowed since the capture was asked for: the helper checked against the old apps.
+    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: [] }));
+    assert.isUndefined(admitFrame(frame(4), current, { ...open, apps: undefined }));
     assert.deepEqual(admitFrame(frame(4, "A".repeat(400_000)), current, open), {
       type: "unavailable",
       reason: "captureFailed",
