@@ -11,8 +11,6 @@ const byPath: ReadonlyMap<string, Entry> = new Map(entries.map((entry) => [entry
 const NOT_YET_KEYED: ReadonlySet<string> = new Set([
   "attachment.prepare_upload",
   "computer_use.request",
-  "device.close",
-  "device.open",
   "html.render",
   "origin.report",
   "schedule.update",
