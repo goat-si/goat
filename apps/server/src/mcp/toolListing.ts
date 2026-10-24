@@ -1,4 +1,5 @@
 import {
+  AGENT_TOOL_LISTING_HEADER,
   AGENT_TOOL_LISTING_META_KEY,
   ALWAYS_LOAD_META_KEY,
   type AgentToolListing,
@@ -24,12 +25,31 @@ const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
+ * The listing a caller gets. Agents GOAT runs (thread callers) get the one the settings ask for.
+ * A client keeps the full listing unless it sends the listing header with "core": another GOAT
+ * host's dispatch reads a remote's tools/list to learn which launch arguments and memory tools it
+ * supports, and hosts on older versions cannot learn that any other way. The header only picks
+ * what tools/list shows; calls never read it.
+ */
+export const callerListing = (
+  scope: McpInvocationContext.McpInvocationScope,
+  setting: AgentToolListing,
+  requested: string | undefined,
+): AgentToolListing => {
+  if (scope.thread !== undefined) return setting;
+  return requested?.trim().toLowerCase() === "core" ? "core" : "full";
+};
+
+/** The listing this caller is shown, and the one agents GOAT runs get, which tools/list names. */
+interface Listing {
+  readonly listed: AgentToolListing;
+  readonly agents: AgentToolListing;
+}
+
+/**
  * The tools a caller is listed: none it cannot use, and in the core listing only entries the
  * registry lists as core. Core entries carry the always-load marker in both listings, so harnesses
  * that defer tools (Claude Code, Pi) keep them resident. Unlisted tools stay callable by name.
- * The core listing is for the agents GOAT runs (thread callers). A client keeps the full listing:
- * another GOAT host's dispatch reads a remote's tools/list to learn which launch arguments and
- * memory tools it supports, and hosts on older versions cannot learn that any other way.
  */
 const listedTools = (
   tools: ReadonlyArray<unknown>,
@@ -43,7 +63,7 @@ const listedTools = (
     if (entry === undefined) return [tool];
     if (!availability(entry, scope, true, profile).now) return [];
     const core = "listing" in entry && entry.listing === "core";
-    if (listing === "core" && !core && scope.thread !== undefined) return [];
+    if (listing === "core" && !core) return [];
     if (!core) return [tool];
     const meta = isRecord(tool._meta) ? tool._meta : {};
     return [{ ...tool, _meta: { ...meta, [ALWAYS_LOAD_META_KEY]: true } }];
@@ -56,7 +76,7 @@ const listedTools = (
 const filterMessage = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
-  listing: AgentToolListing,
+  listing: Listing,
   profile: CallerProfile | undefined,
 ) => {
   const message = Option.getOrUndefined(decodeJson(text));
@@ -67,8 +87,8 @@ const filterMessage = (
     ...message,
     result: {
       ...message.result,
-      tools: listedTools(message.result.tools, scope, listing, profile),
-      _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing },
+      tools: listedTools(message.result.tools, scope, listing.listed, profile),
+      _meta: { ...meta, [AGENT_TOOL_LISTING_META_KEY]: listing.agents },
     },
   });
 };
@@ -77,7 +97,7 @@ const filterMessage = (
 const filterEvents = (
   text: string,
   scope: McpInvocationContext.McpInvocationScope,
-  listing: AgentToolListing,
+  listing: Listing,
   profile: CallerProfile | undefined,
 ) =>
   text
@@ -96,7 +116,7 @@ const filterEvents = (
 export const filterToolsListBody = Effect.fnUntraced(function* (
   body: HttpBody.HttpBody,
   scope: McpInvocationContext.McpInvocationScope,
-  listing: AgentToolListing,
+  listing: Listing,
   profile?: CallerProfile,
 ) {
   if (body._tag !== "Uint8Array" && body._tag !== "Stream") return body;
@@ -150,12 +170,13 @@ export const withCallerListing = (
     const call = Option.getOrUndefined(decodeJson(body.value));
     if (!isRecord(call) || call.method !== "tools/list") return yield* httpEffect;
     const scope = yield* McpInvocationContext.McpInvocationContext;
-    const mode = yield* listing;
+    const agents = yield* listing;
+    const listed = callerListing(scope, agents, request.headers[AGENT_TOOL_LISTING_HEADER]);
     const profile = yield* listingProfile(permissions, scope);
     const response = yield* httpEffect;
     return HttpServerResponse.setBody(
       response,
-      yield* filterToolsListBody(response.body, scope, mode, profile),
+      yield* filterToolsListBody(response.body, scope, { listed, agents }, profile),
     );
   });
 
