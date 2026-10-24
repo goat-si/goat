@@ -348,10 +348,23 @@ async function main(
         // Registered before anything can fail, so a failed step still closes it.
         closeButtons.push(async () => {
           const last = await observe("calculator-close", cw.pid, cw.window_id);
-          const close = fullElements(last).find(
-            (element) => element.role === "Button" && /(Close|닫기)/u.test(element.label ?? ""),
-          );
-          if (close) await act("click", cw.pid, cw.window_id, last.observationId, close.ref);
+          const close =
+            fullElements(last).find(
+              (element) => element.role === "Button" && /(Close|닫기)/u.test(element.label ?? ""),
+            ) ?? fail("Calculator has no close button; it is still open.");
+          await sent("click", cw.pid, cw.window_id, last.observationId, close.ref);
+          // Closed means this exact window is gone, not that the click was sent.
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const listed = (await tool("list_windows", {})).structured?.windows ?? [];
+            if (
+              !(listed as Array<{ window_id: number }>).some(
+                (window) => window.window_id === cw.window_id,
+              )
+            )
+              return;
+            await sleep(250);
+          }
+          fail("Calculator's window is still open after its close button.");
         });
         for (const button of [/^1$/u, /^(Plus|더하기)$/u, /^2$/u, /^(Equals|일치)$/u]) {
           const step = await observe("calculator-step", cw.pid, cw.window_id);
@@ -373,11 +386,17 @@ async function main(
       } else record("calculator", "already running; skipped");
     } finally {
       // While the helper and driver still run, so windows close through their own buttons.
+      // Every close is tried; any that failed fails the run afterwards.
+      const failedCloses: string[] = [];
       for (const close of closeButtons.splice(0))
-        await close().catch((error: unknown) => record("close failed", String(error)));
+        await close().catch((error: unknown) => {
+          record("close failed", String(error));
+          failedCloses.push(String(error));
+        });
       driver.uniffiDestroy?.();
       await helper.call("stop").catch(() => undefined);
       record("driver alive after stop", alive(started.driverPid));
+      if (failedCloses.length > 0) fail("Cleanup failed: " + failedCloses.join("; "));
     }
   } finally {
     await helper.close();
