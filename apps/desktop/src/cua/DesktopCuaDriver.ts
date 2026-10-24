@@ -13,6 +13,7 @@ import {
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
+import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
@@ -38,6 +39,7 @@ import {
   ComputerUseHelperError,
   helperBundle,
   makeHelperHost,
+  listHelperApplications,
   probeHelperGrants,
   spawnHelperProcess,
   type DaemonMetadata,
@@ -154,7 +156,11 @@ export interface DesktopCuaDriverDependencies {
     readonly hostBundleIds: ReadonlyArray<string>;
     readonly directory: string;
     readonly platform: NodeJS.Platform;
+    /** Lists apps through the helper, so the driver never runs outside its seal check. */
+    readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
+  /** The apps the macOS helper's driver lists, after the helper verifies it (#1241). */
+  readonly helperApps: (bundle: HelperBundle) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
   readonly executablePath: string;
@@ -173,6 +179,33 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
     if (Math.max(bitmap[offset]!, bitmap[offset + 1]!, bitmap[offset + 2]!) > 16) lit++;
   }
   return lit / sampled >= 0.01;
+}
+
+/**
+ * The manifest for one daemon start. The grant check's admits only GOAT and needs no listing;
+ * the agents' lists apps through listApplications when the engine gives it one, so a helper
+ * that verifies its driver is the only thing that runs it.
+ */
+export async function prepareDesktopManifest(
+  input: Parameters<DesktopCuaDriverDependencies["prepareManifest"]>[0],
+): Promise<string> {
+  const { join } = await import("node:path");
+  return input.scope === "verify"
+    ? writeCuaDriverCapabilityManifest(
+        join(input.directory, "verify-manifest.yaml"),
+        cuaDriverCapabilityManifest({
+          applications: input.hostBundleIds,
+          tools: CUA_DRIVER_VERIFY_TOOLS,
+        }),
+      )
+    : prepareCuaDriverCapabilityManifest({
+        binaryPath: input.binaryPath,
+        platform: input.platform,
+        environment: cuaDriverListingEnvironment(process.env),
+        hostBundleIds: input.hostBundleIds,
+        path: join(input.directory, "capability-manifest.yaml"),
+        ...(input.listApplications ? { listApplications: input.listApplications } : {}),
+      });
 }
 
 const dependencies: DesktopCuaDriverDependencies = {
@@ -236,24 +269,9 @@ const dependencies: DesktopCuaDriverDependencies = {
     const decoded = nativeImage.createFromBuffer(Buffer.from(image.dataBase64, "base64"));
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
-  prepareManifest: async (input) => {
-    const { join } = await import("node:path");
-    return input.scope === "verify"
-      ? writeCuaDriverCapabilityManifest(
-          join(input.directory, "verify-manifest.yaml"),
-          cuaDriverCapabilityManifest({
-            applications: input.hostBundleIds,
-            tools: CUA_DRIVER_VERIFY_TOOLS,
-          }),
-        )
-      : prepareCuaDriverCapabilityManifest({
-          binaryPath: input.binaryPath,
-          platform: input.platform,
-          environment: cuaDriverListingEnvironment(process.env),
-          hostBundleIds: input.hostBundleIds,
-          path: join(input.directory, "capability-manifest.yaml"),
-        });
-  },
+  prepareManifest: prepareDesktopManifest,
+  helperApps: (bundle) =>
+    listHelperApplications(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId),
   processId: process.pid,
   executablePath: process.execPath,
 };
@@ -504,6 +522,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         hostBundleIds: hostBundleIds(engine),
         directory: environment.path.join(environment.stateDir, "cua-driver"),
         platform: environment.platform,
+        // The macOS helper verifies its driver before running it, so it lists the apps too;
+        // running the driver here would execute it unchecked, under GOAT's identity.
+        ...(engine.kind === "helper" && environment.platform === "darwin"
+          ? { listApplications: () => native.helperApps(engine.bundle) }
+          : {}),
       }),
     );
     if (closed) return undefined;
