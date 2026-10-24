@@ -193,7 +193,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   },
   { key: "mod+arrowright", command: "files.expandAll", when: "fileTreeFocus && !editableFocus" },
   { key: "mod+arrowleft", command: "files.collapseAll", when: "fileTreeFocus && !editableFocus" },
-  // chat.find shares mod+f; it yields to a file view that can find (fileFindShortcut.ts).
+  // Shares mod+f with chat.find, whose !previewFocus never holds in the right panel's file views.
   { key: "mod+f", command: "files.find", when: "fileViewFocus" },
   // Cmd+L stays the browser's address bar and preview.focusUrl; Ctrl+G matches VS Code and Zed.
   { key: "ctrl+g", command: "files.goToLine", when: "fileViewFocus" },

@@ -39,9 +39,9 @@ export const FILE_ITEM_COMMANDS = [
  * The file command a key press asks for, checked in `commands` order.
  *
  * matchesPageCommand ignores built-in defaults stored later in the config: the server
- * backfills new defaults ahead of persisted rules, so on an existing install the
- * persisted chat.find on mod+f would otherwise shadow files.find. A rule the person
- * added or changed still shadows a file command.
+ * backfills new defaults ahead of persisted rules, so on an existing install an older
+ * default on the same keys would otherwise shadow a file command. A rule the person
+ * added or changed still shadows it.
  */
 export function fileViewCommandForEvent<Command extends FileViewCommand>(
   event: KeyboardEvent,
