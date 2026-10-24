@@ -126,7 +126,8 @@ function FileSearchField({
         onChange={(event) => props.onValueChange(event.target.value)}
         onKeyDown={(event) => {
           // VS Code and JetBrains step from the filter into its results with ArrowDown.
-          if (event.key === "ArrowDown") {
+          const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
+          if (event.key === "ArrowDown" && plain && !event.nativeEvent.isComposing) {
             event.preventDefault();
             props.onFocusTree();
             return;
@@ -600,6 +601,7 @@ export default function FileBrowserPanel({
     panelRef,
     model,
     keybindings,
+    selectedPath,
     directoryPaths,
     expandableDirectoryPaths,
     canExpandAll: !hostFolder,

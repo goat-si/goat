@@ -291,6 +291,25 @@ describe("file tree search shortcuts", () => {
     await expectFocusedRow(screen.container, "src/lib/");
   });
 
+  it("keeps a modified or composing ArrowDown in the search field", async () => {
+    setup();
+    await using screen = await renderPanel();
+    await userEvent.click(await row(screen.container, "src/"));
+    await userEvent.keyboard(chord([MOD], "f"));
+    const search = screen.getByRole("searchbox", { name: "Search repo files" });
+    await expect.element(search).toHaveFocus();
+    await userEvent.keyboard(chord(["Shift"], "{ArrowDown}"));
+    await userEvent.keyboard(chord(["Control"], "{ArrowDown}"));
+    // An input method uses the arrows to pick a candidate while composing.
+    search
+      .element()
+      .dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowDown", isComposing: true, bubbles: true }),
+      );
+    await expect.element(search).toHaveFocus();
+    expect(focusedRowPath(screen.container)).toBeNull();
+  });
+
   it("starts a search from a typed letter on a focused row", async () => {
     setup();
     await using screen = await renderPanel();

@@ -20,7 +20,8 @@ export interface FileTreeShortcutContext {
   readonly expandableDirectoryPaths: readonly string[];
   readonly canExpandAll: boolean;
   readonly setAllExpanded: (expanded: boolean) => void;
-  readonly focusViewer: () => void;
+  /** With `openedPath`, the file that was just selected and may not be in the viewer yet. */
+  readonly focusViewer: (openedPath?: string) => void;
 }
 
 /**
@@ -129,7 +130,7 @@ export function runFileTreeCommand(
       }
       for (const path of model.getSelectedPaths()) model.getItem(path)?.deselect();
       focused.select();
-      context.focusViewer();
+      context.focusViewer(focused.getPath());
       return true;
     }
     case "files.expandRecursive":

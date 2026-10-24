@@ -4,7 +4,7 @@ import { useEffect, useRef, type RefObject } from "react";
 
 import { useStableCallback } from "~/hooks/useStableCallback";
 
-import { sourceEditorContent } from "./sourceEditorContent";
+import { focusViewAwaitingEditor, sourceEditorContent } from "./sourceEditorContent";
 import { fileTreeCopyPaths, type FilePathCopyCommand } from "./filePathCopyShortcut";
 import {
   FILE_TREE_FOCUS_REQUEST,
@@ -27,6 +27,8 @@ export function useFileTreeKeyboard(input: {
   readonly panelRef: RefObject<HTMLDivElement | null>;
   readonly model: FileTree;
   readonly keybindings: ResolvedKeybindingsConfig;
+  /** The file the viewer shows, in tree paths. */
+  readonly selectedPath: string | null;
   readonly directoryPaths: readonly string[];
   readonly expandableDirectoryPaths: readonly string[];
   readonly canExpandAll: boolean;
@@ -64,9 +66,15 @@ export function useFileTreeKeyboard(input: {
     if (path !== undefined) focusTreeRow(treeHost(), model, path);
   };
   // The source editor's text when the view has one, else the surface root (tabIndex -1).
-  const focusViewer = () => {
+  // A file the viewer does not show yet gets its editor's focus once that editor attaches.
+  const focusViewer = (openedPath?: string) => {
     const view = panelRef.current?.closest<HTMLElement>("[data-file-view]");
-    if (view) (sourceEditorContent(view) ?? view).focus();
+    if (!view) return;
+    if (openedPath !== undefined && openedPath !== input.selectedPath) {
+      focusViewAwaitingEditor(view);
+    } else {
+      (sourceEditorContent(view) ?? view).focus();
+    }
   };
   const shortcutContext = (): FileTreeShortcutContext => ({
     model,

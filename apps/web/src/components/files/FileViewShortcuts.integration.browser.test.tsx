@@ -14,6 +14,7 @@ import {
 import { Editor } from "@pierre/diffs/edit";
 import { EditProvider, File } from "@pierre/diffs/react";
 import * as Cause from "effect/Cause";
+import { useRef, useState } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 
@@ -92,6 +93,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { isPdfFindShortcut } from "./pdf/pdfShortcuts";
 import { FileViewMenu, keepsEditorFindAgain } from "./FileViewMenu";
+import { claimAwaitedEditorFocus } from "./sourceEditorContent";
 
 const MAC = /mac|iphone|ipad/i.test(navigator.platform);
 const MOD = MAC ? "Meta" : "Control";
@@ -407,6 +409,65 @@ describe("go to line", () => {
 });
 
 describe("tree and viewer focus", () => {
+  /** Swaps its editor for each opened file, as FilePreviewPanel keys its editor by path. */
+  function SwitchingView() {
+    const [openPath, setOpenPath] = useState("src/index.ts");
+    const surface = useRef<HTMLDivElement>(null);
+    return (
+      <div
+        data-file-view
+        tabIndex={-1}
+        style={{ display: "flex", flexDirection: "column", height: 360 }}
+      >
+        <div ref={surface} style={{ display: "flex", height: 120 }}>
+          <EditProvider createEditor={(type, options, key) => new Editor(type, options, key)}>
+            <File
+              key={openPath}
+              file={{ name: openPath, contents: `// ${openPath}\n` }}
+              edit
+              editorOptions={{ onAttach: () => claimAwaitedEditorFocus(surface.current) }}
+              options={{ disableFileHeader: true }}
+            />
+          </EditProvider>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", height: 160 }}>
+          <FileBrowserPanel
+            environmentId={ENVIRONMENT}
+            cwd="/home/dev/repo"
+            projectName="repo"
+            selectedPath={openPath}
+            selectedPathRevealId={0}
+            onOpenFile={setOpenPath}
+            workspaceMutationId={null}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  it("gives a newly opened file's editor the focus once it replaces the old one", async () => {
+    setup();
+    await using screen = await render(<SwitchingView />, { router: false /* nothing links */ });
+    const first = await editorContent(screen.container);
+    await vi.waitFor(() => expect(treeRow(screen.container, "notes.md")).not.toBeNull());
+    treeRow(screen.container, "notes.md")!.focus();
+    await userEvent.keyboard(chord([MOD], "{ArrowDown}"));
+    await vi.waitFor(() =>
+      expect(editorRoot(screen.container).activeElement?.textContent).toContain("// notes.md"),
+    );
+    expect(first.isConnected).toBe(false);
+  });
+
+  it("focuses the open file's editor at once when Cmd/Ctrl+Down names that file", async () => {
+    setup();
+    await using screen = await render(<SwitchingView />, { router: false /* nothing links */ });
+    const content = await editorContent(screen.container);
+    await vi.waitFor(() => expect(treeRow(screen.container, "src/index.ts")).not.toBeNull());
+    treeRow(screen.container, "src/index.ts")!.focus();
+    await userEvent.keyboard(chord([MOD], "{ArrowDown}"));
+    await vi.waitFor(() => expect(editorRoot(screen.container).activeElement).toBe(content));
+  });
+
   it("switches from the editor to the tree's focused row and back", async () => {
     setup();
     await using screen = await renderView();
