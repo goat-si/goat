@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vite-plus/test";
 import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+
+it("lets readers follow computer use status without granting control", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.computerUseStatusChanges, {})).toEqual([
+    "orchestration:read",
+  ]);
+  for (const method of [
+    WS_METHODS.computerUseStop,
+    WS_METHODS.computerUseStopAll,
+    WS_METHODS.computerUseResume,
+  ])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+});
 describe("memory client guards", () => {
   it("guards all three memory mutations", () => {
     for (const method of [

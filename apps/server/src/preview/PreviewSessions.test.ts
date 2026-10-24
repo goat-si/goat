@@ -105,6 +105,38 @@ describe("preview sessions", () => {
       expect(desktopSession(base, control, { _tag: "ended", reason }, detected)).toBeUndefined();
   });
 
+  it("leaves out a control between its thread's turns, when no agent acts on the screen", () => {
+    expect(desktopSession(base, { ...control, idle: true }, active, detected)).toBeUndefined();
+    // A person's stop still shows until the next turn replaces it.
+    expect(
+      desktopSession(
+        base,
+        { ...control, idle: true },
+        { _tag: "ended", reason: "stopped" },
+        detected,
+      ),
+    ).toBeDefined();
+  });
+
+  it("keeps a stopped control's app label instead of calling it the whole screen", () => {
+    const stopped = { _tag: "ended", reason: "stopped" } as const;
+    const none = desktopSession(base, { ...control, scope: { apps: [] } }, stopped, detected)!;
+    expect(none.target).toEqual({ kind: "desktop", title: "No apps approved" });
+    expect(none.lease?.scope).toEqual([]);
+    const whole = desktopSession(
+      base,
+      { ...control, scope: { apps: undefined } },
+      stopped,
+      detected,
+    )!;
+    expect(whole.target).toEqual({ kind: "desktop", title: "Whole screen" });
+    // Never seen active: nothing says which apps it held.
+    expect(desktopSession(base, control, stopped, detected)!.target).toEqual({
+      kind: "desktop",
+      title: "Computer use",
+    });
+  });
+
   effectIt.effect("stops every agent without waiting on a page that never answers", () => {
     const stopped: Array<string> = [];
     const layer = PreviewSessions.layer.pipe(

@@ -92,7 +92,10 @@ export const browserSession = (
   };
 };
 
-/** A thread's computer use control as a session, while it is live or a person stopped it. */
+/**
+ * A thread's computer use control as a session, while one of its turns is live or a person
+ * stopped it. Between turns no agent acts on the screen, so it is left out (#1360).
+ */
 export const desktopSession = (
   base: Base,
   control: ComputerUseLeases.ComputerUseControl,
@@ -101,13 +104,16 @@ export const desktopSession = (
 ): PreviewSession | undefined => {
   if (state._tag === "ended" && state.reason !== "stopped" && state.reason !== "stopped_all")
     return undefined;
+  if (state._tag !== "ended" && control.idle === true) return undefined;
   const reason: ComputerUseRefusalReason | undefined =
     state._tag === "ended"
       ? "userStoppedSession"
       : state._tag === "paused"
         ? "userIntervened"
         : undefined;
-  const apps = state._tag === "active" ? state.apps : undefined;
+  // A paused or stopped control keeps the apps it last held; unknown when it never ran.
+  const scope = state._tag === "active" ? { apps: state.apps } : control.scope;
+  const apps = scope?.apps;
   return {
     id: `${DESKTOP_PREFIX}${control.controlId}`,
     kind: "desktop",
@@ -116,11 +122,13 @@ export const desktopSession = (
     target: {
       kind: "desktop",
       title:
-        apps === undefined
-          ? "Whole screen"
-          : apps.length === 0
-            ? "No apps approved"
-            : apps.join(", "),
+        scope === undefined
+          ? "Computer use"
+          : apps === undefined
+            ? "Whole screen"
+            : apps.length === 0
+              ? "No apps approved"
+              : apps.join(", "),
     },
     owner:
       state._tag !== "paused"

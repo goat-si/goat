@@ -171,6 +171,8 @@ export interface ReadinessFacts {
   /** A real AT-SPI read of the captured window's app: windows found, none, or no answer. */
   readonly tree: "ready" | "empty" | "unavailable";
   readonly uinputWritable: boolean;
+  /** Why a window capture here would not be the window's own pixels (#1328). */
+  readonly captureRefused: string | undefined;
 }
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
@@ -200,22 +202,25 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     );
   if (tree === "empty") reasons.push("The app that was checked shows no windows to AT-SPI.");
   const capture =
-    facts.capture === "varied"
-      ? "ready"
-      : facts.capture === "uniform"
-        ? "blank"
-        : facts.capture === "noWindow"
-          ? "noWindow"
-          : wayland
-            ? "pending"
-            : "unavailable";
+    facts.captureRefused !== undefined
+      ? "unavailable"
+      : facts.capture === "varied"
+        ? "ready"
+        : facts.capture === "uniform"
+          ? "blank"
+          : facts.capture === "noWindow"
+            ? "noWindow"
+            : wayland
+              ? "pending"
+              : "unavailable";
   if (capture === "blank") reasons.push("A window capture came back as one solid color.");
   if (capture === "noWindow") reasons.push("No window is open to prove capture with.");
   if (capture === "pending")
     reasons.push(
       "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
     );
-  if (capture === "unavailable") reasons.push("The driver could not capture a window.");
+  if (capture === "unavailable")
+    reasons.push(facts.captureRefused ?? "The driver could not capture a window.");
   const input = wayland ? "foregroundOnly" : facts.uinputWritable ? "background" : "foregroundOnly";
   if (input === "foregroundOnly")
     reasons.push(
@@ -226,7 +231,14 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   return {
     grants: {
       accessibility: "granted",
-      screenCapture: wayland ? (capture === "ready" ? "granted" : "pending") : "granted",
+      // No consent can make a cropped capture one window's own, so nothing is pending on it.
+      screenCapture: !wayland
+        ? "granted"
+        : capture === "ready"
+          ? "granted"
+          : facts.captureRefused !== undefined
+            ? "unknown"
+            : "pending",
     },
     helper: "authenticated",
     capture,

@@ -447,10 +447,21 @@ export interface HelperHostOptions {
   readonly spawn: (executable: string) => HelperProcess;
   readonly readMetadata: (socketPath: string) => Promise<DaemonMetadata>;
   /**
+   * Agent connections: start no daemon. Each connection's proxy runs the helper itself with
+   * --mcp, which runs the driver as its direct child on stdio, so no socket exists (#1210).
+   * The checks that read the driver here (verify) still use the daemon.
+   */
+  readonly direct?: boolean;
+  /**
    * Where this generation's driver listens. Defaults to a socket in a fresh private directory;
    * Windows names a pipe instead.
    */
   readonly socket?: () => Promise<{ readonly path: string; readonly release: () => Promise<void> }>;
+  /**
+   * Agents reach the driver through the helper's MCP relay instead of the driver binary. Windows
+   * sets it: the relay keeps screenshots of covered windows from showing what covers them (#1329).
+   */
+  readonly mcpThroughHelper?: boolean;
 }
 
 const privateSocket = async () => {
@@ -490,6 +501,22 @@ export function makeHelperHost(options: HelperHostOptions) {
         options.spawn(options.bundle.executable),
         options.bundle.bundleId,
       );
+      if (options.direct) {
+        connection = {
+          socketPath: "",
+          pid: session.pid,
+          generation: String(++generation),
+          driverVersion: options.driverVersion,
+          contractVersion: "",
+          mcpProtocolVersion: "",
+          mcp: {
+            command: options.bundle.executable,
+            args: ["--mcp", "--capability-manifest", options.capabilityManifestPath],
+            environment: [...options.environment],
+          },
+        };
+        return connection;
+      }
       try {
         const socket = await (options.socket ?? privateSocket)();
         releaseSocket = socket.release;
@@ -515,7 +542,9 @@ export function makeHelperHost(options: HelperHostOptions) {
           mcpProtocolVersion: metadata.mcpProtocolVersion,
           // The same proxy invocation the SDK host hands out: arguments carry the whole route.
           mcp: {
-            command: options.bundle.driverPath,
+            command: options.mcpThroughHelper
+              ? options.bundle.executable
+              : options.bundle.driverPath,
             args: [
               "mcp",
               "--embedded",

@@ -54,7 +54,8 @@ const helperCopy = {
   authenticated: { state: "ok", detail: "The helper is authenticated." },
   unauthenticated: {
     state: "blocked",
-    detail: "The helper is not authenticated. Reconnect or restart GOAT on this computer.",
+    detail:
+      "The helper has not been confirmed yet. Run the readiness check; if it fails, restart GOAT on this computer.",
   },
   incompatible: {
     state: "unsupported",
@@ -222,13 +223,26 @@ export function computerUseReadinessSteps({
     ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
   }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
+  // The tree and input are read through a confirmed helper; before that they are unchecked,
+  // not unsupported.
+  const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
   const capture = readiness
     ? [
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
           : captureCopy[readiness.capture],
-        treeCopy[readiness.tree],
-        inputCopy[readiness.input],
+        unconfirmed && readiness.tree === "unavailable"
+          ? ({
+              state: "unknown",
+              detail: "The accessibility tree is read once the helper is confirmed.",
+            } as const)
+          : treeCopy[readiness.tree],
+        unconfirmed && readiness.input === "unavailable"
+          ? ({
+              state: "unknown",
+              detail: "Input is checked once the helper is confirmed.",
+            } as const)
+          : inputCopy[readiness.input],
       ]
     : [unavailable];
   const toolsStatus = tools
