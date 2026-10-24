@@ -20,20 +20,40 @@ const MASK = "***";
 // A field name whose value is a credential, in snake, kebab or camel case.
 const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|csrf|xsrf|api|client)[_-]?)?token|(?:x[_-])?api[_-]?key|client[_-]?secret|secret|password|passwd|authorization|(?:set[_-]?)?cookie`;
 const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
-// A quote, JSON-escaped or not.
-const QUOTE = String.raw`\\?["']`;
+
+// The body of a quoted string, up to its own unescaped closing quote: in JSON, in a single-quoted
+// repr, and in JSON escaped inside another JSON string, where \\ and \" are themselves escaped.
+const DOUBLE_BODY = String.raw`(?:\\.|[^"\\])*`;
+const SINGLE_BODY = String.raw`(?:\\.|[^'\\])*`;
+const ESCAPED_BODY = String.raw`(?:\\\\(?:\\\\|\\"|[^\\"])|[^\\"])*`;
+const QUOTINGS = [
+  [String.raw`\\"`, ESCAPED_BODY],
+  ['"', DOUBLE_BODY],
+  ["'", SINGLE_BODY],
+] as const;
+// A value after = or :, whole when it is quoted.
+const VALUE = String.raw`(?:"${DOUBLE_BODY}"?|'${SINGLE_BODY}'?|\S+)`;
 
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
-  // "set-cookie": ["a=1", "b=2"]
-  [new RegExp(String.raw`(${QUOTE}set-cookie${QUOTE}\s*:\s*)\[[^\]]*\]`, "gi"), `$1["${MASK}"]`],
-  // "access_token": "value", in JSON, escaped JSON or a dict repr
-  [
-    new RegExp(
-      String.raw`(${QUOTE}(?:${CREDENTIAL_KEY})${QUOTE}\s*:\s*${QUOTE})(?:[^"'\\]|\\(?!["']))*`,
-      "gi",
-    ),
-    `$1${MASK}`,
-  ],
+  // "set-cookie": ["a=1", "b=2"], every element whatever it holds
+  ...QUOTINGS.map(
+    ([quote, body]) =>
+      [
+        new RegExp(
+          String.raw`(${quote}set-cookie${quote}\s*:\s*)\[(?:\s*${quote}${body}(?:${quote})?\s*,?)*\s*\]?`,
+          "gi",
+        ),
+        `$1[${MASK}]`,
+      ] as const,
+  ),
+  // "access_token": "value"
+  ...QUOTINGS.map(
+    ([quote, body]) =>
+      [
+        new RegExp(String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*${quote})${body}`, "gi"),
+        `$1${MASK}`,
+      ] as const,
+  ),
   // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
   // A JWT: a JSON header, a payload and a signature, each base64url.
@@ -44,24 +64,33 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
-  [/\b(authorization\s*[=:]\s*)(?!(?:Bearer|Basic)\b)\S+/gi, `$1${MASK}`],
   [
-    /\b((?:(?:access|refresh|id|session|client)[_-]?)?token|api[_-]?key|client[_-]?secret|secret|password|passwd)(\s*[=:]\s*)\S+/gi,
+    new RegExp(String.raw`\b(authorization\s*[=:]\s*)(?!(?:Bearer|Basic)\b)${VALUE}`, "gi"),
+    `$1${MASK}`,
+  ],
+  [
+    new RegExp(
+      String.raw`\b((?:(?:access|refresh|id|session|client)[_-]?)?token|api[_-]?key|client[_-]?secret|secret|password|passwd)(\s*[=:]\s*)${VALUE}`,
+      "gi",
+    ),
     `$1$2${MASK}`,
   ],
 ];
 
 const MAX_STRING = 32_000;
+// Only the start of a huge text can be shown; scanning all of it would slow every log call.
+const MAX_SCANNED = 8 * MAX_STRING;
 
 /** Text with credentials replaced, then cut to a bound, so the cut never splits a credential. */
 export function redactLogText(text: string): string {
+  const scanned = text.length <= MAX_SCANNED ? text : text.slice(0, MAX_SCANNED);
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) => current.replace(pattern, replacement),
-    redactGoatCredentials(text),
+    redactGoatCredentials(scanned),
   );
-  return redacted.length <= MAX_STRING
+  return redacted.length <= MAX_STRING && scanned === text
     ? redacted
-    : `${redacted.slice(0, MAX_STRING)}…[${redacted.length - MAX_STRING} more characters]`;
+    : `${redacted.slice(0, MAX_STRING)}…[cut from ${text.length} characters]`;
 }
 
 const DEFECT_SUMMARY_MAX_CHARS = 2_000;
@@ -186,9 +215,13 @@ function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
 
 const MAX_DEPTH = 8;
 const MAX_NODES = 2_000;
+const MAX_TOTAL_CHARS = 64_000;
+const TRUNCATED = "[Truncated]";
 
+/** One log call's allowance, shared by every value it visits, so no input can make it large. */
 interface Budget {
   nodes: number;
+  chars: number;
   // The objects on the path being copied, so only a real cycle is cut.
   readonly path: WeakSet<object>;
 }
@@ -199,26 +232,39 @@ interface Budget {
  * hook of the original reaches a sink. A credential-named field loses its whole value.
  */
 export const redactLogMessage = (value: unknown): unknown =>
-  sanitize(value, 0, { nodes: MAX_NODES, path: new WeakSet() });
+  sanitize(value, 0, { nodes: MAX_NODES, chars: MAX_TOTAL_CHARS, path: new WeakSet() });
+
+const exhausted = (budget: Budget) => budget.nodes <= 0 || budget.chars <= 0;
+
+/** Already redacted text, cut to what is left of the budget. */
+function fit(redacted: string, budget: Budget): string {
+  const kept =
+    redacted.length <= budget.chars ? redacted : `${redacted.slice(0, Math.max(0, budget.chars))}…`;
+  budget.chars -= kept.length;
+  return kept;
+}
+
+const text = (value: string, budget: Budget) => fit(redactLogText(value), budget);
 
 function sanitize(value: unknown, depth: number, budget: Budget): unknown {
+  if (exhausted(budget)) return TRUNCATED;
+  budget.nodes -= 1;
   switch (typeof value) {
     case "string":
-      return redactLogText(value);
+      return text(value, budget);
     case "number":
     case "boolean":
     case "undefined":
     case "bigint":
       return value;
     case "symbol":
-      return `Symbol(${redactLogText(value.description ?? "")})`;
+      return text(`Symbol(${value.description ?? ""})`, budget);
     case "function":
-      return `[Function ${redactLogText(value.name || "anonymous")}]`;
+      return text(`[Function ${value.name || "anonymous"}]`, budget);
   }
   if (typeof value !== "object" || value === null) return null;
   if (budget.path.has(value)) return "[Circular]";
-  budget.nodes -= 1;
-  if (budget.nodes < 0 || depth > MAX_DEPTH) return "[Truncated]";
+  if (depth > MAX_DEPTH) return TRUNCATED;
   budget.path.add(value);
   try {
     return sanitizeObject(value, depth, budget);
@@ -228,8 +274,8 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
 }
 
 function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
-  if (Cause.isCause(value)) return Cause.pretty(redactCause(value));
-  if (value instanceof Error) return sanitizedError(value).stack;
+  if (Cause.isCause(value)) return fit(Cause.pretty(redactCause(value)), budget);
+  if (value instanceof Error) return fit(sanitizedError(value).stack ?? "", budget);
   if (value instanceof Date) return dateText(value);
   if (Redactable.isRedactable(value)) {
     // The hook decides what the value shows; what it returns is still sanitized.
@@ -243,23 +289,54 @@ function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
   }
   if (value instanceof ArrayBuffer || ArrayBuffer.isView(value))
     return `[binary ${value.byteLength} bytes]`;
+  // Intrinsic iteration: a subclass's own iterator never runs.
   if (value instanceof Map)
-    return Array.from(value, ([key, entry]) => [
+    return collect(Map.prototype.entries.call(value), budget, ([key, entry]) => [
       sanitize(key, depth + 1, budget),
-      sanitize(entry, depth + 1, budget),
+      typeof key === "string" && isCredentialKey.test(key) && entry != null
+        ? MASK
+        : sanitize(entry, depth + 1, budget),
     ]);
-  if (value instanceof Set) return Array.from(value, (entry) => sanitize(entry, depth + 1, budget));
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  if (Array.isArray(value))
-    return Array.from(value, (_, index) =>
-      property(descriptors[String(index)], false, depth, budget),
+  if (value instanceof Set)
+    return collect(Set.prototype.values.call(value), budget, (entry) =>
+      sanitize(entry, depth + 1, budget),
     );
+  if (Array.isArray(value)) {
+    const length = Number(Object.getOwnPropertyDescriptor(value, "length")?.value ?? 0);
+    const indexes = (function* () {
+      for (let index = 0; index < length; index++) yield index;
+    })();
+    return collect(indexes, budget, (index) =>
+      property(Object.getOwnPropertyDescriptor(value, index), false, depth, budget),
+    );
+  }
   const projection: Record<string, unknown> = {};
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!descriptor.enumerable) continue;
-    projection[redactLogText(key)] = property(descriptor, isCredentialKey.test(key), depth, budget);
+  for (const key of Object.keys(value)) {
+    if (exhausted(budget)) {
+      projection["…"] = TRUNCATED;
+      break;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    projection[text(key, budget)] = property(descriptor, isCredentialKey.test(key), depth, budget);
   }
   return projection;
+}
+
+/** Items copied until the budget runs out, then a marker. */
+function collect<T>(
+  items: Iterable<T>,
+  budget: Budget,
+  each: (item: T) => unknown,
+): Array<unknown> {
+  const copied: Array<unknown> = [];
+  for (const item of items) {
+    if (exhausted(budget)) {
+      copied.push(TRUNCATED);
+      break;
+    }
+    copied.push(each(item));
+  }
+  return copied;
 }
 
 function property(

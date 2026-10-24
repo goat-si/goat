@@ -31,7 +31,14 @@ describe("redactLogText", () => {
     ['{"access_token":"abc123","expires_in":3600}', '{"access_token":"***","expires_in":3600}'],
     ['{\\"refreshToken\\":\\"abc123\\"}', '{\\"refreshToken\\":\\"***\\"}'],
     ["{'password': 'hunter2'}", "{'password': '***'}"],
-    ['{"set-cookie":["a=1","b=2"],"status":200}', '{"set-cookie":["***"],"status":200}'],
+    ['{"set-cookie":["a=1","b=2"],"status":200}', '{"set-cookie":[***],"status":200}'],
+    // A value holding the other quote, a bracket or an escaped quote is hidden whole.
+    [`{"cookie":"sid=prefix'CANARY"}`, '{"cookie":"***"}'],
+    ['{"set-cookie":["sid=before]CANARY; Path=/"]}', '{"set-cookie":[***]}'],
+    ['{"token":"abc\\"CANARY"}', '{"token":"***"}'],
+    ['{\\"token\\":\\"abc\\\\\\"CANARY\\"}', '{\\"token\\":\\"***\\"}'],
+    ["{'password': 'it\\'s CANARY'}", "{'password': '***'}"],
+    ['password="two CANARY words" user=me', "password=*** user=me"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
   });
@@ -50,7 +57,7 @@ describe("redactLogText", () => {
   it("redacts a long text before cutting it, so a credential across the cut is still hidden", () => {
     const text = redactLogText(`${"x".repeat(31_990)} ${jwt} ${"y".repeat(100)}`);
     expect(text).not.toContain("eyJhbGciOiJIUzI1NiJ9");
-    expect(text).toMatch(/more characters\]$/);
+    expect(text).toMatch(/cut from \d+ characters\]$/);
   });
 });
 
@@ -191,6 +198,37 @@ describe("redactLogMessage", () => {
       },
     };
     expect(redactLogMessage(value)).toEqual({ note: "Cookie: ***", kept: "yes" });
+  });
+
+  it("masks a credential-named Map entry like an object field", () => {
+    const headers = new Map<unknown, unknown>([
+      ["access_token", "canary-map-token"],
+      ["cookie", "sid=canary-map-cookie"],
+      ["accept", "application/json"],
+    ]);
+    expect(redactLogMessage(headers)).toEqual([
+      ["access_token", "***"],
+      ["cookie", "***"],
+      ["accept", "application/json"],
+    ]);
+  });
+
+  it("copies an array without reading its elements through getters", () => {
+    const items: Array<unknown> = ["first"];
+    Object.defineProperty(items, 1, {
+      enumerable: true,
+      get: () => {
+        throw new Error("getter must not run");
+      },
+    });
+    expect(redactLogMessage(items)).toEqual(["first", "[Getter]"]);
+  });
+
+  it("bounds a wide collection of large strings", () => {
+    const wide = redactLogMessage(Array.from({ length: 5_000 }, () => "a".repeat(4_096)));
+    assert.isArray(wide);
+    expect(JSON.stringify(wide).length).toBeLessThan(70_000);
+    expect((wide as Array<unknown>).at(-1)).toBe("[Truncated]");
   });
 
   it("bounds a deep or wide message", () => {
