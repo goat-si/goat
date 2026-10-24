@@ -37,11 +37,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -183,11 +185,6 @@ const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 const OWN_ID = "goat-proxy:";
 
 /** A lease update that stops the current child before another call may run. */
-type Stopping =
-  | { readonly pause: ComputerUsePauseReason }
-  | { readonly end: LeaseEnd }
-  | { readonly idle: true };
-
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
@@ -213,8 +210,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * replaces a child the other just started or stopped.
    */
   const lifecycle = yield* Semaphore.make(1);
-  /** A pause or end the proxy has taken from the lease stream but not applied yet. */
-  let stopping: Stopping | undefined;
+  /** Lease updates taken but not applied yet, and what each holds back. */
+  const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let driverGeneration = 0;
   let interruptionsSeen: number | undefined;
@@ -556,27 +553,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
 
-  // The server is the authority: the first word for this control confirms it, anything else ends.
-  yield* options.leaseUpdates.pipe(
-    Stream.runForEach((update) => {
-      const stop: Stopping | undefined =
-        update.state !== "ended" && update.controlId !== options.controlId
-          ? { end: "lost" }
-          : update.state === "paused"
-            ? { pause: update.reason }
-            : update.state === "ended"
-              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
-              : update.state === "idle"
-                ? { idle: true }
-                : undefined;
-      return Effect.gen(function* () {
-        // Known before waiting for a manifest refresh: no call may pass a pending stop.
-        stopping = stop;
-        yield* lifecycle.withPermits(1)(
-          (stop !== undefined && "end" in stop
-            ? end(stop.end)
-            : stop !== undefined && "pause" in stop
-              ? pause(stop.pause)
+  const apply = (
+    update: ComputerUseLeaseUpdate | undefined,
+    fence: ReturnType<typeof fences.take>,
+  ) =>
+    lifecycle
+      .withPermits(1)(
+        (update === undefined
+          ? end("lost")
+          : fence !== undefined && "end" in fence
+            ? end(fence.end)
+            : fence !== undefined && "pause" in fence
+              ? pause(fence.pause)
               : update.state === "idle"
                 ? Effect.sync(() => {
                     idle = true;
@@ -591,12 +579,38 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
                   )
                 : activate(update as Extract<ComputerUseLeaseUpdate, { state: "active" }>)
-          ).pipe(Effect.andThen(options.onLeaseUpdateApplied?.(update) ?? Effect.void)),
-        );
-      }).pipe(Effect.ensuring(Effect.sync(() => void (stopping = undefined))));
-    }),
+        ).pipe(
+          Effect.andThen(
+            update === undefined
+              ? Effect.void
+              : (options.onLeaseUpdateApplied?.(update) ?? Effect.void),
+          ),
+        ),
+      )
+      .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
+  // The server is the authority: the first word for this control confirms it, anything else
+  // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
+  // update never keeps a later one's fence from going up. The stream ending applies as lost.
+  const applying = yield* Queue.unbounded<{
+    readonly update: ComputerUseLeaseUpdate | undefined;
+    readonly fence: ReturnType<typeof fences.take>;
+  }>();
+  yield* Queue.take(applying).pipe(
+    Effect.flatMap(({ update, fence }) => apply(update, fence)),
+    Effect.forever,
+    // A failed update ends the control as lost here: this fiber is the queue's only reader.
+    Effect.catchCause(() => end("lost")),
+    Effect.forkScoped,
+  );
+  const take = (update: ComputerUseLeaseUpdate | undefined) =>
+    Effect.suspend(() => {
+      const fence = update === undefined ? fences.lost() : fences.take(update, apps);
+      return Queue.offer(applying, { update, fence });
+    });
+  yield* options.leaseUpdates.pipe(
+    Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
-    Effect.andThen(end("lost")),
+    Effect.andThen(take(undefined)),
     Effect.forkScoped,
   );
 
@@ -839,34 +853,42 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     const notSent = (requestId: JsonRpcId) => {
+      const pending = fences.pending();
       const ending =
-        finished ?? (stopping !== undefined && "end" in stopping ? stopping.end : undefined);
+        finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
       const pausing =
-        paused ?? (stopping !== undefined && "pause" in stopping ? stopping.pause : undefined);
+        paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
       return ending !== undefined
         ? refusal(requestId, message?.method, ending, LEASE_END_MESSAGES[ending])
         : pausing !== undefined
           ? refusal(requestId, message?.method, pausedDetail(pausing), PAUSE_MESSAGES[pausing])
-          : idle || (stopping !== undefined && "idle" in stopping)
+          : idle || (pending !== undefined && "idle" in pending)
             ? refusal(
                 requestId,
                 message?.method,
                 "control_idle",
                 "This thread's turn has ended. Computer use is idle until its next turn.",
               )
-            : refusal(
-                requestId,
-                message?.method,
-                interruptionDetail(lastInterruption),
-                interruptionRefusal(lastInterruption),
-              );
+            : pending !== undefined && "narrowed" in pending
+              ? refusal(
+                  requestId,
+                  message?.method,
+                  "app_not_approved",
+                  "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
+                )
+              : refusal(
+                  requestId,
+                  message?.method,
+                  interruptionDetail(lastInterruption),
+                  interruptionRefusal(lastInterruption),
+                );
     };
     const stillCurrent = () =>
       running === current &&
       paused === undefined &&
       !idle &&
       finished === undefined &&
-      stopping === undefined;
+      fences.clear();
     if (isRequest && message?.method === "tools/call") {
       // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
