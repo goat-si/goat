@@ -115,37 +115,61 @@ export function scopeVerdict(input: {
 
 /**
  * Keeps the pid-to-app map in step with a driver answer. Only a list_apps answer (`listing`)
- * says which app a pid is, by the bundle id grants name or the app name where there is none.
- * Other answers, such as list_windows and get_window_state, often name the app without its
- * bundle id; a display name taken as an id would let a grant naming it reach an app another
- * grant names by bundle id. They can only drop a pid whose app they name differently, which
- * also catches a pid reused by another app, so it is listed again before it is judged.
- * In a listing, an object with a pid is one app's entry; what it nests, such as its windows,
- * is not read, since a window names its app without the bundle id.
+ * says which app a pid is, and only through the entries of its `apps` arrays: each names its
+ * app by the bundle id grants name, or the app name where there is none. Everything else names
+ * apps without the bundle id: windows an entry nests, the `processes` list Windows and Linux
+ * drivers send beside `apps`, and answers such as list_windows and get_window_state. A display
+ * name taken as an id would let a grant naming it reach an app another grant names by bundle
+ * id, so outside a listing an answer can only drop a pid whose app it names differently, which
+ * also catches a pid reused by another app; the pid is listed again before it is judged.
  */
-export function learnApps(
-  value: unknown,
-  into: Map<number, ListedApp>,
-  listing: boolean,
-  depth = 0,
-): void {
-  if (depth > 5) return;
-  if (Array.isArray(value)) {
-    for (const item of value) learnApps(item, into, listing, depth + 1);
-    return;
+export function learnApps(value: unknown, into: Map<number, ListedApp>, listing: boolean): void {
+  for (const entry of listing ? listedApps(value) : namedApps(value)) {
+    if (listing) into.set(entry.pid, { id: entry.id, name: entry.name });
+    else if (into.get(entry.pid)?.id !== entry.id) into.delete(entry.pid);
   }
+}
+
+interface NamedApp extends ListedApp {
+  readonly pid: number;
+}
+
+const namedApp = (value: unknown): NamedApp | undefined => {
   const object = record(value);
-  if (object === undefined) return;
-  const pid = object.pid;
-  const name = text(object.app_name) ?? text(object.name);
-  const id = text(object.bundle_id) ?? name;
-  if (typeof pid === "number" && Number.isInteger(pid) && id !== undefined) {
-    if (listing) {
-      into.set(pid, { id, name });
-      return;
-    }
-    if (into.get(pid)?.id !== id) into.delete(pid);
-  }
-  for (const nested of Object.values(object))
-    if (typeof nested === "object" && nested !== null) learnApps(nested, into, listing, depth + 1);
+  const pid = object?.pid;
+  const name = text(object?.app_name) ?? text(object?.name);
+  const id = text(object?.bundle_id) ?? name;
+  return typeof pid === "number" && Number.isInteger(pid) && id !== undefined
+    ? { pid, id, name }
+    : undefined;
+};
+
+/** The entries of every `apps` array in a list_apps answer, wherever its envelope puts them. */
+function listedApps(value: unknown, depth = 0): ReadonlyArray<NamedApp> {
+  if (depth > 5) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => listedApps(item, depth + 1));
+  const object = record(value);
+  if (object === undefined) return [];
+  return Object.entries(object).flatMap(([key, nested]) =>
+    key === "apps" && Array.isArray(nested)
+      ? nested.flatMap((item) => namedApp(item) ?? [])
+      : typeof nested === "object" && nested !== null
+        ? listedApps(nested, depth + 1)
+        : [],
+  );
+}
+
+/** Every object in an answer that names an app with its pid. */
+function namedApps(value: unknown, depth = 0): ReadonlyArray<NamedApp> {
+  if (depth > 5) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => namedApps(item, depth + 1));
+  const object = record(value);
+  if (object === undefined) return [];
+  const own = namedApp(object);
+  return [
+    ...(own === undefined ? [] : [own]),
+    ...Object.values(object).flatMap((nested) =>
+      typeof nested === "object" && nested !== null ? namedApps(nested, depth + 1) : [],
+    ),
+  ];
 }

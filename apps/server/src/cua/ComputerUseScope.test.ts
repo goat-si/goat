@@ -97,4 +97,19 @@ describe("scopeVerdict", () => {
     assert.deepEqual(listed.get(KAKAO.pid), { id: KAKAO.bundle_id, name: KAKAO.name });
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });
+
+  it("takes a listed app's id over the name-only processes list Windows and Linux send beside it", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps(
+      {
+        structuredContent: {
+          apps: [{ pid: 42, bundle_id: "org.example.Editor", name: "Editor" }],
+          processes: [{ pid: 42, name: "Editor" }],
+        },
+      },
+      listed,
+      true,
+    );
+    assert.deepEqual(listed.get(42), { id: "org.example.Editor", name: "Editor" });
+  });
 });
