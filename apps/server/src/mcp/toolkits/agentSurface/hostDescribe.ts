@@ -27,7 +27,7 @@ export const THIS_BUILD: { readonly version: string; readonly commitTime?: numbe
  * are the same build. null when the host did not report a build (it predates reporting one) or
  * nothing proves an order, such as two dev builds without commit times.
  */
-export const hostOlderThanHere = (build: RuntimeBuild | undefined): boolean | null => {
+const hostOlderThanHere = (build: RuntimeBuild | undefined): boolean | null => {
   if (build === undefined) return null;
   const order = compareRuntimeBuilds(build, THIS_BUILD);
   return order === undefined ? null : order < 0;

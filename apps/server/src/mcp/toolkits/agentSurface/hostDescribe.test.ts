@@ -20,6 +20,7 @@ import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as LinkedHosts from "../../../linkedHosts/LinkedHosts.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
+import * as SshRemoteDispatch from "../../../sshRemote/SshRemoteDispatch.ts";
 import {
   host,
   initialize,
@@ -95,51 +96,60 @@ const describeAs = (options: Options, calls: ReadonlyArray<readonly [string, obj
   const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
     getThreadShell: () => Effect.sync(() => caller.shell),
   });
-  const hostReads = HostThreadsMcpService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        layerNoFleetSync,
-        threads,
-        Layer.mock(ThreadResults.ThreadResultService)({}),
-        Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
-        Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
-        Layer.mock(LaunchWatchService.LaunchWatchService)({}),
-        Layer.mock(ThreadReplicaService.ThreadReplicaService)({}),
-      ),
-    ),
-  );
-  const overrides = Layer.mergeAll(
-    threads,
-    hostReads,
-    Layer.mock(LinkedHosts.LinkedHosts)({
-      find: (name) =>
-        Effect.succeed(
-          options.linkedHost?.host.name === name ? Option.some(options.linkedHost) : Option.none(),
+  // The real dispatch withRemote drives, never the inert one the catalog's dependencies carry.
+  const hostReads = (dispatch: SshRemoteDispatch.SshRemoteDispatch["Service"]) =>
+    HostThreadsMcpService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          layerNoFleetSync,
+          threads,
+          Layer.succeed(SshRemoteDispatch.SshRemoteDispatch, dispatch),
+          Layer.mock(ThreadResults.ThreadResultService)({}),
+          Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+          Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
+          Layer.mock(LaunchWatchService.LaunchWatchService)({}),
+          Layer.mock(ThreadReplicaService.ThreadReplicaService)({}),
         ),
-    }),
-    ...(options.profile === undefined
-      ? []
-      : [
-          Layer.mock(Profiles.PermissionProfiles)({
-            resolve: () => Effect.succeed(options.profile as Profiles.EffectiveProfile),
-          }),
-        ]),
-  );
-  const served = catalog.pipe(
-    Layer.provide(Layer.mergeAll(dependencies, overrides)),
-    Layer.provideMerge(McpServer.McpServer.layer),
-  );
+      ),
+    );
+  const overrides = (dispatch: SshRemoteDispatch.SshRemoteDispatch["Service"]) =>
+    Layer.mergeAll(
+      threads,
+      hostReads(dispatch),
+      Layer.mock(LinkedHosts.LinkedHosts)({
+        find: (name) =>
+          Effect.succeed(
+            options.linkedHost?.host.name === name
+              ? Option.some(options.linkedHost)
+              : Option.none(),
+          ),
+      }),
+      ...(options.profile === undefined
+        ? []
+        : [
+            Layer.mock(Profiles.PermissionProfiles)({
+              resolve: () => Effect.succeed(options.profile as Profiles.EffectiveProfile),
+            }),
+          ]),
+    );
   const body = Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const results: Array<McpSchema.CallToolResult> = [];
-    for (const [name, args] of calls)
-      results.push(yield* server.callTool({ name, arguments: args }));
-    return results;
-  }).pipe(
-    Effect.provideService(McpInvocationContext, options.scope ?? scopes.thread),
-    Effect.provideService(McpSchema.McpServerClient, client),
-    Effect.provide(served),
-  );
+    const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+    const served = catalog.pipe(
+      Layer.provide(Layer.mergeAll(dependencies, overrides(dispatch))),
+      Layer.provideMerge(McpServer.McpServer.layer),
+    );
+    return yield* Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const results: Array<McpSchema.CallToolResult> = [];
+      for (const [name, args] of calls)
+        results.push(yield* server.callTool({ name, arguments: args }));
+      return results;
+    }).pipe(
+      Effect.provideService(McpInvocationContext, options.scope ?? scopes.thread),
+      Effect.provideService(McpSchema.McpServerClient, client),
+      Effect.provide(served),
+    );
+  });
   return withRemote(
     {
       answer: (request) => initialize(request) ?? options.answer(request) ?? { status: 500 },
