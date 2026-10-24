@@ -315,6 +315,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-O",
       "-target",
       arch + "-apple-macos13.0",
+      // audit_token_to_pid, for the parent check by audit token.
+      "-lbsm",
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),

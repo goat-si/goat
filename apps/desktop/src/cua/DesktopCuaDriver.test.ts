@@ -815,6 +815,20 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       }),
     ),
   );
+  it.effect("starts no driver daemon for agents on macOS; only the readiness check does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.verify;
+        assert.deepEqual(
+          test.helperLaunches.map(({ direct }) => direct),
+          [true, false],
+        );
+      }),
+    ),
+  );
 });
 
 describe("DesktopCuaDriver readiness on Windows", () => {

@@ -531,6 +531,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         capabilityManifestPath: manifestPath,
         environment: driverEnvironment,
         platform: environment.platform,
+        // macOS agents reach the driver only through a helper their proxy starts (#1210).
+        direct: scope === "agents" && environment.platform === "darwin",
       });
     } else {
       const sdk = yield* Effect.tryPromise(() => native.loadEmbedded());
@@ -859,7 +861,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
       );
-      const mcp = yield* decodeMcp({ ...connection.mcp, socketPath: connection.socketPath });
+      const mcp = yield* decodeMcp({
+        ...connection.mcp,
+        ...(connection.socketPath === "" ? {} : { socketPath: connection.socketPath }),
+      });
       const session = entry.host.session?.();
       if (entry.helper) {
         helperCanWatch = session?.canWatch === true;
