@@ -1,7 +1,8 @@
 /**
- * An unattended thread asking a person for computer use on this host. The request is an
- * approval handoff on the computer_use.grant path whose expiry is the end of the admission;
- * a person allowed to change this environment's settings answers it in a GOAT client.
+ * A thread asking a person for computer use on this host, of the whole screen or of the apps it
+ * names. The request is an approval handoff on the computer_use.grant path whose expiry is the
+ * end of the admission; a person allowed to change this environment's settings answers it in a
+ * GOAT client. Interactive threads ask for apps; unattended ones need an admission at all.
  *
  * @module ComputerUseRequests
  */
@@ -47,10 +48,18 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: `Thread ${held.value.threadId} holds computer use on this host until ${DateTime.formatIso(held.value.expiresAt)}. Ask again after it ends.`,
     } satisfies ComputerUseRequestResult;
   const own = yield* leases.active(input.threadId);
-  if (Option.isSome(own))
+  const wanted = input.request.apps;
+  // A live admission answers the request only when it already covers what is asked.
+  const granted = Option.isSome(own) ? own.value.apps : [];
+  const covered =
+    Option.isSome(own) &&
+    (granted === undefined ||
+      (wanted !== undefined &&
+        wanted.every((app) => granted.some((name) => name.toLowerCase() === app.toLowerCase()))));
+  if (Option.isSome(own) && covered)
     return {
       kind: "available",
-      message: `This thread is admitted until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
+      message: `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -69,12 +78,19 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   const span = `for ${minutes} minutes, until ${until.slice(11, 16)} UTC`;
   const host = yield* HostProcess.Hostname;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
-  const title = view.projection.thread.title.trim() || "An unattended thread";
+  const title = view.projection.thread.title.trim() || "A thread";
+  const what =
+    wanted === undefined
+      ? "see and control this computer's screen"
+      : `control ${wanted.join(", ")}`;
   const handoffs = yield* Handoffs.Handoffs;
   const handoff = yield* handoffs.create({
     kind: "approval",
-    title: `Allow computer use on ${host}?`,
-    reason: `${title} (turn ${run.ordinal}) asks to see and control this computer's screen ${span}: ${input.request.purpose}`,
+    title:
+      wanted === undefined
+        ? `Allow computer use on ${host}?`
+        : `Allow ${wanted.join(", ")} on ${host}?`,
+    reason: `${title} (turn ${run.ordinal}) asks to ${what} ${span}: ${input.request.purpose}`,
     requestedBy: {
       threadId: input.threadId,
       providerInstanceId: input.providerInstanceId,
@@ -85,13 +101,20 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     nodeId: run.rootNodeId,
     human: {
       location: [
-        `${title}, turn ${run.ordinal} (run ${run.id}), asks to use the screen of ${host} ${span} (${until}).`,
+        `${title}, turn ${run.ordinal} (run ${run.id}), asks to ${what} on ${host} ${span} (${until}).`,
         `Its stated purpose: ${input.request.purpose}`,
-        "Approving admits this thread's turns until then; it does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
+        wanted === undefined
+          ? "Approving admits this thread's turns until then; it does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too."
+          : "Approving admits this thread's turns to these apps' windows until then; it does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
       ].join("\n\n"),
     },
-    args: { purpose: input.request.purpose, minutes },
+    args: {
+      purpose: input.request.purpose,
+      minutes,
+      ...(wanted === undefined ? {} : { apps: wanted }),
+    },
     expiresAt,
+    ...(wanted === undefined ? {} : { apps: wanted }),
   });
   return {
     kind: "needs_human",

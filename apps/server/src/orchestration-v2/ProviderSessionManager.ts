@@ -735,15 +735,7 @@ export const layerWithOptions = (
                   interactionMode: preparedInput.interactionMode,
                   readOnly,
                   origin: computerUseOrigin,
-                  lease:
-                    computerUseOrigin._tag === "unattended" && Option.isSome(computerUseLeases)
-                      ? yield* computerUseLeases.value
-                          .active(threadId)
-                          .pipe(Effect.orElseSucceed(() => Option.none()))
-                      : Option.none(),
-                  proxy: Option.isSome(computerUseLeases)
-                    ? computerUseLeases.value.proxy
-                    : undefined,
+                  leases: computerUseLeases,
                 });
                 const existing = yield* mcpSessions.read(threadId);
                 if (existing !== undefined) {

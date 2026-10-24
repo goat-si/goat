@@ -106,30 +106,128 @@ export const DesktopCuaVerification = Schema.Struct({
 export type DesktopCuaVerification = typeof DesktopCuaVerification.Type;
 
 /**
- * What the computer use lease proxy hears from its own server about the lease it was started
- * for, one JSON object per line. Anything other than "active" for that handoff ends it.
+ * Why a computer use control stopped. stopped: a person pressed Stop on the thread's turn.
+ * stopped_all: a person used the kill switch for every thread on the host.
+ */
+export const ComputerUseControlEnd = Schema.Literals([
+  "expired",
+  "revoked",
+  "replaced",
+  "disabled",
+  "unauthorized",
+  "stopped",
+  "stopped_all",
+]);
+export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
+
+/** Why the agent waits: a person's own input reached the shared desktop, or they took over. */
+export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover"]);
+export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
+
+/**
+ * What the computer use proxy hears from its own server about the control it was started for,
+ * one JSON object per line. "active" carries the apps the thread may control, absent when every
+ * app the driver admits is allowed; "paused" holds every call until a later "active"; anything
+ * else for that control ends it.
  */
 export const ComputerUseLeaseUpdate = Schema.Union([
   Schema.Struct({
     state: Schema.Literal("active"),
-    handoffId: TrimmedNonEmptyString,
+    controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
+    apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
-    state: Schema.Literal("ended"),
-    reason: Schema.Literals(["expired", "revoked", "replaced", "disabled", "unauthorized"]),
+    state: Schema.Literal("paused"),
+    controlId: TrimmedNonEmptyString,
+    reason: ComputerUsePauseReason,
   }),
+  Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
-/** Path the proxy reads lease updates from, on the server that issued its MCP credential. */
+/**
+ * Why computer use refused or stopped one call, shared by the proxy and the native helpers. A
+ * policy refusal is targetRefused, never a person's stop (#1146). The agent must observe again or
+ * ask for approval; a refused call is never replayed for it.
+ */
+export const ComputerUseRefusalReason = Schema.Literals([
+  "userStoppedSession",
+  "userIntervened",
+  "screenLocked",
+  "permissionsNotGranted",
+  "permissionsPending",
+  "appNotAllowed",
+  "blockedURL",
+  "incompatibleClientVersion",
+  "targetRefused",
+]);
+export type ComputerUseRefusalReason = typeof ComputerUseRefusalReason.Type;
+
+/** The proxy's finer account of a refusal, beside its reason. */
+export const ComputerUseRefusalDetail = Schema.Literals([
+  "app_not_approved",
+  "desktop_not_approved",
+  "waiting_for_human",
+  "private_mode",
+  ...ComputerUseControlEnd.literals,
+  "lost",
+]);
+export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
+
+export const computerUseRefusalReason = (
+  detail: ComputerUseRefusalDetail,
+): ComputerUseRefusalReason => {
+  switch (detail) {
+    case "stopped":
+    case "stopped_all":
+      return "userStoppedSession";
+    case "waiting_for_human":
+      return "userIntervened";
+    case "app_not_approved":
+      return "appNotAllowed";
+    default:
+      return "targetRefused";
+  }
+};
+
+/** Path the proxy reads control updates from, on the server that issued its MCP credential. */
 export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
+
+/**
+ * Sent by the desktop host's computer use helper when a person's own keyboard or pointer input
+ * reaches the desktop while an agent controls it. The server pauses every agent on the host
+ * until a person hands control back.
+ */
+export const DesktopCuaHumanInputReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaHumanInput"),
+  source: Schema.Literals(["keyboard", "pointer"]),
+});
+export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
+
+export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
+export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
+export const ComputerUseStopAllResult = Schema.Struct({
+  /** Threads whose control ended, unattended admissions included. */
+  stopped: Schema.Int,
+});
+/** App ids as the driver lists them: a macOS bundle id, or the app name elsewhere. */
+const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(200))).check(
+  Schema.isMaxLength(20),
+);
 
 export const ComputerUseRequestInput = Schema.Struct({
   purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(500)).annotate({
     description:
       "What you will do on the screen and why, in one or two sentences. The person sees it before approving.",
   }),
+  apps: Schema.optional(
+    ComputerUseApps.annotate({
+      description:
+        "The apps you will control, by the bundle_id list_apps reports (its name where there is none). The person approves exactly these. Omit only when the work needs the whole screen.",
+    }),
+  ),
   minutes: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 5, maximum: 120 })).annotate({
       description: "How long the admission lasts after the request. Default 30, at most 120.",

@@ -35,6 +35,19 @@ These limits keep agents away from places they never need. They do not stop an
 agent from typing into an app it may use, so give agents work you would let
 them do at that keyboard.
 
+## Approving apps
+
+An agent in a thread you run asks before it uses an app. The request appears in
+the thread and names the apps, such as Calculator or Notes, and until when;
+approve it in a GOAT app and the agent may use those apps' windows in that
+thread until then. Until it has an approval, the agent can list apps and
+windows but not look inside or type into them. A request for the whole screen
+says so; approving it lets the agent act on anything the screen shows.
+
+**Stop** on a thread also stops its computer use at once, even in the middle of
+an action sequence. The agent gets the screen back on its next turn, within the
+apps you approved.
+
 ## Work that runs on its own
 
 Work nobody is watching does not get computer use by itself: GOAT Bot, work

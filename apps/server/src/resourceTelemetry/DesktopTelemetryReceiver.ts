@@ -6,6 +6,7 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
   type DesktopCuaDriverReport,
+  type DesktopCuaHumanInputReport,
   type DesktopHostTelemetryMessage as DesktopHostTelemetryMessageValue,
   type DesktopHostTelemetrySnapshot,
   DesktopTelemetryControlMessage,
@@ -192,6 +193,8 @@ export class DesktopTelemetryReceiver extends Context.Service<
       Scope.Scope
     >;
     readonly cuaReports: Stream.Stream<DesktopCuaDriverReport>;
+    /** A person's input reaching the desktop while an agent controls it. */
+    readonly cuaHumanInput: Stream.Stream<DesktopCuaHumanInputReport>;
     readonly requestCuaDriver: (
       requestId: string,
       enabled: boolean,
@@ -351,6 +354,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
   const cuaReports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+  const cuaHumanInput = yield* PubSub.sliding<DesktopCuaHumanInputReport>(1);
   const controlMutex = yield* Semaphore.make(1);
   const snapshotMutex = yield* Semaphore.make(1);
   const health = yield* Ref.make<DesktopTelemetryReceiverHealth>({
@@ -543,6 +547,13 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        if (message.type === "cuaHumanInput") {
+          return recordContact.pipe(
+            Effect.andThen(PubSub.publish(cuaHumanInput, message)),
+            Effect.asVoid,
+          );
+        }
+
         const sampledAt = DateTime.makeUnsafe(message.sampledAtUnixMs);
         return snapshotMutex.withPermits(1)(
           recordContact.pipe(
@@ -638,6 +649,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
 
   return DesktopTelemetryReceiver.of({
     cuaReports: Stream.fromPubSub(cuaReports),
+    cuaHumanInput: Stream.fromPubSub(cuaHumanInput),
     requestCuaDriver: (requestId, enabled) =>
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
@@ -719,6 +731,7 @@ export const layerTest = (
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
       cuaReports: Stream.empty,
+      cuaHumanInput: Stream.empty,
       requestCuaDriver: () =>
         Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
       desktopUpdates:
