@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  overnightPullRequestStream,
   overnightNoticeStream,
   replayNoticeDigest,
   replayNoticeStream,
+  replayPullRequestDigest,
 } from "./noticeReplay.testkit.ts";
 
 /**
@@ -33,5 +35,23 @@ describe("notice replay", () => {
     const busy = replayNoticeDigest(events, 8);
     expect(busy.length).toBeLessThanOrEqual(20);
     expect(total(busy)).toBeLessThanOrEqual(94_000);
+  });
+
+  it("tells every pull request's kept context once, within the night's budget (#1055)", () => {
+    // Before #1055 this night told 12 of its 67 kept updates (108,705 B over 31 turns, busy for
+    // eight events) and ended with all 30 pull requests holding context nobody was told.
+    const { turns, untold } = replayPullRequestDigest(overnightPullRequestStream(), 8);
+    expect(untold).toBe(0);
+    for (let lane = 1; lane <= 30; lane++) {
+      const told = (body: string) =>
+        turns.filter((text) => text.includes(`Preview for lane ${lane} ${body}`)).length;
+      // A newer comment replaces an untold one; whatever is told is told once.
+      const latest = lane % 4 === 0 ? "updated." : "is ready.";
+      expect(told(latest), `lane ${lane}`).toBe(1);
+      expect(told("is ready."), `lane ${lane}`).toBeLessThanOrEqual(1);
+    }
+    expect(turns.length).toBeLessThanOrEqual(31);
+    const bytes = turns.reduce((sum, text) => sum + new TextEncoder().encode(text).length, 0);
+    expect(bytes).toBeLessThanOrEqual(122_000);
   });
 });

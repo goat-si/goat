@@ -10,6 +10,7 @@ import { queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
 
 import { LAUNCH_WATCH_MESSAGE_PREFIX } from "../mcp/launchWatch.ts";
 import { HOST_PRESSURE_MESSAGE_PREFIX } from "../fleet/pressure/pressureModel.ts";
+import { PULL_REQUEST_WAKE_MESSAGE_PREFIX } from "./goat/PullRequestWatchWakes.ts";
 import {
   framePendingReports,
   REMOTE_NOTICE_MESSAGE_PREFIXES,
@@ -48,6 +49,8 @@ function noticeLane(id: string): string | null {
   }
   if (id.startsWith(HOST_PRESSURE_MESSAGE_PREFIX))
     return `host:${segments(id, HOST_PRESSURE_MESSAGE_PREFIX)[0]}`;
+  if (id.startsWith(PULL_REQUEST_WAKE_MESSAGE_PREFIX))
+    return `pr:${segments(id, PULL_REQUEST_WAKE_MESSAGE_PREFIX)[0]}`;
   const remote = REMOTE_NOTICE_MESSAGE_PREFIXES.find((prefix) => id.startsWith(prefix));
   return remote === undefined ? null : `report:${segments(id, remote)[0]}`;
 }
@@ -59,7 +62,8 @@ const threadLane = (host: string | null, threadId: string) => `thread:${host ?? 
 const runEndRunId = (id: string) => {
   if (!id.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX)) return null;
   const event = segments(id, LAUNCH_WATCH_MESSAGE_PREFIX).slice(3).join(":");
-  return event.startsWith("run:") ? event.slice("run:".length) : null;
+  // A later end of a run retried in place is `run:<runId>:end:<when>`; run ids never hold ":end:".
+  return event.startsWith("run:") ? event.slice("run:".length).replace(/:end:.*$/, "") : null;
 };
 
 const OPEN = "<notice id=";
@@ -130,6 +134,15 @@ export function renderNotices(notices: ReadonlyArray<Notice>): string {
   return notices.length === 1 && only !== undefined ? only.text : render(notices);
 }
 
+/**
+ * The text of a message that holds these notices. One notice stays plain only under its own id:
+ * a digest whose first notice was dropped keeps its block, so the rest keep their ids.
+ */
+export function renderDigest(messageId: string, notices: ReadonlyArray<Notice>): string {
+  const [only] = notices;
+  return notices.length === 1 && only?.id === messageId ? only.text : render(notices);
+}
+
 /** The summary a client shows for a digest: how many notices, and the newest. */
 /**
  * The digest keeps its first notice's source, which decides whose model selection the turn runs
@@ -182,7 +195,7 @@ export function turnText(
 
 type Dispatch = Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>;
 
-const isNoticeMessage = (message: {
+export const isNoticeMessage = (message: {
   readonly id: string;
   readonly createdBy: string;
   readonly creationSource: string;
@@ -240,7 +253,7 @@ export function foldIntoQueuedNotice(
     occurredAt: now,
     payload: {
       ...queued,
-      text: renderNotices(notices),
+      text: renderDigest(queued.id, notices),
       notification: foldedNotification(notices.length, queued.notification, command.notification),
       updatedAt: now,
     },

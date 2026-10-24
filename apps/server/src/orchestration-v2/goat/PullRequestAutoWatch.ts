@@ -14,6 +14,7 @@ import * as Effect from "effect/Effect";
 
 import type { OrchestratorDispatchError, OrchestratorV2Error } from "../Orchestrator.ts";
 import type { ProjectionStoreV2Shape } from "../ProjectionStore.ts";
+import { keptAfterPass } from "../pullRequestWatch.ts";
 
 /** A watch starting now. An automatic one wakes the agent but does not keep the thread working. */
 export function newPullRequestWatch(
@@ -49,13 +50,26 @@ export function explicitPullRequestWatch(watch: ThreadPullRequestWatch): ThreadP
   return rest;
 }
 
-/** Recorded progress on the current watch, which keeps its own automatic flag. */
+/**
+ * Recorded progress on the current watch, which keeps its own automatic flag. The reader sends
+ * only what this pass kept as context; it is merged here, under the thread lock, so fragments a
+ * starting turn told and cleared while the host was read are not written back. Fragments the
+ * new state contradicts (a cleared conflict, checks of a replaced head) are dropped first.
+ */
 export function syncedPullRequestWatch(
   current: ThreadPullRequestWatch,
   observed: ThreadPullRequestWatch,
 ): ThreadPullRequestWatch {
-  const progress = explicitPullRequestWatch(observed);
-  return current.automatic === true ? { ...progress, automatic: true } : progress;
+  const { heldContext: kept, ...progress } = explicitPullRequestWatch(observed);
+  const heldContext = keptAfterPass(current.heldContext, kept, {
+    ...progress,
+    headMoved: progress.headSha !== current.headSha,
+  });
+  return {
+    ...progress,
+    ...(heldContext.length === 0 ? {} : { heldContext }),
+    ...(current.automatic === true ? { automatic: true } : {}),
+  };
 }
 
 export interface PullRequestAutoWatchDeps {

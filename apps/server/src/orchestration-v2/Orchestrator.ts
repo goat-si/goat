@@ -110,7 +110,12 @@ import {
   newPullRequestWatch,
   syncedPullRequestWatch,
 } from "./goat/PullRequestAutoWatch.ts";
-import { dropQueuedPullRequestWakes as dropQueuedWakes } from "./goat/PullRequestWatchWakes.ts";
+import {
+  dropQueuedPullRequestWakes as dropQueuedWakes,
+  endingWakeText,
+  pullRequestWatchNote,
+  takeHeldPullRequestContext,
+} from "./goat/PullRequestDigest.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -670,7 +675,10 @@ function withPullRequestWatch(
   const { watch: previous, endedWatch, ...rest } = link;
   if (watch !== undefined) return { ...rest, watch };
   const ended = previous ?? endedWatch;
-  return ended === undefined ? rest : { ...rest, endedWatch: ended };
+  if (ended === undefined) return rest;
+  // Kept context is told when the watch ends (or dropped with it); an ended watch never holds it.
+  const { heldContext: _told, ...told } = ended;
+  return { ...rest, endedWatch: told };
 }
 
 function legacyPullRequestLink(
@@ -1606,6 +1614,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
 
       const commandId = CommandId.make(`command:system:start-queued:${queuedRun.id}`);
       const now = yield* DateTime.now;
+      const held = takeHeldPullRequestContext({
+        thread: projection.thread,
+        message: queuedMessage,
+        now,
+        stored: { message: queuedMessage, run: queuedRun },
+      });
       const targetAdapter = yield* providerAdapters.get(queuedRun.providerInstanceId).pipe(
         Effect.mapError(
           (cause) =>
@@ -1936,7 +1950,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           title: null,
           type: "user_message",
           messageId: queuedMessage.id,
-          text: queuedMessage.text,
+          text: held?.text ?? queuedMessage.text,
           attachments: queuedMessage.attachments,
           ...(queuedMessage.context ? { context: queuedMessage.context } : {}),
           createdBy: queuedMessage.createdBy,
@@ -2176,6 +2190,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             occurredAt: now,
             payload: startingRun,
           },
+          // Last: a selection change above rewrites the whole thread from the stored projection.
+          ...(held?.events ?? []),
         ],
         [
           ...sessionsToDetach.map((session) => ({
@@ -2734,10 +2750,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       yield* dispatchThreadMutation(command, events, effects);
       if (command.dropQueuedWakes === true) yield* dropQueuedPullRequestWakes(command, events);
+      else if (command.watch?.headSha != null && command.watch.headSha !== link.watch.headSha)
+        yield* dropQueuedPullRequestWakes(command, events, command.watch.headSha);
       if (command.wake === undefined) {
         if (command.note === undefined) return;
         // Kept as context: the timeline shows it, and no turn starts.
-        const now = yield* DateTime.now;
         const ordinal = yield* projectionStore
           .getNextTurnItemOrdinal(command.threadId)
           .pipe(
@@ -2745,32 +2762,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
             ),
           );
-        yield* emit(
-          events,
-          command,
-        )({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          occurredAt: now,
-          payload: {
-            id: TurnItemId.make(`turn-item:pr-watch:${command.commandId}`),
-            threadId: command.threadId,
-            runId: null,
-            nodeId: null,
-            providerThreadId: null,
-            providerTurnId: null,
-            nativeItemRef: null,
-            parentItemId: null,
-            ordinal,
-            status: "completed",
-            title: null,
-            startedAt: now,
-            completedAt: now,
-            updatedAt: now,
-            type: "notification",
-            ...command.note,
-          },
-        });
+        const note = pullRequestWatchNote(command, command.note, ordinal, yield* DateTime.now);
+        yield* emit(events, command)(note);
         return;
       }
       yield* dispatchMessage(
@@ -2779,7 +2772,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           commandId: command.commandId,
           threadId: command.threadId,
           messageId: command.wake.messageId,
-          text: command.wake.text,
+          // An ending watch tells what it kept, as stored now rather than when the host was read.
+          text:
+            command.watch === null
+              ? endingWakeText(command.wake.text, link.watch, command.endedWatch)
+              : command.wake.text,
           notification: command.wake.notification,
           attachments: [],
           dispatchMode: { type: "queue_after_active" },
@@ -2792,31 +2789,35 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
-  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926).
+  // A stopped watch, or one whose pull request merged or closed, drops the wakes it queued (#926);
+  // a push drops only the check results of earlier heads (#1056).
   const dropQueuedPullRequestWakes = (
-    command: ThreadPullRequestKey & { readonly commandId: CommandId; readonly threadId: ThreadId },
+    command: Extract<OrchestrationV2ServerCommand, ThreadPullRequestKey>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) =>
-    dropQueuedWakes(
-      command,
-      projectionStore
-        .getThreadRecords(command.threadId, ["runs"])
-        .pipe(
-          Effect.mapError(
-            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-          ),
-        ),
-      (runId) =>
-        dispatchQueuedRunCancel(
-          {
-            type: "queued-run.cancel",
-            commandId: command.commandId,
-            threadId: command.threadId,
-            runId,
-          },
-          events,
-        ),
+    headSha?: string,
+  ) => {
+    const read = Effect.mapError(
+      (cause: unknown) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
     );
+    return dropQueuedWakes(
+      command,
+      read(projectionStore.getThreadRecords(command.threadId, ["runs"])),
+      (runId) => read(projectionStore.getRunMessage(command.threadId, runId)),
+      (change) =>
+        "update" in change
+          ? emit(events, command)(change.update).pipe(Effect.asVoid)
+          : dispatchQueuedRunCancel(
+              {
+                type: "queued-run.cancel",
+                commandId: command.commandId,
+                threadId: command.threadId,
+                runId: change.cancel,
+              },
+              events,
+            ),
+      headSha,
+    );
+  };
 
   const { shouldAutoWatchPullRequest } = makePullRequestAutoWatch({
     serverSettings,
@@ -5521,6 +5522,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode.type === "start_immediately" ||
       dispatchMode.type === "queue_after_active";
     const shouldQueue = queueBehindRun !== undefined && startsOrQueuesRun;
+    // A notice that starts now carries what watched pull requests kept as context (#1055).
+    const held = shouldQueue
+      ? undefined
+      : takeHeldPullRequestContext({
+          thread: projection.thread,
+          message: { ...command, id: command.messageId, text: dispatchText },
+          now: yield* DateTime.now,
+        });
+    for (const event of held?.events ?? []) yield* emit(events, command)(event);
+    // Later thread events spread this projection; reread it so they keep the watches cleared.
+    if (held !== undefined)
+      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+    const startText = held?.text ?? dispatchText;
     // A message the user sends from a client means they are back, so the
     // queue a stop or a restart held runs again, in its order, rather than
     // waiting for a Resume.
@@ -6085,7 +6099,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         runId,
         nodeId: rootNodeId,
         role: "user",
-        text: dispatchText,
+        text: startText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
         streaming: false,
@@ -6118,7 +6132,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         type: "user_message",
         messageId: command.messageId,
         inputIntent: "turn_start",
-        text: dispatchText,
+        text: startText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
       };
@@ -6778,7 +6792,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       runId,
       nodeId: rootNodeId,
       role: "user",
-      text: dispatchText,
+      text: startText,
       ...(command.context ? { context: command.context } : {}),
       attachments: command.attachments,
       streaming: false,
@@ -6811,7 +6825,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       type: "user_message",
       messageId: command.messageId,
       inputIntent: "turn_start",
-      text: dispatchText,
+      text: startText,
       ...(command.context ? { context: command.context } : {}),
       attachments: command.attachments,
     };
