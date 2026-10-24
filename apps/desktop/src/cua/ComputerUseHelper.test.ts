@@ -281,6 +281,51 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.isTrue(helper.stdinEnded());
     assert.isUndefined(host.servicePid());
   });
+
+  it.each([
+    { name: "the helper's relay where screenshots are guarded (Windows)", through: true },
+    { name: "the driver itself elsewhere", through: false },
+  ])("hands agents $name as the MCP command, with the same route", async ({ through }) => {
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : { result: {} },
+    });
+    const bundle = {
+      bundlePath: "C:/GOAT/resources/computer-use-helper",
+      executable: "C:/GOAT/resources/computer-use-helper/GOAT Computer Use.exe",
+      driverPath: "C:/GOAT/resources/computer-use-helper/cua-driver/cua-driver.exe",
+      bundleId: BUNDLE_ID,
+    };
+    const host = makeHelperHost({
+      bundle,
+      driverVersion: "0.37.0",
+      capabilityManifestPath: "C:/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      readMetadata: async () => metadata,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      mcpThroughHelper: through,
+    });
+    const connection = await host.start();
+    assert.equal(connection.mcp.command, through ? bundle.executable : bundle.driverPath);
+    expect(connection.mcp.args).toEqual([
+      "mcp",
+      "--embedded",
+      "--socket",
+      "\\\\.\\pipe\\goat-cu-test",
+      "--host-bundle-id",
+      BUNDLE_ID,
+    ]);
+    await host.stop();
+  });
 });
 
 describe("ComputerUseHelper bundle discovery", () => {

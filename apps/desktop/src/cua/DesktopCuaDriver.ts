@@ -245,7 +245,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     makeHelperHost({
       ...options,
       spawn: (executable) => spawnHelperProcess(executable, platform),
-      ...(platform === "win32" ? { socket: windowsDriverPipe } : {}),
+      ...(platform === "win32" ? { socket: windowsDriverPipe, mcpThroughHelper: true } : {}),
       readMetadata: async (socketPath): Promise<DaemonMetadata> => {
         const driver: DriverClient & Pick<CuaDriverLike, "metadata"> = (
           await import("@trycua/cua-driver")

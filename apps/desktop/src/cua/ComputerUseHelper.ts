@@ -457,6 +457,11 @@ export interface HelperHostOptions {
    * Windows names a pipe instead.
    */
   readonly socket?: () => Promise<{ readonly path: string; readonly release: () => Promise<void> }>;
+  /**
+   * Agents reach the driver through the helper's MCP relay instead of the driver binary. Windows
+   * sets it: the relay keeps screenshots of covered windows from showing what covers them (#1329).
+   */
+  readonly mcpThroughHelper?: boolean;
 }
 
 const privateSocket = async () => {
@@ -537,7 +542,9 @@ export function makeHelperHost(options: HelperHostOptions) {
           mcpProtocolVersion: metadata.mcpProtocolVersion,
           // The same proxy invocation the SDK host hands out: arguments carry the whole route.
           mcp: {
-            command: options.bundle.driverPath,
+            command: options.mcpThroughHelper
+              ? options.bundle.executable
+              : options.bundle.driverPath,
             args: [
               "mcp",
               "--embedded",
