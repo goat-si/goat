@@ -222,6 +222,27 @@ namespace Goat.ComputerUse
         }
 
         /// <summary>
+        /// Which process has keyboard focus and whether it is a password field, read now. False
+        /// when UI Automation did not answer in time; callers treat that as private.
+        /// </summary>
+        public static bool Focus(out int processId, out bool password)
+        {
+            int pid = 0;
+            bool secure = false;
+            bool done = RunBounded(delegate
+            {
+                AutomationElement focused = AutomationElement.FocusedElement;
+                if (focused == null) return true;
+                pid = focused.Current.ProcessId;
+                secure = focused.Current.IsPassword;
+                return true;
+            }, 2000, false);
+            processId = pid;
+            password = secure;
+            return done;
+        }
+
+        /// <summary>
         /// "secure" when keyboard focus is on a password field of this process (D6), "clear" when
         /// it is not, "unknown" when UI Automation did not answer in time; callers treat unknown
         /// as private.

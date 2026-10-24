@@ -1,6 +1,7 @@
 import { withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 import type {
   AuthEnvironmentScope,
+  BuiltInSkillName,
   CuaDriverMcpConfiguration,
   EnvironmentId,
   ProviderInstanceId,
@@ -47,10 +48,20 @@ export interface McpProviderSessionConfig {
    */
   readonly cuaDriverBlocked?: boolean;
   /**
+   * Built-in skills this thread's turns carry, from `resolveBuiltInSkills`. Set with
+   * `cuaDriver`; absent means every skill of what is attached.
+   */
+  readonly builtInSkills?: ReadonlyArray<BuiltInSkillName>;
+  /**
    * How many provider-native subagents the thread's goatclaw profile lets run at once. Absent
    * while goatclaw is off, which leaves the provider's own limits in place.
    */
   readonly nativeSubagentLimit?: number;
+  /**
+   * The thread's own TMPDIR. Parallel agents on one machine otherwise share /tmp and can pick up
+   * each other's scratch files (#1206).
+   */
+  readonly temporaryDirectory?: string;
 }
 
 /** Server name every provider sees for the managed Cua Driver. */
@@ -133,6 +144,16 @@ export function cuaDriverKey(descriptor: CuaDriverMcpConfiguration | undefined):
     : JSON.stringify([descriptor.command, descriptor.args, descriptor.socketPath ?? null]);
 }
 
+/**
+ * Whether a turn with the driver attached also carries the computer use skill. The person can
+ * switch the skill off in Settings while keeping the tools.
+ */
+export function carriesComputerUseSkill(
+  config: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined,
+): boolean {
+  return config?.builtInSkills?.includes("computer-use") ?? true;
+}
+
 export function withAgentDeviceEnvironment(
   base: NodeJS.ProcessEnv,
   config: Pick<McpProviderSessionConfig, "agentDeviceEnvironment"> | undefined,
@@ -171,10 +192,13 @@ export function memoryToolAvailability(
 /** Empty markers prevent a thread shell from falling back to a broader stored login. */
 export function withThreadMcpEnvironment(
   base: NodeJS.ProcessEnv,
-  config: Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader"> | undefined,
+  config:
+    | Pick<McpProviderSessionConfig, "endpoint" | "authorizationHeader" | "temporaryDirectory">
+    | undefined,
 ): NodeJS.ProcessEnv {
   return withLegacyEnvNames({
     ...base,
+    ...(config?.temporaryDirectory === undefined ? {} : { TMPDIR: config.temporaryDirectory }),
     GOAT_ACP_MCP_ENDPOINT: config?.endpoint ?? "",
     GOAT_ACP_MCP_AUTHORIZATION: config?.authorizationHeader ?? "",
   });

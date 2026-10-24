@@ -181,10 +181,8 @@ import type { ManagedServerProvider } from "@goat/provider-core/server/snapshot"
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { GOAT_ORCHESTRATION_INSTRUCTIONS } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
-import {
-  buildRuntimeInstructions,
-  COMPUTER_USE_INSTRUCTIONS,
-} from "@goat/provider-core/server/runtimeInstructions";
+import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
+import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
   normalizeMcpText,
@@ -1338,6 +1336,7 @@ export function makeClaudeQueryOptions(input: {
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
+  readonly computerUseSkill?: boolean;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
@@ -1442,6 +1441,7 @@ export function makeClaudeQueryOptions(input: {
         buildRuntimeInstructions({
           harness: "Claude Code",
           computerUse:
+            input.computerUseSkill !== false &&
             input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&
             !McpProviderSession.isBlockedCuaServer(
               input.mcpServers[McpProviderSession.CUA_MCP_SERVER_NAME],
@@ -9594,6 +9594,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
             resume: shouldResume,
+            computerUseSkill: McpProviderSession.carriesComputerUseSkill(mcpSession),
             ...(resumeSessionAt === undefined ? {} : { resumeSessionAt }),
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
@@ -9666,7 +9667,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             queryPolicyKey,
             mcpCredentialId: mcpSession?.providerSessionId,
             cuaDriverKey: cuaKey,
-            computerUseInstructed: cuaKey !== "",
+            computerUseInstructed: launchedWithComputerUseSkill(cuaKey, mcpSession),
             selection: compiledSelection,
             closed,
             lastTurn: null,
@@ -9750,19 +9751,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           return appendClaudeUserText(message, text);
         });
 
-        // A process whose system prompt predates the driver learns the
-        // computer use rules from the first prompt after it was attached.
-        const withComputerUseNotice = (message: SDKUserMessage, query: ClaudeLiveQueryContext) =>
-          Effect.sync(() => {
-            if (
-              query.cuaDriverKey === "" ||
-              query.cuaDriverKey === "blocked" ||
-              query.computerUseInstructed
-            )
-              return message;
-            query.computerUseInstructed = true;
-            return appendClaudeUserText(message, COMPUTER_USE_INSTRUCTIONS);
-          });
+        const withCuaNotice = (
+          message: SDKUserMessage,
+          query: ClaudeLiveQueryContext,
+          threadId: ThreadId,
+        ) =>
+          readMcpSession(threadId).pipe(
+            Effect.map((config) => {
+              const notice = pendingComputerUseNotice(query, config);
+              return notice === undefined ? message : appendClaudeUserText(message, notice);
+            }),
+          );
 
         const startTurn = Effect.fn("ClaudeAdapterV2.startTurn")(
           function* (turnInput: ProviderAdapter.ProviderAdapterV2TurnInput, nativeControl = false) {
@@ -9937,7 +9936,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               const admittedMessage = nativeControl
                 ? userMessage
                 : yield* withFreshMemory(userMessage, turnInput).pipe(
-                    Effect.flatMap((message) => withComputerUseNotice(message, querySession)),
+                    Effect.flatMap((m) => withCuaNotice(m, querySession, turnInput.threadId)),
                   );
               if (context.input.memoryContext) {
                 const body = context.input.memoryContext;

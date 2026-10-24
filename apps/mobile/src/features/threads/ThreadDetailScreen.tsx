@@ -38,7 +38,7 @@ import {
   type EnvironmentThreadStatus,
 } from "@goat/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
-import { resolveProviderSkillsForCwd } from "@goat/client-runtime/providerSkills";
+import { resolveThreadProviderSkills } from "@goat/client-runtime/providerSkills";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
@@ -1131,14 +1131,11 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
   );
   const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
-  const selectedProviderSkills = (() => {
-    const provider = props.serverConfig?.providers.find(
-      (candidate) => candidate.instanceId === selectedInstanceId,
-    );
-    return provider
-      ? resolveProviderSkillsForCwd(provider, props.threadCwd ?? props.projectWorkspaceRoot)
-      : [];
-  })();
+  const selectedProviderSkills = resolveThreadProviderSkills(
+    props.serverConfig,
+    selectedInstanceId,
+    props.threadCwd ?? props.projectWorkspaceRoot,
+  );
 
   useLayoutEffect(() => {
     selectedThreadKeyRef.current = selectedThreadKey;

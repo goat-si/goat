@@ -11,6 +11,10 @@
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
     },
+    "./computer-use-linux-setup": {
+      "types": "./src/computerUseLinuxSetup.ts",
+      "default": "./src/computerUseLinuxSetup.ts"
+    },
     "./memory-browsing": {
       "types": "./src/memoryBrowsing.ts",
       "default": "./src/memoryBrowsing.ts"

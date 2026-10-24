@@ -73,14 +73,10 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
 const removeCheckpointWorkspaceEffect = Effect.fn("removeCheckpointWorkspace")(function* (
   cwd: string,
 ) {
-  // Windows refuses to remove a directory that is still a process's cwd. After a session
-  // release the replay agent can finish exiting just after the test's scope closes, so let
-  // Node retry EBUSY on its own timers (the test clock may be paused). A process that never
-  // exits still fails the removal. Whether release should await that exit: #1164.
+  // No EBUSY retry: Windows refuses to remove a directory that is still a process's cwd, so
+  // a replay agent outliving server shutdown fails here instead of passing unnoticed.
   // The release already dies on failure, so a rejection is a defect here.
-  yield* Effect.promise(() =>
-    NodeFS.promises.rm(cwd, { recursive: true, maxRetries: 10, retryDelay: 50 }),
-  );
+  yield* Effect.promise(() => NodeFS.promises.rm(cwd, { recursive: true }));
 });
 
 export const checkpointWorkspace = (fixtureName: string, files?: ReplayWorkspaceFiles) =>

@@ -18,6 +18,7 @@ import * as DeviceService from "../../../device/DeviceService.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { AGENT_DEVICE_ACCESS_OFF } from "../../toolAvailability.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
 
 function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
@@ -67,7 +68,7 @@ const requireDeviceAccess = McpInvocationContext.requireThreadMcpCapability("dev
   Effect.mapError(
     () =>
       new DeviceToolUnavailableError({
-        reason: "Agent device access is turned off for this environment.",
+        reason: AGENT_DEVICE_ACCESS_OFF,
       }),
   ),
 );
@@ -158,7 +159,7 @@ const handlers = {
         if (!(yield* devices.agentReadinessIfSupported(input.hostId ?? LOCAL_DEVICE_HOST_ID))) {
           return yield* new DeviceToolUnavailableError({
             reason:
-              "Agent device access requires enabled device support, agent access, and an available simulator platform on this host.",
+              "Agent device access needs device support and Agent device access turned on in Settings → Integrations → Devices, and an available simulator platform on this host. Only a person can change those settings; ask the user.",
           });
         }
         yield* McpToolAccess.admit(input);

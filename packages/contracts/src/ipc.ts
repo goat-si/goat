@@ -20,7 +20,7 @@ import {
   SshRuntimeUpdateMode,
 } from "./sshHost.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import type { DesktopCuaVerification } from "./cua.ts";
+import type { DesktopCuaGrants, DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
@@ -1310,6 +1310,12 @@ export interface DesktopBridge extends DesktopWindowMaterialBridge {
   restartCuaDriver?: () => Promise<void>;
   /** Restarts the local driver and proves its macOS grants from inside the driver. */
   verifyCuaDriver?: () => Promise<DesktopCuaVerification>;
+  /** The grants of the app computer use runs as (the helper when shipped), without prompting. */
+  checkCuaGrants?: () => Promise<DesktopCuaGrants>;
+  /** Opens the pane plus a panel to drag that app into its list; false if it did not open. */
+  openCuaPermissionGuide?: (pane: "accessibility" | "screen-recording") => Promise<boolean>;
+  revealCuaGrantTarget?: () => Promise<void>;
+  relaunchForCuaGrants?: () => Promise<void>;
   /**
    * Optional: older desktop builds lack it; callers fall back to VS Code only.
    */

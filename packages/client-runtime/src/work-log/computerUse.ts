@@ -1,5 +1,9 @@
 import type { OrchestrationV2TurnItem } from "@goat/contracts";
-import { cuaDriverToolName } from "@goat/shared/toolActivity";
+import {
+  computerUseTypedTextLength,
+  cuaDriverToolName,
+  replaceComputerUseTypedText,
+} from "@goat/shared/toolActivity";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
@@ -63,6 +67,20 @@ function keys(value: unknown): ReadonlyArray<string> {
   return Array.isArray(value) ? value.flatMap((key) => label(key, 20) ?? []) : [];
 }
 
+const characters = (length: number) => `${length} character${length === 1 ? "" : "s"}`;
+
+/**
+ * A computer-use call's input with its typed text replaced by the text's length. The text can be
+ * a password, so the expanded row, its copy text and every client show only how long it was. The
+ * server sends a redacted marker; raw text from a server that did not redact gets the same label.
+ */
+export function computerUseDisplayInput(
+  toolName: string | null | undefined,
+  input: unknown,
+): unknown {
+  return replaceComputerUseTypedText(toolName, input, characters);
+}
+
 function summary(tool: string, input: Record<string, unknown>): string {
   switch (tool) {
     case "click":
@@ -77,8 +95,8 @@ function summary(tool: string, input: Record<string, unknown>): string {
     }
     case "type_text": {
       // Typed text can be a password, so the card shows only how long it was.
-      const length = typeof input.text === "string" ? input.text.length : 0;
-      return length === 0 ? "Type text" : `Type ${length} character${length === 1 ? "" : "s"}`;
+      const length = computerUseTypedTextLength("cua-driver.type_text", input) ?? 0;
+      return length === 0 ? "Type text" : `Type ${characters(length)}`;
     }
     case "press_key": {
       const key = label(input.key, 20);
@@ -116,7 +134,9 @@ export function computerUseRun(
   if (item?.type !== "dynamic_tool") return undefined;
   const tool = cuaDriverToolName(item.toolName);
   if (tool === undefined) return undefined;
-  const input = record(item.input) ?? {};
+  const raw = record(item.input);
+  // ACP children keep the call in its {server, tool, arguments} envelope.
+  const input = (raw?.server === "cua-driver" ? record(raw.arguments) : raw) ?? {};
   return {
     tool,
     summary: summary(tool, input),
@@ -128,9 +148,33 @@ export function computerUseRun(
 /** The app and window title an observation's result names. */
 export function computerUseObservedTarget(output: unknown): string | null {
   const structured = record(record(output)?.structuredContent) ?? record(output);
-  const app = label(structured?.app_name);
-  const title = label(structured?.window_title);
+  const fields =
+    structured?.app_name !== undefined || structured?.window_title !== undefined
+      ? structured
+      : jsonTextFields(output);
+  const app = label(fields?.app_name);
+  const title = label(fields?.window_title);
   return app !== undefined && title !== undefined ? `${title} in ${app}` : (app ?? title ?? null);
+}
+
+/**
+ * GOAT folds a screenshot result's structured fields into a JSON text block, because Codex drops
+ * the image beside structuredContent, so an observation's names can arrive that way.
+ */
+function jsonTextFields(output: unknown): Record<string, unknown> | undefined {
+  const blocks = Array.isArray(output) ? output : record(output)?.content;
+  if (!Array.isArray(blocks)) return undefined;
+  for (const block of blocks) {
+    const text = record(block)?.type === "text" ? record(block)?.text : undefined;
+    if (typeof text !== "string" || !text.startsWith("{") || text.length > 65_536) continue;
+    try {
+      const parsed = record(JSON.parse(text));
+      if (parsed?.app_name !== undefined || parsed?.window_title !== undefined) return parsed;
+    } catch {
+      // Plain text that only looks like JSON.
+    }
+  }
+  return undefined;
 }
 
 export function computerUseRunStatus(

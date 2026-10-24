@@ -25,6 +25,11 @@ const Windows = Schema.Struct({
   ),
 });
 
+/** Shown windows readiness tries before it settles for the best answer it has. */
+const READINESS_WINDOWS = 5;
+const CAPTURE_RANK = { varied: 3, uniform: 2, failed: 1, noWindow: 0, unproven: 0 } as const;
+const TREE_RANK = { ready: 2, empty: 1, unavailable: 0 } as const;
+
 const decodePermissions = Schema.decodeUnknownOption(Permissions);
 const decodeWindows = Schema.decodeUnknownOption(Windows);
 
@@ -62,24 +67,35 @@ export async function readLinuxReadiness(
       const windows = decodeWindows(list?.structured);
       const shown =
         windows._tag === "Some"
-          ? windows.value.windows.find((entry) => entry.is_on_screen !== false)
-          : undefined;
-      if (!shown) facts.capture = windows._tag === "Some" ? "noWindow" : "failed";
-      else {
-        // display_only preserves the snapshot the agent's element tokens belong to.
-        const capture = await call("get_window_state", {
-          pid: shown.pid,
-          window_id: shown.window_id,
-          include_accessibility_tree: false,
-          display_only: true,
-          max_image_dimension: 256,
-        });
-        const image = capture?.images[0];
-        facts.capture = image
-          ? (pngColors(Buffer.from(image.data, "base64")) ?? "failed")
-          : "failed";
-        const focus = await deps.secureFocus(shown.pid);
-        facts.tree = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
+          ? windows.value.windows
+              .filter((entry) => entry.is_on_screen !== false)
+              .slice(0, READINESS_WINDOWS)
+          : [];
+      if (shown.length === 0) facts.capture = windows._tag === "Some" ? "noWindow" : "failed";
+      // One window does not speak for the desktop: an app without accessibility, or a covered
+      // window that captures blank. The best answer among a few shown windows wins.
+      for (const window of shown) {
+        if (facts.capture !== "varied") {
+          // display_only preserves the snapshot the agent's element tokens belong to.
+          const capture = await call("get_window_state", {
+            pid: window.pid,
+            window_id: window.window_id,
+            include_accessibility_tree: false,
+            display_only: true,
+            max_image_dimension: 256,
+          });
+          const image = capture?.images[0];
+          const found = image
+            ? (pngColors(Buffer.from(image.data, "base64")) ?? "failed")
+            : "failed";
+          if (CAPTURE_RANK[found] > CAPTURE_RANK[facts.capture]) facts.capture = found;
+        }
+        if (facts.tree !== "ready") {
+          const focus = await deps.secureFocus(window.pid);
+          const found = !focus.known ? "unavailable" : focus.windows > 0 ? "ready" : "empty";
+          if (TREE_RANK[found] > TREE_RANK[facts.tree]) facts.tree = found;
+        }
+        if (facts.capture === "varied" && facts.tree === "ready") break;
       }
     }
   }
