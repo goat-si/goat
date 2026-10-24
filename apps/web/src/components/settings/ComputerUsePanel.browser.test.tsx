@@ -212,7 +212,7 @@ it("Off while verifying ignores the late result, and On again runs a fresh check
   const f = setup();
   const first = deferred<DesktopCuaVerification>();
   f.verify.mockImplementationOnce(() => first.promise);
-  await using screen = await render(panel(f));
+  await using _screen = await render(panel(f));
   await clickSwitch("Computer use");
   await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
   await clickSwitch("Computer use");
@@ -251,7 +251,7 @@ it("keeps the grant prompt and does not resume when a read fails", async () => {
 
 it("a failure the host reports outranks this session's passing check, even with the same text", async () => {
   const f = setup({ status: { ...idleMac, failure: "Helper could not start." } });
-  await using screen = await render(panel(f));
+  await using _screen = await render(panel(f));
   await clickSwitch("Computer use");
   await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
   await vi.waitFor(() => expect(statusText()).toBe("Helper could not start."));

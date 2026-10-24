@@ -220,7 +220,7 @@ export function ComputerUsePanel({
           Advanced
         </CollapsibleTrigger>
         <CollapsiblePanel>
-          <div className="border-t border-border/50 pt-3 [&>*+*]:border-t [&>*+*]:border-border/50">
+          <div className="border-t border-border/50 pt-3 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
             <ComputerUseReadiness {...readinessInput} />
             {localMac && setup.holder ? (
               <div className="space-y-2 px-4 py-3">
