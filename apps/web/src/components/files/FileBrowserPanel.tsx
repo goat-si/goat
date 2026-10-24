@@ -33,24 +33,13 @@ import { primaryServerKeybindingsAtom } from "~/state/server";
 import { joinHostPath } from "./filePath";
 import {
   copyFilePathsForCommand,
-  fileTreeCopyPaths,
   hasRelativeCopyPaths,
   type FilePathCopyCommand,
 } from "./filePathCopyShortcut";
-import {
-  FILE_TREE_FOCUS_REQUEST,
-  focusTreeRow,
-  isDirectoryHandle,
-  runFileTreeCommand,
-  toggleDirectoryRecursively,
-  typeToFindSeed,
-  type FileTreeShortcutContext,
-} from "./fileTreeShortcuts";
-import {
-  FILE_TREE_COMMANDS,
-  fileViewCommandForEvent,
-  fileViewShortcutLabel,
-} from "./fileViewCommands";
+import { FileShortcutsHelp } from "./FileShortcutsHelp";
+import { fileViewShortcutLabel } from "./fileViewCommands";
+import { useFileTreeActions } from "./useFileTreeActions";
+import { useFileTreeKeyboard } from "./useFileTreeKeyboard";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
@@ -81,7 +70,11 @@ function treePath(entry: ProjectEntry): string {
   return entry.kind === "directory" ? `${entry.path}/` : entry.path;
 }
 
-function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }) {
+function RefreshFilesButton(props: {
+  isPending: boolean;
+  onRefresh: () => void;
+  shortcut: string | null;
+}) {
   return (
     <Tooltip>
       <TooltipTrigger
@@ -97,7 +90,12 @@ function RefreshFilesButton(props: { isPending: boolean; onRefresh: () => void }
       >
         <RefreshIcon refreshing={props.isPending} />
       </TooltipTrigger>
-      <TooltipPopup>{props.isPending ? "Refreshing…" : "Refresh files"}</TooltipPopup>
+      <TooltipPopup>
+        {props.isPending ? "Refreshing…" : "Refresh files"}
+        {props.shortcut ? (
+          <span className="ms-2 text-muted-foreground">{props.shortcut}</span>
+        ) : null}
+      </TooltipPopup>
     </Tooltip>
   );
 }
@@ -200,6 +198,14 @@ export default function FileBrowserPanel({
   // rows copy host paths and offer a relative path only inside the workspace.
   const copyTreePaths = (command: FilePathCopyCommand, rows: readonly string[]) =>
     copyFilePathsForCommand(command, rows.map(panelPath), workspaceRoot);
+  const treeActions = useFileTreeActions({
+    environmentId,
+    cwd,
+    workspaceRoot,
+    panelPath,
+    entryKind: (row) => entryKindsRef.current.get(row),
+    fileContextMenu,
+  });
   const {
     entries: directoryEntries,
     load,
@@ -278,12 +284,24 @@ export default function FileBrowserPanel({
                 ]
               : []),
             { id: "copy-full", label: `Copy full path${plural}` },
+            { id: "copy-name", label: copyRows.length > 1 ? "Copy names" : "Copy name" },
+            ...(copyRows.length === 1 && item.kind === "file"
+              ? [{ id: "copy-contents", label: "Copy contents" }]
+              : []),
             { id: "copy-mention", label: "Copy mention" },
             { id: "add-to-chat", label: "Add to chat" },
           ],
           position,
         );
         if (clicked === null) return;
+        if (clicked === "copy-name") {
+          await treeActions.copyNames(copyRows);
+          return;
+        }
+        if (clicked === "copy-contents") {
+          await treeActions.copyContents(copyRows);
+          return;
+        }
         if (clicked === "copy-relative" || clicked === "copy-full") {
           await copyTreePaths(
             clicked === "copy-full" ? "files.copyPath" : "files.copyRelativePath",
@@ -578,90 +596,19 @@ export default function FileBrowserPanel({
       panel.removeEventListener("dragend", handleDragEnd);
     };
   }, [dragMention, model]);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const treeHost = () =>
-    panelRef.current?.querySelector<HTMLElement>("file-tree-container") ?? null;
-  const focusSearch = (seed?: string) => {
-    if (seed !== undefined) handleSearchValueChange(seed);
-    searchInputRef.current?.focus();
-  };
-  const focusTree = () => {
-    const path =
-      model.getFocusedPath() ??
-      model.getSelectedPaths().at(-1) ??
-      model.getVisibleRows(0, 0)[0]?.path;
-    if (path !== undefined) focusTreeRow(treeHost(), model, path);
-  };
-  const shortcutContext = (): FileTreeShortcutContext => ({
+  const { searchInputRef, focusTree } = useFileTreeKeyboard({
+    panelRef,
     model,
-    host: treeHost(),
+    keybindings,
     directoryPaths,
     expandableDirectoryPaths,
     canExpandAll: !hostFolder,
     setAllExpanded,
-    // FilePreviewPanel's surface root takes focus (tabIndex -1).
-    focusViewer: () => panelRef.current?.closest<HTMLElement>("[data-file-view]")?.focus(),
+    onSearchValueChange: handleSearchValueChange,
+    onRefresh: handleRefresh,
+    copyTreePaths,
+    treeActions,
   });
-  // Capture runs before the rows' own handlers in the tree's shadow root, which
-  // treat Alt and Cmd/Ctrl arrows as plain arrows and stop them.
-  const handleShortcut = useStableCallback((event: KeyboardEvent) => {
-    const command = fileViewCommandForEvent(event, keybindings, [
-      ...FILE_TREE_COMMANDS,
-      "files.find",
-      "files.copyPath",
-      "files.copyRelativePath",
-    ]);
-    if (command === null) {
-      const seed = event.target === treeHost() ? typeToFindSeed(event) : null;
-      if (seed === null) return;
-      event.preventDefault();
-      focusSearch(seed);
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    if (command === "files.pageDown" || command === "files.pageUp") {
-      runFileTreeCommand(command, shortcutContext());
-    } else if (event.repeat) {
-      return;
-    } else if (command === "files.find") {
-      focusSearch();
-    } else if (command === "files.copyPath" || command === "files.copyRelativePath") {
-      void copyTreePaths(command, fileTreeCopyPaths(model));
-    } else {
-      runFileTreeCommand(command, shortcutContext());
-    }
-  });
-  // Option-click opens or closes a folder with everything below it, as in Finder and VS Code.
-  const handleRecursiveClick = useStableCallback((event: MouseEvent) => {
-    if (!event.altKey || event.button !== 0) return;
-    const row = event
-      .composedPath()
-      .find(
-        (node): node is HTMLElement =>
-          node instanceof HTMLElement && node.dataset.itemPath?.endsWith("/") === true,
-      );
-    const path = row?.dataset.itemPath;
-    const item = path === undefined ? null : model.getItem(path);
-    if (path === undefined || !isDirectoryHandle(item)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    toggleDirectoryRecursively(shortcutContext(), path, !item.isExpanded());
-    focusTreeRow(treeHost(), model, path);
-  });
-  const handleFocusRequest = useStableCallback(() => focusTree());
-  useEffect(() => {
-    const panel = panelRef.current;
-    if (panel === null) return;
-    panel.addEventListener("keydown", handleShortcut, true);
-    panel.addEventListener("click", handleRecursiveClick, true);
-    panel.addEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
-    return () => {
-      panel.removeEventListener("keydown", handleShortcut, true);
-      panel.removeEventListener("click", handleRecursiveClick, true);
-      panel.removeEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
-    };
-  }, [handleFocusRequest, handleRecursiveClick, handleShortcut]);
   const expandToggleCommand =
     expandAll || allDirectoriesExpanded ? "files.collapseAll" : "files.expandAll";
   const expandToggleShortcut = fileViewShortcutLabel(keybindings, expandToggleCommand);
@@ -676,7 +623,11 @@ export default function FileBrowserPanel({
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 in-data-[preview-panel-mode=inline]:mb-1 in-data-[preview-panel-mode=inline]:h-9 in-data-[preview-panel-mode=inline]:min-h-9 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader
       >
-        <RefreshFilesButton isPending={isPending} onRefresh={handleRefresh} />
+        <RefreshFilesButton
+          isPending={isPending}
+          onRefresh={handleRefresh}
+          shortcut={fileViewShortcutLabel(keybindings, "files.refresh")}
+        />
         <FileSearchField
           name="project-files-search"
           ariaLabel={`Search ${projectName} files`}
@@ -716,6 +667,7 @@ export default function FileBrowserPanel({
             </TooltipPopup>
           </Tooltip>
         ) : null}
+        <FileShortcutsHelp />
       </div>
       {error || pathSearch.error ? (
         <button

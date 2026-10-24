@@ -9,6 +9,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
+  readFile: vi.fn(async (_path: string): Promise<unknown> => ({ _tag: "Failure" })),
   copy: vi.fn(async (_text: string, _target?: string) => true),
   toast: vi.fn(),
   opened: [] as string[],
@@ -20,6 +21,9 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
   useAtomValue: (() => state.keybindings) as never,
 }));
 vi.mock("~/state/server", () => ({ primaryServerKeybindingsAtom: "keybindings" }));
+// Contents reads go through the query runner; tests answer them directly.
+vi.mock("./projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "read" }));
+vi.mock("~/state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => state.readFile }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/composerHandleContext", () => ({ useComposerHandleContext: () => null }));
 vi.mock("~/hooks/useCopyToClipboard", () => ({ writeTextToClipboard: state.copy }));

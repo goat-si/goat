@@ -7,7 +7,7 @@ import { fileViewCommandForEvent } from "./fileViewCommands";
 import { isPdfFindShortcut } from "./pdf/pdfShortcuts";
 
 /** Pierre renders the editable source text inside its host element's shadow root. */
-function sourceEditorContent(view: Element): HTMLElement | null {
+export function sourceEditorContent(view: Element): HTMLElement | null {
   for (const host of view.querySelectorAll(DIFFS_TAG_NAME)) {
     const content = host.shadowRoot?.querySelector<HTMLElement>(
       '[role="textbox"][contenteditable="true"]',

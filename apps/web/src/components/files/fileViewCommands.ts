@@ -17,8 +17,23 @@ export const FILE_TREE_COMMANDS = [
 ] as const satisfies readonly FileViewCommand[];
 export type FileTreeCommand = (typeof FILE_TREE_COMMANDS)[number];
 
-/** Commands that act while a source editor's text has focus. Form fields never trigger any. */
-const EDITOR_SAFE_COMMANDS: ReadonlySet<FileViewCommand> = new Set(["files.find"]);
+/** Commands that also act while a source editor's text has focus, as their editors do. Form fields never trigger any. */
+const EDITOR_SAFE_COMMANDS: ReadonlySet<FileViewCommand> = new Set([
+  "files.find",
+  "files.goToLine",
+  "files.toggleFocus",
+]);
+
+/** Actions both the tree and the viewer offer for their current item. */
+export const FILE_ITEM_COMMANDS = [
+  "files.copyPath",
+  "files.copyRelativePath",
+  "files.copyName",
+  "files.copyContents",
+  "files.revealInFileManager",
+  "files.refresh",
+  "files.toggleFocus",
+] as const satisfies readonly FileViewCommand[];
 
 /**
  * The file command a key press asks for, checked in `commands` order.

@@ -87,7 +87,7 @@ import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import FileBrowserPanel from "./FileBrowserPanel";
 import { FileBreadcrumbs } from "./FileBreadcrumbs";
-import { FilePathCopyMenu } from "./FilePathCopyMenu";
+import { FileViewMenu } from "./FileViewMenu";
 import { breadcrumbPathOf, retainedBreadcrumbTrail, trailChildOf } from "./filePath";
 import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import {
@@ -1348,7 +1348,14 @@ export default function FilePreviewPanel({
               />
             </div>
           </ScrollArea>
-          <FilePathCopyMenu filePath={breadcrumbPath} workspaceRoot={cwd} />
+          <FileViewMenu
+            filePath={breadcrumbPath}
+            workspaceRoot={cwd}
+            environmentId={environmentId}
+            threadRef={threadRef}
+            readResult={isMedia || isPdf ? null : file.data}
+            onRefresh={isMedia ? () => setMediaRefreshRequestId((id) => id + 1) : file.refresh}
+          />
           {absolutePath &&
           (environmentId === primaryEnvironmentId || remoteOpenState.mode !== "local-exec") ? (
             <OpenInPicker

@@ -195,6 +195,17 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+arrowleft", command: "files.collapseAll", when: "fileTreeFocus && !editableFocus" },
   // chat.find shares mod+f; it yields to a file view that can find (fileFindShortcut.ts).
   { key: "mod+f", command: "files.find", when: "fileViewFocus" },
+  // Cmd+L stays the browser's address bar and preview.focusUrl; Ctrl+G matches VS Code and Zed.
+  { key: "ctrl+g", command: "files.goToLine", when: "fileViewFocus" },
+  {
+    key: "mod+alt+r",
+    command: "files.revealInFileManager",
+    when: "fileViewFocus && !editableFocus",
+  },
+  // JetBrains' Synchronize key; mod+r reloads the app.
+  { key: "mod+alt+y", command: "files.refresh", when: "fileViewFocus && !editableFocus" },
+  // mod+shift+e (VS Code's Explorer focus) is composer.effort here.
+  { key: "mod+alt+e", command: "files.toggleFocus", when: "fileViewFocus" },
   { key: "mod+shift+f", command: "projectSearch.toggle", when: "!terminalFocus" },
   { key: "mod+u", command: "usage.open", when: "!terminalFocus" },
   { key: "mod+alt+a", command: "theme.select", when: "!terminalFocus" },
