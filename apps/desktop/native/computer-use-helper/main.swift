@@ -96,29 +96,67 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 /// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
 /// serves an unpackaged Electron or a terminal.
 ///
-/// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
-/// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
-func parentRefusal(_ parent: pid_t) -> String? {
+/// A signed GOAT that can run a launcher's own JavaScript (ELECTRON_RUN_AS_NODE, NODE_OPTIONS or
+/// Node inspect arguments) would pass that check for any same-user code, so the parent app's
+/// Electron fuses must have all three off as well (#1352). GOAT's backend and lease proxy still
+/// run as Node today, so every release parent is refused with parent_runs_node until they move
+/// to a runtime of their own and the fuses are off; release builds do not ship the helper until
+/// then either (#1210).
+func parentRefusal(_ parent: pid_t) -> (reason: String, message: String)? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
   }
   guard let own = selfStaticCode(), let team = signingTeam(own) else {
-    return "This helper has no Developer ID team, so it cannot verify who launched it."
+    return ("untrusted_parent", "This helper has no Developer ID team, so it cannot verify who launched it.")
   }
   let suffix = ".computer-use"
   guard let ownId = Bundle.main.bundleIdentifier, ownId.hasSuffix(suffix) else {
-    return "This helper's bundle identifier does not name its GOAT app."
+    return ("untrusted_parent", "This helper's bundle identifier does not name its GOAT app.")
   }
   let appId = String(ownId.dropLast(suffix.count))
+  let teamRequirement = "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\""
   guard let parent = parentCode(parent),
-    satisfies(
-      parent,
-      "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
-    )
+    satisfies(parent, teamRequirement + " and identifier \"\(appId)\"")
   else {
-    return "The process that launched the helper is not \(appId) signed by team \(team)."
+    return ("untrusted_parent", "The process that launched the helper is not \(appId) signed by team \(team).")
   }
-  return nil
+  switch parentFuses(parent, teamRequirement) {
+  case .closed: return nil
+  case .open(let fuses):
+    return (
+      "parent_runs_node",
+      "\(appId) can still run any JavaScript as Node (\(fuses.joined(separator: ", ")) on), so the helper cannot tell GOAT's own code from another program's (#1352)."
+    )
+  case .unreadable:
+    return ("parent_runs_node", "The Electron fuses of \(appId) could not be read, so the helper cannot tell whether it runs only GOAT's own code (#1352).")
+  }
+}
+
+/// The node fuses of the parent app's Electron framework, read from disk and checked against the
+/// team's signature first, so the bytes judged are the ones the team signed. A same-user writer
+/// could still swap the file after the parent loaded it; the app's location keeps that writer out,
+/// as for the driver (driverRefusal).
+func parentFuses(_ parent: SecCode, _ teamRequirement: String) -> ElectronFuses.Verdict {
+  var staticCode: SecStaticCode?
+  var path: CFURL?
+  guard SecCodeCopyStaticCode(parent, [], &staticCode) == errSecSuccess, let staticCode,
+    SecCodeCopyPath(staticCode, [], &path) == errSecSuccess, let path
+  else { return .unreadable }
+  let framework = (path as URL).appendingPathComponent(
+    "Contents/Frameworks/Electron Framework.framework")
+  var frameworkCode: SecStaticCode?
+  var requirement: SecRequirement?
+  guard
+    SecStaticCodeCreateWithPath(framework as CFURL, [], &frameworkCode) == errSecSuccess,
+    let frameworkCode,
+    SecRequirementCreateWithString(teamRequirement as CFString, [], &requirement) == errSecSuccess,
+    let requirement,
+    SecStaticCodeCheckValidity(
+      frameworkCode, SecCSFlags(rawValue: kSecCSStrictValidate), requirement) == errSecSuccess,
+    let bytes = try? Data(
+      contentsOf: framework.appendingPathComponent("Electron Framework"), options: .alwaysMapped)
+  else { return .unreadable }
+  return bytes.withUnsafeBytes { ElectronFuses.verdict($0) }
 }
 
 /// The service half accepts only its own launcher as a parent, so setting the disclaimed
@@ -173,7 +211,7 @@ func runLauncher() -> Never {
   if CommandLine.arguments.contains("--mcp") && parent <= 1 {
     refuse("untrusted_parent", "The process that started this connection is gone.", 77)
   }
-  if let refusal = parentRefusal(parent) { refuse("untrusted_parent", refusal, 77) }
+  if let refusal = parentRefusal(parent) { refuse(refusal.reason, refusal.message, 77) }
   // RTLD_DEFAULT; the symbol is private libsystem API, so a missing one is a typed refusal.
   guard
     let symbol = dlsym(
@@ -195,6 +233,8 @@ func runLauncher() -> Never {
   let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
   var environment = ProcessInfo.processInfo.environment
   environment[disclaimedVariable] = "1"
+  // Whatever the inherited environment says: the service learns GOAT's pid only from here.
+  environment[HostIdentity.hostPidVariable] = String(parent)
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
   // The service gets this launch's arguments: --mcp selects the agent connection mode.
   let argv = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
