@@ -703,6 +703,38 @@ it.effect("an add stopped between install and save resumes without installing ag
   ),
 );
 
+it.effect("a resumed add whose cloud target changed while stopped is refused before saving", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cloud = ProviderInstanceId.make("team-devin");
+      const fixture = yield* setup({
+        capabilities: [],
+        instances: { [cloud]: { driver: ProviderDriverKind.make("devinCloud") } },
+        crashAt: { when: (p) => p.effects.install === "done", store: true },
+      });
+      yield* approveUntilCrash(fixture, {
+        action: "add",
+        input: { acpAgentId: "devin", linkTo: cloud },
+      });
+      // The plan was checked when it was made; the target is no longer a Devin Cloud.
+      yield* fixture.settings.updateProviderInstance({
+        operation: "upsert",
+        instanceId: cloud,
+        instance: { driver: ProviderDriverKind.make("cursorCloud") },
+      });
+
+      const restarted = yield* fixture.boot;
+      yield* restarted.resumeContinuations;
+      expect(Object.keys(yield* fixture.instances)).toEqual([cloud]);
+      expect((yield* restarted.readChange(handoff1))?.outcome).toMatchObject({
+        state: "failed",
+        reason: "invalid_request",
+        message: expect.stringContaining("needs a Cursor instance"),
+      });
+    }),
+  ),
+);
+
 it.effect(
   "an add stopped between save and link links the saved instance instead of a new one",
   () =>

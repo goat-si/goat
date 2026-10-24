@@ -553,7 +553,7 @@ it.effect("an unknown instance id tells the agent to list providers", () =>
   }),
 );
 
-it.effect("every fix a diagnosis emits names a path goat_call resolves", () =>
+it.effect("every fix path a diagnosis emits resolves through goat_call", () =>
   Effect.gen(function* () {
     const results = [
       yield* diagnose({ instanceId: id("typo") }),
@@ -573,21 +573,24 @@ it.effect("every fix a diagnosis emits names a path goat_call resolves", () =>
         { instanceId: id("devin-cloud") },
         { instances: { ...devinCloud("devin-acp"), "devin-acp": devinSibling() }, executables: {} },
       ),
-      // Two Devin siblings: a person picks one, a settings fix with no call.
-      yield* diagnose(
-        { driver: driver("devinCloud") },
-        { instances: { "devin-one": devinRegistry, "devin-two": devinRegistry } },
-      ),
     ].flatMap(({ result }) => result.diagnoses.flatMap((diagnosis) => diagnosis.checks));
+    // Two Devin siblings: a person picks one in Settings, which no GOAT tool does for them.
+    const ambiguous = yield* diagnose(
+      { driver: driver("devinCloud") },
+      { instances: { "devin-one": devinRegistry, "devin-two": devinRegistry } },
+    );
+    const choose = checkOf(only(ambiguous.result.diagnoses), "sibling")?.fix;
+    expect(choose).toMatchObject({ actor: "human", handoff: "approval" });
+    expect(choose).not.toHaveProperty("path");
     const checks = [
       ...results,
+      ...only(ambiguous.result.diagnoses).checks,
       ...snapshotChecks(snapshot({ enabled: false, status: "disabled" })),
       ...snapshotChecks(snapshot({ installed: false, status: "error" })),
       ...snapshotChecks(snapshot({ auth: { status: "unauthenticated" }, status: "error" })),
     ];
     const paths = checks.flatMap((item) => (item.fix?.path === undefined ? [] : [item.fix.path]));
     expect(paths.filter((path) => resolveAgentSurfaceEntry(path) === undefined)).toEqual([]);
-    expect(paths).toContain("provider.setup_open");
     expect(paths).toContain("provider.update");
   }),
 );

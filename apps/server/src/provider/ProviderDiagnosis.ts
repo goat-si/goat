@@ -104,12 +104,14 @@ const agent = (
 
 type FixCall = NonNullable<ProviderDiagnosisFix["call"]>;
 
-/** A settings change. Its call runs directly for a provider manager; others get an approval. */
+/**
+ * A settings change. Its call runs directly for a provider manager; others get an approval. With
+ * no call, no GOAT tool makes the change, so the fix names no path and a person follows it.
+ */
 const settingsChange = (instruction: string, call?: FixCall) =>
   human(instruction, {
-    path: providerSettingsFixPath(call),
     handoff: "approval",
-    ...(call === undefined ? {} : { call }),
+    ...(call === undefined ? {} : { path: providerSettingsFixPath(call), call }),
   });
 
 const enableCall = (instanceId: string): FixCall => ({

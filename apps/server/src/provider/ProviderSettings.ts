@@ -414,6 +414,13 @@ const make = Effect.gen(function* () {
     });
   };
 
+  type AddPlan = NonNullable<ProviderSettingsProgress["plan"]>;
+  /** Refuses a plan whose link would fail, before it saves; a resumed plan's target can change. */
+  const checkLink = (instances: Readonly<Record<string, ProviderInstanceConfig>>, plan: AddPlan) =>
+    plan.linkTo === undefined
+      ? Effect.void
+      : planLink({ ...instances, [plan.instanceId]: plan.instance }, plan.linkTo, plan.instanceId);
+
   const link = Effect.fn("ProviderSettings.link")(function* (
     cloudId: ProviderInstanceId,
     siblingId: ProviderInstanceId,
@@ -444,8 +451,6 @@ const make = Effect.gen(function* () {
     ...fields,
     next: { call: "goat_provider_diagnose" },
   });
-
-  type AddPlan = NonNullable<ProviderSettingsProgress["plan"]>;
 
   /** Fixes the instance id and entry an add writes, before any of its effects run. */
   const planAdd = Effect.fn("ProviderSettings.planAdd")(function* (input: ProviderAddInput) {
@@ -480,15 +485,13 @@ const make = Effect.gen(function* () {
       ...(Object.keys(config).length === 0 ? {} : { config }),
       ...(environment === undefined || environment.length === 0 ? {} : { environment }),
     };
-    // Refused here, before anything is installed or saved, so a failed link leaves no instance.
-    if (input.linkTo !== undefined)
-      yield* planLink({ ...instances, [instanceId]: instance }, input.linkTo, instanceId);
-    return {
+    const plan = {
       instanceId,
       instance,
       install: driver === "acpRegistry" && config.source !== "local" && (input.install ?? true),
       ...(input.linkTo === undefined ? {} : { linkTo: input.linkTo }),
     } satisfies AddPlan as AddPlan;
+    return yield* checkLink(instances, plan).pipe(Effect.as(plan));
   });
 
   const addResult = (
@@ -934,6 +937,8 @@ const make = Effect.gen(function* () {
           `${plan.instanceId} changed after GOAT began saving it, so GOAT cannot tell whether this approval added it.`,
         );
       if (existing === undefined) {
+        const linkable = yield* attempt(stored.pipe(Effect.flatMap((all) => checkLink(all, plan))));
+        if (Exit.isFailure(linkable)) return yield* failed(undefined, linkable.cause);
         yield* mark("save", "started");
         const saved = yield* attempt(
           save(

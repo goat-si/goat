@@ -45,14 +45,9 @@ export const ProviderDiagnosisFix = Schema.Struct({
 });
 export type ProviderDiagnosisFix = typeof ProviderDiagnosisFix.Type;
 
-/**
- * The path a settings fix names: the provider tool its call makes, or, with no call, the
- * request that asks a person to finish the provider's setup in the app.
- */
-export const providerSettingsFixPath = (call: ProviderDiagnosisFix["call"]) =>
-  call === undefined
-    ? "provider.setup_open"
-    : `provider.${call.tool.replace(/^goat_provider_/u, "")}`;
+/** The goat_call path of the provider tool a settings fix's call makes. */
+export const providerSettingsFixPath = (call: NonNullable<ProviderDiagnosisFix["call"]>) =>
+  `provider.${call.tool.replace(/^goat_provider_/u, "")}`;
 
 export const ProviderDiagnosisCheckStatus = Schema.Literals([
   "pass",
