@@ -212,7 +212,8 @@ export const ComputerUseElement = Schema.Struct({
    * in a diff and an action can be read back (D5). Absent fields are unknown, not false.
    * selected: chosen in a list, tab or menu, and on some platforms a checked box. checked: a
    * check box, radio button or switch, mixed for indeterminate. expanded: a disclosure, tree
-   * row or combo box that is open.
+   * row or combo box that is open; partially expanded counts as open, and an element that
+   * cannot expand (a leaf) has no expanded at all.
    */
   state: Schema.optionalKey(
     Schema.Struct({
