@@ -293,15 +293,23 @@ function listCuaDriverApplications(input: {
   });
 }
 
-/** Writes the manifest owner-only and returns its path for the driver to load at startup. */
+/** Replaces the manifest owner-only; direct agent connections can read it during refresh. */
 export async function writeCuaDriverCapabilityManifest(
   path: string,
   text: string,
 ): Promise<string> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { dirname } = await import("node:path");
+  const { mkdir, mkdtemp, rename, rm, writeFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, text, { mode: 0o600 });
+  const temporary = await mkdtemp(join(dirname(path), ".manifest-"));
+  try {
+    const contents = join(temporary, "contents.yaml");
+    await writeFile(contents, text, { mode: 0o600 });
+    // The desktop mutex cannot fence a direct helper connection in another process.
+    await rename(contents, path);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
   return path;
 }
 
