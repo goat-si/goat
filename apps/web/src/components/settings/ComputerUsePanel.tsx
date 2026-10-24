@@ -50,13 +50,13 @@ interface StatusLine {
 type Readiness = ReturnType<typeof computerUseReadinessSteps>;
 
 /**
- * Whether the host's own report speaks against computer use working: a failure, or a grant,
- * helper or capture step it reports as blocked. Tools that are not running yet do not count,
- * since a passing check stops its own helper until the next agent turn.
+ * Whether the host's own report speaks against computer use working: a failure, a screen it
+ * cannot use, or a grant, helper or capture step it reports as blocked. Tools that are not
+ * running yet do not count, since a passing check stops its own helper until the next turn.
  */
 function hostRejects(status: CuaHostStatus | null): boolean {
   if (status === null) return false;
-  if (status.failure) return true;
+  if (status.failure || status.display?.capability === "unavailable") return true;
   if (!status.readiness) return false;
   const { steps } = computerUseReadinessSteps({
     readiness: status.readiness,
@@ -115,6 +115,8 @@ function setupLine(input: {
   if (error || status === null)
     return { text: computerUseStatusText({ enabled: true, status, error }) ?? "" };
   if (status.failure) return { text: status.failure, error: true, retry: localMac };
+  if (status.display?.capability === "unavailable")
+    return { text: status.display.reason, error: true };
   if (phase.step === "ready" || input.readiness.ready) {
     const limits = status.display?.capability === "partial" ? status.display.reason : null;
     const later = status.tools === "available" ? null : "Starts with the next agent turn.";

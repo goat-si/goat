@@ -76,19 +76,25 @@ export function useComputerUseAutoSetup({
   readonly actions: ComputerUseSetupActions;
 }) {
   const [phase, setPhase] = useState<ComputerUseSetupPhase>({ step: "idle" });
-  // What the person last chose, until the settings stream agrees; a failed save clears it.
-  const [desired, setDesired] = useState<boolean | null>(null);
+  // What the person last chose. It holds until its own save finished and the settings stream
+  // shows the same value, so an older save's echo cannot undo a newer choice; a failed save
+  // clears it.
+  const [desired, setDesired] = useState<{
+    readonly value: boolean;
+    readonly saved: boolean;
+  } | null>(null);
   const [opened, setOpened] = useState<CuaPermission | null>(null);
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   // Each run gets a number, so a run that Off, unmount or a later run replaced reports nothing.
   const run = useRef(0);
-  // Off has its own number: turning off invalidates setup runs, but not the Off save itself.
-  const offRun = useRef(0);
+  // The latest save has its own number: Off invalidates setup runs but not its own save, and
+  // only the latest save may settle the person's choice.
+  const saveRun = useRef(0);
   // The check in flight. A run that Off replaced can still be restarting the helper, so a later
   // run waits for it and then proves the helper again for itself.
   const inflight = useRef<Promise<DesktopCuaVerification> | null>(null);
-  const on = desired ?? enabled;
+  const on = desired?.value ?? enabled;
   const busy = phase.step === "saving" || phase.step === "checking" || phase.step === "verifying";
   // Each read starts a helper process, so it pauses while setup runs its own, rechecks quickly
   // while the person is in System Settings, and otherwise slowly to catch a revoked grant.
@@ -101,7 +107,7 @@ export function useComputerUseAutoSetup({
   const holder: CuaGrantHolder | null = grants && grants.principal !== "unusable" ? grants : null;
   const missing = holder ? (CUA_PERMISSIONS.find((id) => !cuaGranted(holder, id)) ?? null) : null;
 
-  if (desired !== null && desired === enabled) setDesired(null);
+  if (desired?.saved && desired.value === enabled) setDesired(null);
   if (opened !== null && holder !== null && cuaGranted(holder, opened)) setOpened(null);
   // Turned off elsewhere: whatever this client was doing no longer applies. A failure stays
   // until Retry or the switch, so the person can read it.
@@ -159,14 +165,16 @@ export function useComputerUseAutoSetup({
 
   const start = async () => {
     run.current += 1;
-    offRun.current += 1;
+    saveRun.current += 1;
     const id = run.current;
+    const saveId = saveRun.current;
     polled.invalidate();
     setNotice(null);
     setOpened(null);
-    setDesired(true);
+    setDesired({ value: true, saved: false });
     setPhase({ step: "saving" });
     const failure = await actions.save({ enableCua: true }).catch(() => SAVE_FAILED);
+    if (failure === null && saveId === saveRun.current) setDesired({ value: true, saved: true });
     if (id !== run.current) return;
     if (failure !== null) {
       setDesired(null);
@@ -198,15 +206,19 @@ export function useComputerUseAutoSetup({
 
   const stop = async () => {
     run.current += 1;
-    offRun.current += 1;
-    const id = offRun.current;
+    saveRun.current += 1;
+    const id = saveRun.current;
     polled.invalidate();
     setNotice(null);
     setOpened(null);
-    setDesired(false);
+    setDesired({ value: false, saved: false });
     setPhase({ step: "idle" });
     const failure = await actions.save({ enableCua: false }).catch(() => SAVE_FAILED);
-    if (failure === null || id !== offRun.current) return;
+    if (id !== saveRun.current) return;
+    if (failure === null) {
+      setDesired({ value: false, saved: true });
+      return;
+    }
     // The setting is still on, so the switch shows that again and Off can be retried.
     setDesired(null);
     setNotice("Could not turn off computer use. Try again.");

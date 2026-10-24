@@ -377,6 +377,13 @@ it.each([
     },
   ],
   ["a host failure", { ...idleMac, failure: "Helper could not start." }],
+  [
+    "an unusable screen",
+    {
+      ...idleMac,
+      display: { capability: "unavailable", reason: "Another user is signed in at the console." },
+    },
+  ],
 ] satisfies ReadonlyArray<[string, CuaHostStatus]>)(
   "%s reported after a passing check ends Ready until a new check passes",
   async (_, rejecting) => {
@@ -408,4 +415,23 @@ it("a System Settings pane that cannot open says so and keeps the Open button", 
     .toBeVisible();
   await open.click();
   expect(f.openGuide).toHaveBeenCalledTimes(2);
+});
+it("an older Off echo arriving after On again does not cancel the new setup", async () => {
+  const f = setup({ enabled: true });
+  const off = deferred<string | null>();
+  const on = deferred<string | null>();
+  await using screen = await render(panel(f));
+  f.save.mockImplementationOnce(() => off.promise).mockImplementationOnce(() => on.promise);
+  await clickSwitch("Computer use");
+  await clickSwitch("Computer use");
+  await act(() => off.resolve(null));
+  // The settings stream echoes the earlier Off before the newer On.
+  f.enabled = false;
+  await screen.rerender(panel(f));
+  await act(() => on.resolve(null));
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  f.enabled = true;
+  await screen.rerender(panel(f));
+  await vi.waitFor(() => expect(statusText()).toMatch(/^Ready/));
+  await expect.element(screen.getByRole("switch", { name: "Computer use" })).toBeChecked();
 });
