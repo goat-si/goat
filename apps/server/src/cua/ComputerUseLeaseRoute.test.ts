@@ -59,6 +59,9 @@ const fixture = Effect.fnUntraced(function* () {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    foregroundApprovalEpoch: Effect.die("unused"),
+    approveForeground: () => Effect.die("unused"),
+    foregroundAvailable: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),
@@ -135,6 +138,7 @@ describe("computer use lease route", () => {
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
               }),
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+                foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
                 callReservation: (owner, call) =>
                   Effect.sync(() => {

@@ -3,9 +3,89 @@ import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  foregroundActive,
+  call,
+  CONTROL,
+  harness,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect("ends the control if restarting after foreground expiry fails", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ restartFailure: "fixture restart failure" });
+      const update = foregroundActive();
+      yield* h.push({
+        ...update,
+        foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
+      });
+      yield* h.send(call(1, "run_script", { script: "opaque work" }));
+      yield* h.nextToDriver;
+      yield* TestClock.adjust("5 minutes");
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "get_guide"));
+      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(result.structuredContent.detail, "helper_restarted");
+    }),
+  );
+  it.effect("cuts off foreground expiry on its own clock while a lease stream is silent", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const update = foregroundActive();
+      yield* h.push({
+        ...update,
+        foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
+      });
+      yield* h.send(call(1, "run_script", { script: "opaque work" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* TestClock.adjust("5 minutes");
+      yield* h.killed;
+      assert.equal((yield* h.nextReservation).action, "close");
+      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(result.structuredContent.detail, "foreground_not_approved");
+      yield* h.restarted;
+      yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "background" }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+    }),
+  );
+  it.effect(
+    "refuses foreground and opaque routes without an explicit foreground grant before dispatch",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const routes = [
+          ["bring_to_front", { pid: 42, window_id: 7 }],
+          ["launch_app", { bundle_id: "com.example.Build" }],
+          ["move_cursor", { x: 1, y: 1 }],
+          ["click", { pid: 42, window_id: 7, delivery_mode: "foreground" }],
+          ["press_key", { pid: 42, window_id: 7, dispatch: "foreground" }],
+          ["run_steps", { foreground_fallback: true, steps: [{ delivery_mode: "foreground" }] }],
+          ["run_steps", { steps: [{ type: "click", pid: 42, window_id: 7 }] }],
+          ["run_script", { script: "opaque work" }],
+        ] as const;
+        let id = 0;
+        for (const [name, args] of routes) {
+          const mutationId = ++id;
+          const discoveryId = ++id;
+          yield* h.send(call(mutationId, name, args));
+          yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: discoveryId, method: "tools/list" }));
+          assert.equal((yield* h.nextToDriver).id, discoveryId);
+          const refused = (yield* h.nextToProvider).result as {
+            structuredContent: { detail: string };
+          };
+          assert.equal(refused.structuredContent.detail, "foreground_not_approved");
+          yield* h.reply(
+            JSON.stringify({ jsonrpc: "2.0", id: discoveryId, result: { tools: [] } }),
+          );
+          yield* h.nextToProvider;
+        }
+        assert.equal(h.reservations.length, 0);
+      }),
+  );
+
   it.effect(
     "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
     () =>
@@ -77,7 +157,7 @@ describe("proxy execution ownership", () => {
   it.effect("keeps a cancelled execution reserved until the driver's terminal reply", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       yield* h.send(call(1, "run_script", { code: "opaque" }));
       yield* h.nextToDriver;
       const acquired = yield* h.nextReservation;

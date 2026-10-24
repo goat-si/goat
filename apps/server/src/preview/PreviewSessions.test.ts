@@ -153,6 +153,7 @@ describe("preview sessions", () => {
             stopAllAgents: Effect.sync(() => void stopped.push("browser")),
           }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            foregroundApprovalEpoch: Effect.die("unused"),
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
             // The live picture service listens for control changes from the start.

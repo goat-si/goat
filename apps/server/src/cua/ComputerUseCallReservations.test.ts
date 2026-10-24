@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const serviceLayer = ComputerUseLeases.layer.pipe(
@@ -110,6 +111,7 @@ describe("server computer-use call reservations", () => {
     () =>
       Effect.gen(function* () {
         const f = yield* fixture();
+        const focus = yield* foregroundGrant(f.b, "handoff:conflict-focus");
         assert.equal((yield* f.reserve()).status, "admitted");
         assert.equal((yield* f.reserve(f.b, { pid: 42, window_id: 8 })).status, "admitted");
         assert.equal((yield* f.reserve(f.b, {}, "list_windows")).status, "admitted");
@@ -121,7 +123,18 @@ describe("server computer-use call reservations", () => {
           ["type_text", { pid: 99, window_id: 8, dispatch: "foreground" }],
           ["future_tool", { pid: 99, window_id: 8 }],
         ] as const) {
-          assert.deepEqual(yield* f.reserve(f.b, args, name), {
+          const decision = yield* f.leases.callReservation(f.b, {
+            action: "reserve",
+            controlId: f.second.controlId,
+            connectionId: "driver:1",
+            callId: name,
+            interruptions: 0,
+            idleEpoch: 0,
+            name,
+            args,
+            foregroundGrantId: focus.handoffId,
+          });
+          assert.deepEqual(decision, {
             status: "refused",
             detail: "target_busy",
             holderThreadId: f.a,

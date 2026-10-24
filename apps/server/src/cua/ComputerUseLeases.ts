@@ -18,6 +18,7 @@ import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
+  type ComputerUseForegroundGrant,
   type ComputerUseControlEnd,
   type ComputerUsePauseReason,
   Handoff,
@@ -42,7 +43,12 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
+import {
+  callResource,
+  makeCallReservations,
+  requiresForeground,
+} from "./ComputerUseCallReservations.ts";
+import { makeForegroundApprovals } from "./ComputerUseForeground.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -59,6 +65,7 @@ export interface ComputerUseLease {
   readonly expiresAt: DateTime.Utc;
   /** Absent when the grant admits every app. */
   readonly apps?: ReadonlyArray<string>;
+  readonly computerUseForeground?: NonNullable<Handoff["computerUseForeground"]>;
 }
 
 /** The thread holding this host's screen for unattended work, by grant or full access. */
@@ -108,6 +115,7 @@ export type ComputerUseControlState =
       readonly wakeAt: number;
       readonly idle?: true;
       readonly idleEpoch?: number;
+      readonly foreground?: ReadonlyArray<ComputerUseForegroundGrant>;
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }
   | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
@@ -179,6 +187,12 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
+    readonly foregroundApprovalEpoch: Effect.Effect<number>;
+    readonly approveForeground: (handoff: Handoff, observedEpoch: number) => Effect.Effect<void>;
+    readonly foregroundAvailable: (
+      threadId: ThreadId,
+      purpose: string,
+    ) => Effect.Effect<boolean, ComputerUseLeaseError>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -238,6 +252,9 @@ const leaseOf = (handoff: Handoff, now: DateTime.Utc): Option.Option<ComputerUse
         handoffId: handoff.handoffId,
         expiresAt: handoff.expiresAt,
         ...(handoff.apps === undefined ? {} : { apps: handoff.apps }),
+        ...(handoff.computerUseForeground === undefined
+          ? {}
+          : { computerUseForeground: handoff.computerUseForeground }),
       })
     : Option.none();
 
@@ -286,6 +303,7 @@ const make = Effect.gen(function* () {
   );
   const controls = new Map<ThreadId, ControlRecord>();
   const reservations = makeCallReservations();
+  const foreground = makeForegroundApprovals();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
@@ -380,8 +398,16 @@ const make = Effect.gen(function* () {
       ...(everyApp === undefined ? {} : { everyApp }),
       uses: 0,
     };
-    if (existing !== undefined) reservations.forgetClosed(threadId, existing.controlId);
+    if (existing !== undefined) {
+      reservations.forgetClosed(threadId, existing.controlId);
+      foreground.replaceControl(threadId, existing.controlId);
+    }
     controls.set(threadId, next);
+    foreground.bindPending(
+      threadId,
+      next.controlId,
+      everyApp === undefined ? handoffId : undefined,
+    );
     yield* kick;
     // A proxy still holding the previous id hears it was replaced.
     if (existing !== undefined && existing.ended === undefined) yield* changed;
@@ -446,13 +472,22 @@ const make = Effect.gen(function* () {
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    const grants =
+      (record.everyApp === undefined && record.handoffId === undefined) ||
+      foreground.hasThread(threadId)
+        ? yield* live(threadId)
+        : [];
+    const focus = foreground.grants(threadId, controlId, grants, DateTime.toEpochMillis(now));
+    const focusState = focus.length === 0 ? {} : { foreground: focus };
+    const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
     if (record.everyApp !== undefined)
       return {
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
         apps: scoped(record, undefined),
-        wakeAt: DateTime.toEpochMillis(record.expiresAt),
+        wakeAt: Math.min(DateTime.toEpochMillis(record.expiresAt), focusWake),
+        ...focusState,
         ...(record.idle === true ? { idle: true as const } : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       };
@@ -464,13 +499,13 @@ const make = Effect.gen(function* () {
         expiresAt: record.expiresAt,
         interruptions,
         apps: scoped(record, grant.lease.apps),
-        wakeAt: DateTime.toEpochMillis(record.expiresAt),
+        wakeAt: Math.min(DateTime.toEpochMillis(record.expiresAt), focusWake),
+        ...focusState,
         ...(record.idle === true ? { idle: true as const } : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       };
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
-    const grants = yield* live(threadId);
     return {
       _tag: "active",
       expiresAt: record.expiresAt,
@@ -478,14 +513,17 @@ const make = Effect.gen(function* () {
       apps: scoped(record, grants.length === 0 ? [] : appsOf(grants)),
       wakeAt: Math.min(
         DateTime.toEpochMillis(record.expiresAt),
+        focusWake,
         ...grants.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
       ),
       ...(record.idle === true ? { idle: true as const } : {}),
       ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
+      ...focusState,
     };
   });
 
   const end = (threadId: ThreadId, reason: ComputerUseControlEnd) => {
+    foreground.revokeThread(threadId);
     const record = controls.get(threadId);
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
@@ -497,6 +535,7 @@ const make = Effect.gen(function* () {
 
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
+      foreground.clear();
       // A person's input with no agent on the screen is just a person using their computer,
       // also between a thread's turns.
       if (![...controls.values()].some(acting)) return false;
@@ -531,7 +570,10 @@ const make = Effect.gen(function* () {
         if (report.type === "cuaHumanInput") return pause("human_input");
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
-          if (report.active && !privateHost) interrupted("private");
+          if (report.active && !privateHost) {
+            foreground.clear();
+            interrupted("private");
+          }
           privateHost = report.active;
         }).pipe(Effect.andThen(changed));
       }),
@@ -661,6 +703,43 @@ const make = Effect.gen(function* () {
     everyAppControl,
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
+    foregroundApprovalEpoch: Effect.sync(() => foreground.revision()),
+    approveForeground: Effect.fn("ComputerUseLeases.approveForeground")(
+      function* (handoff, observedEpoch) {
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        const current = controls.get(handoff.requestedBy.threadId);
+        const controlId =
+          current !== undefined &&
+          current.ended === undefined &&
+          DateTime.toEpochMillis(current.expiresAt) > now
+            ? current.controlId
+            : undefined;
+        foreground.approve({
+          handoff,
+          observedRevision: observedEpoch,
+          controlId,
+          now,
+          blocked: paused !== undefined || privateHost,
+        });
+        yield* changed;
+      },
+    ),
+    foregroundAvailable: Effect.fn("ComputerUseLeases.foregroundAvailable")(
+      function* (threadId, purpose) {
+        if (!foreground.hasThread(threadId)) return false;
+        const grants = yield* live(threadId);
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
+        const current = controls.get(threadId);
+        if (paused !== undefined || privateHost) return false;
+        const controlId =
+          current !== undefined &&
+          current.ended === undefined &&
+          DateTime.toEpochMillis(current.expiresAt) > now
+            ? current.controlId
+            : undefined;
+        return foreground.available(threadId, controlId, purpose, grants, now);
+      },
+    ),
     callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, call) {
       if (call.action !== "reserve") {
         const current = controls.get(threadId);
@@ -692,6 +771,16 @@ const make = Effect.gen(function* () {
             return { status: "refused", detail: "replaced" } as const;
           if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
             return { status: "refused", detail: "expired" } as const;
+          if (
+            requiresForeground(call) &&
+            (call.foregroundGrantId === undefined ||
+              !foreground.bound(call.foregroundGrantId, threadId, call.controlId) ||
+              !state.foreground?.some(
+                (grant) =>
+                  grant.handoffId === call.foregroundGrantId && grant.expiresAtMillis > now,
+              ))
+          )
+            return { status: "refused", detail: "foreground_not_approved" } as const;
           return reservations.reserve(threadId, call);
         }),
       );
@@ -719,9 +808,10 @@ const make = Effect.gen(function* () {
       yield* changed;
       return true;
     }),
-    stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
-      Effect.tap(() => changed),
-    ),
+    stopAll: Effect.sync(() => {
+      foreground.clear();
+      return [...controls.keys()].filter((id) => end(id, "stopped_all"));
+    }).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>
@@ -736,9 +826,10 @@ const make = Effect.gen(function* () {
         { discard: true },
       ),
     ),
-    disable: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "disabled"))).pipe(
-      Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void)),
-    ),
+    disable: Effect.sync(() => {
+      foreground.clear();
+      return [...controls.keys()].filter((id) => end(id, "disabled"));
+    }).pipe(Effect.flatMap((ended) => (ended.length > 0 ? changed : Effect.void))),
     grants: live(),
     pause,
     detection,

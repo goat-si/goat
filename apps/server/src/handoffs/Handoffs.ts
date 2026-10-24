@@ -144,6 +144,7 @@ export class Handoffs extends Context.Service<
       readonly sshProgress?: SshProgressBinding;
       /** A computer use grant's apps, recorded on the handoff itself. */
       readonly apps?: ReadonlyArray<string>;
+      readonly computerUseForeground?: Handoff["computerUseForeground"];
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** Client-only; caller supplies an authenticated, server-resolved label. */
@@ -417,7 +418,22 @@ const make = Effect.gen(function* () {
           true,
         );
       }
+      // Capture before the durable transition so a concurrent pause or Stop fences this approval.
+      const foregroundEpoch =
+        isComputerUseGrant &&
+        input.action === "completed" &&
+        isHandoffPending(record.state) &&
+        record.computerUseForeground !== undefined &&
+        Option.isSome(computerUseLeases)
+          ? yield* computerUseLeases.value.foregroundApprovalEpoch
+          : undefined;
       const result = yield* transition(input, input.action, { type: "client", label });
+      if (
+        foregroundEpoch !== undefined &&
+        result.state === "completed" &&
+        Option.isSome(computerUseLeases)
+      )
+        yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
       if (isComputerUseGrant && Option.isSome(computerUseLeases))
         yield* computerUseLeases.value.changed;
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
@@ -503,6 +519,9 @@ const make = Effect.gen(function* () {
         createdAt: now,
         actor: { type: "agent", threadId: input.requestedBy.threadId },
         ...(input.apps === undefined ? {} : { apps: input.apps }),
+        ...(input.computerUseForeground === undefined
+          ? {}
+          : { computerUseForeground: input.computerUseForeground }),
       };
       yield* savePrivate(handoff.handoffId, {
         version: 1,

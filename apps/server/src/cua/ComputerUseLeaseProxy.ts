@@ -31,6 +31,7 @@ import {
   type ComputerUseRefusalDetail,
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
+  type ComputerUseForegroundGrant,
   computerUseRefusalReason,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -39,10 +40,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -274,11 +278,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const scope = yield* Effect.scope;
   const confirmed = yield* Deferred.make<void>();
   const ended = yield* Deferred.make<LeaseEnd>();
+  const deadlineWake = yield* Queue.sliding<void>(1);
   let deadline = DateTime.toEpochMillis(options.expiresAt);
   let finished: LeaseEnd | undefined;
   let paused: ComputerUsePauseReason | undefined;
   let idle = false;
   let apps: ReadonlySet<string> | undefined;
+  let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   let running: Running | undefined;
   let ownRequests = 0;
   let driverGeneration = 0;
@@ -506,7 +512,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
     const child = yield* Scope.fork(scope);
-    const driver = yield* options.startDriver.pipe(Scope.provide(child));
+    const driver = yield* options.startDriver.pipe(
+      Scope.provide(child),
+      Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(child, exit) : Effect.void)),
+    );
     if (finished !== undefined) {
       yield* driver.kill;
       return yield* Scope.close(child, Exit.void);
@@ -548,6 +557,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     // A proxy told it is paused before it was ever active refuses its waiting calls now.
     yield* Deferred.succeed(confirmed, undefined);
+    yield* Queue.offer(deadlineWake, undefined);
   }, Effect.uninterruptible);
 
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
@@ -557,6 +567,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (Option.isSome(expiresAt))
       deadline = Math.min(deadline, DateTime.toEpochMillis(expiresAt.value));
     const next = approvedApps(update.apps);
+    const nextForeground = update.foreground ?? [];
+    const foregroundRemoved = foreground.some(
+      (grant) => !nextForeground.some((nextGrant) => nextGrant.handoffId === grant.handoffId),
+    );
+    foreground = nextForeground;
     // Fewer apps than before: work already running may be in one of them, so it ends now and
     // anything it still answers is dropped with the old child.
     const narrowed =
@@ -581,6 +596,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     } else if (missedPause !== undefined && finished === undefined && running !== undefined) {
       yield* interrupt(pausedDetail(missedPause.last), PAUSE_MESSAGES[missedPause.last]);
       yield* start();
+    } else if (foregroundRemoved && finished === undefined && running !== undefined) {
+      yield* interrupt(
+        "foreground_not_approved",
+        "Foreground approval ended, so this work was stopped. Observe again before acting.",
+      );
+      yield* start();
     } else if (narrowed && finished === undefined && running !== undefined) {
       yield* interrupt(
         "app_not_approved",
@@ -595,6 +616,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* start();
     }
     yield* Deferred.succeed(confirmed, undefined);
+    yield* Queue.offer(deadlineWake, undefined);
   }, Effect.uninterruptible);
 
   yield* Effect.addFinalizer(() => end("lost"));
@@ -629,16 +651,30 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   );
 
   // Held here, not in the agent's calls: expiry acts while a call is outstanding or none comes.
-  yield* Effect.gen(function* () {
-    for (;;) {
-      const now = yield* Clock.currentTimeMillis;
-      if (now >= deadline) {
-        yield* end("expired");
-        return;
-      }
-      yield* Effect.sleep(deadline - now);
-    }
-  }).pipe(Effect.forkScoped);
+  yield* watchLeaseProxyDeadlines({
+    wake: deadlineWake,
+    controlDeadline: () => deadline,
+    foregroundDeadline: () => Math.min(...foreground.map((grant) => grant.expiresAtMillis)),
+    expireControl: end("expired"),
+    expireForeground: Effect.fn("ComputerUseLeaseProxy.expireForeground")(function* (now) {
+      foreground = foreground.filter((grant) => grant.expiresAtMillis > now);
+      if (running === undefined) return;
+      yield* interrupt(
+        "foreground_not_approved",
+        "Foreground approval reached its time limit, so this work was stopped. Observe again before acting.",
+      );
+      if (
+        finished === undefined &&
+        paused === undefined &&
+        !idle &&
+        (yield* Clock.currentTimeMillis) < deadline
+      )
+        yield* start();
+    }),
+  }).pipe(
+    Effect.catchCause(() => end("helper_restarted")),
+    Effect.forkScoped,
+  );
 
   /** Asks the driver which apps run, so a pid it has not named yet can be judged. */
   const listApps = Effect.fn("ComputerUseLeaseProxy.listApps")(function* () {
@@ -730,6 +766,20 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         verdict.reason,
         scopeMessage(verdict.reason, verdict.app, verdict.opaque),
         verdict.app,
+      );
+    const focusNow = yield* Clock.currentTimeMillis;
+    if (
+      requiresForeground({
+        name: typeof message.params?.name === "string" ? message.params.name : "unknown",
+        args: message.params?.arguments,
+      }) &&
+      !foreground.some((grant) => grant.expiresAtMillis > focusNow)
+    )
+      return refusal(
+        id,
+        message.method,
+        "foreground_not_approved",
+        `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps, then end your turn. Pause or Stop requires new foreground approval.`,
       );
     return undefined;
   });
@@ -831,6 +881,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const current = running;
     let reservationId: string | undefined;
     if (isRequest && message?.method === "tools/call") {
+      const focusNow = yield* Clock.currentTimeMillis;
+      const focusGrant = requiresForeground({
+        name: typeof message.params?.name === "string" ? message.params.name : "unknown",
+        args: message.params?.arguments,
+      })
+        ? foreground.find((grant) => grant.expiresAtMillis > focusNow)
+        : undefined;
       const decision = yield* options.reservation({
         action: "reserve",
         controlId: options.controlId,
@@ -838,6 +895,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
+        ...(focusGrant === undefined ? {} : { foregroundGrantId: focusGrant.handoffId }),
         name: typeof message.params?.name === "string" ? message.params.name : "unknown",
         args: message.params?.arguments ?? {},
       });

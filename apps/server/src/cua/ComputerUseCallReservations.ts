@@ -61,16 +61,17 @@ const foreground = (value: unknown, depth = 0): boolean => {
   );
 };
 
+export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
+  call.name === "run_steps" ||
+  call.name === "run_script" ||
+  call.name === "bring_to_front" ||
+  call.name === "launch_app" ||
+  call.name === "move_cursor" ||
+  foreground(call.args);
+
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
-  if (
-    call.name === "run_steps" ||
-    call.name === "run_script" ||
-    call.name === "bring_to_front" ||
-    call.name === "launch_app" ||
-    foreground(call.args)
-  )
-    return "desktop";
+  if (requiresForeground(call)) return "desktop";
   if (READS.has(call.name)) return "read";
   if (!WINDOW_MUTATIONS.has(call.name)) return "desktop";
   const args = record(call.args);

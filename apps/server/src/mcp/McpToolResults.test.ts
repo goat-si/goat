@@ -67,7 +67,10 @@ const layer = McpHttpServer.toolkitRegistration(
   Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
   Layer.provide(
     Layer.mergeAll(
-      Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
+      Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+        proxy: undefined,
+        foregroundApprovalEpoch: Effect.succeed(0),
+      }),
       Layer.mock(Handoffs.Handoffs)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
     ),

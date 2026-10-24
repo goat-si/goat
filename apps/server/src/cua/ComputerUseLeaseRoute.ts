@@ -101,6 +101,7 @@ export const leaseUpdates = (input: {
                 expiresAt: DateTime.formatIso(state.expiresAt),
                 ...(state.apps === undefined ? {} : { apps: state.apps }),
                 ...(state.idleEpoch === undefined ? {} : { idleEpoch: state.idleEpoch }),
+                ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
               },
         );

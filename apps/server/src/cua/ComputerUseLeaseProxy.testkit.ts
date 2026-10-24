@@ -4,6 +4,7 @@ import {
   type ComputerUseOverlayCommand,
   type ComputerUseCallReservation,
   type ComputerUseCallAdmission,
+  TurnItemId,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +28,18 @@ export const active = (
   ...(apps === undefined ? {} : { apps }),
 });
 
+export const foregroundActive = (expiresAt = "1970-01-01T00:30:00.000Z") => ({
+  ...active(expiresAt),
+  foreground: [
+    {
+      handoffId: TurnItemId.make("handoff:foreground"),
+      purpose: "Check the build status",
+      target: "desktop" as const,
+      expiresAtMillis: DateTime.toEpochMillis(DateTime.makeUnsafe(expiresAt)),
+    },
+  ],
+});
+
 interface FakeDriver {
   readonly toDriver: Queue.Queue<string>;
   readonly fromDriver: Queue.Queue<string, Cause.Done>;
@@ -36,6 +49,8 @@ interface FakeDriver {
 /** A proxy over in-memory stdio, lease stream and drivers, on the TestClock (epoch 0). */
 export const harness = Effect.fn(function* (
   options: {
+    readonly controlId?: string;
+    readonly leaseUpdates?: Stream.Stream<ComputerUseLeaseUpdate>;
     readonly expiresAt?: string;
     /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
     readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
@@ -54,6 +69,7 @@ export const harness = Effect.fn(function* (
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission>;
     readonly kill?: Effect.Effect<void>;
+    readonly restartFailure?: string;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -82,7 +98,7 @@ export const harness = Effect.fn(function* (
             ),
         ),
       ),
-    controlId: CONTROL,
+    controlId: options.controlId ?? CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
@@ -92,8 +108,10 @@ export const harness = Effect.fn(function* (
           onTarget: (target: { pid: number; windowId: number }) =>
             Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
         }),
-    leaseUpdates: Stream.fromQueue(updates),
+    leaseUpdates: options.leaseUpdates ?? Stream.fromQueue(updates),
     startDriver: Effect.gen(function* () {
+      if (drivers.length > 0 && options.restartFailure !== undefined)
+        return yield* Effect.fail(options.restartFailure);
       const driver: FakeDriver = {
         toDriver: yield* Queue.unbounded<string>(),
         fromDriver: yield* Queue.unbounded<string, Cause.Done>(),

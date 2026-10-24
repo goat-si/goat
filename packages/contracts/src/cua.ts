@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 import {
   ComputerUseCapabilities,
   ComputerUseHumanInputSource,
@@ -239,6 +244,16 @@ export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
 export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
+export const ComputerUseForegroundGrant = Schema.Struct({
+  handoffId: TurnItemId,
+  purpose: TrimmedNonEmptyString,
+  target: Schema.Literal("desktop"),
+  expiresAtMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+});
+export type ComputerUseForegroundGrant = typeof ComputerUseForegroundGrant.Type;
+
 /**
  * What the computer use proxy hears from its own server about the control it was started for,
  * one JSON object per line. "active" carries the apps the thread may control, absent when every
@@ -251,6 +266,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
@@ -281,6 +297,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "control_idle",
   "app_not_approved",
   "desktop_not_approved",
+  "foreground_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
   "desktop_capture_off",
   "waiting_for_human",
@@ -330,6 +347,7 @@ export const ComputerUseCallReservation = Schema.Union([
     idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     args: Schema.Unknown,
+    foregroundGrantId: Schema.optionalKey(TurnItemId),
   }),
   Schema.Struct({
     ...ComputerUseCallOwner,
@@ -415,6 +433,12 @@ const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLen
 );
 
 export const ComputerUseRequestInput = Schema.Struct({
+  foreground: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Ask to bring apps forward and take keyboard or pointer focus for this purpose. Default false (background-only). Requires whole-desktop approval: omit apps. Pause, Stop or control replacement requires approval again.",
+    }),
+  ),
   purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(500)).annotate({
     description:
       "What you will do on the screen and why, in one or two sentences. The person sees it before approving.",

@@ -5,10 +5,16 @@ import {
   ComputerUseCallReservation,
   ComputerUseCallAdmission,
   ComputerUseLeaseUpdate,
+  ComputerUseForegroundGrant,
+  ComputerUseRequestInput,
   CuaHostStatus,
 } from "./cua.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
+
+const decodeCallReservation = Schema.decodeUnknownSync(ComputerUseCallReservation);
+const decodeLeaseUpdate = Schema.decodeUnknownSync(ComputerUseLeaseUpdate);
+const decodeCallAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
 
 const computerUse = {
   enabled: false,
@@ -32,6 +38,58 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("preserves optional foreground authority and rejects malformed grant identities and expiry", () => {
+    const grant = {
+      handoffId: "handoff:foreground",
+      purpose: "Check build",
+      target: "desktop",
+      expiresAtMillis: 1234,
+    };
+    const decode = Schema.decodeUnknownSync(ComputerUseForegroundGrant);
+    expect(decode(grant)).toEqual(grant);
+    for (const invalid of [
+      { ...grant, handoffId: "" },
+      { ...grant, purpose: " " },
+      { ...grant, target: "app" },
+      ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Infinity].map((expiresAtMillis) => ({
+        ...grant,
+        expiresAtMillis,
+      })),
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const active = {
+      state: "active",
+      controlId: "control:one",
+      expiresAt: "later",
+      foreground: [grant],
+      idleEpoch: 2,
+    };
+    expect(decodeLeaseUpdate(active)).toEqual(active);
+    const reserve = {
+      action: "reserve",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      callId: "call:one",
+      interruptions: 0,
+      idleEpoch: 2,
+      name: "bring_to_front",
+      args: {},
+      foregroundGrantId: grant.handoffId,
+    };
+    expect(decodeCallReservation(reserve)).toEqual(reserve);
+    expect(
+      decodeCallAdmission({
+        status: "refused",
+        detail: "foreground_not_approved",
+      }),
+    ).toEqual({ status: "refused", detail: "foreground_not_approved" });
+    const request = Schema.decodeUnknownSync(ComputerUseRequestInput);
+    expect(request({ purpose: "Check" })).toEqual({ purpose: "Check" });
+    for (const foreground of [true, false])
+      expect(request({ purpose: "Check", foreground })).toEqual({ purpose: "Check", foreground });
+    for (const foreground of ["true", 1, {}])
+      expect(() => request({ purpose: "Check", foreground })).toThrow();
+  });
   it("roundtrips execution ownership and refuses malformed or unknown reservation actions", () => {
     const decode = Schema.decodeUnknownSync(ComputerUseCallReservation);
     const request = {
@@ -56,10 +114,11 @@ describe("computer use on the wire", () => {
     ])
       expect(() => decode(invalid)).toThrow();
     const refusal = { status: "refused", detail: "target_busy", holderThreadId: "thread:holder" };
-    expect(Schema.decodeUnknownSync(ComputerUseCallAdmission)(refusal)).toEqual(refusal);
-    expect(
-      Schema.decodeUnknownSync(ComputerUseLeaseUpdate)({ state: "idle", controlId: "control:one" }),
-    ).toEqual({ state: "idle", controlId: "control:one" });
+    expect(decodeCallAdmission(refusal)).toEqual(refusal);
+    expect(decodeLeaseUpdate({ state: "idle", controlId: "control:one" })).toEqual({
+      state: "idle",
+      controlId: "control:one",
+    });
   });
   it("preserves reported readiness and signals, and drops future optional shapes independently", () => {
     const decode = Schema.decodeUnknownSync(CuaHostStatus);
