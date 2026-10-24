@@ -65,7 +65,7 @@ const served = (options: { readonly profile?: string; readonly mode: RuntimeMode
               repository: null,
             }),
         }),
-        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({}),
+        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
         Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
         Layer.mock(ThreadLaunchMcpService.ThreadLaunchMcpService)({}),
         Layer.mock(RepositoryReferenceMcpService.RepositoryReferenceMcpService)({}),
