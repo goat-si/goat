@@ -12,6 +12,8 @@ import {
 const TAG = "testtag0";
 const TOKEN = TAG + "SyntheticMcpTokenNotARealCredential00000000";
 const SECRET = TOKEN.slice(TAG.length);
+// Synthetic, shaped like a token another server minted.
+const FOREIGN = "f".repeat(51);
 registerCredentialRunTag(TAG);
 
 /** What a viewer of streamed chunks ends up seeing. */
@@ -104,10 +106,20 @@ describe("redactGoatCredentialChunk", () => {
       `Authorization: Bearer ${"a".repeat(47)}-GOA\n`,
       `Authorization: Bearer ${"b".repeat(48)}tes\n`,
       `GOAT_MCP_BEARER_TOKEN=${"c".repeat(47)}-Bea\n`,
+      // Labels whose assignment or escaped space is still arriving.
+      `{"GOAT_MCP_BEARER_TOKEN":"${FOREIGN}"}\n`,
+      `${JSON.stringify(JSON.stringify({ GOAT_MCP_BEARER_TOKEN: FOREIGN }))}\n`,
+      `GOAT_MCP_BEARER_TOKEN = ${FOREIGN}\n`,
+      `Authorization: Bearer\\ ${FOREIGN}\n`,
+      `GOAT_ACP_MCP_AUTHORIZATION=Bearer\\ ${FOREIGN}\n`,
+      `GOAT_MCP_BEARER_TOKEN=${TOKEN}\0PATH=/usr/bin\0`,
+      // A complete credential that runs on into what looks like the start of another.
+      `${TAG}GOAT_ACP_MCP_AUTHORIZATION: \n`,
+      `bearerGOAT_MCP_BEARER_TOKEN :\tGOAT_MCP_BEARER_TOKEN \n`,
     ];
     for (const output of outputs) {
       for (let first = 1; first < output.length; first += 1) {
-        for (const second of [first + 1, first + 7, first + 30]) {
+        for (let second = first; second <= output.length; second += 1) {
           const chunks = [
             output.slice(0, first),
             output.slice(first, second),
@@ -119,10 +131,63 @@ describe("redactGoatCredentialChunk", () => {
     }
   });
 
+  it("streams random mixes of labels, escapes and tokens exactly as whole-text redaction", () => {
+    // A fixed seed keeps the cases the same on every run.
+    const parts = [
+      "GOAT_MCP_BEARER_TOKEN",
+      "GOAT_ACP_MCP_AUTHORIZATION",
+      "Bearer",
+      "bearer",
+      "Bearer\\",
+      " ",
+      "\t",
+      "=",
+      ":",
+      '"',
+      "'",
+      "\\",
+      "\n",
+      "\0",
+      ",",
+      "{",
+      TAG,
+      "test",
+      "GOA",
+      "-",
+      "a".repeat(20),
+      "f".repeat(43),
+      FOREIGN,
+      "Authorization: ",
+    ];
+    let seed = 12_345;
+    const random = (bound: number) => {
+      seed = (seed * 1_103_515_245 + 12_345) & 0x7f_ff_ff_ff;
+      return seed % bound;
+    };
+    for (let index = 0; index < 20_000; index += 1) {
+      let output = "";
+      for (let count = 2 + random(16); count > 0; count -= 1) output += parts[random(parts.length)];
+      const cuts = [random(output.length + 1), random(output.length + 1)].toSorted((a, b) => a - b);
+      const chunks = [
+        output.slice(0, cuts[0]),
+        output.slice(cuts[0], cuts[1]),
+        output.slice(cuts[1]),
+      ];
+      expect(streamed(chunks).shown, JSON.stringify(chunks)).toBe(redactGoatCredentials(output));
+    }
+  });
+
   it("holds back at most a short tail, whatever the output", () => {
     const flood = Array.from({ length: 10 }, () => " ".repeat(10_000));
     expect(streamed(["GOAT_ACP_MCP_AUTHORIZATION=Bearer", ...flood]).maxCarry).toBeLessThan(400);
     expect(streamed(["a".repeat(60_000), "!"]).maxCarry).toBeLessThan(400);
     expect(streamed(["GOAT_MCP_BEARER_TOKEN=" + "x".repeat(60_000)]).maxCarry).toBeLessThan(400);
+    // Values past MAX_VALUE stream exactly as whole-text redaction shows them.
+    const long = `GOAT_MCP_BEARER_TOKEN=${"x".repeat(300)}\n`;
+    for (let cut = 1; cut < long.length; cut += 1) {
+      expect(streamed([long.slice(0, cut), long.slice(cut)]).shown).toBe(
+        redactGoatCredentials(long),
+      );
+    }
   });
 });

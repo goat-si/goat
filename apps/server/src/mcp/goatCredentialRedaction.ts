@@ -33,9 +33,12 @@ const ASSIGNMENT = String.raw`\\?["']?[ \t]{0,8}[=:][ \t]{0,8}\\?["']?`;
 const BEARER = String.raw`Bearer(?:\\?[ \t]){1,8}`;
 // A value ends at whitespace, a quote, a backslash, a separator, or env -0's NUL.
 const VALUE_CHAR = String.raw`[^\s"'\\,;\0]`;
+// Longest value redacted as one. Real tokens are 43 or 51 characters; the bound keeps streamed
+// and whole-text redaction equal, since a stream can hold back only so much.
+const MAX_VALUE = 256;
 
 const NAMED_VALUE = new RegExp(
-  `(${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)${VALUE_CHAR}+`,
+  `(${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)${VALUE_CHAR}{1,${MAX_VALUE}}`,
   "g",
 );
 const BEARER_VALUE = new RegExp(`(?<![A-Za-z0-9])(${BEARER})${REGISTRY_TOKEN}`, "gi");
@@ -45,13 +48,15 @@ const MAY_HOLD_LABELED_CREDENTIAL = /bearer|_AUTHORIZATION|_BEARER_TOKEN/i;
 const runTags: Array<string> = [];
 const MAX_RUN_TAGS = 32;
 let taggedValue: RegExp | undefined;
+let partialCredential = buildPartialCredential();
 
 /** Called by McpSessionRegistry with the tag that starts every token it mints. */
 export function registerCredentialRunTag(tag: string): void {
   if (!TOKEN_CHARS.test(tag) || runTags.includes(tag)) return;
   runTags.push(tag);
   if (runTags.length > MAX_RUN_TAGS) runTags.shift();
-  taggedValue = new RegExp(`(?:${runTags.join("|")})${TOKEN_CHAR}*`, "g");
+  taggedValue = new RegExp(`(?:${runTags.join("|")})${TOKEN_CHAR}{0,${MAX_VALUE}}`, "g");
+  partialCredential = buildPartialCredential();
 }
 
 /** Text with every GOAT MCP credential replaced by {@link REDACTED_CREDENTIAL}. */
@@ -99,69 +104,89 @@ function redactValue(value: unknown, depth: number): unknown {
   return next ?? value;
 }
 
-/** Only the end of a chunk can hold the start of a credential; this bounds work and carry. */
-const PARTIAL_WINDOW = 320;
-const PARTIAL_LABELED = new RegExp(
-  `(?:(?<![A-Za-z0-9])${BEARER}${TOKEN_CHAR}{0,50}|${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?${VALUE_CHAR}{0,256})$`,
-  "i",
-);
-const LONGEST_NAME = Math.max(...CREDENTIAL_NAMES.map((name) => name.length));
+/**
+ * Only the end of a chunk can hold the start of a credential. The window covers the longest
+ * unfinished credential: a name, its assignment, "Bearer " and a value of MAX_VALUE characters.
+ */
+const PARTIAL_WINDOW = 400;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+/** Every non-empty prefix of the words, longest first, as one alternation. */
+function prefixesOf(words: ReadonlyArray<string>): string {
+  const prefixes = new Set(
+    words.flatMap((word) => Array.from(word, (_, index) => word.slice(0, index + 1))),
+  );
+  const alternation = [...prefixes]
+    .toSorted((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join("|");
+  return `(?:${alternation})`;
+}
+
+/**
+ * Matches, at the end of the text, any unfinished start of something redactGoatCredentials would
+ * redact: part of a credential name, a name waiting for its assignment or value, part of
+ * "Bearer " (escaped spaces too), "Bearer " with up to a token of characters, or part of a tag or
+ * a tagged run. Holding back from its match means the cut never splits a credential.
+ */
+function buildPartialCredential(): RegExp {
+  // Before the = or :, including a JSON-escaped closing quote.
+  const beforeDelimiter = String.raw`\\?["']?[ \t]{0,8}`;
+  const bearerPrefix = String.raw`B(?:e(?:a(?:r(?:e(?:r(?:\\?[ \t]){0,8}\\?)?)?)?)?)?`;
+  const alternatives = [
+    prefixesOf(CREDENTIAL_NAMES),
+    `${CREDENTIAL_NAME}${beforeDelimiter}`,
+    `${CREDENTIAL_NAME}${ASSIGNMENT}(?:${bearerPrefix})?`,
+    `${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?${VALUE_CHAR}{1,${MAX_VALUE}}`,
+    `(?<![A-Za-z0-9])${bearerPrefix}`,
+    `(?<![A-Za-z0-9])${BEARER}${TOKEN_CHAR}{0,${TOKEN_LENGTH}}`,
+    ...(runTags.length === 0
+      ? []
+      : [prefixesOf(runTags), `(?:${runTags.join("|")})${TOKEN_CHAR}{0,${MAX_VALUE}}`]),
+  ];
+  return new RegExp(`(?:${alternatives.join("|")})$`, "i");
+}
+
 // What can stand right before a credential value: "Bearer " or a credential variable's assignment.
 const LABEL_BEFORE_VALUE = new RegExp(
   `(?:(?<![A-Za-z0-9])${BEARER}|${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)$`,
   "i",
 );
 
-/** Start of the shortest-to-longest tail that a later chunk may turn into a credential. */
+/** Where the held-back tail starts: nothing before it can still become part of a credential. */
 function partialStart(text: string): number {
   const windowStart = Math.max(0, text.length - PARTIAL_WINDOW);
-  let start = text.length;
-  const labeled = PARTIAL_LABELED.exec(text.slice(windowStart));
-  if (labeled !== null) start = windowStart + labeled.index;
-  // A token minted here that the next chunk may continue: hold from its tag, wherever the tag sits
-  // in the trailing run of token characters, so the cut never splits a recognized token.
-  let runStart = text.length;
-  while (runStart > 0 && text.length - runStart < 2 * TOKEN_LENGTH) {
-    if (!TOKEN_CHARS.test(text.charAt(runStart - 1))) break;
-    runStart -= 1;
-  }
-  const run = text.slice(runStart);
-  const tagged = runTags
-    .map((tag) => run.indexOf(tag))
-    .filter((index) => index !== -1)
-    .toSorted((left, right) => left - right)[0];
-  if (tagged !== undefined) start = Math.min(start, runStart + tagged);
-  // Or the start of a tag.
-  for (let index = Math.max(runStart, text.length - TOKEN_LENGTH); index < start; index += 1) {
-    const tail = text.slice(index);
-    if (runTags.some((tag) => tail.length < tag.length && tag.startsWith(tail))) {
-      start = index;
-      break;
+  const partial = partialCredential.exec(text.slice(windowStart));
+  let start = partial === null ? text.length : windowStart + partial.index;
+  // Nor inside a credential that is already complete, such as a tagged run that runs on into a
+  // name, or a value that is itself a name.
+  const scanFrom = Math.max(0, windowStart - PARTIAL_WINDOW);
+  const spans = [taggedValue, NAMED_VALUE, BEARER_VALUE].flatMap((pattern) =>
+    pattern === undefined
+      ? []
+      : Array.from(text.slice(scanFrom).matchAll(pattern), (match) => ({
+          from: scanFrom + match.index,
+          to: scanFrom + match.index + match[0].length,
+        })),
+  );
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const { from, to } of spans) {
+      if (from < start && start < to) {
+        start = from;
+        moved = true;
+      }
     }
   }
-  // A word that may still grow into a credential name or "Bearer".
-  let wordStart = text.length;
-  while (
-    wordStart > 0 &&
-    text.length - wordStart < LONGEST_NAME &&
-    /[A-Za-z0-9_]/.test(text.charAt(wordStart - 1))
-  ) {
-    wordStart -= 1;
-  }
-  const word = text.slice(wordStart);
-  if (
-    wordStart < start &&
-    word.length > 0 &&
-    ("bearer".startsWith(word.toLowerCase()) ||
-      CREDENTIAL_NAMES.some((name) => name.startsWith(word)))
-  ) {
-    start = wordStart;
-  }
-  // Never cut inside the trailing run of token characters: the part shown now could be most of a
-  // token whose label the redactor needs to see. Hold the whole run, and the label before it.
+  // Never cut inside the trailing run of token characters either: the part shown now could be
+  // most of a token whose label the redactor needs to see. Hold the run and the label before it.
+  let runStart = text.length;
+  while (runStart > windowStart && TOKEN_CHARS.test(text.charAt(runStart - 1))) runStart -= 1;
   if (start < text.length && start > runStart) start = runStart;
   if (start === runStart && start < text.length) {
-    const label = LABEL_BEFORE_VALUE.exec(text.slice(Math.max(0, start - PARTIAL_WINDOW), start));
+    const label = LABEL_BEFORE_VALUE.exec(text.slice(windowStart, start));
     if (label !== null) start -= label[0].length;
   }
   return start;
