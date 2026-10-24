@@ -175,8 +175,16 @@ placement refuses a critical host. Settings: `fleet.pressure` in
 
 ## Durable decisions
 
-`apps/server/src/goatclaw/DecisionInbox.ts` and `packages/contracts/src/decisions.ts` keep durable
-requests alongside projections of pending provider questions. Projections retain the existing response
+`apps/server/src/goatclaw/DecisionService.ts` routes Settings and MCP decision reads and answers
+through `HostThreadsMcpService`; `DecisionInbox.ts` remains local and owns state and delivery.
+Discovery queries direct launch lineage for the origin environment, while an explicit host reads
+that host's local inbox. Foreign transport filters never fan out, and unavailable or older hosts
+remain partial results rather than being retried without a filter.
+
+Origin grants and profile ceilings are rechecked at every dispatch authorization milestone. The
+destination intersects its transport grant with the forwarded profile for classification and
+execution; person-only questions cannot cross this boundary, and linked hosts cannot approve.
+`packages/contracts/src/decisions.ts` keeps durable requests alongside pending provider questions. Projections retain the existing response
 path and its dispatch-time mode guard; approvals and questions above an agent's ceiling remain human-only.
 A client's owner override requires authenticated settings-write and orchestration-operate scopes.
 
