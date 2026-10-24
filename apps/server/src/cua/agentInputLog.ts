@@ -69,12 +69,14 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKind> {
   if (READ_ONLY_TOOLS.has(tool) || SEMANTIC_TOOLS.has(tool)) return [];
   const given = record(args);
-  // Pinned cua-driver 0.37.0 moves only the overlay on macOS, Windows and Linux unless the
-  // scope is desktop (including a typed desktop target, which the driver normalizes to scope).
+  // Pinned cua-driver 0.37.0 moves only the overlay unless the target is desktop without window
+  // selectors. Legacy desktop scope with pid/window_id becomes a window move on Linux and is
+  // refused on macOS/Windows; neither posts input. Typed desktop targets normalize to scope.
   if (
     tool === "move_cursor" &&
-    given?.scope !== "desktop" &&
-    record(given?.target)?.kind !== "desktop"
+    ((given?.scope !== "desktop" && record(given?.target)?.kind !== "desktop") ||
+      given?.pid !== undefined ||
+      given?.window_id !== undefined)
   )
     return [];
   // A point makes a keyboard tool click there first; modifiers make a pointer tool press keys.
