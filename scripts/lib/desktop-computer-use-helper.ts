@@ -1,7 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import { ChildProcess } from "effect/process";
-import { requireReleaseCommand, runReleaseCommand } from "./release-verify.ts";
+import { ReleaseVerificationError, runReleaseCommand } from "./release-verify.ts";
+
+/**
+ * The helper channel a packaged app embeds. Never "dev": a dev helper skips its parent check
+ * (GOATComputerUseAllowAnyParent), so it must not ship in a nightly or stable app.
+ */
+export const packagedHelperChannel = (updateChannel: "latest" | "nightly") =>
+  updateChannel === "nightly" ? ("nightly" as const) : ("stable" as const);
 
 export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseHelper")(
   function* (input: {
@@ -15,14 +22,21 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
     const args = [
       path.join(input.repoRoot, "scripts/build-computer-use-helper.ts"),
       "--channel",
-      input.channel === "nightly" ? "nightly" : "stable",
+      packagedHelperChannel(input.channel),
       "--output",
       input.output,
     ];
-    if (process.env.CSC_NAME) args.push("--identity", process.env.CSC_NAME);
+    if (process.env.GOAT_CLI_MAC_SIGN_IDENTITY)
+      args.push("--identity", process.env.GOAT_CLI_MAC_SIGN_IDENTITY);
     if (process.env.APPLE_KEYCHAIN_PROFILE)
       args.push("--notary-profile", process.env.APPLE_KEYCHAIN_PROFILE);
-    yield* requireReleaseCommand(runReleaseCommand, process.execPath, args);
+    const result = yield* runReleaseCommand(process.execPath, args);
+    if (result.exitCode !== 0)
+      return yield* new ReleaseVerificationError({
+        problems: [
+          `GOAT Computer Use build failed (${result.exitCode}). stdout: ${result.stdout.trim()} stderr: ${result.stderr.trim()}`,
+        ],
+      });
     return path.join(input.output, "GOAT Computer Use.app");
   },
 );

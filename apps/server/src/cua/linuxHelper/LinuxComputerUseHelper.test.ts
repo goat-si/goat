@@ -25,6 +25,8 @@ import {
   pngColors,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
+import { CROPPED_CAPTURE } from "./windowCapture.ts";
+import { UNREDIRECTED_CAPTURE, type DriverShot } from "./x11WindowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -47,6 +49,7 @@ describe("Linux session facts", () => {
         session: detectLinuxSession(facts),
         uinputWritable: async () => true,
         secureFocus: async () => NOT_SECURE,
+        capture: { route: "driver" },
         call: async (tool) => {
           calls.push(tool);
           return "unexpected";
@@ -511,6 +514,80 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("on X11 the screenshot is the window's own capture, at the size the driver's points are in", async () => {
+    const shots: DriverShot[] = [];
+    const helper = await connect({
+      capture: {
+        route: "own",
+        capture: async (_windowId, shot) => {
+          shots.push(shot);
+          return {
+            png: png(shot.width, shot.height, false),
+            width: shot.width,
+            height: shot.height,
+          };
+        },
+      },
+    });
+    const first = await helper.observe();
+    // The driver still took its screenshot, so its pointer scale is current; its image is not sent.
+    expect(helper.driver.state.reads.at(-1)?.include_screenshot).toBe(true);
+    expect(shots).toEqual([{ width: 420, height: 320, windowWidth: 420, windowHeight: 320 }]);
+    expect(first.image?.data).not.toBe(SHOT);
+    expect(first.image?.data).toBe(png(420, 320, false).toString("base64"));
+    expect(first.observation.screenshot).toEqual({
+      mimeType: "image/png",
+      width: 420,
+      height: 320,
+    });
+    const increment =
+      first.observation.kind === "full"
+        ? first.observation.elements.find((element) => element.label === "Increment")
+        : undefined;
+    expect(increment?.frame).toEqual({ x: 12, y: 54, width: 396, height: 34 });
+    await helper.close();
+  });
+
+  it("a window whose own pixels cannot be proven gets no screenshot: observe and readiness say why", async () => {
+    const helper = await connect({
+      capture: { route: "own", capture: async () => ({ refused: UNREDIRECTED_CAPTURE }) },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
+    expect(shot.image).toBeUndefined();
+    const controls = await helper.observe({ screenshot: false });
+    expect(controls.observation.kind).toBe("full");
+    expect(controls.image).toBeUndefined();
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({ capture: "unavailable", tree: "ready" });
+    expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
+    expect(computerUseReady(readiness)).toBe(false);
+    await helper.close();
+  });
+
+  it("where the driver would crop the whole screen, nothing is captured and readiness says why", async () => {
+    const helper = await connect({
+      session: { ...X11, display: undefined, waylandDisplay: "wayland-0", gnomeShellMajor: 46 },
+      capture: { route: "refused", reason: CROPPED_CAPTURE },
+    });
+    const shot = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(shot.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
+    expect(helper.driver.state.reads).toEqual([]);
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness).toMatchObject({
+      grants: { screenCapture: "unknown" },
+      capture: "unavailable",
+    });
+    expect(readiness.reasons).toContain(CROPPED_CAPTURE);
+    await helper.close();
+  });
+
   it("readiness proves the tree and a non-blank capture, and says input is foreground only without uinput", async () => {
     const helper = await connect();
     const readiness = decodeReadiness((await helper.request("permissions", {})).result);
@@ -551,6 +628,7 @@ describe("makeLinuxHelper shutdown", () => {
       screen: ":91",
       startDriver: async () => ({ ...client, close: () => closing.promise }),
       secureFocus: async () => NOT_SECURE,
+      capture: { route: "driver" },
       uinputWritable: async () => false,
       settle: async () => undefined,
       newId: () => "o",

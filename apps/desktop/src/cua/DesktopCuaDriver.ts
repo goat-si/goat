@@ -245,7 +245,7 @@ const dependencies: DesktopCuaDriverDependencies = {
     makeHelperHost({
       ...options,
       spawn: (executable) => spawnHelperProcess(executable, platform),
-      ...(platform === "win32" ? { socket: windowsDriverPipe } : {}),
+      ...(platform === "win32" ? { socket: windowsDriverPipe, mcpThroughHelper: true } : {}),
       readMetadata: async (socketPath): Promise<DaemonMetadata> => {
         const driver: DriverClient & Pick<CuaDriverLike, "metadata"> = (
           await import("@trycua/cua-driver")
@@ -275,6 +275,8 @@ interface OwnedHost {
   readonly started: Promise<EmbeddedDriverConnection>;
   /** Run by GOAT Computer Use; only such a host makes the helper's readiness "running". */
   readonly helper: boolean;
+  /** It exited before GOAT stopped it; retire aborts before stopping, so its own stop never is. */
+  crashed?: boolean;
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
@@ -360,6 +362,18 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
       ),
     );
+  const forgetCrash = (entry: OwnedHost) =>
+    Effect.suspend(() => {
+      if (!entry.helper || !entry.crashed) return Effect.void;
+      // Consume it once, before a retiring host can be replaced or a new check proves it again.
+      entry.crashed = false;
+      return noteHelper((state) =>
+        withoutProof(
+          state,
+          `${COMPUTER_USE_HELPER_NAME} stopped unexpectedly. Run the readiness check again.`,
+        ),
+      );
+    });
 
   // UniFFI calls can outlive cancellation. Retain the host until every native
   // promise settles, even after the public shutdown deadline has elapsed.
@@ -376,15 +390,17 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }
     return entry.cleanup;
   };
-  const stop = Effect.suspend(() =>
-    owned
-      ? Effect.tryPromise(() => retire(owned!)).pipe(
+  const stop = Effect.suspend(() => {
+    const entry = owned;
+    return entry
+      ? Effect.tryPromise(() => retire(entry)).pipe(
           Effect.timeoutOption("2 seconds"),
           Effect.map(Option.isSome),
           Effect.orElseSucceed(() => false),
+          Effect.tap(() => forgetCrash(entry)),
         )
-      : Effect.succeed(true),
-  ).pipe(
+      : Effect.succeed(true);
+  }).pipe(
     Effect.tap(() => noteHelper((state) => withRunning(state, false))),
     Effect.tap(() => Effect.sync(() => privateMode.detach())),
   );
@@ -555,10 +571,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       (connection) => {
         entry.monitor = settle(
           Promise.resolve().then(() =>
-            host.waitForExit(connection.generation, { signal: entry.abort.signal }),
+            host.waitForExit(connection.generation, { signal: entry.abort.signal }).finally(() => {
+              // Judged on the exit itself: wrapping hops would let a retire's abort land first.
+              if (!entry.abort.signal.aborted) entry.crashed = true;
+            }),
           ),
         ).then(() => {
-          if (!entry.cleanup && !closed) Queue.offerUnsafe(crashes, entry);
+          // A crash is still reported when retiring began meanwhile, so its lost proof is.
+          if ((!entry.cleanup || entry.crashed) && !closed) Queue.offerUnsafe(crashes, entry);
         });
       },
       () => undefined,
@@ -882,6 +902,18 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     }).pipe(
       Effect.catch((error) =>
         stop.pipe(
+          // A helper that could not start, such as one whose identity no longer matches, is
+          // not the one an earlier check confirmed.
+          Effect.andThen(
+            selected.kind === "helper"
+              ? noteHelper((state) =>
+                  withoutProof(
+                    state,
+                    `${COMPUTER_USE_HELPER_NAME} could not start. Run the readiness check again.`,
+                  ),
+                )
+              : Effect.void,
+          ),
           Effect.andThen(
             isCuaDriverStartupRefusal(error)
               ? report(
@@ -941,7 +973,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           Effect.flatMap((entry) =>
             mutex.withPermits(1)(
               Effect.gen(function* () {
-                if (owned !== entry || entry.cleanup || closed) return;
+                if (closed) return;
+                // A helper that exited on its own is not known to be the one a check confirmed,
+                // even when its owner went away before this ran.
+                yield* forgetCrash(entry);
+                if (owned !== entry || entry.cleanup) return;
                 const request = currentRequest;
                 yield* stop;
                 if (request) yield* unavailable(request.requestId);
