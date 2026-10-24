@@ -194,7 +194,7 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       controlId: string,
       at: number,
-    ) => Effect.Effect<boolean>;
+    ) => Effect.Effect<"paused" | "agents" | "refused">;
     /**
      * One of a control's calls that can post input started or ended (#1235). A person's input
      * reported while any agent's input was on its way is that agent's, not a person's. False when
@@ -706,7 +706,7 @@ const make = Effect.gen(function* () {
       controlId: string,
       at: number,
     ) {
-      if ((yield* liveControl(threadId, controlId)) === undefined) return false;
+      if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
       // Another agent's input on this host shows up in every helper; only a live control's
       // calls count.
       const live = new Set(
@@ -714,9 +714,10 @@ const make = Effect.gen(function* () {
           .filter((record) => record.ended === undefined)
           .map((record) => record.controlId),
       );
-      if (!agentInputs.isAgents(at, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
-        yield* pause("human_input");
-      return true;
+      if (agentInputs.isAgents(at, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
+        return "agents" as const;
+      yield* pause("human_input");
+      return "paused" as const;
     }),
     agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
       threadId: ThreadId,

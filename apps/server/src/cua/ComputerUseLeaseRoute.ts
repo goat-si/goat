@@ -127,12 +127,18 @@ const reportLayer = HttpRouter.add(
     if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     const value = report.value;
+    if ("humanInput" in value) {
+      const outcome = yield* leases.humanInput(threadId, value.controlId, value.humanInput.at);
+      // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
+      // keeps reporting after a 202 (another agent's input) or a 409.
+      return HttpServerResponse.empty({
+        status: outcome === "paused" ? 204 : outcome === "agents" ? 202 : 409,
+      });
+    }
     const recorded =
-      "humanInput" in value
-        ? yield* leases.humanInput(threadId, value.controlId, value.humanInput.at)
-        : "agentInput" in value
-          ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
-          : yield* leases.setTarget(threadId, value.controlId, value);
+      "agentInput" in value
+        ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
+        : yield* leases.setTarget(threadId, value.controlId, value);
     return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
   }),
 );

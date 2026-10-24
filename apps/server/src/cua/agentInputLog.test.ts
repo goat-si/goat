@@ -30,4 +30,16 @@ describe("agentInputLog", () => {
     for (const tool of ["click", "type_text", "run_script", "launch_app", "some_new_tool"])
       assert.isTrue(postsInput(tool));
   });
+
+  it("starts whose end never came, or came first, are forgotten once they cover nothing", () => {
+    const log = makeAgentInputLog();
+    assert.isFalse(log.ended("early", 1_000));
+    log.started("early", 1_000);
+    log.started("lost", 1_200);
+    log.started("done", 1_300);
+    log.ended("done", 1_400);
+    assert.equal(log.size(), 3);
+    assert.isFalse(log.isAgents(20_000));
+    assert.equal(log.size(), 0);
+  });
 });
