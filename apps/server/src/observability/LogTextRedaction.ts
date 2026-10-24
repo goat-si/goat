@@ -324,7 +324,9 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // https://user:token@host/repo.git. Userinfo runs to the authority's last @, as URL parsers read
   // it, so a password holding @ is hidden whole. The scheme is bounded (a longer run is matched by
   // its end) and an authority ends at the next slash, so scanning stays linear.
-  [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\s?#]*@/gi, `$1${MASK}@`],
+  // URL parsers also accept spaces and tabs in a password, so after user: the userinfo may hold
+  // them, up to the line's end; without a colon, whitespace ends it, so prose stays readable.
+  [/([a-z][a-z0-9+.-]{0,31}:\/\/)(?:[^/\s?#:@]*:[^/\r\n?#]*|[^/\s?#]*)@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
