@@ -268,11 +268,15 @@ function inspectError(
   seen.add(value);
   const rawName = diagnostic(value, "name") ?? "Error";
   const rawMessage = diagnostic(value, "message") ?? "";
+  // Joined, name and message can form a credential neither holds alone ("Authorization" and a
+  // secret, or a name ending in {"token":" and a message starting with its value), so the raw
+  // header is redacted whole before anything else, and the message is taken from that result.
+  const header = `${rawName}: ${rawMessage}`;
+  const safeHeader = redactLogText(header);
   const name = bounded(redactLogText(rawName), MAX_NAME_CHARS);
-  // Joined, a name such as "Authorization" makes "name: message" a header whose value is the
-  // message, so the message is taken from the joined text after redacting it whole.
-  const joined = redactLogText(`${name}: ${bounded(redactLogText(rawMessage), MAX_MESSAGE_CHARS)}`);
-  const message = joined.startsWith(`${name}: `) ? joined.slice(name.length + 2) : MASK;
+  const message = safeHeader.startsWith(`${name}: `)
+    ? bounded(redactLogText(safeHeader.slice(name.length + 2)), MAX_MESSAGE_CHARS)
+    : MASK;
   const nested = causeOf(value);
   let cause: Error | undefined;
   try {
@@ -290,13 +294,12 @@ function inspectError(
   // A V8 stack starts by repeating the message, which may span lines; other engines' stacks may
   // not. Whatever the format, everything after that header is kept as frames, redacted.
   const stack = diagnostic(value, "stack") ?? "";
-  const header = `${rawName}: ${rawMessage}`;
   const afterHeader = stack.startsWith(header)
     ? stack.slice(header.length)
     : // Without its own header (some engines, or a rewritten stack) the whole stack is frames.
       `\n${stack}`;
   // Redacted in one pass with its header, so a header value folded onto the next line stays hidden.
-  const stackText = afterHeader.trim().length === 0 ? joined : `${joined}${afterHeader}`;
+  const stackText = afterHeader.trim().length === 0 ? header : `${header}${afterHeader}`;
   error.stack = bounded(`${redactLogText(stackText)}${frames}`, MAX_STACK_CHARS);
   return error;
 }

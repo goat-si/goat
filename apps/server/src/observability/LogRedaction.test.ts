@@ -391,6 +391,22 @@ describe("redactCause", () => {
     expect(pretty?.message).toBe("***");
   });
 
+  it("masks a credential that only the joined name and message form", () => {
+    const error = new Error('canary-split-value"}');
+    error.name = 'prefix\n{"token":"';
+    error.stack = `${error.name}: ${error.message}\n    at fixture.js:1:1`;
+    const printed = [
+      Cause.pretty(redactCause(Cause.die(error))),
+      JSON.stringify(redactLogMessage({ error })),
+      ...redactedDefects(Cause.die(error)).map((cause) => Cause.pretty(cause)),
+      defectSummary(error),
+    ];
+    for (const text of printed) {
+      expect(text).toContain("fixture.js");
+      expect(text).not.toContain("canary-split-value");
+    }
+  });
+
   it("keeps a getter-defined message and survives a getter that throws", () => {
     class Computed extends Error {
       override get message() {
