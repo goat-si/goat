@@ -62,6 +62,7 @@ const run = <A, E>(
     readonly aliases?: ReadonlyArray<string>;
     readonly profile?: PermissionProfile;
     readonly currentProfile?: () => PermissionProfile;
+    readonly goatclawEnabled?: boolean;
     readonly beforeAuthorize?: (tool: string) => void;
     readonly answer?: (
       host: string,
@@ -102,11 +103,12 @@ const run = <A, E>(
     });
   const currentProfile =
     options.currentProfile ?? (() => options.profile ?? BUILTIN_PERMISSION_PROFILES.manager!);
+  const enabled = options.goatclawEnabled ?? true;
   const profileLayer = Layer.mock(Profiles.PermissionProfiles)({
     resolve: () =>
       Effect.sync(() => {
         const profile = currentProfile();
-        return { enabled: true, profile, runtimeMode: profile.runtimeModeCeiling };
+        return { enabled: enabled, profile, runtimeMode: profile.runtimeModeCeiling };
       }),
     check: (_scope, capability, context) =>
       Effect.sync(() => {
@@ -115,7 +117,7 @@ const run = <A, E>(
           (profile.hosts === undefined || profile.hosts.includes(context?.host ?? ""))
           ? {
               ok: true as const,
-              effective: { enabled: true, profile, runtimeMode: profile.runtimeModeCeiling },
+              effective: { enabled: enabled, profile, runtimeMode: profile.runtimeModeCeiling },
             }
           : { ok: false as const, reason: "Remote capability denied" };
       }),
@@ -134,7 +136,7 @@ const run = <A, E>(
       connectedHosts: Effect.succeed(options.aliases ?? ["alpha", "beta"]),
     }),
     profileLayer,
-    Settings.layerTest({ goatclaw: { enabled: true } }),
+    Settings.layerTest({ goatclaw: { enabled } }),
     liveThreadsLayer,
     Layer.succeed(Invocation.McpInvocationContext, options.caller ?? scope),
   );
@@ -174,6 +176,21 @@ it.effect(
       );
     }),
 );
+it.effect(
+  "regression #1405: an origin with goatclaw off reaches remote hosts without forwarding a ceiling",
+  () =>
+    Effect.gen(function* () {
+      const { calls } = yield* run({ goatclawEnabled: false }, (toolkit) =>
+        toolkit.handle("goat_decision_list", {}).pipe(Stream.unwrap, Stream.runCollect),
+      );
+      // A destination with goatclaw off refuses any forwarded ceiling, and an origin with it off
+      // has no profile narrowing to forward; the session's runtime ceiling still applies.
+      expect(calls).toHaveLength(2);
+      for (const call of calls)
+        expect(call.arguments).not.toHaveProperty("permissionProfileCeiling");
+    }),
+);
+
 it.effect("baseline-failing #1405: explicit get and answer stay on the asking host", () =>
   Effect.gen(function* () {
     const { result, calls } = yield* run({}, (toolkit) =>
