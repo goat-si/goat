@@ -554,7 +554,8 @@ const make = Effect.gen(function* () {
       if (diagnostic && !failure)
         failure = new ClaudeCloudError({
           detail:
-            redact(diagnostic, login.environment) || "Claude could not confirm cloud submission.",
+            redact(diagnostic, login.environment).replace(/\s+/g, " ") ||
+            "Claude could not confirm cloud submission.",
           outcome: "uncertain",
         });
       notify();

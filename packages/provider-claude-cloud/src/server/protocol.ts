@@ -68,17 +68,17 @@ export function cleanOutput(raw: string) {
 }
 
 /**
- * Claude's "Error:" text as it appears on screen. The native PTY spaces words with cursor-column
- * jumps and wraps long text with CR CR LF, so the jumps become spaces and the wrapped lines that
- * already arrived rejoin into one sentence.
+ * Claude's "Error:" text as it appears on screen, as lines. The native PTY spaces words with
+ * cursor-column jumps and wraps long text with CR CR LF, so the jumps become spaces and the wrapped
+ * lines that already arrived are kept. Callers redact before collapsing whitespace, so a masked
+ * value still matches its original spacing.
  */
 export function readDiagnostic(raw: string) {
   const screen = NodeUtil.stripVTControlCharacters(
     // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
     raw.replace(/\u001b\[\d*[GC]/g, " "),
   ).replace(/\r+\n|\r/g, "\n");
-  const lines = /^[ \t]*Error:[ \t]*(\S.*(?:\n[ \t]*\S.*)*)\n/m.exec(screen)?.[1];
-  return lines?.replace(/\s+/g, " ").trim();
+  return /^\s*Error:\s*(\S.*(?:\n[ \t]*\S.*)*)\n/m.exec(screen)?.[1];
 }
 
 export function readStartReceipt(raw: string) {

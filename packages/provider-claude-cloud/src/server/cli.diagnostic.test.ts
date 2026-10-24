@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { LOGIN, makeCliHarness } from "./testing.ts";
+import { LOGIN, makeCliHarness, RECEIPT } from "./testing.ts";
 
 it.effect("reads a cursor-spaced, wrapped diagnostic as Claude shows it on screen", () =>
   Effect.scoped(
@@ -23,6 +23,46 @@ it.effect("reads a cursor-spaced, wrapped diagnostic as Claude shows it on scree
         "This repository is too large to upload: even without its history it is 100.6MB, and an upload can be at most 100MB. GitHub isn't connected to your Claude account, so this repository can't be cloned in the cloud. Connect it on the web at [link redacted]",
       );
       expect(h.fake.writes).toEqual([]);
+    }),
+  ),
+);
+
+it.effect.each([
+  ["fixture  secret", "Error: invalid fixture  secret\n"],
+  ["fixture\nsecret", "Error: invalid fixture\r\r\nsecret\r\r\n"],
+])(
+  "redacts a sign-in value before collapsing the diagnostic's whitespace (%#)",
+  ([value, output]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeCliHarness();
+        const login = { ...LOGIN, environment: { ...LOGIN.environment, FIXTURE_TOKEN: value } };
+        const fiber = yield* h.service
+          .start(login, "/fixture/project", "task")
+          .pipe(Effect.forkChild);
+        yield* h.fake.ready;
+        h.fake.emit(output);
+        h.fake.finish(1);
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+        expect(error.detail).toBe("invalid [redacted]");
+      }),
+    ),
+);
+
+it.effect("still recognizes a diagnostic whose text starts on the line after Error:", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Error:\nfixture transport interrupted\n" + RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      h.fake.finish(0, 0);
+      const error = yield* handle.exited.pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toContain("fixture transport interrupted");
     }),
   ),
 );
