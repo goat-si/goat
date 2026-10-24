@@ -79,6 +79,7 @@ import { formatClaudeResumeCompactionQuestion } from "@goat/shared/claudeCompact
 import * as HostProcess from "@goat/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
+import { toolOutputImages } from "@goat/shared/toolOutput";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
@@ -7083,6 +7084,100 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             : undefined,
           "On branch main\nwarning: dirty",
         );
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
+
+  it.effect("regression: keeps an MCP screenshot that Claude's structured result leaves out", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        const toolUseId = "toolu_01CuaWindowState";
+        const screenshot = "iVBORw0KGgo=";
+
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-claude-mcp-screenshot"),
+            text: "Look at Finder.",
+            attachments: [],
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "assistant",
+            message: {
+              model: "claude-sonnet-4-6",
+              id: "msg_mcp_screenshot",
+              type: "message",
+              role: "assistant",
+              content: [
+                {
+                  type: "tool_use",
+                  id: toolUseId,
+                  name: "mcp__cua-driver__get_window_state",
+                  input: { pid: 501, window_id: 7 },
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000000793",
+            session_id: WAKE_NATIVE_SESSION,
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          claudeSdkFrame({
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: toolUseId,
+                  content: [
+                    { type: "text", text: "Finder, 1 window" },
+                    {
+                      type: "image",
+                      source: { type: "base64", media_type: "image/png", data: screenshot },
+                    },
+                  ],
+                },
+              ],
+            },
+            parent_tool_use_id: null,
+            uuid: "00000000-0000-4000-8000-000000000794",
+            session_id: WAKE_NATIVE_SESSION,
+            // Claude reports an MCP result with structured output as its text and that output.
+            tool_use_result: {
+              content: "Finder, 1 window",
+              structuredContent: { app: "Finder", windowId: 7 },
+            },
+          }),
+        );
+        yield* Queue.offer(
+          harness.sdkMessages,
+          makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000795", result: "Done." }),
+        );
+        yield* harness.awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+
+        const tool = harness.events.findLast(
+          (event) =>
+            event.type === "turn_item.updated" &&
+            event.turnItem.nativeItemRef?.nativeId === toolUseId,
+        );
+        const output =
+          tool?.type === "turn_item.updated" && tool.turnItem.type === "dynamic_tool"
+            ? tool.turnItem.output
+            : undefined;
+        assert.deepEqual(toolOutputImages(output), [{ mimeType: "image/png", data: screenshot }]);
+        assert.deepEqual((output as { readonly structuredContent?: unknown }).structuredContent, {
+          app: "Finder",
+          windowId: 7,
+        });
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );

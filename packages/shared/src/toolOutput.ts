@@ -305,6 +305,21 @@ export function mcpToolResultOutput(result: {
 
 const BASE64_IMAGE_DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
 
+/**
+ * A harness that reports an MCP result as its text and structured output, as Claude does,
+ * leaves the images in the raw tool result, so those blocks come back beside that output.
+ */
+export function mcpToolResultWithRawImages(output: unknown, rawContent: unknown): unknown {
+  if (toolOutputImageBlocks(output).length > 0 || toolOutputImageBlocks(rawContent).length === 0) {
+    return output;
+  }
+  const structuredContent =
+    Predicate.isObject(output) && output.structuredContent != null
+      ? output.structuredContent
+      : output;
+  return { content: rawContent, structuredContent };
+}
+
 /** An image a provider sent as a base64 data URL, as the image block the parser reads. */
 export function imageBlockFromDataUrl(
   url: string,
