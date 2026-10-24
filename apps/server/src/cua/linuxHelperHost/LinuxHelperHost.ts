@@ -25,6 +25,7 @@ import {
   type DesktopCuaSafetyReport,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { CUA_DRIVER_PROBED_SESSION_NAMES } from "@goat/shared/cuaDriverRelease";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -140,10 +141,18 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
 
   const publish = (report: DesktopCuaSafetyReport) => void PubSub.publishUnsafe(hub, report);
 
-  const clearSecrets = () => {
-    const last = [...secret.values()].at(-1);
-    secret.clear();
-    if (last !== undefined)
+  /**
+   * A helper's targets are released only when the helper says so or has exited: a stop request
+   * alone proves nothing, and private mode must not end while a secret may still be focused.
+   */
+  const releaseLaunch = (launch: number) => {
+    let last: ComputerUseWindowTarget | undefined;
+    for (const [key, target] of secret)
+      if (key.startsWith(launch + "|")) {
+        secret.delete(key);
+        last = target;
+      }
+    if (last !== undefined && secret.size === 0)
       publish({ version: 1, type: "cuaPrivateMode", active: false, target: last });
   };
 
@@ -151,7 +160,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (current?.launch !== launch) return;
     if (event.type === "humanInput")
       return publish({ version: 1, type: "cuaHumanInput", source: event.source });
-    const key = event.target.pid + ":" + event.target.windowId;
+    const key = launch + "|" + event.target.pid + ":" + event.target.windowId;
     if (event.active) {
       const first = secret.size === 0;
       secret.set(key, event.target);
@@ -163,7 +172,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
 
   const backoff = () => RESTART_MS[Math.min(failures++, RESTART_MS.length - 1)] ?? 60_000;
 
-  /** A helper that ends releases every target of its launch, and reports nothing any more. */
+  /** A helper let go reports nothing any more; its targets stay held until it has exited. */
   const retire = Effect.fnUntraced(function* (entry: Running) {
     if (entry.retired) return;
     entry.retired = true;
@@ -171,7 +180,6 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     entry.process.stop();
     if (current === entry) {
       current = undefined;
-      clearSecrets();
       yield* Ref.set(deps.report, Option.none());
     }
   });
@@ -183,6 +191,10 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       if (value !== undefined) env[name] = value;
     }
     Object.assign(env, session.display, { GOAT_COMPUTER_USE_DRIVER: session.command });
+    // A name the display probe decides and left out was found unusable: the daemon gets it
+    // empty, and the helper must not dial it either.
+    for (const name of CUA_DRIVER_PROBED_SESSION_NAMES)
+      if (!(name in session.display)) delete env[name];
     const launch = ++launches;
     const process = deps.spawn(env);
     const client = makeHelperClient({
@@ -207,6 +219,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     process.onExit(() => {
       entry.ended = true;
       client.close("The computer use helper ended.");
+      releaseLaunch(launch);
       void PubSub.publishUnsafe(kick, undefined);
     });
     const hello = yield* Effect.promise(() =>
@@ -215,6 +228,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
         new Promise<undefined>((resolve) => deps.after(HELLO_MS, () => resolve(undefined))),
       ]),
     );
+    // Let go while starting (its daemon stopped or was replaced): not a failed start.
+    if (entry.retired) return "dismissed" as const;
     if (hello === undefined || entry.ended) {
       yield* Effect.logWarning("The Linux computer use helper did not start", {
         launch,
@@ -290,6 +305,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       pid: entry.process.pid,
     });
     yield* retire(entry);
+    // A new daemon session starts fresh, not behind an earlier one's failed starts.
+    failures = 0;
+    retryAt = 0;
   });
 
   const tick = Effect.fnUntraced(function* () {
@@ -309,7 +327,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (Option.isNone(session)) return;
     if (entry === undefined) {
       if (now < retryAt) return;
-      entry = yield* start(session.value);
+      const started = yield* start(session.value);
+      if (started === "dismissed") return;
+      entry = started;
       if (entry === undefined) {
         retryAt = now + backoff();
         return;

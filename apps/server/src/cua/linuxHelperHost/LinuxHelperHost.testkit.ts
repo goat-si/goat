@@ -50,6 +50,8 @@ export interface FakeHelperOptions {
   readonly afterAnswer?: (request: FakeRequest, send: (frame: unknown) => void) => void;
   /** What listWindows answers instead of the windows, such as a refusal. */
   readonly listing?: () => unknown;
+  /** What a request gets instead of the scripted answer, when this returns one. */
+  readonly override?: (request: FakeRequest) => unknown;
 }
 
 export function fakeHelper(options: FakeHelperOptions = {}) {
@@ -61,6 +63,8 @@ export function fakeHelper(options: FakeHelperOptions = {}) {
   const requests: FakeRequest[] = [];
   const send = (frame: unknown) => lineListener?.(JSON.stringify(frame));
   const answer = (request: FakeRequest): unknown => {
+    const replaced = options.override?.(request);
+    if (replaced !== undefined) return replaced;
     if (request.method === "permissions") return READY;
     if (request.method === "listWindows")
       return options.listing?.() ?? { windows: options.windows?.() ?? [] };

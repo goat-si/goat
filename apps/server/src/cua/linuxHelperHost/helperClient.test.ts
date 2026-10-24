@@ -91,4 +91,25 @@ describe("Linux helper client (#1223)", () => {
     assert.isTrue(await client.watch([{ pid: 7, windowId: 70 }], 1000));
     assert.deepEqual(events, [secret]);
   });
+
+  it("keeps hearing a watch whose unwatch was refused, so its clearing event still counts (#1494 r2)", async () => {
+    let watchId = "";
+    const helper = fakeHelper({
+      onRequest: (request) => {
+        if (request.method === "watch") watchId = (request.params as { watchId: string }).watchId;
+      },
+      override: (request) =>
+        request.method === "unwatch"
+          ? { outcome: "refused", reason: "busy", message: "busy" }
+          : undefined,
+    });
+    const { client, events } = connect(helper);
+    await client.start();
+    await client.watch([{ pid: 7, windowId: 70 }], 1000);
+    assert.isFalse(await client.unwatch(1000));
+    assert.isTrue(client.watching());
+    const cleared = { type: "privateMode", active: false, target: { pid: 7, windowId: 70 } };
+    helper.event(watchId, cleared);
+    assert.deepEqual(events, [cleared]);
+  });
 });

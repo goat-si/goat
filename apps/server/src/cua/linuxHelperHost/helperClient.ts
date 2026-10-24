@@ -181,10 +181,14 @@ export function makeHelperClient(options: HelperClientOptions) {
       return accepts(result);
     },
     unwatch: async (deadlineMs: number) => {
-      const result = await request("unwatch", {}, deadlineMs, () => {
-        watchId = undefined;
+      // A refused unwatch leaves the helper watching: its events, clearing ones among them,
+      // still count until an unwatch is acknowledged.
+      const acknowledged = (result: unknown) =>
+        typeof result === "object" && result !== null && !("outcome" in result);
+      const result = await request("unwatch", {}, deadlineMs, (answer) => {
+        if (acknowledged(answer)) watchId = undefined;
       });
-      return result !== undefined;
+      return acknowledged(result);
     },
     watching: () => watchId !== undefined,
     close,

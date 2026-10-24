@@ -50,7 +50,12 @@ const hostWith = (
         spawned.push({ env, helper });
         return helper.process;
       },
-      environment: { PATH: "/usr/bin", HOME: "/home/person", GOAT_AUTH_TOKEN: "secret" },
+      environment: {
+        PATH: "/usr/bin",
+        HOME: "/home/person",
+        GOAT_AUTH_TOKEN: "secret",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/ambient-bus",
+      },
       report,
       newId: () => "id-" + ++next,
       after: () => () => undefined,
@@ -228,7 +233,35 @@ describe("LinuxHelperHost (#1223)", () => {
           DISPLAY: ":8",
           GOAT_COMPUTER_USE_DRIVER: "/opt/goat/cua-driver-2",
         });
+        // The probe found no usable bus for this daemon; the helper does not dial the ambient one.
+        assert.notProperty(t.spawned[1]?.env ?? {}, "DBUS_SESSION_BUS_ADDRESS");
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("a stopped daemon's helper holds private mode until it has exited (#1494 r2)", () =>
+    Effect.gen(function* () {
+      const t = yield* hostWith([{ pid: 7, windowId: 70 }]);
+      yield* Ref.set(t.session, Option.some(SESSION));
+      yield* TestClock.adjust(TICK_MS);
+      assert.strictEqual((yield* Queue.take(t.safety)).type, "cuaReadiness");
+      yield* t.host.setWatch(true);
+      const watchId = ((yield* t.nextRequest("watch")).params as { watchId: string }).watchId;
+      const helper = t.spawned[0]?.helper;
+      helper?.event(watchId, {
+        type: "privateMode",
+        active: true,
+        target: { pid: 7, windowId: 70 },
+      });
+      assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: true });
+      yield* Ref.set(t.session, Option.none());
+      yield* TestClock.adjust(TICK_MS);
+      // Asked to stop, not yet gone: readiness is withdrawn, private mode still holds.
+      assert.isTrue(helper?.stopped());
+      assert.deepEqual(yield* t.host.readiness, Option.none());
+      assert.strictEqual(yield* Queue.size(t.safety), 0);
+      helper?.exit();
+      assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
+    }).pipe(Effect.scoped),
   );
 
   it.effect(
