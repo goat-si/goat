@@ -116,6 +116,7 @@ const build = (fleet: Fleet, baseDir: string) =>
           plan: () => Effect.die("A window never plans a manual sync."),
           run: () => Effect.die("A window never runs a manual sync."),
           latest: Effect.sync(() => fleet.syncReport),
+          lastUpdate: Effect.sync(() => fleet.syncReport),
           changes: Stream.empty,
           markUpdating: (open) =>
             Effect.sync(() => {
@@ -318,13 +319,12 @@ it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
     }),
   );
 
-  it.effect("keeps a manual sync and another version's sync out of the update status", () =>
+  it.effect("keeps another version's sync out of the update status", () =>
     Effect.gen(function* () {
       const { fleet, update } = yield* setup();
       yield* update.check;
-      fleet.syncReport = { ...fleet.syncReport!, trigger: "manual" };
-      expect((yield* update.status)?.sync).toBeUndefined();
-      fleet.syncReport = { ...fleet.syncReport, trigger: "update", targetVersion: "2.91.0" };
+      expect((yield* update.status)?.sync?.targetVersion).toBe("2.90.0");
+      fleet.syncReport = { ...fleet.syncReport!, targetVersion: "2.91.0" };
       expect((yield* update.status)?.sync).toBeUndefined();
     }),
   );

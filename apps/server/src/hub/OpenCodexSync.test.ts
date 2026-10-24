@@ -47,6 +47,8 @@ const makeFleet = () => ({
   calls: [] as Array<string>,
   reads: [] as Array<string>,
   holds: 0,
+  /** A turn starts on this machine the moment a sync takes admission. */
+  turnStartsOnHold: false,
   /** The row each device saw for itself while its own sync ran. */
   during: new Map<string, string | undefined>(),
 });
@@ -84,6 +86,7 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
         holdAdmission: () =>
           Effect.sync(() => {
             fleet.holds += 1;
+            if (fleet.turnStartsOnHold) fleet.running.set(null, 1);
             return true;
           }),
         releaseAdmission: () =>
@@ -187,6 +190,31 @@ it.effect("leaves a busy machine that is itself a Child alone, since its sync ca
     const report = yield* sync.run(scope);
     expect(fleet.calls).toEqual([]);
     expect(rows(report)).toEqual([[null, "skipped", "busy"]]);
+  }),
+);
+
+it.effect("judges this machine again once it holds admission, for a turn that started first", () =>
+  Effect.gen(function* () {
+    // A Child that was idle when read: its sync would restart its runtime under the new turn.
+    const child = makeFleet();
+    child.snapshots.set(null, fleetSnapshot("mac-studio"));
+    child.turnStartsOnHold = true;
+    const asChild = yield* setup(child);
+    expect(rows(yield* asChild.sync.run(scope))).toEqual([[null, "skipped", "busy"]]);
+    expect(child.calls).toEqual([]);
+    expect(child.holds).toBe(0);
+
+    // A Home still writes the catalog, without restarting Codex under the new turn.
+    const home = makeFleet();
+    home.turnStartsOnHold = true;
+    const asHome = yield* setup(home);
+    expect((yield* asHome.sync.run(scope)).members[0]).toMatchObject({
+      alias: null,
+      state: "synced",
+      restartCodex: false,
+      reason: "busy",
+    });
+    expect(home.calls[0]).toBe("home sync");
   }),
 );
 
@@ -323,6 +351,17 @@ it.effect("fills one update report across the window's steps", () =>
     const report = yield* sync.latest;
     expect(report).toMatchObject({ trigger: "update", targetVersion: "2.91.0" });
     expect(rows(report!)).toEqual([
+      [null, "synced", undefined],
+      ["mac-studio", "failed", "exit-1"],
+    ]);
+
+    // A person's sync afterwards, even one refused during the window, keeps the update's report.
+    yield* sync.markUpdating(true);
+    expect((yield* sync.run(scope)).trigger).toBe("manual");
+    yield* sync.markUpdating(false);
+    yield* sync.run(scope);
+    expect((yield* sync.latest)?.trigger).toBe("manual");
+    expect(rows((yield* sync.lastUpdate)!)).toEqual([
       [null, "synced", undefined],
       ["mac-studio", "failed", "exit-1"],
     ]);

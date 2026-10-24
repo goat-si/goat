@@ -43,6 +43,8 @@ export class OpenCodexSync extends Context.Service<
       permits?: SyncPermits,
     ) => Effect.Effect<OpenCodexSyncReport>;
     readonly latest: Effect.Effect<OpenCodexSyncReport | undefined>;
+    /** The sync that followed the last update window; manual runs never replace it. */
+    readonly lastUpdate: Effect.Effect<OpenCodexSyncReport | undefined>;
     /** The latest report, then each change while a run moves through its machines. */
     readonly changes: Stream.Stream<OpenCodexSyncReport | null>;
     /** The managed update's window is open: installs, probation or a restore. Runs wait. */
@@ -98,13 +100,15 @@ const make = Effect.gen(function* () {
   const host = yield* OpenCodexUpdateHost;
   const ocx = yield* HubOcx;
   const report = yield* SubscriptionRef.make<OpenCodexSyncReport | null>(null);
+  const updateReport = yield* Ref.make<OpenCodexSyncReport | undefined>(undefined);
   const updating = yield* Ref.make(false);
   // One sync at a time, and none while an update window installs.
   const permit = yield* Semaphore.make(1);
 
-  const put = (row: OpenCodexSyncMember) =>
-    SubscriptionRef.update(report, (current) =>
-      current === null
+  /** One row of the update window's report, which is also what clients watch while it runs. */
+  const putUpdate = (row: OpenCodexSyncMember) =>
+    Ref.updateAndGet(updateReport, (current) =>
+      current === undefined
         ? current
         : {
             ...current,
@@ -112,7 +116,7 @@ const make = Effect.gen(function* () {
               ? current.members.map((member) => (member.alias === row.alias ? row : member))
               : [...current.members, row],
           },
-    );
+    ).pipe(Effect.flatMap((next) => SubscriptionRef.set(report, next ?? null)));
 
   const readPlan = Effect.fn("OpenCodexSync.readPlan")(function* (
     scope: McpInvocationScope,
@@ -149,13 +153,18 @@ const make = Effect.gen(function* () {
     }));
   });
 
-  /** This machine. New turns wait while Codex restarts, and the count is read again once they do. */
+  /**
+   * This machine. New turns wait while Codex restarts, and the machine is judged again once they
+   * do: a turn that started in between makes a Home skip the restart and a Child skip the sync.
+   */
   const syncHere = Effect.fn("OpenCodexSync.syncHere")(function* (scope: McpInvocationScope) {
     const planned = planCoordinator(yield* host.member(null, scope)).member;
     if (planned.state !== "ready") return planned;
     const held = planned.restartCodex && (yield* host.holdAdmission(null));
     return yield* Effect.gen(function* () {
-      const restartCodex = held && (yield* host.member(null, scope)).runningTurns === 0;
+      const fresh = held ? planCoordinator(yield* host.member(null, scope)).member : planned;
+      if (fresh.state !== "ready") return fresh;
+      const restartCodex = held && fresh.restartCodex;
       return yield* ocx
         .home(["sync", ...(restartCodex ? ["--restart-codex"] : [])], SYNC_TIMEOUT_MS)
         .pipe(
@@ -239,19 +248,26 @@ const make = Effect.gen(function* () {
     plan,
     run,
     latest: SubscriptionRef.get(report).pipe(Effect.map((value) => value ?? undefined)),
+    lastUpdate: Ref.get(updateReport),
     changes: SubscriptionRef.changes(report),
     markUpdating: (open) => Ref.set(updating, open),
     exclusive: (body) => permit.withPermit(body),
     beginUpdate: (targetVersion) =>
       Clock.currentTimeMillis.pipe(
-        Effect.flatMap((checkedAt) =>
-          SubscriptionRef.set(report, { trigger: "update", checkedAt, targetVersion, members: [] }),
+        Effect.map((checkedAt): OpenCodexSyncReport => ({
+          trigger: "update",
+          checkedAt,
+          targetVersion,
+          members: [],
+        })),
+        Effect.flatMap((opened) =>
+          Ref.set(updateReport, opened).pipe(Effect.andThen(SubscriptionRef.set(report, opened))),
         ),
       ),
     syncUpdatedMember: Effect.fn("OpenCodexSync.syncUpdatedMember")(function* (alias, scope) {
-      yield* put({ alias, state: "syncing", restartCodex: true });
+      yield* putUpdate({ alias, state: "syncing", restartCodex: true });
       const done = yield* syncOne(alias, scope, everyone);
-      yield* put({ ...done, at: yield* Clock.currentTimeMillis });
+      yield* putUpdate({ ...done, at: yield* Clock.currentTimeMillis });
     }),
   });
 });

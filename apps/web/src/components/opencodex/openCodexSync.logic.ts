@@ -41,7 +41,7 @@ export function syncRowView(member: OpenCodexSyncMember, homeLabel: string): Syn
             ? "Reconnects its link, then syncs and restarts Codex"
             : member.restartCodex
               ? "Syncs and restarts Codex"
-              : "Syncs now; Codex restarts once its work finishes",
+              : "Syncs now; work is running, so Codex is not restarted",
       };
     case "syncing":
       return { key, label, tone: "progress", status: "Syncing…" };
@@ -59,7 +59,7 @@ export function syncRowView(member: OpenCodexSyncMember, homeLabel: string): Syn
             tone: "success",
             status: member.restartCodex
               ? "Synced · Codex restarted"
-              : "Synced · Codex restarts once its work finishes",
+              : "Synced · Codex keeps the old list until it restarts; sync again when work finishes",
           };
     case "failed":
       return {

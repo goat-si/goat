@@ -617,12 +617,12 @@ const make = Effect.gen(function* () {
     Effect.withSpan("OpenCodexManagedUpdate.check"),
   );
 
-  /** The sync report joins the status only for a window this status records. */
+  /** The update window's sync report joins the status only for a window this status records. */
   const readStatus = Effect.gen(function* () {
     const current = yield* Ref.get(status);
-    const synced = yield* sync.latest;
+    const synced = yield* sync.lastUpdate;
     return current !== undefined &&
-      synced?.trigger === "update" &&
+      synced !== undefined &&
       current.members.some(({ targetVersion }) => targetVersion === synced.targetVersion)
       ? { ...current, sync: synced }
       : current;

@@ -111,7 +111,7 @@ const UpdateAlias = Schema.NullOr(Schema.String);
 
 /**
  * One machine's row in an `ocx sync` run. `ready` exists only in a plan. `reason` is a code:
- * busy (Codex restart waits, or a Child skipped), not-connected, not-permitted, unreachable,
+ * busy (Codex was not restarted, or a Child skipped), not-connected, not-permitted, unreachable,
  * not-installed, updating, stale (the Home did not answer; the last remote catalog was kept),
  * connection-changed, timed-out or exit-<n>.
  */

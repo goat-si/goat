@@ -16,7 +16,7 @@ const plan: OpenCodexSyncReport = {
 describe("Sync OpenCodex dialog", () => {
   it("tells a busy Home it still syncs, and sends a disconnected Child to Repair", () => {
     expect(plan.members.map((member) => syncRowView(member, "This Mac").status)).toEqual([
-      "Syncs now; Codex restarts once its work finishes",
+      "Syncs now; work is running, so Codex is not restarted",
       "Skipped: not linked to this Home; repair it in Settings → Hub",
       "Skipped: work is running there; try again when it finishes",
     ]);
