@@ -83,6 +83,8 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
         peer: ReturnType<typeof makeStdioMcpClient>;
         pid: number | undefined;
         ended: boolean;
+        /** A second hello arrived on stderr; the service's identity is no longer proven. */
+        conflicted: boolean;
         detach: () => void;
       }
     | undefined;
@@ -103,7 +105,7 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
     }
   };
   return {
-    servicePid: () => (current && !current.ended ? current.pid : undefined),
+    servicePid: () => (current && !current.ended && !current.conflicted ? current.pid : undefined),
     readinessPeer: () => current?.peer,
     start: async (): Promise<EmbeddedDriverConnection> => {
       if (connection) return connection;
@@ -114,9 +116,11 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
         process,
         peer: client,
         ended: false,
+        conflicted: false,
         pid: undefined as number | undefined,
         detach: () => {},
       };
+      let helloSeen = false;
       current = session;
       const fail = (error: Error) => hello.reject(error);
       const eof = () =>
@@ -136,6 +140,14 @@ export function makeMcpHelperHost(options: Options, startProcess = spawnMcpHelpe
           if (typeof value !== "object" || value === null) return;
           const greeting = value as Record<string, unknown>;
           if (greeting.type !== "hello") return;
+          // The service writes the first hello before its driver starts. A later hello, which
+          // only the driver sharing stderr could write, withdraws the identity instead of
+          // replacing it.
+          if (session.pid !== undefined || helloSeen) {
+            session.conflicted = true;
+            return;
+          }
+          helloSeen = true;
           if (
             greeting.protocol !== 1 ||
             greeting.bundleId !== options.bundle.bundleId ||

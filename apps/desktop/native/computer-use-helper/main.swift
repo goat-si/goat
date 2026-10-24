@@ -751,11 +751,9 @@ func runMcp() -> Never {
   posix_spawnattr_init(&attributes)
   defer { posix_spawnattr_destroy(&attributes) }
   posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
-  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
-  argv.forEach { free($0) }
-  envp.forEach { free($0) }
-  guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
-  // stdout belongs to MCP. Readiness binds the driver's reported parent to this service.
+  // stdout belongs to MCP, so this service names itself on stderr. Written before the driver
+  // starts: the driver shares stderr, and the first hello the host reads is this one.
+  // Readiness binds the driver's reported parent to this pid.
   let greeting: [String: Any] = [
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
@@ -763,6 +761,10 @@ func runMcp() -> Never {
   if let data = try? JSONSerialization.data(withJSONObject: greeting) {
     FileHandle.standardError.write(data + Data([0x0A]))
   }
+  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
+  argv.forEach { free($0) }
+  envp.forEach { free($0) }
+  guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
   // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
   // service ends the driver it started. The driver is waited on without reaping below, so
   // `child` names it for as long as this process runs.

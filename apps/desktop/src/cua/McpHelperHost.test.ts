@@ -109,6 +109,21 @@ describe("macOS readiness MCP helper host", () => {
     },
   );
 
+  it("withdraws the service identity when a second hello follows the service's own", async () => {
+    const test = peer();
+    try {
+      await test.host.start();
+      expect(test.host.servicePid()).toBe(99);
+      // Only the driver, which shares the helper's stderr, could write a later hello.
+      const read = new Promise((resolve) => test.process.stderr.once("data", resolve));
+      test.process.stderr.write(JSON.stringify({ ...greeting, pid: 4242 }) + "\n");
+      await read;
+      expect(test.host.servicePid()).toBeUndefined();
+    } finally {
+      await test.host.stop();
+    }
+  });
+
   it("invalidates the service identity when its MCP peer exits", async () => {
     const test = peer();
     await test.host.start();
