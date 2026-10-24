@@ -1,7 +1,13 @@
 import type { OrchestrationV2TurnItem } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { computerUseObservedTarget, computerUseRun, computerUseRunStatus } from "./computerUse.ts";
+import {
+  computerUseDisplayInput,
+  computerUseObservedTarget,
+  computerUseRun,
+  computerUseRunStatus,
+} from "./computerUse.ts";
+import { toolItemForDisplay } from "./presentation.ts";
 
 const call = (toolName: string, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
@@ -78,5 +84,28 @@ describe("computerUseRunStatus", () => {
     expect(computerUseRunStatus("declined")).toBe("denied");
     expect(computerUseRunStatus("stopped")).toBe("stopped");
     expect(computerUseRunStatus(undefined)).toBeNull();
+  });
+});
+
+describe("computerUseDisplayInput", () => {
+  it("shows only the length of typed text in the expanded row and its copy text", () => {
+    expect(computerUseDisplayInput("cua-driver.type_text", { pid: 1, text: "hunter2" })).toEqual({
+      pid: 1,
+      text: "7 characters",
+    });
+    expect(
+      computerUseDisplayInput("mcp__cua-driver__set_value", {
+        pid: 1,
+        element_index: 3,
+        value: "x",
+      }),
+    ).toEqual({ pid: 1, element_index: 3, value: "1 character" });
+    const click = { pid: 1, text: "Submit" };
+    expect(computerUseDisplayInput("cua-driver.click", click)).toBe(click);
+    const other = { text: "not typed into a screen" };
+    expect(computerUseDisplayInput("mcp__notes__type_text", other)).toBe(other);
+    // Mobile's full detail and long-press copy serialize this display item.
+    const shown = toolItemForDisplay(call("cua-driver.type_text", { pid: 1, text: "hunter2" }));
+    expect(JSON.stringify(shown)).not.toContain("hunter2");
   });
 });
