@@ -14,8 +14,23 @@ const swiftc = () =>
 const macWithSwift = HostProcess.Platform.defaultValue() === "darwin" && swiftc();
 
 describe("computer use helper input reports (Swift)", () => {
+  it("reads nothing of an input event but its type: no position, button, key or field", () => {
+    const source = NodeFS.readFileSync(NodePath.join(helperDir, "HumanInput.swift"), "utf8");
+    // Every CGEvent accessor that could reveal where or what a person clicked or typed.
+    for (const accessor of [
+      /\.location\b/,
+      /unflippedLocation/,
+      /getIntegerValueField/,
+      /getDoubleValueField/,
+      /keyboardGetUnicodeString/,
+      /\.flags\b/,
+      /CGEventGet/,
+    ])
+      assert.notMatch(source, accessor);
+  });
+
   it.skipIf(!macWithSwift)(
-    "reports each input event with its own time, so an agent's cannot hide a person's",
+    "reports each pointer event with its own time, so an agent's cannot hide a person's",
     () => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-helper-input-"));
       try {

@@ -336,12 +336,12 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   optional: onboarding offers it, and without it the Stop controls remain.
 - **Input collision.** When a person uses the same desktop while an agent acts, the agent pauses
   and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
-  keyboard and pointer events to its lease proxy, each with its own time, from a listen-only
-  event tap (#1488). Pointer events need no grant there, keyboard events need Input Monitoring;
-  the helper also samples the HID system state's per-kind newest event, so a kind the tap does
-  not see is still reported, though a person's event right before an agent's of the same kind
-  can then hide behind it. The driver posts some input through the same system, so the server
-  takes an event for an agent's only while one of its input calls of that kind covers it
+  pointer events to its lease proxy one by one, each with its own time, from a listen-only event
+  tap that needs no grant and reads only each event's type (#1488). Keyboard input is only
+  sampled, as the HID system state's newest key age every 250 ms, because a keyboard tap would
+  need Input Monitoring, which the helper does not use; a person's key right before an agent's
+  typing can still hide behind it. The driver posts some input through the same system, so the
+  server takes an event for an agent's only while one of its input calls of that kind covers it
   (`apps/server/src/cua/agentInputLog.ts`), and pauses every agent otherwise. Calls known only
   to read never hide a person's input.
 - **Takeover and hand-back.** Takeover fences new agent input immediately and drops in-flight
