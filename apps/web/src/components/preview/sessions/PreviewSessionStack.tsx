@@ -11,7 +11,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   ChevronDownIcon,
@@ -89,7 +89,8 @@ function PreviewSessionTile(props: {
     <article
       ref={tile}
       className={cn(
-        "overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
+        // Clipped content would otherwise let the scrolling list squeeze a tile instead of scrolling.
+        "shrink-0 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-sm",
         props.focused && "ring-2 ring-ring",
       )}
       aria-label={`${session.target.title || previewSessionDetail(session)}: ${chip}`}
@@ -145,6 +146,41 @@ function PreviewSessionTile(props: {
   );
 }
 
+/** The stack's top edge (`top-14`) plus the gap it keeps above the mini player, in px. */
+const STACK_TOP_PX = 56;
+const STACK_GAP_PX = 8;
+/** `w-72` and `right-3`: a mini player left of this edge does not sit under the stack. */
+const STACK_SPAN_PX = 300;
+
+/**
+ * Where the mini player starts when it sits under the stack, so the stack ends above it. Its
+ * frame depends on the page it shows and the composer, so it is measured, again whenever it is
+ * resized or moved.
+ */
+function useMiniPlayerTop(frame: unknown) {
+  const [top, setTop] = useState<number | null>(null);
+  useEffect(() => {
+    const player = frame === null ? null : document.querySelector("[data-preview-mini-player]");
+    if (player === null) {
+      setTop(null);
+      return;
+    }
+    const measure = () => {
+      const rect = player.getBoundingClientRect();
+      setTop(rect.right > window.innerWidth - STACK_SPAN_PX ? rect.top : null);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(player);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [frame]);
+  return top;
+}
+
 /**
  * The right-side stack of what agents drive on this environment's host: one tile per browser
  * tab or desktop session, waiting ones first. Thumbnails stream only while the stack is open and
@@ -178,6 +214,7 @@ export function PreviewSessionStack(props: {
   const focus = usePreviewSessionStack((state) => state.focus);
   const focusRequest = usePreviewSessionStack((state) => state.focusRequest);
   const visible = useDocumentVisible();
+  const miniPlayerTop = useMiniPlayerTop(miniPlayer);
   const focusedId =
     focus === null
       ? null
@@ -192,11 +229,13 @@ export function PreviewSessionStack(props: {
     void control({ environmentId, input });
   return (
     <aside
-      className={cn(
-        "pointer-events-none fixed top-14 right-3 z-40 flex w-72 flex-col gap-2",
-        // The mini player keeps the lower right; the stack ends above where it opens.
-        miniPlayer ? "max-h-[calc(100vh-30rem)]" : "max-h-[calc(100vh-5rem)]",
-      )}
+      className="pointer-events-none fixed top-14 right-3 z-40 flex max-h-[calc(100vh-5rem)] w-72 flex-col gap-2"
+      // The mini player keeps its corner; the stack ends above it and scrolls.
+      style={
+        miniPlayerTop === null
+          ? undefined
+          : { maxHeight: Math.max(0, miniPlayerTop - STACK_TOP_PX - STACK_GAP_PX) }
+      }
       aria-label="Agents on screen"
     >
       <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border bg-popover px-2 py-1.5 shadow-sm">
