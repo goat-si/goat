@@ -56,6 +56,7 @@ import {
 } from "@goat/shared/toolActivity";
 import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@goat/shared/model";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { imageBlockFromDataUrl, mcpToolResultOutput } from "@goat/shared/toolOutput";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
@@ -498,9 +499,7 @@ function codexMcpToolOutput(
   const resultOutput =
     item.result === null || item.result === undefined
       ? undefined
-      : item.result.structuredContent !== null && item.result.structuredContent !== undefined
-        ? item.result.structuredContent
-        : item.result.content;
+      : mcpToolResultOutput(item.result);
 
   if (item.error === null || item.error === undefined) {
     return resultOutput;
@@ -524,7 +523,11 @@ function codexDynamicToolOutput(
   item: Extract<CodexDynamicToolItem, { readonly type: "dynamicToolCall" }>,
 ): unknown | undefined {
   if (item.contentItems !== null && item.contentItems !== undefined) {
-    return item.contentItems;
+    return item.contentItems.map((contentItem) =>
+      contentItem.type === "inputImage"
+        ? (imageBlockFromDataUrl(contentItem.imageUrl) ?? contentItem)
+        : contentItem,
+    );
   }
   return item.success === false ? { success: false } : undefined;
 }

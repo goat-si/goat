@@ -5937,6 +5937,112 @@ describe("CodexAdapterV2 post-settle continuation", () => {
   );
 
   const ORPHAN_WAIT_SCENARIO = "codex-orphaned-dynamic-tool";
+
+  const SCREENSHOT_NATIVE_THREAD = "native-codex-screenshot-thread";
+  const SCREENSHOT_NATIVE_TURN = "native-codex-screenshot-turn";
+  const SCREENSHOT_PNG = "iVBORw0KGgo=";
+  const screenshotItems = [
+    {
+      // The shape cua-driver's get_window_state returns: the screenshot only in content.
+      type: "mcpToolCall",
+      id: "cua-window-state",
+      server: "cua-driver",
+      tool: "get_window_state",
+      status: "completed",
+      arguments: { pid: 501, window_id: 7 },
+      result: {
+        content: [
+          { type: "text", text: "Finder, 1 window" },
+          { type: "image", mimeType: "image/png", data: SCREENSHOT_PNG },
+        ],
+        structuredContent: { app: "Finder", windowId: 7 },
+      },
+    },
+    {
+      type: "dynamicToolCall",
+      id: "dynamic-screenshot",
+      namespace: "viewer",
+      tool: "capture",
+      status: "completed",
+      arguments: {},
+      success: true,
+      contentItems: [
+        { type: "inputText", text: "Captured" },
+        { type: "inputImage", imageUrl: `data:image/png;base64,${SCREENSHOT_PNG}` },
+      ],
+    },
+  ];
+  const screenshotTranscript = makeCodexReplayTranscript({
+    scenario: "codex-tool-screenshots",
+    entries: [
+      ...codexReplayPreamble({
+        nativeThreadId: SCREENSHOT_NATIVE_THREAD,
+        nativeTurnId: SCREENSHOT_NATIVE_TURN,
+        prompt: "Look at Finder.",
+      }),
+      ...screenshotItems.map((item) => ({
+        type: "emit_inbound" as const,
+        label: `item/completed/${item.id}`,
+        frame: {
+          method: "item/completed",
+          params: {
+            item,
+            threadId: SCREENSHOT_NATIVE_THREAD,
+            turnId: SCREENSHOT_NATIVE_TURN,
+            completedAtMs: 1782622441500,
+          },
+        },
+      })),
+      {
+        type: "emit_inbound",
+        label: "turn/completed",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: SCREENSHOT_NATIVE_THREAD,
+            turn: makeCodexReplayTurn({ id: SCREENSHOT_NATIVE_TURN, status: "completed" }),
+          },
+        },
+      },
+    ],
+  });
+
+  it.effect("regression: keeps the screenshots a tool returned beside its structured output", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeCodexReplayHarness(screenshotTranscript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-codex-tool-screenshots"),
+            text: "Look at Finder.",
+          }),
+        );
+        yield* harness.awaitUntil(() => harness.terminalEvents().length === 1, "turn terminal");
+
+        const output = (nativeId: string) => {
+          const event = harness.events.findLast(
+            (candidate) =>
+              candidate.type === "turn_item.updated" &&
+              candidate.turnItem.nativeItemRef?.nativeId === nativeId,
+          );
+          return event?.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+            ? event.turnItem.output
+            : undefined;
+        };
+        const screenshot = [{ mimeType: "image/png", data: SCREENSHOT_PNG }];
+        const windowState = output("cua-window-state");
+        assert.deepEqual(toolOutputImages(windowState), screenshot);
+        assert.deepEqual(
+          (windowState as { readonly structuredContent?: unknown }).structuredContent,
+          { app: "Finder", windowId: 7 },
+        );
+        assert.deepEqual(toolOutputImages(output("dynamic-screenshot")), screenshot);
+      }).pipe(Effect.provide(layerAdapterTest)),
+    ),
+  );
   const ORPHAN_WAIT_NATIVE_THREAD = "native-codex-orphan-wait-thread";
   const ORPHAN_WAIT_NATIVE_TURN = "native-codex-orphan-wait-turn";
   const ORPHAN_WAIT_ITEM = "exec-4669f3bb-78c9-4af1-b44e-daa340d2c538";
