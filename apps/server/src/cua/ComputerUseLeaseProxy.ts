@@ -118,6 +118,11 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
+  /**
+   * Identifies the driver's capability manifest file as it is now (#1416), where the driver
+   * reads one from a known path; absent elsewhere. A change starts a fresh driver child.
+   */
+  readonly manifestStamp?: Effect.Effect<string | undefined>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -254,6 +259,8 @@ const refusal = (
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
+  /** The driver's capability manifest as it was when this child started, when known. */
+  readonly manifest?: string | undefined;
 }
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
@@ -446,8 +453,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
     const child = yield* Scope.fork(scope);
+    // Read before the child starts: a change while it starts is caught by the next call.
+    const manifest = options.manifestStamp === undefined ? undefined : yield* options.manifestStamp;
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
-    const current: Running = { driver, scope: child };
+    const current: Running = { driver, scope: child, manifest };
     running = current;
     // A new helper draws nothing yet.
     overlay = initialOverlayState;
@@ -697,6 +706,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           ),
         );
       return;
+    }
+    // The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
+    // when it starts, so a fresh child serves this call; with nothing outstanding nothing is cut
+    // off. A call still running keeps the old child until a later call finds it idle.
+    if (
+      isRequest &&
+      message?.method === "tools/call" &&
+      options.manifestStamp !== undefined &&
+      running !== undefined &&
+      outstanding.size === 0
+    ) {
+      const manifest = yield* options.manifestStamp;
+      if (manifest !== undefined && manifest !== running.manifest) {
+        yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
+        yield* start();
+      }
     }
     // Before the call reaches the driver: a capture must not see the overlay (#1321).
     if (isRequest && message?.method === "tools/call") {

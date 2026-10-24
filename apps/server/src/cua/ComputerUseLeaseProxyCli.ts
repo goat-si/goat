@@ -7,6 +7,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs/promises";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 
@@ -103,6 +104,11 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   // The macOS helper in agent connection mode draws the cursor overlay from fd 3 (#1214).
   const drawsOverlay = platform === "darwin" && descriptor.args.includes("--mcp");
 
+  // A driver that reads its capability manifest from a path GOAT rewrites (the macOS helper's
+  // --mcp mode, #1416) gets a fresh child when the file changes.
+  const manifestFlag = descriptor.args.indexOf("--capability-manifest");
+  const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
+
   const leaseUrl = new URL(url);
   leaseUrl.searchParams.set("control", controlId);
   const abort = new AbortController();
@@ -172,6 +178,16 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ...(placement === undefined
         ? {}
         : { placement: (windows) => Effect.promise(() => placement(windows)) }),
+      ...(manifestPath === undefined
+        ? {}
+        : {
+            manifestStamp: Effect.promise(() =>
+              NodeFS.stat(manifestPath).then(
+                (info) => info.ino + ":" + info.size + ":" + info.mtimeMs,
+                () => undefined,
+              ),
+            ),
+          }),
       revokeSessions: (sessions) =>
         // A driver without a socket is a direct child of this connection; killing it ends its
         // sessions, and there is no daemon left to ask.
