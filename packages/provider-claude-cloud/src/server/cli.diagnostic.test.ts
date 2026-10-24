@@ -30,7 +30,7 @@ it.effect("reads a cursor-spaced, wrapped diagnostic as Claude shows it on scree
 it.effect.each([
   ["fixture  secret", "Error: invalid fixture  secret\n"],
   ["fixture\nsecret", "Error: invalid fixture\r\r\nsecret\r\r\n"],
-])(
+] as const)(
   "redacts a sign-in value before collapsing the diagnostic's whitespace (%#)",
   ([value, output]) =>
     Effect.scoped(
