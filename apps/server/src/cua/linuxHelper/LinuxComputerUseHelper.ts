@@ -28,7 +28,7 @@ import type { DriverClient, DriverImage, DriverToolResult } from "./CuaDriverMcp
 import { driverRefusalCode, linuxActionResult, linuxDriverCall } from "./linuxActions.ts";
 import type { SignalMonitor } from "./linuxSignals.ts";
 import type { LinuxSession } from "./linuxSession.ts";
-import type { WindowCaptureCheck } from "./windowCapture.ts";
+import { COMPOSITED_CAPTURE, type WindowCaptureCheck } from "./windowCapture.ts";
 
 /**
  * What the Linux helper does with each protocol request (WS10 #1138). It owns one Cua Driver
@@ -230,8 +230,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     readonly maxElements: number | undefined;
     readonly deadlineMs: number;
   }): Promise<HelperAnswer & { readonly result: ComputerUseObservation | ComputerUseRefusal }> => {
-    // A screenshot that could hold other apps' windows is refused, before and after the read:
-    // the driver decides its route per capture, so a check that passed may no longer hold.
+    // A screenshot that could hold other apps' windows is refused (#1328). The desktop is checked
+    // before and after the read, since a compositing manager can stop while the driver captures.
     const cropped = async () => (input.screenshot ? await deps.windowCapture() : undefined);
     const refuseCropped = (reason: string) => ({
       result: {
@@ -259,6 +259,14 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
     if (isRefusal(answer)) return { result: answer };
     const after = await cropped();
     if (after !== undefined) return refuseCropped(after);
+    // The driver took the screen region under the window because a popup covers it.
+    if (input.screenshot && field(answer.structured, "screenshot_composited") === true)
+      return {
+        result: refusal(
+          "targetRefused",
+          COMPOSITED_CAPTURE + " Observe again without a screenshot to read the window's controls.",
+        ),
+      };
     const decoded = decodeRead(answer.structured);
     if (answer.isError || decoded._tag === "None") {
       const code = driverRefusalCode(answer.structured);

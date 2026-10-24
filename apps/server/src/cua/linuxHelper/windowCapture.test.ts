@@ -1,85 +1,69 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { detectLinuxSession } from "./linuxSession.ts";
-import { CROPPED_CAPTURE, makeWindowCaptureCheck, type ProcessFacts } from "./windowCapture.ts";
+import { detectLinuxSession, type LinuxSessionFacts } from "./linuxSession.ts";
+import { CROPPED_CAPTURE, makeWindowCaptureCheck, UNREDIRECTED_CAPTURE } from "./windowCapture.ts";
 
-const SESSION = {
+const BUS = "unix:path=/run/user/1000/bus";
+const WAYLAND: LinuxSessionFacts = {
   display: undefined,
-  waylandDisplay: "wayland-0",
-  sessionBus: "unix:path=/run/user/1000/bus",
-  currentDesktop: "GNOME",
-  gnomeShellMajor: 46,
-};
-const SHELL: ProcessFacts = {
-  comm: "gnome-shell",
-  executable: "/usr/bin/gnome-shell",
-  executableOwner: 0,
-  executableMode: 0o100755,
+  waylandDisplay: "wayland-1",
+  sessionBus: BUS,
+  currentDesktop: "Hyprland",
+  gnomeShellMajor: null,
 };
 
-/** A session bus where GNOME Shell (pid 900, uid 1000) owns the Cua helper at this API. */
-function check(
-  options: {
-    readonly x11?: boolean;
-    readonly environment?: Record<string, string>;
-    readonly version?: number;
-    readonly owner?: string;
-    readonly ownerUid?: number;
-    readonly shell?: ProcessFacts | undefined;
-    readonly busFails?: boolean;
-  } = {},
-) {
-  const calls: string[][] = [];
+/** The check for a session, with the environment the helper would hand the driver. */
+function check(facts: LinuxSessionFacts, extra: Record<string, string> = {}, compositing = true) {
+  const session = detectLinuxSession(facts);
+  let asked = 0;
   const windowCapture = makeWindowCaptureCheck({
-    session: detectLinuxSession(options.x11 ? { ...SESSION, display: ":0" } : SESSION),
-    environment: options.environment ?? {},
-    uid: 1000,
-    processFacts: async (pid) =>
-      pid === 900 ? ("shell" in options ? options.shell : SHELL) : undefined,
-    gdbus: async (args) => {
-      calls.push([...args]);
-      if (options.busFails) throw new Error("no session bus");
-      const method = args[args.indexOf("--method") + 1];
-      if (method === "org.freedesktop.DBus.GetNameOwner")
-        return "('" + (options.owner ?? ":1.42") + "',)\n";
-      if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 900,)\n";
-      if (method === "org.freedesktop.DBus.GetConnectionUnixUser")
-        return "(uint32 " + (options.ownerUid ?? 1000) + ",)\n";
-      if (method === "org.cua.WinRects.GetVersion")
-        return "(uint32 " + (options.version ?? 9) + ",)\n";
-      throw new Error("unexpected " + method);
+    session,
+    driverEnvironment: {
+      WAYLAND_DISPLAY: facts.waylandDisplay,
+      ...session.driverEnvironment,
+      ...extra,
+    },
+    compositing: async () => {
+      asked++;
+      return compositing;
     },
   });
-  return { windowCapture, calls };
+  return { windowCapture, asked: () => asked };
 }
 
 describe("window capture on Linux (#1328)", () => {
-  it("X11 and Hyprland capture the window itself, without asking the bus", async () => {
-    const x11 = check({ x11: true });
-    expect(await x11.windowCapture()).toBeUndefined();
-    const hyprland = check({ environment: { HYPRLAND_INSTANCE_SIGNATURE: "abc_123" } });
-    expect(await hyprland.windowCapture()).toBeUndefined();
-    expect([...x11.calls, ...hyprland.calls]).toEqual([]);
+  it("X11 captures a window's own pixels only while a compositing manager redirects windows", async () => {
+    const x11 = { ...WAYLAND, display: ":0", waylandDisplay: undefined, currentDesktop: "i3" };
+    expect(await check(x11, {}, true).windowCapture()).toBeUndefined();
+    expect(await check(x11, {}, false).windowCapture()).toBe(UNREDIRECTED_CAPTURE);
   });
 
-  it("GNOME captures one window only through its Shell helper at API 9 or later", async () => {
-    expect(await check({ version: 9 }).windowCapture()).toBeUndefined();
-    expect(await check({ version: 10 }).windowCapture()).toBeUndefined();
-    expect(await check({ version: 8 }).windowCapture()).toBe(CROPPED_CAPTURE);
+  it("XWayland is the window's own, since Xwayland redirects every window itself", async () => {
+    const xwayland = check({ ...WAYLAND, display: ":0" }, {}, false);
+    expect(await xwayland.windowCapture()).toBeUndefined();
+    expect(xwayland.asked()).toBe(0);
   });
 
-  it("a helper the driver would not trust counts as none, so the capture would be cropped", async () => {
-    const untrusted = [
-      check({ owner: "org.cua.WinRects" }),
-      check({ ownerUid: 1001 }),
-      check({ shell: undefined }),
-      check({ shell: { ...SHELL, comm: "python3" } }),
-      check({ shell: { ...SHELL, executable: "/home/user/gnome-shell-copy" } }),
-      check({ shell: { ...SHELL, executableOwner: 1000 } }),
-      check({ shell: { ...SHELL, executableMode: 0o100775 } }),
-      // No helper owns the name at all, as on sway or KDE.
-      check({ busFails: true }),
-    ];
-    for (const { windowCapture } of untrusted) expect(await windowCapture()).toBe(CROPPED_CAPTURE);
+  it("pure Wayland is the window's own only where the driver itself sees Hyprland", async () => {
+    expect(
+      await check(WAYLAND, { HYPRLAND_INSTANCE_SIGNATURE: "abc_123" }).windowCapture(),
+    ).toBeUndefined();
+    // The signature in the helper's own environment counts for nothing if the driver lacks it.
+    expect(await check(WAYLAND).windowCapture()).toBe(CROPPED_CAPTURE);
+    // Inject mode routes the driver elsewhere.
+    expect(
+      await check(WAYLAND, {
+        HYPRLAND_INSTANCE_SIGNATURE: "abc_123",
+        CUA_INJECT_SOCKET: "/run/cua.sock",
+      }).windowCapture(),
+    ).toBe(CROPPED_CAPTURE);
+  });
+
+  it("GNOME and every other Wayland compositor would crop, whatever helper is installed", async () => {
+    const gnome = { ...WAYLAND, currentDesktop: "GNOME", gnomeShellMajor: 46 };
+    expect(await check(gnome).windowCapture()).toBe(CROPPED_CAPTURE);
+    expect(await check({ ...WAYLAND, currentDesktop: "sway" }).windowCapture()).toBe(
+      CROPPED_CAPTURE,
+    );
   });
 });

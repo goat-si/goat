@@ -105,6 +105,8 @@ export function fixtureDriver() {
     /** Answers the next input call instead of the fixture's own behavior. */
     nextAnswer: undefined as DriverToolResult | undefined,
     readinessImage: png(8, 4, true).toString("base64"),
+    /** The driver took the screen region under the window, as when a popup covers it. */
+    composited: false,
   };
   const exit = Promise.withResolvers<void>();
   const ok = (structured: unknown, text = "", images: DriverToolResult["images"] = []) =>
@@ -189,6 +191,7 @@ export function fixtureDriver() {
           pid: 10,
           window_id: 20,
           window_bounds: { width: 420, height: 320 },
+          ...(state.composited ? { screenshot_composited: true } : {}),
           ...(shot
             ? { screenshot_width: 420, screenshot_height: 320, screenshot_mime_type: "image/png" }
             : {}),

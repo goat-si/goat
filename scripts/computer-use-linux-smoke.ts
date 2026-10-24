@@ -9,7 +9,7 @@
 // Every process is stopped by the pid it was started with; the person's desktop is never used.
 //
 //   node scripts/build-computer-use-helper-linux.ts --out /tmp/gcu
-//   node scripts/computer-use-linux-smoke.ts --helper /tmp/gcu/goat-computer-use --evidence /tmp/gcu-evidence [--xvfb /path/to/Xvfb]
+//   node scripts/computer-use-linux-smoke.ts --helper /tmp/gcu/goat-computer-use --evidence /tmp/gcu-evidence [--xvfb /path/to/Xvfb] [--compositor /path/to/xcompmgr]
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -31,6 +31,9 @@ const { values } = NodeUtil.parseArgs({
     helper: { type: "string" },
     evidence: { type: "string", default: "computer-use-linux-evidence" },
     xvfb: { type: "string", default: "Xvfb" },
+    // Without a compositing manager an X11 window capture can show what covers it, so the
+    // helper refuses screenshots (#1328); the run checks that, then starts this one.
+    compositor: { type: "string", default: "xcompmgr" },
   },
 });
 if (!values.helper) throw new Error("--helper <path to goat-computer-use> is required.");
@@ -240,6 +243,24 @@ try {
     COMPUTER_USE_METHODS.every((method) => method in capabilities.result.methods),
     capabilities.result,
   );
+  const windows = await request("listWindows");
+  const window = windows.result.windows.find((entry: any) => entry.title === "GOAT CU Fixture");
+  check("listWindows finds the fixture by its own pid", window?.pid === app.pid, {
+    windows: windows.result.windows,
+  });
+  const target = { pid: window.pid, windowId: window.windowId };
+
+  const uncomposited = await request("observe", { target, screenshot: true });
+  check(
+    "without a compositing manager a screenshot is refused, typed, and nothing is sent",
+    uncomposited.result.outcome === "refused" &&
+      uncomposited.result.reason === "unsupported" &&
+      uncomposited.image === undefined,
+    uncomposited.result,
+  );
+  const compositor = start(values.compositor, [], env);
+  await sleep(1000);
+  log("compositor", { pid: compositor.pid });
   const permissions = await request("permissions");
   check(
     "readiness: a real tree and a non-blank capture are proven, on X11",
@@ -249,12 +270,6 @@ try {
       permissions.result.platform?.linux?.displayServer === "x11",
     permissions.result,
   );
-  const windows = await request("listWindows");
-  const window = windows.result.windows.find((entry: any) => entry.title === "GOAT CU Fixture");
-  check("listWindows finds the fixture by its own pid", window?.pid === app.pid, {
-    windows: windows.result.windows,
-  });
-  const target = { pid: window.pid, windowId: window.windowId };
 
   const first = await request("observe", { target, screenshot: true });
   const elements = first.result.elements as Array<any>;

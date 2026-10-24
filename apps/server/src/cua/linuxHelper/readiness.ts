@@ -31,6 +31,9 @@ const READINESS_WINDOWS = 5;
 const CAPTURE_RANK = { varied: 3, uniform: 2, failed: 1, noWindow: 0, unproven: 0 } as const;
 const TREE_RANK = { ready: 2, empty: 1, unavailable: 0 } as const;
 
+const field = (value: unknown, key: string): unknown =>
+  typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : undefined;
+
 const decodePermissions = Schema.decodeUnknownOption(Permissions);
 const decodeWindows = Schema.decodeUnknownOption(Windows);
 
@@ -66,7 +69,7 @@ export async function readLinuxReadiness(
     const decoded = decodePermissions(permissions?.structured);
     if (decoded._tag === "Some") {
       facts.driver = decoded.value;
-      // A cropped capture proves nothing about one window, so it is not even taken.
+      // A capture that may not be the window's own proves nothing, so it is not even taken.
       facts.captureRefused = await deps.windowCapture();
       const list = await call("list_windows", {});
       const windows = decodeWindows(list?.structured);
@@ -89,7 +92,13 @@ export async function readLinuxReadiness(
             display_only: true,
             max_image_dimension: 256,
           });
-          const image = capture?.images[0];
+          // The desktop can change while the driver captures; a capture it no longer vouches
+          // for, or one taken from the screen under a popup, proves nothing.
+          facts.captureRefused = await deps.windowCapture();
+          const vouched =
+            facts.captureRefused === undefined &&
+            field(capture?.structured, "screenshot_composited") !== true;
+          const image = vouched ? capture?.images[0] : undefined;
           const found = image
             ? (pngColors(Buffer.from(image.data, "base64")) ?? "failed")
             : "failed";

@@ -16,7 +16,8 @@ import {
 } from "./linuxHelper/linuxSession.ts";
 import type { CuaDisplayVariable } from "./CuaDisplayCapability.ts";
 import { readLinuxReadiness } from "./linuxHelper/readiness.ts";
-import { makeWindowCaptureCheck, readProcessFacts } from "./linuxHelper/windowCapture.ts";
+import { makeWindowCaptureCheck } from "./linuxHelper/windowCapture.ts";
+import { x11Compositing } from "./linuxHelper/x11Compositing.ts";
 
 const UNWATCHED = { privateMode: "unsupported", humanInput: "unsupported" } as const;
 
@@ -59,12 +60,11 @@ export const makeObserver = Effect.fn("LinuxReadiness.makeObserver")(function* (
         ),
       );
       const secureFocus = makeSecureFocusProbe(gdbus);
+      // This driver runs with the server's session environment, so that is what it decides by.
       const windowCapture = makeWindowCaptureCheck({
         session,
-        environment: sessionEnvironment,
-        gdbus,
-        processFacts: readProcessFacts,
-        uid: process.getuid?.() ?? -1,
+        driverEnvironment: sessionEnvironment,
+        compositing: () => x11Compositing(sessionEnvironment),
       });
       for (const lookup of requireDriver.resolve.paths("@trycua/cua-driver") ?? []) {
         const directory = path.join(lookup, "@trycua", "cua-driver");

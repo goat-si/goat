@@ -25,7 +25,7 @@ import {
   pngColors,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
-import { CROPPED_CAPTURE } from "./windowCapture.ts";
+import { CROPPED_CAPTURE, UNREDIRECTED_CAPTURE } from "./windowCapture.ts";
 
 describe("Linux session facts", () => {
   it("refuses Wayland GNOME 50 for readiness as the helper does, without probing the driver", async () => {
@@ -551,6 +551,31 @@ describe("Linux computer use helper conformance", () => {
     });
     expect(reply.result).toMatchObject({ outcome: "refused", reason: "unsupported" });
     expect(reply.image).toBeUndefined();
+    await helper.close();
+  });
+
+  it("an X11 capture the driver took from the screen under a popup is refused, never sent", async () => {
+    const helper = await connect();
+    helper.driver.state.composited = true;
+    const reply = await helper.request("observe", {
+      target: { pid: 10, windowId: 20 },
+      screenshot: true,
+    });
+    expect(reply.result).toMatchObject({ outcome: "refused", reason: "targetRefused" });
+    expect(reply.image).toBeUndefined();
+    // Without a screenshot nothing is captured, so the controls still read.
+    expect((await helper.observe({ screenshot: false })).observation.kind).toBe("full");
+    await helper.close();
+  });
+
+  it("readiness does not count a capture the desktop stopped vouching for while it was taken", async () => {
+    const helper = await connect();
+    // Before the readiness capture the window's own pixels were promised; after it, not.
+    helper.capture.next.push(undefined, UNREDIRECTED_CAPTURE);
+    const readiness = decodeReadiness((await helper.request("permissions", {})).result);
+    expect(readiness.capture).toBe("unavailable");
+    expect(readiness.reasons).toContain(UNREDIRECTED_CAPTURE);
+    expect(computerUseReady(readiness)).toBe(false);
     await helper.close();
   });
 

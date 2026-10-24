@@ -20,7 +20,8 @@ import { serveHelperChannel } from "./helperChannel.ts";
 import { openX11HumanInput } from "./humanInputSource.ts";
 import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
-import { makeWindowCaptureCheck, readProcessFacts } from "./windowCapture.ts";
+import { makeWindowCaptureCheck } from "./windowCapture.ts";
+import { x11Compositing } from "./x11Compositing.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
@@ -40,6 +41,8 @@ const SESSION_NAMES = [
   "DISPLAY",
   "XAUTHORITY",
   "WAYLAND_DISPLAY",
+  // The driver captures a Hyprland window by its own export only when it sees this.
+  "HYPRLAND_INSTANCE_SIGNATURE",
   "XDG_RUNTIME_DIR",
   "XDG_SESSION_TYPE",
   "XDG_CURRENT_DESKTOP",
@@ -89,10 +92,8 @@ const monotonic = () => performance.now();
 const secureFocus = makeSecureFocusProbe(gdbus);
 const windowCapture = makeWindowCaptureCheck({
   session,
-  environment,
-  gdbus,
-  processFacts: readProcessFacts,
-  uid: process.getuid?.() ?? -1,
+  driverEnvironment,
+  compositing: () => x11Compositing(environment),
 });
 let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
   undefined;
