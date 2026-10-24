@@ -14,7 +14,13 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
 const environmentFor = (
   path: Path.Path,
-  input: { home: string; baseDir: string; platform?: NodeJS.Platform; isPackaged?: boolean },
+  input: {
+    home: string;
+    baseDir: string;
+    platform?: NodeJS.Platform;
+    isPackaged?: boolean;
+    appVersion?: string;
+  },
 ) =>
   DesktopEnvironment.DesktopEnvironment.of({
     path,
@@ -27,12 +33,18 @@ const environmentFor = (
     appImagePath: Option.none(),
     branding: DesktopEnvironment.resolveDesktopAppBranding({
       isDevelopment: false,
-      appVersion: "1.2.3",
+      appVersion: input.appVersion ?? "1.2.3",
     }),
   } as unknown as DesktopEnvironment.DesktopEnvironment["Service"]);
 
 const commandIn = (
-  input: { home: string; baseDir?: string; platform?: NodeJS.Platform; isPackaged?: boolean },
+  input: {
+    home: string;
+    baseDir?: string;
+    platform?: NodeJS.Platform;
+    isPackaged?: boolean;
+    appVersion?: string;
+  },
   spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) =>
   Effect.gen(function* () {
@@ -202,5 +214,39 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       yield* command.uninstall;
       expect(registry.path).toBe(userPath);
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "puts Nightly's folder where stable's was on the Windows PATH, so goat runs Nightly (#1091)",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped();
+        const baseDir = path.join(home, ".goat", "desktop");
+        const folderOf = (appVersion: string) =>
+          path.dirname(
+            DesktopCliShim.launcherPath(
+              environmentFor(path, { home, baseDir, platform: "win32", appVersion }),
+            ),
+          );
+        const stableFolder = folderOf("1.2.3");
+        const nightlyFolder = folderOf("1.2.4-nightly.20261024.1");
+        const { registry, spawner } = fakePowerShell("C:\\Tools");
+        const stable = yield* commandIn({ home, baseDir, platform: "win32" }, spawner);
+        yield* stable.install;
+        registry.path = `${registry.path};C:\\Later`;
+
+        const nightly = yield* commandIn(
+          { home, baseDir, platform: "win32", appVersion: "1.2.4-nightly.20261024.1" },
+          spawner,
+        );
+        expect((yield* nightly.state).installedPath).toBe(path.join(stableFolder, "goat.cmd"));
+        expect((yield* nightly.install).installedPath).toBe(path.join(nightlyFolder, "goat.cmd"));
+        expect(registry.path).toBe(`C:\\Tools;${nightlyFolder};C:\\Later`);
+
+        yield* nightly.uninstall;
+        expect(registry.path).toBe("C:\\Tools;C:\\Later");
+      }).pipe(Effect.scoped),
   );
 });
