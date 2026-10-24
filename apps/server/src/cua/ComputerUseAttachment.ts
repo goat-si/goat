@@ -1,5 +1,6 @@
 import {
   BuiltInSkillName,
+  COMPUTER_USE_PROVIDER_DRIVERS,
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
@@ -17,23 +18,6 @@ import * as ServerSettings from "../serverSettings.ts";
 import type * as CuaDriver from "./CuaDriver.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
-
-/**
- * Providers whose agent process runs on this host and can spawn the driver's
- * stdio MCP server. Cloud providers run elsewhere, and the driver would
- * operate this host's desktop on their behalf; Muse only accepts HTTP session
- * servers. See ADR-0022 for the per-adapter table.
- */
-const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
-  "claudeAgent",
-  "codex",
-  "cursor",
-  "grok",
-  "antigravity",
-  "acpRegistry",
-  "opencode",
-  "pi",
-]);
 
 export type ComputerUseRefusal =
   | "unsupported-provider"
@@ -128,7 +112,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
-    skills: resolveBuiltInSkills({ attached: ["computer"], disabled }).active,
+    skills: resolveBuiltInSkills({ attached: ["computer-use"], disabled }).active,
   } as const;
 });
 

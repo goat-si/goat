@@ -1,9 +1,14 @@
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadMayRunUnattended,
+  matchComposerCapabilityItems,
+} from "@goat/client-runtime/composerCapabilityItems";
 import type {
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
   PullRequestListInput,
+  ProviderInteractionMode,
   ServerProvider,
   ThreadId,
   ThreadPullRequestLink,
@@ -34,6 +39,7 @@ import {
   rankPullRequestMatches,
 } from "../pullRequest/pullRequestList.logic";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
+import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import {
   searchSlashCommandItems,
   slashCommandItemsForPromptPosition,
@@ -60,6 +66,8 @@ export function useComposerMenuItems({
   selectedProviderSkills,
   selectedProviderSlashCommands,
   showSkillsInSlashMenu,
+  interactionMode,
+  capabilityTargetDrivers,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -75,6 +83,9 @@ export function useComposerMenuItems({
   readonly selectedProviderSkills: ServerProvider["skills"];
   readonly selectedProviderSlashCommands: ServerProvider["slashCommands"];
   readonly showSkillsInSlashMenu: boolean;
+  readonly interactionMode: ProviderInteractionMode;
+  /** The drivers of every provider this send goes to, so @computer judges the real targets. */
+  readonly capabilityTargetDrivers: ReadonlyArray<string>;
 }) {
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
@@ -91,6 +102,18 @@ export function useComposerMenuItems({
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
+  const activeShell = environmentThreadShells.find(
+    (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
+  );
+  const capabilityContext = useComposerCapabilityContext({
+    environmentId,
+    active: isPathTrigger,
+    turn: {
+      interactionMode,
+      providerDrivers: capabilityTargetDrivers,
+      mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.source),
+    },
+  });
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -159,6 +182,7 @@ export function useComposerMenuItems({
     if (!composerTrigger) return [];
     if (composerTrigger.kind === "path") {
       return [
+        ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           environmentId,

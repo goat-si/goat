@@ -1,8 +1,9 @@
-import type {
-  CapabilityContextRecord,
-  ComposerContextRecord,
-  OrchestrationMessageContext,
-  TurnCapability,
+import {
+  TURN_CAPABILITIES,
+  type CapabilityContextRecord,
+  type ComposerContextRecord,
+  type OrchestrationMessageContext,
+  type TurnCapability,
 } from "@goat/contracts";
 
 import {
@@ -12,12 +13,12 @@ import {
 } from "./composerContextReferences.ts";
 
 /** The chip text for `@computer` and `@browser`, the same on every client. */
-const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
+export const TURN_CAPABILITY_LABEL: Record<TurnCapability, string> = {
   "computer-use": "Computer",
   browser: "Browser",
 };
 
-function turnCapabilityContextRecord(capability: TurnCapability): CapabilityContextRecord {
+export function turnCapabilityContextRecord(capability: TurnCapability): CapabilityContextRecord {
   return {
     version: 1,
     kind: "capability",
@@ -54,7 +55,7 @@ export function requestedTurnCapabilities(input: {
 export function withTurnCapabilities(
   message: { readonly text: string; readonly context?: OrchestrationMessageContext | undefined },
   capabilities: ReadonlyArray<TurnCapability>,
-): { text: string; context: OrchestrationMessageContext | undefined } {
+): { text: string; context?: OrchestrationMessageContext } {
   const present = new Set(
     requestedTurnCapabilities({
       text: message.text,
@@ -62,7 +63,10 @@ export function withTurnCapabilities(
     }),
   );
   const missing = [...new Set(capabilities)].filter((capability) => !present.has(capability));
-  if (missing.length === 0) return { text: message.text, context: message.context };
+  if (missing.length === 0)
+    return message.context === undefined
+      ? { text: message.text }
+      : { text: message.text, context: message.context };
   const added = missing.map(turnCapabilityContextRecord);
   const addedIds = new Set(added.map((record) => record.contextId));
   const kept = (message.context?.records ?? []).filter((record) => !addedIds.has(record.contextId));
@@ -71,4 +75,29 @@ export function withTurnCapabilities(
     text: `${references} ${message.text}`,
     context: { version: 1, records: [...kept, ...added] },
   };
+}
+
+/** The capability a chip's context id names, or undefined for any other id. */
+export function turnCapabilityForContextId(contextId: string): TurnCapability | undefined {
+  return TURN_CAPABILITIES.find(
+    (capability) => turnCapabilityContextRecord(capability).contextId === contextId,
+  );
+}
+
+/**
+ * The capability records a composer's text refers to. A capability chip carries nothing beyond
+ * its id, so a client rebuilds the records from the text at send instead of keeping them in
+ * the draft.
+ */
+export function capabilityContextRecordsInText(text: string): CapabilityContextRecord[] {
+  const capabilities = new Set(
+    collectComposerContextReferences(text).flatMap((occurrence) => {
+      const capability =
+        occurrence.kind === "capability"
+          ? turnCapabilityForContextId(occurrence.contextId)
+          : undefined;
+      return capability === undefined ? [] : [capability];
+    }),
+  );
+  return [...capabilities].map(turnCapabilityContextRecord);
 }

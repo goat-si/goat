@@ -674,6 +674,7 @@ it.effect(
       expect(yield* service.status).toEqual({
         platform: "linux",
         running: false,
+        tools: "unavailable",
         wayland: true,
         display: reportedDisplay,
       });
@@ -688,6 +689,7 @@ it.effect(
       expect(yield* service.status).toEqual({
         platform: "linux",
         running: false,
+        tools: "off",
         wayland: true,
         display: reportedDisplay,
       });
@@ -717,6 +719,7 @@ it.effect("shows the desktop's reason when it cannot start the driver", () =>
     expect(yield* service.status).toEqual({
       platform: "darwin",
       running: false,
+      tools: "unavailable",
       failure: message,
       display: reportedDisplay,
     });
@@ -744,6 +747,7 @@ it.effect("treats a desktop restart as a stop, then starts fresh for the next se
     expect(yield* service.status).toEqual({
       platform: "darwin",
       running: false,
+      tools: "unavailable",
       display: reportedDisplay,
     });
     expect(yield* service.lastFailure).toEqual(Option.none());
