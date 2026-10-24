@@ -1,4 +1,4 @@
-import { listingSetting, withCallerListing } from "./toolListing.ts";
+import { layerListingChanges, listingSetting, withCallerListing } from "./toolListing.ts";
 import * as Settings from "../serverSettings.ts";
 import { forwardedContentRegistration } from "./toolkits/agentSurface/forwardedContent.ts";
 import { surfaceArgumentAliases } from "./toolkits/agentSurface/argumentAliases.ts";
@@ -1364,34 +1364,6 @@ const layerDeviceScreenshotRegistration = catalogRegistrations.deviceScreenshot;
 export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceStandardToolkitRegistration,
   layerDeviceScreenshotRegistration,
-);
-
-/**
- * Tells connected clients to list tools again (MCP list_changed) when the listing setting or the
- * goatclaw policy changes, since a thread's listing leaves out what its profile refuses.
- */
-const layerListingChanges = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const settings = yield* Effect.serviceOption(Settings.ServerSettingsService);
-    if (Option.isNone(settings)) return;
-    const policyOf = (current: { readonly goatclaw: unknown }) => JSON.stringify(current.goatclaw);
-    // Changes carry no initial snapshot, so compare against the listing clients have now.
-    let listed = yield* listingSetting(settings);
-    let policy = yield* settings.value.getSettings.pipe(
-      Effect.map(policyOf),
-      Effect.catch(() => Effect.succeed(undefined)),
-    );
-    yield* settings.value.streamChanges.pipe(
-      Stream.runForEach((current) => {
-        if (current.agentToolListing === listed && policyOf(current) === policy) return Effect.void;
-        listed = current.agentToolListing;
-        policy = policyOf(current);
-        return server.notifications["notifications/tools/list_changed"]({});
-      }),
-      Effect.forkScoped,
-    );
-  }),
 );
 
 export const layerMcpTransport = McpServer.layerHttp({
