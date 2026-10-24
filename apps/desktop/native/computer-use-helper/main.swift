@@ -56,10 +56,19 @@ func signingTeam(_ code: SecStaticCode) -> String? {
   return dictionary[kSecCodeInfoTeamIdentifier as String] as? String
 }
 
-/// The code of the process that launched this one, named by its audit token so a pid reused
-/// after the parent exits cannot stand in for it. Nil when the parent cannot be read or is gone.
+/// The code of the process that launched this one, named by its audit token. Nil when the parent
+/// cannot be read or is gone.
+///
+/// A pid reused after the parent exits cannot stand in for it: macOS re-parents an orphan to
+/// launchd, so if the parent died at any point before the final getppid() that call no longer
+/// returns the pid we looked up, whatever process took that pid. What remains is a parent that
+/// exits after the check, which no longer matters. The stronger check, asking the kernel who
+/// holds the other end of stdin, is not available: macOS reports peer credentials only for
+/// Unix sockets (LOCAL_PEERTOKEN), not pipes.
 func parentCode() -> SecCode? {
   let parent = getppid()
+  // launchd: the launcher is already orphaned, or was started by launchd itself.
+  guard parent > 1 else { return nil }
   var task: mach_port_name_t = 0
   guard task_name_for_pid(mach_task_self_, parent, &task) == KERN_SUCCESS else { return nil }
   defer { mach_port_deallocate(mach_task_self_, task) }
