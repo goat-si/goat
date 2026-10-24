@@ -138,6 +138,17 @@ const blockerRemedies = {
   },
 } as const satisfies Record<Blocker, { step: StepId; remedy: string }>;
 
+// Windows has no permission prompt to walk through; what stops computer use there is the
+// session, the secure desktop, elevation and app control (#1137, D14).
+const windowsRemedies: Partial<Record<Blocker, string>> = {
+  screenLocked:
+    "Unlock the screen, or answer the Windows security prompt (User Account Control) on this computer. Computer use waits while either is shown.",
+};
+const WINDOWS_ELEVATED =
+  "Apps running as administrator stay out of reach: GOAT never runs its helper as administrator.";
+const WINDOWS_APP_CONTROL =
+  "If Windows blocked GOAT Computer Use (Smart App Control or your organization's app control policy), allow it or ask your administrator, then restart GOAT.";
+
 const combine = (states: ReadonlyArray<ReadinessStepState>): ReadinessStepState => {
   for (const state of ["blocked", "unsupported", "unknown", "pending"] as const) {
     if (states.includes(state)) return state;
@@ -187,7 +198,11 @@ export function computerUseReadinessSteps({
       isCurrent: grant === current,
     };
   });
-  const blockers = (readiness?.blockers ?? []).map((id) => ({ id, ...blockerRemedies[id] }));
+  const blockers = (readiness?.blockers ?? []).map((id) => ({
+    id,
+    ...blockerRemedies[id],
+    ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
+  }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
   const capture = readiness
     ? [captureCopy[readiness.capture], treeCopy[readiness.tree], inputCopy[readiness.input]]
@@ -267,6 +282,12 @@ export function computerUseReadinessSteps({
       ...captureStep,
       detail: [...captureStep.detail, `Linux display server: ${linux.displayServer}.`],
     };
+  if (platform === "win32" && readiness) {
+    const [, helperNow, captureNow] = steps;
+    if (helperNow && readiness.helper !== "authenticated")
+      steps[1] = { ...helperNow, detail: [...helperNow.detail, WINDOWS_APP_CONTROL] };
+    if (captureNow) steps[2] = { ...captureNow, detail: [...captureNow.detail, WINDOWS_ELEVATED] };
+  }
   return {
     ready: readiness !== undefined && computerUseReady(readiness) && tools === "available",
     report,
