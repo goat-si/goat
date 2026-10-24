@@ -84,6 +84,11 @@ layer("ComputerUseLeases controls", (it) => {
         // A second turn within the hour keeps the same control, so its proxy is not respawned.
         assert.equal((yield* leases.control(thread, Option.none())).controlId, first.controlId);
         assert.equal((yield* leases.controlState(thread, first.controlId))._tag, "active");
+        // The session list reads the controls each time, so one minted after startup is listed.
+        assert.include(
+          (yield* leases.sessions).map(({ control }) => control.controlId),
+          first.controlId,
+        );
 
         assert.isTrue(yield* leases.stop(thread));
         assert.isFalse(yield* leases.stop(thread));

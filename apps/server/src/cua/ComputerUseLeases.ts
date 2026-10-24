@@ -145,6 +145,13 @@ export class ComputerUseLeases extends Context.Service<
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
     readonly resume: Effect.Effect<void>;
+    /** Every thread's latest control with where it stands, for the preview session list. */
+    readonly sessions: Effect.Effect<
+      ReadonlyArray<{
+        readonly control: ComputerUseControl;
+        readonly state: ComputerUseControlState;
+      }>
+    >;
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly changed: Effect.Effect<void>;
@@ -453,6 +460,18 @@ const make = Effect.gen(function* () {
     resume: Effect.sync(() => {
       paused = undefined;
     }).pipe(Effect.andThen(changed)),
+    // Suspended: the controls are read each time it runs, never once when the service is built.
+    sessions: Effect.suspend(() =>
+      Effect.forEach([...controls.values()], (record) =>
+        controlState(record.threadId, record.controlId).pipe(
+          Effect.orElseSucceed((): ComputerUseControlState => ({
+            _tag: "ended",
+            reason: "revoked",
+          })),
+          Effect.map((state) => ({ control: record as ComputerUseControl, state })),
+        ),
+      ),
+    ),
     subscribe: PubSub.subscribe(signals),
     changed,
     proxy,
