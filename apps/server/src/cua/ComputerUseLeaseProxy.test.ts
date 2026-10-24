@@ -87,6 +87,8 @@ const harness = Effect.fn(function* (
     push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
     failLeaseStream: Queue.fail(updates, "connection reset"),
     reply: (line: string) => Queue.offer(current().fromDriver, line),
+    /** The driver's output ends without the proxy killing it, as when the helper restarts. */
+    driverExits: Effect.suspend(() => Queue.end(current().fromDriver)),
     nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
     nextToProvider: Queue.take(output).pipe(Effect.map(json)),
     providerQueued: Queue.size(output),
@@ -208,6 +210,22 @@ describe("ComputerUseLeaseProxy", () => {
       assert.deepEqual((yield* h.nextToProvider).id, 1);
       assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "expired"));
     }),
+  );
+
+  it.effect(
+    "tells the agent the helper stopped or restarted when the driver exits on its own (#1233)",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "click"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.driverExits;
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "helper_restarted"));
+        yield* h.send(call(2, "get_window_state"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_restarted"));
+        assert.equal(computerUseRefusalReason("helper_restarted"), "helperUnavailable");
+      }),
   );
 
   it.effect("fails closed when the lease stream drops, and before any confirmation", () =>
