@@ -135,6 +135,12 @@ const LINUX_DRIVER_LIBRARIES = [
 
 export interface LinuxDisplayFacts {
   readonly user: string;
+  /**
+   * The DISPLAY this server was started with. When it names one, that display is the only one
+   * computer use may use: a session reachable some other way, such as an inherited Wayland
+   * socket, may be another desktop (#1358).
+   */
+  readonly requestedDisplay?: string;
   /** The session's Wayland socket, when the environment names one, and whether it accepts. */
   readonly wayland: {
     readonly display: string;
@@ -168,6 +174,14 @@ const missingLibrariesReason = (missing: ReturnType<typeof missingLibraries>) =>
   `Computer use needs ${missing.map((library) => library.soname).join(", ")} on this computer (Debian/Ubuntu: apt install ${missing.map((library) => library.package).join(" ")}).`;
 
 export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
+  // The driver is handed DISPLAY=:N, which is screen 0 of that display.
+  const screen = /\.(\d+)$/u.exec(facts.requestedDisplay?.trim() ?? "")?.[1];
+  if (screen !== undefined && Number(screen) !== 0)
+    return {
+      capability: "unavailable",
+      reason: `This server was started with DISPLAY=${facts.requestedDisplay}, screen ${Number(screen)} of that X display. Computer use works on screen 0 only; start GOAT with DISPLAY set to screen 0.`,
+      environment: [],
+    };
   const reachable = facts.displays.find((entry) => entry.outcome === "ok");
   const session: CuaDisplayVariable[] = [
     ...(facts.sessionBus ? [{ name: "DBUS_SESSION_BUS_ADDRESS", value: facts.sessionBus }] : []),
@@ -176,6 +190,18 @@ export function classifyLinux(facts: LinuxDisplayFacts): CuaDisplayProbe {
   const wayland = facts.wayland?.reachable ? facts.wayland : null;
   // The binary links the X client libraries even on Wayland, so it cannot start without them.
   const missing = missingLibraries(facts);
+  if (!reachable && facts.requestedDisplay) {
+    const requested = facts.requestedDisplay;
+    const refused = facts.displays.some((entry) => entry.outcome === "refused");
+    return {
+      capability: "unavailable",
+      reason:
+        localDisplayNumber(requested) === null
+          ? `This server was started with DISPLAY=${requested}, a forwarded or remote X display, which computer use cannot use. Start GOAT with a local display, or without DISPLAY to use the desktop signed in on this computer.`
+          : `This server was started with DISPLAY=${requested}, and that X display ${refused ? `refused ${facts.user}'s connection` : "is not answering"}. Start that display, or start GOAT without DISPLAY to use the desktop signed in on this computer.`,
+      environment: [],
+    };
+  }
   if (!reachable) {
     if (wayland) {
       const environment = [
@@ -456,6 +482,32 @@ export const probeAccessibilityBuses = Effect.fnUntraced(function* (
   };
 });
 
+/**
+ * The X displays to try. A server given a DISPLAY uses that display or none: trying the others
+ * would hand computer use whichever desktop answers, such as the person signed in at the seat
+ * when the server was meant for its own Xvfb (#1358). Only a server with no DISPLAY at all, such
+ * as one started over SSH, looks for the local desktop.
+ */
+export function linuxDisplayCandidates(
+  display: string | undefined,
+  sockets: ReadonlyArray<number>,
+): ReadonlyArray<number> {
+  if (display?.trim()) {
+    const named = localDisplayNumber(display);
+    return named === null ? [] : [named];
+  }
+  return sockets.slice(0, MAX_DISPLAYS);
+}
+
+/** The session buses to try, on the same rule: a named bus or none, else this user's own. */
+export function linuxBusCandidates(
+  address: string | undefined,
+  userRuntime: string | null,
+): ReadonlyArray<string> {
+  if (address?.trim()) return [address.trim()];
+  return userRuntime ? [`unix:path=${userRuntime}/bus`] : [];
+}
+
 const probeLinux = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -470,10 +522,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const sockets = x11SocketDisplays(
     yield* fs.readDirectory("/tmp/.X11-unix").pipe(Effect.orElseSucceed(() => [])),
   );
-  const candidates = [...new Set([...(preferred === null ? [] : [preferred]), ...sockets])].slice(
-    0,
-    MAX_DISPLAYS,
-  );
+  const candidates = linuxDisplayCandidates(environment.DISPLAY, sockets);
 
   // Xvfb and display managers keep the cookie in a file named only on their command line.
   const serverAuth = new Map<number, string>();
@@ -518,14 +567,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const runtimeDir =
     environment.XDG_RUNTIME_DIR?.trim() ||
     (userRuntime && (yield* exists(userRuntime)) ? userRuntime : null);
-  const busCandidates = [
-    ...new Set(
-      [
-        environment.DBUS_SESSION_BUS_ADDRESS?.trim(),
-        userRuntime ? `unix:path=${userRuntime}/bus` : undefined,
-      ].filter((address): address is string => typeof address === "string" && address !== ""),
-    ),
-  ];
+  const busCandidates = linuxBusCandidates(environment.DBUS_SESSION_BUS_ADDRESS, userRuntime);
   const buses =
     uid === undefined
       ? { sessionBus: null, atSpi: false, issues: ["this user's id is unknown"] }
@@ -563,6 +605,7 @@ const probeLinux = Effect.fnUntraced(function* () {
 
   return classifyLinux({
     user,
+    ...(environment.DISPLAY?.trim() ? { requestedDisplay: environment.DISPLAY.trim() } : {}),
     wayland,
     displays,
     libraries,
