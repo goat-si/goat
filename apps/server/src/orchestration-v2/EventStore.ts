@@ -124,7 +124,7 @@ const layerBase: Layer.Layer<EventStoreV2, never, OrchestrationEventStore.Orches
             ),
         appendProjectEvent: (event) =>
           applicationEvents
-            .appendProjectEvent(event)
+            .appendProjectEvent(redactGoatCredentialsDeep(event))
             .pipe(
               Effect.mapError((cause) => new EventStoreAppendEventsError({ eventCount: 1, cause })),
             ),

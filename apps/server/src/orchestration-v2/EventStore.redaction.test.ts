@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CommandId,
+  EventId,
   MessageId,
   type ModelSelection,
   NodeId,
@@ -8,6 +10,7 @@ import {
   type OrchestrationV2TurnItem,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProjectId,
   RunId,
   TurnItemId,
 } from "@goat/contracts";
@@ -197,6 +200,38 @@ it.layer(layerTest)("orchestration event log credential redaction", (it) => {
       assert.equal(
         projection.messages.find((message) => message.id === messageId)?.text,
         "Your token is [redacted].",
+      );
+    }),
+  );
+
+  it.effect("stores a project event an agent named with the token without it", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* EventStore.EventStoreV2;
+      const now = "2026-10-24T00:00:00.000Z";
+      const projectId = ProjectId.make("project:redaction");
+      const stored = yield* eventStore.appendProjectEvent({
+        type: "project.created",
+        eventId: EventId.make("event:project-redaction"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: now,
+        commandId: CommandId.make("command:project-redaction"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          projectId,
+          title: `Debug ${TOKEN}`,
+          workspaceRoot: "/tmp/project-redaction",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      assert.equal(
+        stored.type === "project.created" ? stored.payload.title : undefined,
+        "Debug [redacted]",
       );
     }),
   );

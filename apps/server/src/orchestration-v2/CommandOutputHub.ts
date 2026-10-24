@@ -55,8 +55,6 @@ const MAX_FINISHED_COMMANDS = 16;
  * evicting a tail must not forget that the next chunk may finish a token.
  */
 const MAX_CARRIED_COMMANDS = 4 * MAX_LIVE_COMMANDS;
-/** Commands whose held-back output was evicted; bounds the memory a flood of them can take. */
-const MAX_BLINDED_COMMANDS = 4096;
 /** Final output read from persistence is normalized from at most this many trailing chars. */
 const MAX_FINAL_SOURCE_CHARS = TERMINAL_OUTPUT_TAIL_CHARS * 4;
 
@@ -156,8 +154,9 @@ export const make = Effect.gen(function* () {
   const carries = new Map<string, string>();
   // Commands whose carry was evicted. The next chunk could finish a credential with no context
   // left to recognize it, so they stream nothing more; their persisted, redacted output shows
-  // when they settle.
-  const blinded = new Map<string, true>();
+  // when they settle. Only finishing clears an entry: dropping one would resume the stream
+  // without that context. Entries are a key each, for commands still running.
+  const blinded = new Set<string>();
   const finished = new Map<string, TerminalOutputState>();
   const subscribers = new Map<string, Set<Subscriber>>();
 
@@ -186,7 +185,7 @@ export const make = Effect.gen(function* () {
       const redacted = redactGoatCredentialChunk(carries.get(key) ?? "", chunk);
       if (redacted.carry.length > 0)
         setBounded(carries, key, redacted.carry, MAX_CARRIED_COMMANDS, (evicted) =>
-          setBounded(blinded, evicted, true, MAX_BLINDED_COMMANDS),
+          blinded.add(evicted),
         );
       else carries.delete(key);
       return appendRedacted(key, redacted.emit);
