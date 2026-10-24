@@ -83,7 +83,7 @@ const sameSpec = (left: FleetGoal["spec"], right: FleetGoal["spec"]) =>
   JSON.stringify(encodeSpec(left)) === JSON.stringify(encodeSpec(right));
 
 /** "thread:<id>" or "client:<auth session id>"; the store lists and dedupes by it. */
-export const goalOwnerKey = (owner: Pick<FleetGoal["owner"], "kind" | "threadId" | "mcpOwner">) =>
+const goalOwnerKey = (owner: Pick<FleetGoal["owner"], "kind" | "threadId" | "mcpOwner">) =>
   owner.kind === "thread" ? "thread:" + owner.threadId : (owner.mcpOwner ?? "");
 
 type GoalIdentity =

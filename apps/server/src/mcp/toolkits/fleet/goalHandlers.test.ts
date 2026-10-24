@@ -1,7 +1,7 @@
 import { NodeHttpServer } from "@effect/platform-node";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
-import { AuthSessionId, EnvironmentId, GoatGoalApplyInput } from "@goat/contracts";
+import { AuthSessionId, EnvironmentId, FleetGoalId, GoatGoalApplyInput } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -148,7 +148,7 @@ const pathOf: Record<string, string> = {
 const spec = testSpec({ workers: { ...testSpec().workers, runtimeMode: "auto-accept-edits" } });
 const encodeApply = Schema.encodeSync(Schema.toCodecJson(GoatGoalApplyInput));
 /** Arguments as an MCP client sends them: the input encoded to JSON. */
-const applyInput = (overrides: Partial<typeof GoatGoalApplyInput.Type> = {}) =>
+const applyInput = (overrides: Partial<GoatGoalApplyInput> = {}) =>
   encodeApply({ title: "Ship", spec, ...overrides }) as object;
 
 const valueOf = <T extends { readonly ok: boolean }>(result: T) => {
@@ -170,7 +170,7 @@ describe("goal tools for an outside MCP client (#493)", () => {
           mcpOwner: "client:session:bot",
           runtimeModeCeiling: "full-access",
         });
-        const id = goal.id;
+        const id = FleetGoalId.make(goal.id);
         expect(valueOf(yield* call(bot, route, "goat_goal_get", { id }))).toMatchObject({
           goal: { id },
         });
