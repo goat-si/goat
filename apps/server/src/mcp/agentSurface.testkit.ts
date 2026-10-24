@@ -76,6 +76,8 @@ import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReview
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import type { Project } from "@goat/contracts";
 import { McpSchema } from "effect/ai";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
@@ -245,6 +247,18 @@ const inertDependencies = Layer.mergeAll(
 const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
 const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+/**
+ * The calling thread's project exists and grants Agent device access, so a device handler runs
+ * past its per-call access check. Merge it after `dependencies`.
+ */
+export const deviceAccessGranted = Layer.mergeAll(
+  Layer.mock(ProjectService.ProjectService)({
+    getById: (id) => Effect.succeed(Option.some({ id } as Project)),
+  }),
+  Layer.mock(Settings.ServerSettingsService)({
+    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, enableAgentDeviceAccess: true }),
+  }),
+);
 /**
  * The same inert services with goatclaw on, so the capability gate holds threads to their
  * profiles. The caller provides SqlClient (with the calling thread seeded) and the
