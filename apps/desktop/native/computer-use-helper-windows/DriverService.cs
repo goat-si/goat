@@ -306,12 +306,53 @@ namespace Goat.ComputerUse
                     structured is Dictionary<string, object> &&
                     ((Dictionary<string, object>)structured).TryGetValue("apps", out apps) && apps is object[])
                 {
-                    // The same answer as the macOS helper's listApps.
+                    // The same answer as the macOS helper's listApps, plus each running app's
+                    // executable as Windows reports it for that pid. The driver lists a running
+                    // program without a Start menu entry with no bundle id at all, so without
+                    // its path GOAT's manifest could never admit it (#1368); a path grant is
+                    // matched against the executable the driver attests for the window.
+                    foreach (object entry in (object[])apps)
+                    {
+                        var app = entry as Dictionary<string, object>;
+                        object pid;
+                        if (app == null || app.ContainsKey("executable") || !app.TryGetValue("pid", out pid) || !(pid is int) || (int)pid <= 0) continue;
+                        string executable = ImagePath((int)pid);
+                        if (executable != null) app["executable"] = executable;
+                    }
                     var listed = new Dictionary<string, object>();
                     listed["apps"] = apps;
                     return listed;
                 }
                 throw new HelperException("list_failed", "Cua Driver could not list apps.");
+            }
+        }
+
+        /// <summary>
+        /// The final path of a running process's image file, as the driver attests it: it
+        /// resolves links, junctions and short names (Rust's fs::canonicalize, which is
+        /// GetFinalPathNameByHandle on an opened file), so the helper does the same. Null when
+        /// Windows will not say or the file will not open; that app then stays out.
+        /// </summary>
+        static string ImagePath(int pid)
+        {
+            IntPtr process = NativeMethods.OpenProcess(NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (process == IntPtr.Zero) return null;
+            string reported;
+            try
+            {
+                var name = new StringBuilder(1024);
+                int size = name.Capacity;
+                if (!NativeMethods.QueryFullProcessImageNameW(process, 0, name, ref size)) return null;
+                reported = name.ToString();
+            }
+            finally { NativeMethods.CloseHandle(process); }
+            using (SafeFileHandle file = NativeMethods.CreateFileW(reported, NativeMethods.FILE_READ_ATTRIBUTES,
+                NativeMethods.FILE_SHARE_READ | NativeMethods.FILE_SHARE_WRITE | 4, IntPtr.Zero, NativeMethods.OPEN_EXISTING,
+                NativeMethods.FILE_FLAG_BACKUP_SEMANTICS, IntPtr.Zero))
+            {
+                if (file.IsInvalid) return null;
+                try { return FinalPath(file); }
+                catch (HelperException) { return null; }
             }
         }
 
@@ -631,3 +672,4 @@ namespace Goat.ComputerUse
         }
     }
 }
+
