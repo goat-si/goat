@@ -144,6 +144,7 @@ const machine = (id: string, environmentId: string) => ({
   machineKind: null,
   environmentId: EnvironmentId.make(environmentId),
   sshHost: null,
+  reportedAliases: [],
   boat: null,
   running: 0,
   attention: 0,

@@ -153,7 +153,6 @@
         "apps/server/src/orchestration-v2/ProviderAdapterRegistry.ts",
         "apps/server/src/orchestration-v2/CheckpointCaptureService.ts",
         "apps/server/src/orchestration-v2/CheckpointService.ts",
-        "apps/server/src/orchestration-v2/builtInProviderAdapterDrivers.ts",
         "apps/server/src/checkpointing/CheckpointStore.ts",
         "apps/server/src/checkpointing/Utils.ts",
         "apps/server/src/vcs/GitVcsDriver.ts",
