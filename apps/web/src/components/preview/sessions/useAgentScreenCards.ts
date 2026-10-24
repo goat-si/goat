@@ -13,7 +13,7 @@ import { sessionKey, usePreviewSessionStack } from "./previewSessionStackStore";
 /** Aside's card width; browser and desktop cards share it. */
 export const AGENT_CARD_WIDTH_PX = 240;
 /** The floating mini player's edge gap, so a card and the player line up. */
-export const AGENT_CARD_GAP_PX = 12;
+const AGENT_CARD_GAP_PX = 12;
 /** Below the header when no chat header is on screen (`top-14`). */
 const FALLBACK_TOP_PX = 56;
 /** Something on the column this close below the cards' top leaves no room for a card above it. */
@@ -22,7 +22,7 @@ const MIN_CARD_SPACE_PX = 160;
  * Every card's picture is 16:10: the server browser opens pages at 1280x800, and Mac displays,
  * where desktop apps run, are 16:10. Any page or window letterboxes inside it.
  */
-export const AGENT_VIEW_ASPECT = 16 / 10;
+const AGENT_VIEW_ASPECT = 16 / 10;
 /** The card's padding and one-line header around its picture, in px. */
 const CARD_CHROME = { width: 12, height: 40 } as const;
 const LARGE_MAX_WIDTH_PX = 720;
@@ -33,20 +33,20 @@ const LARGE_PANE_SHARE = 0.5;
  * Whether a card fits in the gutter right of the conversation column. Cards overlay the pane, so
  * when one would cover the conversation they hide instead of moving it.
  */
-export function agentCardFits(paneWidth: number, contentWidth: number) {
+function agentCardFits(paneWidth: number, contentWidth: number) {
   const gutter = (paneWidth - Math.min(contentWidth, paneWidth)) / 2;
   return gutter >= AGENT_CARD_WIDTH_PX + 2 * AGENT_CARD_GAP_PX;
 }
 
 /** The card's height for a width; the picture keeps its aspect at every size. */
-export const agentCardHeight = (width: number) =>
+const agentCardHeight = (width: number) =>
   CARD_CHROME.height + (width - CARD_CHROME.width) / AGENT_VIEW_ASPECT;
 
 /**
  * The large view's width: it follows the pane's width, capped so the whole card fits the height
  * it has. Only its frame changes size; the page inside keeps its own viewport.
  */
-export function largeAgentViewWidth(paneWidth: number, maxHeight: number) {
+function largeAgentViewWidth(paneWidth: number, maxHeight: number) {
   const byHeight = (maxHeight - CARD_CHROME.height) * AGENT_VIEW_ASPECT + CARD_CHROME.width;
   return Math.round(
     Math.max(
@@ -74,7 +74,7 @@ export interface AgentCardsPlacement {
  * floating mini player does. Something already in that column (the pinned thread details card,
  * the mini player) comes first and the column follows it, or, further down, the column ends above.
  */
-export function placeAgentColumn(input: {
+function placeAgentColumn(input: {
   readonly pane: Box;
   readonly viewport: { readonly width: number; readonly height: number };
   readonly width: number;
@@ -107,7 +107,7 @@ export interface AgentScreenLayout {
 const OBSTACLES = ["[data-thread-details-card]", "[data-preview-mini-player]"] as const;
 
 /** Lays out cards and the large view for a pane, a viewport, and what already floats there. */
-export function layoutAgentScreen(input: {
+function layoutAgentScreen(input: {
   readonly pane: Box;
   readonly viewport: { readonly width: number; readonly height: number };
   readonly obstacles: ReadonlyArray<Box>;
@@ -203,7 +203,7 @@ export function useAgentCardsPlacement(
  * One desktop card per thread: a thread's live session (waiting or blocked ones rank first in
  * orderPreviewSessions) stands for it, and a stopped one shows only when nothing newer runs.
  */
-export function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
+function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
   const seen = new Set<string>();
   return [
     ...sessions.filter((session) => session.status !== "stopped"),

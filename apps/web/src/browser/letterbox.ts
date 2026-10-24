@@ -17,7 +17,7 @@ export interface Point {
 }
 
 /** Where a frame of `frame` size sits when fitted whole (object-contain) into `box`. */
-export function letterboxFit(box: Size, frame: Size) {
+function letterboxFit(box: Size, frame: Size) {
   const fit = Math.min(box.width / frame.width, box.height / frame.height);
   const width = frame.width * fit;
   const height = frame.height * fit;
