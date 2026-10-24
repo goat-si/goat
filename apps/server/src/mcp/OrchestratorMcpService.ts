@@ -1055,7 +1055,7 @@ function threadOrganization(
     // The sidebar's rule; thread.mark-unread rewinds lastVisitedAt to just before completion.
     unread:
       completedAt !== null &&
-      thread.lastVisitedAt !== null &&
+      thread.lastVisitedAt != null &&
       DateTime.isGreaterThan(completedAt, thread.lastVisitedAt),
   };
 }

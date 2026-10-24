@@ -1904,3 +1904,33 @@ it.effect("filters run before replay and coalescing without claiming ignored del
     { workers },
   );
 });
+
+it.effect(
+  "a saved signing secret names the secretRef it came from until another secret replaces it",
+  () =>
+    withService(({ service, secretsByRef }) =>
+      Effect.gen(function* () {
+        const ref = "secret-ref:00000000000000000000000000000003";
+        secretsByRef.set(ref, "rotated-secret");
+        const signature = { header: "x-hub-signature-256", encoding: "hex", prefix: "sha256=" };
+        const rotated = yield* service.upsert(
+          yield* webhookTaskInput({
+            schedule: { type: "webhook", signature: { ...signature, secretRef: ref } },
+          }),
+        );
+        assert.equal(rotated.task.webhook?.secretRef, ref);
+        // A save that leaves the secret alone keeps the ref that set it.
+        const renamed = yield* service.upsert(
+          yield* webhookTaskInput({ title: "Renamed", schedule: { type: "webhook", signature } }),
+        );
+        assert.equal(renamed.task.webhook?.secretRef, ref);
+        const inline = yield* service.upsert(
+          yield* webhookTaskInput({
+            schedule: { type: "webhook", signature: { ...signature, secret: "inline" } },
+          }),
+        );
+        assert.equal(inline.task.webhook?.hasSecret, true);
+        assert.equal(inline.task.webhook?.secretRef, undefined);
+      }),
+    ),
+);
