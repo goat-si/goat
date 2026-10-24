@@ -615,8 +615,8 @@ describe("buildFleet machine identity", () => {
   const lidge = EnvironmentId.make("lidge-env");
   const provider = () => ({ label: "Codex", driver: ProviderDriverKind.make("codex") });
   const environments: FleetEnvironment[] = [
-    { ...env(mac, "jun's MacBook Pro"), machineId: "machine-mbp" },
-    { ...env(headless, "Headless server"), machineId: "machine-mbp" },
+    { ...env(mac, "jun's MacBook Pro"), machineId: "machine-mbp", machineUserId: "jun" },
+    { ...env(headless, "Headless server"), machineId: "machine-mbp", machineUserId: "jun" },
     { ...env(mini, "MINI", ["mini"]), machineId: "machine-mini", connected: false },
     { ...env(lidge, "lidge-AI-AI", ["lidge"]), machineId: "machine-lidge", connected: false },
   ];
@@ -692,11 +692,12 @@ describe("buildFleet machine identity", () => {
     ]);
   });
 
-  it("drops reported work a newer cached shell shows finished", () => {
+  it("keeps reported work a cached shell shows finished, since only the dispatcher can tell", () => {
     const fleet = buildFleet({
       environments,
       primaryEnvironmentId: mac,
       shells: [
+        // Stamped by lidge's clock after the dispatcher's last word, yet a resumed run is newer.
         shell(lidge, "ws10", { status: "completed", updatedAt: "2026-10-24T09:40:00.000Z" }),
       ],
       remote: [headlessReports],
@@ -705,7 +706,54 @@ describe("buildFleet machine identity", () => {
     expect(fleet.machines.map((machine) => [machine.label, machine.reported])).toEqual([
       ["jun's MacBook Pro", 0],
       ["MINI", 1],
-      ["lidge-AI-AI", 0],
+      ["lidge-AI-AI", 1],
+    ]);
+    expect(fleet.machines[2]!.reportedAliases).toEqual([{ via: headless, alias: "lidge-ts" }]);
+  });
+
+  it("reads another OS account's aliases as its own, even on the same machine", () => {
+    const fleet = buildFleet({
+      environments: [
+        environments[0]!,
+        { ...environments[1]!, machineUserId: "someone-else" },
+        ...environments.slice(2),
+      ],
+      primaryEnvironmentId: mac,
+      shells: [],
+      remote: [headlessReports],
+    });
+    expect(fleet.machines.map((machine) => [machine.label, machine.subtitle])).toEqual([
+      ["jun's MacBook Pro", null],
+      ["MINI", null],
+      ["lidge-AI-AI", null],
+      ["mini", "via jun's MacBook Pro"],
+      ["lidge-ts", "via jun's MacBook Pro"],
+    ]);
+  });
+
+  it("counts one agent across a machine's servers only when both name the same provider", () => {
+    const work = ProviderInstanceId.make("work");
+    const providers = new Map([
+      [mac, { label: "Codex", driver: ProviderDriverKind.make("codex") }],
+      [headless, { label: "Claude", driver: ProviderDriverKind.make("claudeAgent") }],
+    ]);
+    const fleet = buildFleet({
+      environments: environments.slice(0, 2),
+      primaryEnvironmentId: mac,
+      shells: [
+        { ...shell(mac, "a"), providerInstanceId: work },
+        { ...shell(headless, "b"), providerInstanceId: work },
+      ],
+      remote: [],
+      provider: (environmentId) => providers.get(environmentId) ?? null,
+    });
+    expect(fleet.machines[0]!.agents.map((agent) => [agent.key, agent.label])).toEqual([
+      ["work", "Codex"],
+      [JSON.stringify([headless, "work"]), "Claude"],
+    ]);
+    expect(fleet.threads.map((thread) => thread.agentKey)).toEqual([
+      "work",
+      JSON.stringify([headless, "work"]),
     ]);
   });
 

@@ -113,6 +113,11 @@ export interface FleetEnvironment {
    */
   readonly machineId?: string | null;
   /**
+   * The server's OS account on that machine. Servers that share it read one SSH config, so an
+   * alias names the same host on each of them. Absent on servers that predate it.
+   */
+  readonly machineUserId?: string | null;
+  /**
    * False draws the machine without counting its threads: a disconnected
    * environment's shells are stale. Absent means connected.
    */
@@ -138,7 +143,7 @@ export interface FleetSummary {
  * machine share it: the primary when it is among them, else the first connected one, else the
  * first listed. Every other environment stands for itself.
  */
-export function fleetMachineOwners(
+function fleetMachineOwners(
   environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "machineId" | "connected">>,
   primaryEnvironmentId: EnvironmentId | null,
 ): ReadonlyMap<EnvironmentId, EnvironmentId> {
@@ -166,6 +171,23 @@ export function fleetMachineOwners(
     for (const environment of group) owners.set(environment.environmentId, owner.environmentId);
   }
   return owners;
+}
+
+/**
+ * Which SSH config each environment reads. Environments one OS account runs on one machine
+ * share it; any other environment, including one that does not say, has its own.
+ */
+export function fleetSshConfigScopes(
+  environments: ReadonlyArray<Pick<FleetEnvironment, "environmentId" | "machineUserId">>,
+): ReadonlyMap<EnvironmentId, string> {
+  return new Map(
+    environments.map((environment) => [
+      environment.environmentId,
+      environment.machineUserId
+        ? "user:" + environment.machineUserId
+        : "environment:" + environment.environmentId,
+    ]),
+  );
 }
 
 /** @public Tested directly; createFleetSummaryAtom is its only runtime caller. */
@@ -244,7 +266,11 @@ export function createFleetSummaryAtom(input: {
 export type FleetMachineKind = "environment" | "ssh" | "cloud";
 
 export interface FleetAgent {
-  /** Provider instance id, or "unknown" for work a dispatcher reported. */
+  /**
+   * Provider instance id, or "unknown" for work a dispatcher reported. On a machine several
+   * servers share, an instance that differs from the holding server's instance of that id is
+   * keyed by its own environment too.
+   */
   readonly key: string;
   readonly label: string;
   /** The provider's driver, for its logo; null when unknown. */
@@ -265,6 +291,8 @@ export interface FleetMachine {
   readonly environmentId: EnvironmentId | null;
   /** An SSH or cloud host a dispatcher reported, by the alias that dispatcher reaches it through. */
   readonly sshHost: { readonly via: EnvironmentId; readonly alias: string } | null;
+  /** Every dispatcher alias that named this machine, so host readings under them are its own. */
+  readonly reportedAliases: ReadonlyArray<{ readonly via: EnvironmentId; readonly alias: string }>;
   /** Set when the host is a Boat machine, from a server's record or else its reserved alias. */
   readonly boat: BoatMachineIdentity | null;
   /**
@@ -381,6 +409,7 @@ export function buildFleet(input: {
         machineKind: ownerEnvironment.machineKind ?? environment.machineKind ?? null,
         environmentId: owner,
         sshHost: null,
+        reportedAliases: [],
         boat: null,
         answering: environment.connected !== false,
         running: 0,
@@ -427,23 +456,42 @@ export function buildFleet(input: {
     agent[state] += 1;
     machine.agents.set(agentIdentity.key, agent);
   };
+  // Instance ids are local to a server: on a machine several servers share, one counts with
+  // the holding server's instance of that id only when both name the same provider.
   const agentOf = (
     shell: Pick<FleetShell, "environmentId" | "providerInstanceId">,
+    machine: Pick<MutableMachine, "environmentId">,
   ): Pick<FleetAgent, "key" | "label" | "driver"> => {
-    const provider = input.provider?.(shell.environmentId, shell.providerInstanceId) ?? null;
+    const instanceId = shell.providerInstanceId;
+    const provider = input.provider?.(shell.environmentId, instanceId) ?? null;
+    const holder = machine.environmentId;
+    const holderProvider =
+      holder === null || holder === shell.environmentId
+        ? provider
+        : (input.provider?.(holder, instanceId) ?? null);
+    const shared =
+      holder === null ||
+      holder === shell.environmentId ||
+      (provider !== null &&
+        holderProvider !== null &&
+        provider.label === holderProvider.label &&
+        provider.driver === holderProvider.driver);
     return {
-      key: shell.providerInstanceId,
-      label: provider?.label ?? shell.providerInstanceId,
+      key: shared ? instanceId : JSON.stringify([shell.environmentId, instanceId]),
+      label: provider?.label ?? instanceId,
       driver: provider?.driver ?? null,
     };
   };
+  const scopes = fleetSshConfigScopes(input.environments);
+  const scopeOf = (environmentId: EnvironmentId) =>
+    scopes.get(environmentId) ?? "environment:" + environmentId;
 
   for (const shell of connectedShells) {
     const state = classifyFleetThread(shell);
     if (state === null) continue;
     const machine = nodeOf(shell.environmentId);
     if (machine === undefined) continue;
-    const agent = agentOf(shell);
+    const agent = agentOf(shell, machine);
     count(machine, agent, state);
     threads.push({
       key: JSON.stringify([shell.environmentId, shell.id]),
@@ -464,10 +512,10 @@ export function buildFleet(input: {
     const dispatcher = source.dispatcherEnvironmentId;
     const dispatcherLabel = labelOf.get(dispatcher) ?? null;
     const dispatcherOwner = owners.get(dispatcher) ?? dispatcher;
-    // Servers on the client's own machine read the same SSH config, so its aliases name its hosts.
+    // A server reading this client's SSH config names hosts by this client's aliases.
     const sharesClientAliases =
       input.primaryEnvironmentId !== null &&
-      dispatcherOwner === (owners.get(input.primaryEnvironmentId) ?? input.primaryEnvironmentId);
+      scopeOf(dispatcher) === scopeOf(input.primaryEnvironmentId);
     // Shells from disconnected environments must not resolve a launch: their
     // state is stale, so the launch would vanish from both live and reported.
     const groups = presentRemoteLaunches({
@@ -490,13 +538,22 @@ export function buildFleet(input: {
       resolvedHosts.get(alias) ??
       (sharesClientAliases ? environmentBySshAlias.get(alias) : undefined);
     const hostMachine = (alias: string, kind: "ssh" | "cloud", label: string) => {
+      const named = (machine: MutableMachine) => {
+        if (
+          !machine.reportedAliases.some(
+            (route) => route.via === dispatcher && route.alias === alias,
+          )
+        )
+          machine.reportedAliases = [...machine.reportedAliases, { via: dispatcher, alias }];
+        return machine;
+      };
       const environmentId = resolveAlias(alias);
       const node = environmentId === undefined ? undefined : nodeOf(environmentId);
-      if (node !== undefined) return node;
-      // One alias reached from one machine is one host, whichever server there dispatched to it.
-      const id = JSON.stringify(["ssh", dispatcherOwner, alias]);
+      if (node !== undefined) return named(node);
+      // One alias in one SSH config is one host, whichever server reading it dispatched there.
+      const id = JSON.stringify(["ssh", scopeOf(dispatcher), alias]);
       const existing = machines.get(id);
-      if (existing !== undefined) return existing;
+      if (existing !== undefined) return named(existing);
       const viaLabel = labelOf.get(dispatcherOwner) ?? dispatcherLabel;
       const created: MutableMachine = {
         id,
@@ -507,6 +564,7 @@ export function buildFleet(input: {
         machineKind: null,
         environmentId: null,
         sshHost: { via: dispatcher, alias },
+        reportedAliases: [],
         boat: null,
         answering: false,
         running: 0,
@@ -515,7 +573,7 @@ export function buildFleet(input: {
         agents: new Map(),
       };
       machines.set(id, created);
-      return created;
+      return named(created);
     };
 
     for (const cloud of source.cloudMachines) {
@@ -543,18 +601,13 @@ export function buildFleet(input: {
         if (launch.state !== "launching" && launch.state !== "running") return;
         if (launch.hostUnavailableSince !== null) return;
         const cached = cachedShellOf(launch);
-        // A cached shell that finished after the dispatcher last heard from the run is newer news.
-        if (
-          cached !== null &&
-          classifyFleetThread(cached) === null &&
-          Date.parse(cached.updatedAt) > Date.parse(launch.updatedAt)
-        )
-          return;
+        const machine = hostMachine(group.host, "ssh", group.host);
+        // A cached shell names the agent; whether the run still goes is the dispatcher's word,
+        // since the two machines' clocks cannot order a stale shell against a resumed run.
         const agent =
           cached === null
             ? { key: UNKNOWN_AGENT, label: UNKNOWN_AGENT_LABEL, driver: null }
-            : agentOf(cached);
-        const machine = hostMachine(group.host, "ssh", group.host);
+            : agentOf(cached, machine);
         count(machine, agent, "reported");
         threads.push({
           key: JSON.stringify(["reported", dispatcher, group.host, index]),

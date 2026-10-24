@@ -249,6 +249,11 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
    * and on servers that predate it.
    */
   machineId: Schema.optionalKey(TrimmedNonEmptyString),
+  /**
+   * Like `machineId`, but the same only for servers one OS account runs there. They read the
+   * same SSH config, so an SSH alias names the same host on each of them.
+   */
+  machineUserId: Schema.optionalKey(TrimmedNonEmptyString),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

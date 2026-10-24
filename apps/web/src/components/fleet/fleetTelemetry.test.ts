@@ -81,6 +81,7 @@ function machine(id: string, overrides: Partial<FleetMachine> = {}): FleetMachin
     machineKind: null,
     environmentId: null,
     sshHost: null,
+    reportedAliases: [],
     boat: null,
     answering: true,
     running: 0,
@@ -188,7 +189,27 @@ describe("fleetHostRows", () => {
         { environmentId: headless, hosts: [entry("macmini"), entry("devbox")] },
       ),
       primaryEnvironmentId: studio,
-      primaryMachineEnvironmentIds: new Set([studio, headless]),
+      sharedSshConfigEnvironmentIds: new Set([studio, headless]),
+    });
+    expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
+  });
+
+  it("does not list a host again under another server's alias the graph resolved", () => {
+    const headless = EnvironmentId.make("headless");
+    const rows = fleetHostRows({
+      machines: [
+        machine("studio", { environmentId: studio }),
+        machine("mini", {
+          environmentId: mini,
+          reportedAliases: [{ via: headless, alias: "mini-ts" }],
+        }),
+      ],
+      sshAliases: new Map([[mini, ["macmini"]]]),
+      reports: reportsOf(
+        { environmentId: studio, hosts: [entry(null)] },
+        { environmentId: headless, hosts: [entry("mini-ts"), entry("devbox")] },
+      ),
+      primaryEnvironmentId: studio,
     });
     expect(rows.map((row) => row.label)).toEqual(["studio", "mini", "devbox"]);
   });

@@ -48,6 +48,7 @@ function sameEnvironments(
         environment.os === other.os &&
         environment.machineKind === other.machineKind &&
         environment.machineId === other.machineId &&
+        environment.machineUserId === other.machineUserId &&
         environment.connected === other.connected
       );
     })
@@ -88,6 +89,7 @@ function fleetEnvironments(
       os: serverConfig?.environment.platform.os ?? null,
       machineKind: serverConfig ? (machineKinds.get(environmentId) ?? null) : null,
       machineId: serverConfig?.environment.machineId ?? null,
+      machineUserId: serverConfig?.environment.machineUserId ?? null,
       connected: connected.has(environmentId),
     });
   }
@@ -215,6 +217,7 @@ function snapshotKey(
       machine.label,
       machine.subtitle,
       machine.boat,
+      machine.reportedAliases,
       machine.answering,
       machine.os,
       machine.machineKind,
