@@ -182,8 +182,10 @@ function inspectError(
     return error;
   }
   seen.add(value);
-  const name = bounded(redactLogText(diagnostic(value, "name") ?? "Error"), MAX_NAME_CHARS);
-  const message = bounded(redactLogText(diagnostic(value, "message") ?? ""), MAX_MESSAGE_CHARS);
+  const rawName = diagnostic(value, "name") ?? "Error";
+  const rawMessage = diagnostic(value, "message") ?? "";
+  const name = bounded(redactLogText(rawName), MAX_NAME_CHARS);
+  const message = bounded(redactLogText(rawMessage), MAX_MESSAGE_CHARS);
   const nested = causeOf(value);
   let cause: Error | undefined;
   try {
@@ -195,10 +197,14 @@ function inspectError(
   }
   const error = cause === undefined ? new Error(message) : new Error(message, { cause });
   error.name = name;
-  // The stack starts by repeating the message; keep its frames beneath the redacted header.
+  // A V8 stack starts by repeating the message, which may span lines; other engines' stacks may
+  // not. Whatever the format, everything after that header is kept as frames, redacted.
   const stack = diagnostic(value, "stack") ?? "";
-  const firstFrame = stack.indexOf("\n    at ");
-  const stackFrames = firstFrame === -1 ? "" : redactLogText(stack.slice(firstFrame));
+  const header = `${rawName}: ${rawMessage}`;
+  const afterHeader = stack.startsWith(header)
+    ? stack.slice(header.length)
+    : stack.slice(Math.max(0, stack.indexOf("\n")));
+  const stackFrames = afterHeader.trim().length === 0 ? "" : redactLogText(afterHeader);
   error.stack = bounded(`${name}: ${message}${stackFrames}${frames}`, MAX_STACK_CHARS);
   return error;
 }
@@ -226,7 +232,7 @@ function annotationFrames(annotations: ReadonlyMap<string, unknown>): string {
 const MAX_DEPTH = 8;
 const MAX_NODES = 2_000;
 const MAX_TOTAL_CHARS = 64_000;
-const MAX_BIGINT_DIGITS = 64;
+const BIGINT_LIMIT = 10n ** 64n;
 const TRUNCATED = "[Truncated]";
 
 /** One log call's allowance, shared by every value it visits, so no input can make it large. */
@@ -268,8 +274,9 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
     case "undefined":
       return value;
     case "bigint": {
-      const digits = value.toString();
-      return digits.length <= MAX_BIGINT_DIGITS ? value : fit(digits, budget);
+      // Decimal conversion of a huge bigint is super-linear, so its size is told in bits instead.
+      if (value < BIGINT_LIMIT && value > -BIGINT_LIMIT) return value;
+      return `[bigint of ${value.toString(16).length * 4} bits]`;
     }
     case "symbol":
       return text(`Symbol(${value.description ?? ""})`, budget);
@@ -292,7 +299,12 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
 
 function sanitizeObject(value: object, depth: number, budget: Budget): unknown {
   if (Cause.isCause(value)) return fit(Cause.pretty(redactCause(value)), budget);
-  if (value instanceof Error) return fit(sanitizedError(value).stack ?? "", budget);
+  // Rendered like a cause, so the sanitized Error cause chain shows as Effect would print it.
+  if (value instanceof Error)
+    return fit(
+      Cause.pretty(Cause.fromReasons([Cause.makeDieReason(sanitizedError(value))])),
+      budget,
+    );
   if (value instanceof Date) return dateText(value);
   if (Redactable.isRedactable(value)) {
     // The hook decides what the value shows; what it returns is still sanitized.

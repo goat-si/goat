@@ -269,6 +269,14 @@ describe("redactCause", () => {
     expect(Cause.pretty(redactCause(Cause.fromReasons([reason])))).toContain("original failure");
   });
 
+  it("keeps stack frames whatever the engine's stack format", () => {
+    const error = new Error("boom");
+    error.stack = "Error: boom\nfunction@file:///synthetic.ts:1:2";
+    expect(Cause.pretty(redactCause(Cause.die(error)))).toContain(
+      "function@file:///synthetic.ts:1:2",
+    );
+  });
+
   it("keeps an error whose cause cannot be inspected", () => {
     const { proxy, revoke } = Proxy.revocable({}, {});
     revoke();
@@ -441,9 +449,8 @@ describe("redactLogMessage", () => {
       });
     expect((redactLogMessage(getters) as Array<unknown>).at(-1)).toBe("[Truncated]");
 
-    const huge = redactLogMessage(10n ** 100_000n);
-    expect(typeof huge).toBe("string");
-    expect(String(huge).length).toBeLessThanOrEqual(64_001);
+    // A huge bigint is told by its size; converting it to decimal would not be linear.
+    expect(redactLogMessage(10n ** 100_000n)).toMatch(/^\[bigint of \d+ bits\]$/);
     expect(redactLogMessage(42n)).toBe(42n);
   });
 
@@ -454,6 +461,12 @@ describe("redactLogMessage", () => {
       revoked: "[Uninspectable]",
       forged: "[Uninspectable]",
     });
+  });
+
+  it("shows an Error field's cause chain", () => {
+    const printed = redactLogMessage({ error: new Error("outer", { cause: new Error("inner") }) });
+    expect(JSON.stringify(printed)).toContain("outer");
+    expect(JSON.stringify(printed)).toContain("inner");
   });
 
   it("names a function without running a name getter", () => {
