@@ -431,7 +431,8 @@
         "scripts/build-desktop-artifact.ts",
         "patches/@ubjs__node@0.31.0-3.patch",
         "apps/desktop/native/computer-use-helper/",
-        "scripts/build-computer-use-helper.ts"
+        "scripts/build-computer-use-helper.ts",
+        "scripts/desktop-artifact-computer-use.ts"
       ]
     },
     {
