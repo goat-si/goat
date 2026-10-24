@@ -67,86 +67,175 @@ export function cleanOutput(raw: string) {
   return NodeUtil.stripVTControlCharacters(raw).replace(/\r\n?/g, "\n");
 }
 
-/** One character of screen text; gap marks a cursor jump drawn just before it. */
-type Cell = { readonly character: string; readonly gap: boolean };
+/** One character of output; gap marks a cursor jump drawn just before it, jump a jump's own bytes. */
+type Cell = { readonly character: string; readonly gap: boolean; readonly jump?: boolean };
+type Token = {
+  readonly character: string;
+  readonly ids: ReadonlyArray<number>;
+  readonly label?: string;
+};
 
 /**
  * Claude's "Error:" text as it appears on screen, redacted. The native PTY spaces words with
- * cursor-column jumps and wraps long text with CR CR LF. The jumps travel beside the characters,
- * so redact()'s exact steps run, in order, on the same text it would see; only the jumps left
- * outside a mask then show as spaces, and the wrapped lines that already arrived rejoin into one
- * sentence. Returns "" for an Error: line with nothing readable on it.
+ * cursor-column jumps and wraps long text across lines. Redaction runs redact()'s exact steps on
+ * exactly the text it always received (the first Error: line, cleaned twice), and again on each
+ * wrapped line and on all lines joined; a character any pass masks or strips stays hidden. Only
+ * then do the jumps that remain show as spaces. Returns "" when nothing readable is left.
  */
 export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
-  const cells = screenCells(raw);
+  const cells = cleanCells(rawCells(raw)).cells;
   const text = cellText(cells);
-  const match = /^\s*Error:([^\n]*(?:\n[ \t]*\S[^\n]*)*)\n/m.exec(text);
-  const lines = match?.[1];
-  if (match === undefined || match === null || lines === undefined) return undefined;
-  const start = match.index + match[0].indexOf("Error:") + "Error:".length;
-  return redactCells(cells.slice(start, start + lines.length), environment)
-    .map((cell) => (cell.gap ? " " : "") + cell.character)
-    .join("")
-    .replace(/\s+/g, " ")
-    .slice(0, 1024)
-    .trim();
-}
-
-function screenCells(raw: string): Cell[] {
-  const cells: Cell[] = [];
-  let gap = false;
-  // eslint-disable-next-line no-control-regex -- Split on the native PTY's cursor-column and cursor-forward sequences.
-  const segments = raw.replace(/\r+\n|\r/g, "\n").split(/\u001b\[\d*[GC]/);
-  segments.forEach((segment, index) => {
-    if (index > 0) gap = true;
-    const visible = NodeUtil.stripVTControlCharacters(segment);
-    for (let offset = 0; offset < visible.length; offset++) {
-      cells.push({ character: visible.charAt(offset), gap });
-      gap = false;
-    }
-  });
-  return cells;
-}
-
-const cellText = (cells: ReadonlyArray<Cell>) => cells.map((cell) => cell.character).join("");
-
-function replaceCells(
-  cells: ReadonlyArray<Cell>,
-  matches: ReadonlyArray<{ readonly index: number; readonly length: number }>,
-  label: string,
-): Cell[] {
-  const next: Cell[] = [];
-  let cursor = 0;
-  for (const { index, length } of matches) {
-    next.push(...cells.slice(cursor, index));
-    const gap = cells[index]?.gap ?? false;
-    for (let offset = 0; offset < label.length; offset++)
-      next.push({ character: label.charAt(offset), gap: offset === 0 && gap });
-    cursor = index + length;
+  const first = /^\s*Error:\s*(.+)\n/m.exec(text);
+  const line = first?.[1];
+  if (first === undefined || first === null || line === undefined) return undefined;
+  const firstStart = first.index + first[0].length - 1 - line.length;
+  const lines = [cells.slice(firstStart, firstStart + line.length)];
+  // CR CR LF wraps read as one blank line between wrapped lines once cleaned.
+  const rest = /^(?:\n?[ \t]*\S[^\n]*\n)*/.exec(text.slice(first.index + first[0].length))?.[0];
+  let offset = first.index + first[0].length;
+  for (const piece of (rest ?? "").split("\n").slice(0, -1)) {
+    if (piece.trim()) lines.push(cells.slice(offset, offset + piece.length));
+    offset += piece.length + 1;
   }
-  next.push(...cells.slice(cursor));
-  return next;
+  const block: Cell[] = [];
+  const ranges: Array<readonly [number, number]> = [];
+  for (const [index, cellsOfLine] of lines.entries()) {
+    if (index > 0) block.push({ character: "\n", gap: false });
+    ranges.push([block.length, block.length + cellsOfLine.length]);
+    block.push(...cellsOfLine);
+  }
+  const marks = { hidden: new Set<number>(), masked: new Set<number>(), links: new Set<number>() };
+  const pass = (start: number, end: number, link: RegExp) =>
+    redactPass(block, start, end, environment, link, marks);
+  for (const [start, end] of ranges) pass(start, end, /https?:\/\/[^\s<>]+/g);
+  // A link wrapped onto following lines keeps its continuation inside the mask.
+  pass(0, block.length, /https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g);
+  let shown = "";
+  for (let index = 0; index < block.length; index++) {
+    const cell = block[index];
+    if (cell === undefined) continue;
+    if (!marks.hidden.has(index)) {
+      shown += (cell.gap ? " " : "") + cell.character;
+      continue;
+    }
+    let link = false;
+    let masked = false;
+    for (; index < block.length && marks.hidden.has(index); index++) {
+      link ||= marks.links.has(index);
+      masked ||= marks.masked.has(index);
+    }
+    index--;
+    if (masked) shown += link ? " [link redacted] " : " [redacted] ";
+  }
+  return shown.replace(/\s+/g, " ").slice(0, 1024).trim();
 }
 
-/** redact()'s steps on screen cells: exact values, links (with wrapped continuations), tokens. */
-function redactCells(cells: Cell[], environment: NodeJS.ProcessEnv) {
-  let text = cellText(cells);
+function rawCells(raw: string): Cell[] {
+  const jumps = new Set<number>();
+  // eslint-disable-next-line no-control-regex -- Match the native PTY's cursor-column and cursor-forward sequences.
+  for (const match of raw.matchAll(/\u001b\[\d*[GC]/g))
+    for (let offset = 0; offset < match[0].length; offset++) jumps.add(match.index + offset);
+  return Array.from({ length: raw.length }, (_, index) => ({
+    character: raw.charAt(index),
+    gap: false,
+    jump: jumps.has(index),
+  }));
+}
+
+/**
+ * cleanOutput() on cells: the text is exactly cleanOutput's result, and each kept character keeps
+ * its cell; removed cells are reported, and a removed jump marks the next kept character's gap.
+ */
+function cleanCells<T extends Cell>(cells: ReadonlyArray<T>) {
+  const cleaned = cleanOutput(cellText(cells));
+  const kept: Cell[] = [];
+  const keptFrom: number[] = [];
+  const removed: number[] = [];
+  let cursor = 0;
+  let pendingGap = false;
+  for (let offset = 0; offset < cleaned.length; offset++) {
+    const character = cleaned.charAt(offset);
+    while (cursor < cells.length) {
+      const candidate = cells[cursor]?.character;
+      if (candidate === character || (character === "\n" && candidate === "\r")) break;
+      pendingGap ||= cells[cursor]?.jump === true || cells[cursor]?.gap === true;
+      removed.push(cursor);
+      cursor++;
+    }
+    const cell = cells[cursor];
+    kept.push({ character, gap: pendingGap || (cell?.gap ?? false) });
+    keptFrom.push(cursor);
+    pendingGap = false;
+    cursor++;
+    if (character === "\n" && cell?.character === "\r" && cells[cursor]?.character === "\n") {
+      removed.push(cursor);
+      cursor++;
+    }
+  }
+  for (; cursor < cells.length; cursor++) removed.push(cursor);
+  return { cells: kept, keptFrom, removed };
+}
+
+const cellText = (cells: ReadonlyArray<{ readonly character: string }>) =>
+  cells.map((cell) => cell.character).join("");
+
+/** redact()'s steps on block[start, end), tracking which block characters each label covers. */
+function redactPass(
+  block: ReadonlyArray<Cell>,
+  start: number,
+  end: number,
+  environment: NodeJS.ProcessEnv,
+  link: RegExp,
+  marks: {
+    // Every character a pass masked or stripped; masked ones were replaced by a label.
+    readonly hidden: Set<number>;
+    readonly masked: Set<number>;
+    readonly links: Set<number>;
+  },
+) {
+  const slice = block.slice(start, end);
+  const cleaned = cleanCells(slice);
+  for (const index of cleaned.removed) marks.hidden.add(start + index);
+  let tokens: Token[] = cleaned.cells.map((cell, index) => ({
+    character: cell.character,
+    ids: [start + (cleaned.keptFrom[index] ?? 0)],
+  }));
+  const replace = (matches: ReadonlyArray<readonly [number, number]>, label: string) => {
+    const next: Token[] = [];
+    let cursor = 0;
+    for (const [index, length] of matches) {
+      next.push(...tokens.slice(cursor, index));
+      const ids = tokens.slice(index, index + length).flatMap((token) => token.ids);
+      for (let offset = 0; offset < label.length; offset++)
+        next.push({ character: label.charAt(offset), ids, label });
+      cursor = index + length;
+    }
+    next.push(...tokens.slice(cursor));
+    tokens = next;
+  };
   for (const value of Object.values(environment)) {
     if (!value || value.length < 6) continue;
-    const matches: Array<{ index: number; length: number }> = [];
+    const text = cellText(tokens);
+    const matches: Array<readonly [number, number]> = [];
     for (let at = text.indexOf(value); at >= 0; at = text.indexOf(value, at + value.length))
-      matches.push({ index: at, length: value.length });
-    if (matches.length === 0) continue;
-    cells = replaceCells(cells, matches, "[redacted]");
-    text = cellText(cells);
+      matches.push([at, value.length]);
+    if (matches.length > 0) replace(matches, "[redacted]");
   }
   const found = (pattern: RegExp) =>
-    Array.from(cellText(cells).matchAll(pattern), (match) => ({
-      index: match.index,
-      length: match[0].length,
-    }));
-  cells = replaceCells(cells, found(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g), "[link redacted]");
-  return replaceCells(cells, found(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi), "[redacted]");
+    Array.from(
+      cellText(tokens).matchAll(pattern),
+      (match) => [match.index, match[0].length] as const,
+    );
+  replace(found(link), "[link redacted]");
+  replace(found(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi), "[redacted]");
+  for (const token of tokens) {
+    if (token.label === undefined) continue;
+    for (const id of token.ids) {
+      marks.hidden.add(id);
+      marks.masked.add(id);
+      if (token.label === "[link redacted]") marks.links.add(id);
+    }
+  }
 }
 
 export function readStartReceipt(raw: string) {

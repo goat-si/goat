@@ -101,6 +101,14 @@ it.effect.each([
   ["/fixture/tool/bin:".repeat(1024), "Error: a simple error\n", "a simple error"],
   ["abc\uE000def", "Error: invalid abc\uE000def\n", "invalid [redacted]"],
   ["public secret", "Error: visit https://public secret-tail\n", "visit [link redacted]"],
+  [" https://", "Error: https://example.invalid/?token=private-token\n", "[link redacted]"],
+  [" Bearer", "Error: Bearer private-token\n", "[redacted]"],
+  [
+    "failed\nhttps://",
+    "Error: failed\r\r\nhttps://example.invalid/?token=private-token\r\r\n",
+    "[link redacted]",
+  ],
+  ["fixture-secret", "Error: invalid fixture-\u001b\u001b[1m[1msecret\n", "invalid [redacted]"],
 ] as const)(
   "masks what plain redaction masks however the screen spaced it (%#)",
   ([value, output, shown]) =>
