@@ -328,6 +328,22 @@ it("tells a remote Mac's person what to grant there, with nothing to open here",
   expect(buttonLabels().filter((label) => label?.startsWith("Open"))).toEqual([]);
 });
 
+it("names the grant that kept agents from computer use in the readiness list (#1399)", async () => {
+  const f = setup({
+    enabled: true,
+    status: {
+      ...idleMac,
+      tools: "unavailable",
+      block: { reason: "permissionsNotGranted", missing: ["screenRecording"], holder: "helper" },
+    },
+  });
+  await using screen = await render(panel(f));
+  await screen.getByRole("button", { name: "Details" }).click();
+  await expect
+    .element(screen.getByText(/has not allowed GOAT Computer Use in Screen/))
+    .toBeVisible();
+});
+
 it("keeps the readiness list and skill switch in Advanced, closed by default and remembered", async () => {
   const f = setup({ enabled: true, status: { ...idleMac, running: true, tools: "available" } });
   {
