@@ -127,19 +127,36 @@ namespace Goat.ComputerUse
                     changed = true;
                 }
             }
-            // The id is the agent's own, echoed; it stays exactly as the agent sent it.
-            object echoed;
-            bool hasId = message.TryGetValue("id", out echoed);
-            message.Remove("id");
+            // A message that is itself shaped like an image carries nothing else worth keeping: a
+            // reply the agent waits for gets an empty result with the note, anything else is dropped.
+            if (ImageLike(message))
+            {
+                if (call == null) return null;
+                var withheld = new Dictionary<string, object>();
+                withheld["jsonrpc"] = "2.0";
+                withheld["id"] = id;
+                var answer = new Dictionary<string, object>();
+                answer["content"] = new object[] { Text(Withheld) };
+                withheld["result"] = answer;
+                return json.Serialize(withheld);
+            }
+            // A paired reply's id is the agent's own, echoed: it stays exactly as the agent sent it.
+            // Any other id came from the driver and is scrubbed like the rest.
+            if (call != null) message.Remove("id");
             Scrub(message, own, ref changed);
-            if (hasId) message["id"] = echoed;
+            if (call != null) message["id"] = id;
             return changed ? json.Serialize(message) : line;
         }
 
         /// <summary>
         /// Replaces everything that is or could be an image with a note: image and resource-link
         /// blocks, anything with a blob, anything whose MIME type is an image or is not text, an
-        /// embedded resource holding one, and strings that carry an encoded image anywhere in them.
+        /// embedded resource holding one, and any key or string holding a data: image URL.
+        ///
+        /// The pinned driver emits the pixels it captures only as typed image content (tools/impl_.rs
+        /// Content::image_png / image_jpeg; no base64 in structured fields), and all of that is caught
+        /// here. Other text is the target window's own accessibility text, which the agent may read
+        /// anyway; it is not searched for encodings, which would only slow every reply and hide text.
         /// </summary>
         object Scrub(object value, HashSet<object> own, ref bool changed)
         {
@@ -152,7 +169,16 @@ namespace Goat.ComputerUse
                     changed = true;
                     return Text(Withheld);
                 }
-                foreach (string key in new List<string>(map.Keys)) map[key] = Scrub(map[key], own, ref changed);
+                foreach (string key in new List<string>(map.Keys))
+                {
+                    if (DataImage(key))
+                    {
+                        map.Remove(key);
+                        changed = true;
+                        continue;
+                    }
+                    map[key] = Scrub(map[key], own, ref changed);
+                }
                 return map;
             }
             var array = value as object[];
@@ -162,7 +188,7 @@ namespace Goat.ComputerUse
                 return array;
             }
             var text = value as string;
-            if (text != null && EncodedImage(text))
+            if (text != null && DataImage(text))
             {
                 changed = true;
                 return Withheld;
@@ -183,47 +209,13 @@ namespace Goat.ComputerUse
             return map.TryGetValue("resource", out resource) && resource is Dictionary<string, object> && ImageLike((Dictionary<string, object>)resource);
         }
 
-        /// <summary>
-        /// A data: image URL anywhere, any base64 or base64url run long enough to hold a picture
-        /// (1024 characters, whatever it decodes to), or a shorter run that decodes to the start
-        /// of a PNG, JPEG, GIF, WebP, BMP, TIFF or ICO file at any of its first offsets.
-        /// </summary>
-        static bool EncodedImage(string text)
+        /// <summary>A data: image URL, written plainly or percent-encoded.</summary>
+        static bool DataImage(string text)
         {
-            if (text.IndexOf("data:image", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            for (int i = 0; i < text.Length;)
-            {
-                if (!Base64Char(text[i])) { i++; continue; }
-                int start = i;
-                while (i < text.Length && Base64Char(text[i])) i++;
-                int length = i - start;
-                if (length >= 1024) return true;
-                for (int offset = 0; offset + 16 <= length && offset < 64; offset++)
-                    if (ImageMagic(text.Substring(start + offset, 16))) return true;
-            }
-            return false;
+            return text.IndexOf("data:image", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                text.IndexOf("data%3Aimage", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        static bool Base64Char(char c)
-        {
-            return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' || c == '/' || c == '-' || c == '_' || c == '=';
-        }
-
-        static bool ImageMagic(string chunk)
-        {
-            byte[] b;
-            try { b = Convert.FromBase64String(chunk.Replace('-', '+').Replace('_', '/')); }
-            catch (FormatException) { return false; }
-            if (b.Length < 12) return false;
-            return (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) ||
-                (b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) ||
-                (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) ||
-                (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 && b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) ||
-                (b[0] == 0x42 && b[1] == 0x4D && b[6] == 0 && b[7] == 0 && b[8] == 0 && b[9] == 0) ||
-                (b[0] == 0x49 && b[1] == 0x49 && b[2] == 0x2A && b[3] == 0x00) ||
-                (b[0] == 0x4D && b[1] == 0x4D && b[2] == 0x00 && b[3] == 0x2A) ||
-                (b[0] == 0x00 && b[1] == 0x00 && b[2] == 0x01 && b[3] == 0x00 && b[5] == 0x00);
-        }
 
         static string Field(Dictionary<string, object> map, string name)
         {
