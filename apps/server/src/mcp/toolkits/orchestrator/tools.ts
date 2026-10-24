@@ -1,3 +1,4 @@
+import { withClientRequestId } from "../keyedParameters.ts";
 import {
   OrchestratorMcpCapabilitiesInput,
   OrchestrationV2StopWorkflowInput,
@@ -169,7 +170,7 @@ const ListScheduledTasksTool = Tool.make(agentSurfaceRegistry["schedule.list"].n
 
 const UpdateScheduledTaskTool = Tool.make(agentSurfaceRegistry["schedule.update"].name, {
   description: agentSurfaceRegistry["schedule.update"].description,
-  parameters: OrchestratorMcpUpdateScheduledTaskInput,
+  parameters: withClientRequestId(OrchestratorMcpUpdateScheduledTaskInput),
   success: OrchestratorMcpScheduleTaskResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",

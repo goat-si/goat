@@ -3,6 +3,8 @@ import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   OrchestratorMcpFailure,
   RemoteOriginReportInput,
+  RemoteOriginReportReceiptInput,
+  RemoteOriginReportReceiptResult,
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
@@ -27,10 +29,16 @@ const ReportTool = Tool.make(agentSurfaceRegistry["origin.report"].name, {
   parameters: RemoteOriginReportInput,
   success: RemoteOriginReportResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report"]));
+const ReceiptTool = Tool.make(agentSurfaceRegistry["origin.report_receipt"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["origin.report_receipt"].description,
+  parameters: RemoteOriginReportReceiptInput,
+  success: RemoteOriginReportReceiptResult,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report_receipt"]));
 const WaitTool = Tool.make(agentSurfaceRegistry["origin.report_wait"].name, {
   ...shared,
   description: agentSurfaceRegistry["origin.report_wait"].description,
   parameters: RemoteOriginReportsWaitInput,
   success: RemoteOriginReportsWaitResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["origin.report_wait"]));
-export const RemoteReportToolkit = Toolkit.make(ReportTool, WaitTool);
+export const RemoteReportToolkit = Toolkit.make(ReportTool, ReceiptTool, WaitTool);

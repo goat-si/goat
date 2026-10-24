@@ -325,10 +325,17 @@ export const actsAsCaller = <P, A, E, R>(
     ),
   );
 
-export const writes = <P, A, E, R>(handle: (params: P) => Effect.Effect<A, E, R>) =>
+export const writes = <P, A, E, R>(
+  handle: (params: P) => Effect.Effect<A, E, R>,
+  options: AdmissionOption = {},
+) =>
   declare("write", (params: P) =>
     orchestratingCaller.pipe(
-      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+      Effect.flatMap((caller) =>
+        options.admission === "handler"
+          ? withLimits(caller.limits, handle(params))
+          : admitted(params, caller.limits, handle(params)),
+      ),
     ),
   );
 

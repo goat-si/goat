@@ -70,8 +70,9 @@ import {
   type WebhookRequest,
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
+import { webhookEndpoint } from "./webhookEndpoint.ts";
 
-export const WEBHOOK_ROUTE_PREFIX = "/api/hooks";
+export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const PROMPT_TOO_LONG = "The filled-in prompt is too long.";
 const WEBHOOK_DELIVERY_RETENTION = 50;
@@ -93,7 +94,7 @@ const LEGACY_DELIVERY_OUTCOMES: ReadonlySet<string> = new Set([
   "expired",
 ]);
 
-interface WebhookOrigin {
+export interface WebhookOrigin {
   readonly relayHookBaseUrl: string | null;
   /** Why relayHookBaseUrl is null, when the link state could be read. */
   readonly unavailableReason?: ScheduledTaskWebhookUrlUnavailableReason | undefined;
@@ -216,6 +217,7 @@ interface ScheduledTaskRow {
   readonly run_count: number;
   readonly webhook_token: string | null;
   readonly webhook_secret: string | null;
+  readonly webhook_secret_ref: string | null;
 }
 
 interface WebhookDeliveryRow {
@@ -315,25 +317,6 @@ function errorMessage(error: unknown): string {
   if (Cause.isCause(error)) return Cause.pretty(error);
   if (error instanceof Error) return error.message;
   return String(error);
-}
-
-function webhookPath(taskId: string, token: string): string {
-  return `${WEBHOOK_ROUTE_PREFIX}/${encodeURIComponent(taskId)}/${token}`;
-}
-
-function webhookEndpoint(
-  row: Pick<ScheduledTaskRow, "task_id" | "webhook_token" | "webhook_secret">,
-  origin: WebhookOrigin | null,
-): ScheduledTask["webhook"] {
-  if (row.webhook_token === null) return undefined;
-  const base = origin?.relayHookBaseUrl ?? null;
-  const reason = base === null ? origin?.unavailableReason : undefined;
-  return {
-    path: webhookPath(row.task_id, row.webhook_token),
-    url: base === null ? null : `${base}/${encodeURIComponent(row.task_id)}/${row.webhook_token}`,
-    ...(reason === undefined ? {} : { urlUnavailableReason: reason }),
-    hasSecret: row.webhook_secret !== null,
-  };
 }
 
 // Runs per task row; list and lookup operations already own the span.
@@ -498,7 +481,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        webhook_secret_ref
       FROM scheduled_tasks
       -- Not updated_at: toggles, runs and edits rewrite it, and clients render
       -- this order as-is, so rows would move under the pointer.
@@ -536,7 +520,8 @@ export const layer = Layer.effect(
         last_run_error,
         run_count,
         webhook_token,
-        webhook_secret
+        webhook_secret,
+        webhook_secret_ref
       FROM scheduled_tasks
       WHERE task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
@@ -589,6 +574,8 @@ export const layer = Layer.effect(
         readonly token: string | null;
         readonly secret: string | null;
         readonly secretChanged: boolean;
+        /** The secretRef the new secret came from; null for an inline secret or none. */
+        readonly secretRef: string | null;
       },
     ) =>
       sql<{ task_id: string }>`
@@ -615,7 +602,8 @@ export const layer = Layer.effect(
           last_run_error,
           run_count,
           webhook_token,
-          webhook_secret
+          webhook_secret,
+          webhook_secret_ref
         )
         SELECT
           ${task.id},
@@ -640,7 +628,8 @@ export const layer = Layer.effect(
           ${task.lastRunError},
           ${task.runCount},
           ${webhook.token},
-          ${webhook.secret}
+          ${webhook.secret},
+          ${webhook.secretRef}
         WHERE ${requireExisting ? 0 : 1} = 1
            OR EXISTS (SELECT 1 FROM scheduled_tasks WHERE task_id = ${task.id})
         ON CONFLICT (task_id)
@@ -668,6 +657,10 @@ export const layer = Layer.effect(
           webhook_secret = CASE
             WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret
             ELSE scheduled_tasks.webhook_secret
+          END,
+          webhook_secret_ref = CASE
+            WHEN ${webhook.secretChanged ? 1 : 0} = 1 THEN excluded.webhook_secret_ref
+            ELSE scheduled_tasks.webhook_secret_ref
           END
         RETURNING task_id
       `.pipe(
@@ -1209,9 +1202,13 @@ export const layer = Layer.effect(
                   taskId: id,
                 });
               }
-              return { token, secret, secretChanged };
+              const secretRef =
+                signature?.secretRef !== undefined && fromRef !== undefined
+                  ? signature.secretRef
+                  : null;
+              return { token, secret, secretChanged, secretRef };
             })
-          : { token: null, secret: null, secretChanged: true };
+          : { token: null, secret: null, secretChanged: true, secretRef: null };
       const workspaceStrategy: ScheduledTask["workspaceStrategy"] =
         input.workspaceStrategy.type === "worktree" &&
         (yield* managedFolders.isScratchProject(input.projectId))
