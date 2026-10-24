@@ -474,6 +474,29 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect("drops a driver reply to a request the provider cancelled or never made", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(3, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 3);
+      const cancel = {
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 3 },
+      };
+      yield* h.send(JSON.stringify(cancel));
+      assert.deepEqual(yield* h.nextToDriver, cancel);
+      // Driver lines arrive in order, so the next reply reaching the provider proves these dropped.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 99, result: { content: [] } }));
+      yield* h.send(call(4, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 4);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 4, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 4);
+    }),
+  );
+
   it.effect("reads NDJSON lease lines and drops ones it cannot decode", () =>
     Effect.gen(function* () {
       const updates = yield* Stream.runCollect(
