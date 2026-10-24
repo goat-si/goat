@@ -38,6 +38,7 @@ const fixture = Effect.fnUntraced(function* () {
         return {
           _tag: "active",
           expiresAt,
+          interruptions: { count: 0, last: "human_input" },
           apps: ["com.apple.calculator"],
           wakeAt: DateTime.toEpochMillis(expiresAt),
         } as const;

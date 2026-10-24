@@ -167,6 +167,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   let running: Running | undefined;
   let ownRequests = 0;
+  let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
   const outstanding = new Map<string, { readonly id: JsonRpcId; readonly method: string }>();
   const ownAnswers = new Map<string, Deferred.Deferred<void>>();
@@ -282,9 +283,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
     apps = next;
+    // A pause that began and ended before this update still ends the call it overlapped.
+    const count = update.interruptions?.count ?? 0;
+    const missedPause =
+      interruptionsSeen !== undefined && count > interruptionsSeen
+        ? update.interruptions
+        : undefined;
+    interruptionsSeen = count;
     if (paused !== undefined) {
       paused = undefined;
       if (finished === undefined) yield* start();
+    } else if (missedPause !== undefined && finished === undefined && running !== undefined) {
+      yield* interrupt(pausedDetail(missedPause.last), PAUSE_MESSAGES[missedPause.last]);
+      yield* start();
     } else if (narrowed && finished === undefined && running !== undefined) {
       yield* interrupt(
         "app_not_approved",
