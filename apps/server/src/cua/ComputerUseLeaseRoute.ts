@@ -3,7 +3,8 @@
  * started with, then a new line whenever that may have changed, ending with the line that ends
  * it. It authenticates with the thread's own GOAT MCP credential, so a proxy only ever learns
  * about its own thread. A POST to the same route reports, for that thread's live control only,
- * the window the proxy's latest admitted call named or a person's own input its helper saw.
+ * the window the proxy's latest admitted call named, its own input calls, or a person's input
+ * its helper saw.
  *
  * @module ComputerUseLeaseRoute
  */
@@ -128,8 +129,10 @@ const reportLayer = HttpRouter.add(
     const value = report.value;
     const recorded =
       "humanInput" in value
-        ? yield* leases.humanInput(threadId, value.controlId)
-        : yield* leases.setTarget(threadId, value.controlId, value);
+        ? yield* leases.humanInput(threadId, value.controlId, value.humanInput.at)
+        : "agentInput" in value
+          ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
+          : yield* leases.setTarget(threadId, value.controlId, value);
     return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
   }),
 );

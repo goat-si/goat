@@ -48,6 +48,7 @@ const fixture = Effect.fnUntraced(function* () {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     humanInput: () => Effect.die("unused"),
+    agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
     turnEnded: () => Effect.die("unused"),
     settle: Effect.die("unused"),

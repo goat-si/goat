@@ -1,5 +1,5 @@
 /**
- * When the agent's own input was on its way, so a person's input can be told apart from it
+ * When agents' own input was on its way, so a person's input can be told apart from it
  * (#1235). The macOS helper sees only that the system had a keyboard or pointer event some time
  * ago; the driver posts its events through the same system state, so an event inside one of the
  * agent's input calls, or just after it, is the agent's.
@@ -44,6 +44,12 @@ const BEFORE_MS = 50;
 const AFTER_MS = 500;
 /** Finished calls older than this can no longer cover an event the helper reports. */
 const KEEP_MS = 10_000;
+/**
+ * An open call covers events for at most this long. A call that never answers, or whose end
+ * report was lost, must not hide a person's input for the rest of the control; a script longer
+ * than this pauses the agents for its own input, which errs toward the person.
+ */
+const OPEN_MS = 60_000;
 
 export function makeAgentInputLog() {
   const open = new Map<string, number>();
@@ -53,21 +59,28 @@ export function makeAgentInputLog() {
   };
   return {
     started: (key: string, now: number) => void open.set(key, now),
-    /** A call answered, cancelled or cut off; unknown keys are ignored. */
+    /** A call answered, cancelled or cut off; true when it was open. */
     ended: (key: string, now: number) => {
       const start = open.get(key);
-      if (start === undefined) return;
+      if (start === undefined) return false;
       open.delete(key);
       finish(start, now);
+      return true;
     },
-    /** Every open call ends, as when the driver child is stopped. */
+    /** Every open call ends, as when the driver child is stopped; returns their keys. */
     endAll: (now: number) => {
+      const keys = [...open.keys()];
       for (const start of open.values()) finish(start, now);
       open.clear();
+      return keys;
     },
-    /** Whether an event at `at` falls inside the agent's own input. */
-    isAgents: (at: number) =>
-      [...open.values()].some((start) => at >= start - BEFORE_MS) ||
-      done.some((call) => at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS),
+    /**
+     * Whether an event at `at` falls inside an agent's input. `live` says which open calls still
+     * count, so a call of a control that has ended covers nothing.
+     */
+    isAgents: (at: number, live: (key: string) => boolean = () => true) =>
+      [...open].some(
+        ([key, start]) => live(key) && at >= start - BEFORE_MS && at <= start + OPEN_MS,
+      ) || done.some((call) => at >= call.start - BEFORE_MS && at <= call.end + AFTER_MS),
   };
 }

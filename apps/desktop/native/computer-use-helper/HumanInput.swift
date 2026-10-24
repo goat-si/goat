@@ -4,7 +4,7 @@ import CoreGraphics
 import Foundation
 
 /// Polls how long ago the system last had each kind of keyboard and pointer event, and reports
-/// every new one with its age: the kind only, never a key, a position or a window. The driver
+/// every new one with when it happened: the kind only, never a key, a position or a window. The driver
 /// posts the agent's input through the same system state, so this reports the agent's events
 /// too; the lease proxy knows when its input calls ran and keeps only the rest
 /// (apps/server/src/cua/agentInputLog.ts). Reading these counters needs no Input Monitoring
@@ -21,11 +21,12 @@ final class InputActivity {
     ),
   ]
   private let queue = DispatchQueue(label: "si.goat.computer-use.input")
-  private let report: (String, Int) -> Void
+  private let report: (String, Double) -> Void
   private var latest: [String: Double] = [:]
   private var timer: DispatchSourceTimer?
 
-  init(report: @escaping (_ source: String, _ ageMs: Int) -> Void) {
+  /// `at` is on `InputActivity.now()`'s clock, so a later writer can say how long ago it was.
+  init(report: @escaping (_ source: String, _ at: Double) -> Void) {
     self.report = report
   }
 
@@ -36,7 +37,7 @@ final class InputActivity {
   }
 
   /// Seconds on a clock that never steps back with the wall clock.
-  private static func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
+  static func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
   func start() {
     queue.async { [self] in
@@ -60,7 +61,7 @@ final class InputActivity {
       // A millisecond of slack: the same event read twice must not count as a new one.
       guard at > (latest[kind.source] ?? -.infinity) + 0.001 else { continue }
       latest[kind.source] = at
-      report(kind.source, Int((age * 1000).rounded()))
+      report(kind.source, at)
     }
   }
 }

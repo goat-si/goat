@@ -5,7 +5,7 @@
  *
  * @module ComputerUseLeaseProxyCli
  */
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
@@ -128,10 +128,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
             windowId: target.windowId,
           }),
         ),
-      onHumanInput: (source) =>
-        Effect.promise(() =>
-          report(url, authorization, { controlId, humanInput: { source } }),
-        ).pipe(Effect.asVoid),
+      onHumanInput: (humanInput) =>
+        Effect.promise(() => report(url, authorization, { controlId, humanInput })),
+      onAgentInput: (agentInput) =>
+        Effect.promise(() => report(url, authorization, { controlId, agentInput })),
       leaseUpdates: leaseUpdateLines(
         Stream.fromAsyncIterable(
           (async function* () {
@@ -162,12 +162,21 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         Effect.flatMap((child) =>
           Effect.gen(function* () {
             // The helper's input reports; only the latest few matter once one is a person's.
-            const seen = yield* Queue.sliding<HelperHumanInput>(16);
+            const seen = yield* Queue.sliding<{
+              readonly source: HelperHumanInput["source"];
+              readonly at: number;
+            }>(16);
             const channel = child.stdio[3];
             return {
               ...(drawsOverlay && channel instanceof NodeStream.Duplex
                 ? {
-                    overlay: overlayChannel(channel, (input) => Queue.offerUnsafe(seen, input)),
+                    // Dated the moment the line is read, on the clock the server compares with.
+                    overlay: overlayChannel(channel, (input) =>
+                      Queue.offerUnsafe(seen, {
+                        source: input.source,
+                        at: Date.now() - input.ageMs,
+                      }),
+                    ),
                     humanInput: Stream.fromQueue(seen),
                   }
                 : {}),

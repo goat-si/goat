@@ -7,6 +7,7 @@ import {
   computerUseRefusalReason,
 } from "@goat/contracts";
 import type * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -52,8 +53,12 @@ export const harness = Effect.fn(function* (
     readonly placementGate?: Deferred.Deferred<void>;
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
-    /** Gives each driver a helper input feed (`hid`); reports to the server land in `people`. */
+    /**
+     * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
+     * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
+     */
     readonly humanInput?: boolean;
+    readonly acceptHuman?: () => boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -67,7 +72,8 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
-  const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; ageMs: number }>> = [];
+  const agentCalls = yield* Queue.unbounded<string>();
+  const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
@@ -81,8 +87,10 @@ export const harness = Effect.fn(function* (
         }),
     ...(options.humanInput
       ? {
-          onHumanInput: (source: ComputerUseHumanInputSource) =>
-            Queue.offer(people, source).pipe(Effect.asVoid),
+          onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
+            Queue.offer(people, input.source).pipe(Effect.as(options.acceptHuman?.() ?? true)),
+          onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
+            Queue.offer(agentCalls, report.state + " " + report.call),
         }
       : {}),
     leaseUpdates: Stream.fromQueue(updates),
@@ -94,7 +102,7 @@ export const harness = Effect.fn(function* (
       };
       drivers.push(driver);
       yield* Queue.offer(started, driver);
-      const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; ageMs: number }>();
+      const hid = yield* Queue.unbounded<{ source: ComputerUseHumanInputSource; at: number }>();
       hidFeeds.push(hid);
       return {
         ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
@@ -173,10 +181,15 @@ export const harness = Effect.fn(function* (
     hid: (source: ComputerUseHumanInputSource, ageMs = 0) =>
       Effect.suspend(() => {
         const feed = hidFeeds.at(-1);
-        return feed === undefined ? Effect.void : Queue.offer(feed, { source, ageMs });
+        if (feed === undefined) return Effect.void;
+        return Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => Queue.offer(feed, { source, at: now - ageMs })),
+        );
       }),
     /** The next person's input the proxy reported to the server. */
     person: Queue.take(people),
+    /** The next input call start or end the proxy told the server about, as "start 1". */
+    agentCall: Queue.take(agentCalls),
     revoked,
     log,
     proxy,
