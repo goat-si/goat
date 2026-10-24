@@ -23,7 +23,6 @@ export const COMPUTER_USE_ACTIONS = [
   "rightClick",
   "typeText",
   "pressKey",
-  "hotkey",
   "scroll",
   "drag",
   "setValue",
@@ -119,6 +118,8 @@ export type ComputerUseElement = typeof ComputerUseElement.Type;
 export const ComputerUseFullReason = Schema.Literals([
   "first",
   "unknown_since",
+  /** The read used another query or limits, so what it lacks says nothing about the window. */
+  "scope_changed",
   "reordered",
   "incomplete",
   "window_changed",
@@ -133,8 +134,9 @@ const ObservationFields = {
   complete: Schema.Boolean,
   focused: Schema.optionalKey(ComputerUseElementRef),
   /**
-   * A secure field has focus (D6). The helper withholds the screenshot and values, and refuses
-   * actions with privateMode until it loses focus.
+   * A secure field has focus (D6). Nothing of the window leaves: the observation is full and
+   * incomplete with no elements, no focused ref and no screenshot (labels can repeat a field's
+   * value), and every ref, point and action is refused with privateMode until it loses focus.
    */
   privateMode: Schema.Boolean,
   /** The image travels separately as MCP content; absent when withheld or not requested. */
@@ -157,6 +159,11 @@ export const ComputerUseObservation = Schema.Union([
     since: TrimmedNonEmptyString,
     added: Schema.Array(ComputerUseElement),
     changed: Schema.Array(ComputerUseElement),
+    /**
+     * Refs this read did not see. Accessibility reads can miss nodes, so this is "not seen",
+     * not proof of deletion; the refs are stale either way, and an element that returns gets a
+     * new ref.
+     */
     removed: Schema.Array(ComputerUseElementRef),
   }),
 ]);
@@ -189,7 +196,38 @@ const ActionFields = {
   delivery: ComputerUseDelivery,
 };
 
+/**
+ * Modifier keys by role, not by label: option is Alt on Windows and Linux, and command is the
+ * Windows key on Windows and Super on Linux. Each helper maps them to its platform's keys.
+ */
 const Modifiers = Schema.Array(Schema.Literals(["shift", "control", "option", "command"]));
+
+/**
+ * One key by what it means, not by keycode: a single printable character as typed without
+ * modifiers ("a", "7", "/"), or a named key. Helpers translate it for the active layout.
+ */
+export const ComputerUseKey = Schema.Union([
+  // One code point that is not a control, format, surrogate, private-use or unassigned one.
+  Schema.String.check(Schema.isPattern(/^[^\p{C}]$/u)),
+  Schema.Literals([
+    "enter",
+    "tab",
+    "escape",
+    "backspace",
+    "delete",
+    "space",
+    "arrowUp",
+    "arrowDown",
+    "arrowLeft",
+    "arrowRight",
+    "home",
+    "end",
+    "pageUp",
+    "pageDown",
+    ...Array.from({ length: 20 }, (_, index) => `f${index + 1}` as const),
+  ]),
+]);
+export type ComputerUseKey = typeof ComputerUseKey.Type;
 
 export const ComputerUseActionRequest = Schema.Union([
   Schema.Struct({
@@ -207,20 +245,17 @@ export const ComputerUseActionRequest = Schema.Union([
   Schema.Struct({
     ...ActionFields,
     action: Schema.Literal("pressKey"),
-    key: TrimmedNonEmptyString,
+    /** A key or a chord: press the modifiers, press and release key, release the modifiers. */
+    key: ComputerUseKey,
     modifiers: Schema.optionalKey(Modifiers),
-  }),
-  Schema.Struct({
-    ...ActionFields,
-    action: Schema.Literal("hotkey"),
-    keys: Schema.Array(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     ...ActionFields,
     action: Schema.Literal("scroll"),
     at: ComputerUseActionPoint,
     direction: Schema.Literals(["up", "down", "left", "right"]),
-    amount: Schema.Int,
+    /** In lines, the unit one mouse-wheel notch scrolls on each platform. */
+    amount: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 })),
   }),
   Schema.Struct({
     ...ActionFields,
@@ -291,31 +326,34 @@ export const ComputerUseRefusal = Schema.Struct({
 });
 export type ComputerUseRefusal = typeof ComputerUseRefusal.Type;
 
+const SentFields = {
+  delivery: ComputerUseDelivery,
+  detail: Schema.optionalKey(Schema.String),
+  /** What changed, as a diff of the observation the action named. */
+  observation: Schema.optionalKey(ComputerUseObservation),
+};
+
 /**
- * What happened to input the helper did send. not_dispatched: nothing reached the target.
- * dispatched_unknown: input was sent and its effect is unknown. verified: the helper saw the effect.
+ * What happened to input the helper sent. dispatch says whether the helper saw the effect
+ * (verified) or only knows input left (dispatched_unknown). Only pairs that make sense decode:
+ * confirmed and suspected_noop were seen, unverifiable was not, partial may be either. Input
+ * that never left is a refusal, never an outcome.
  */
-export const ComputerUseDispatch = Schema.Literals([
-  "not_dispatched",
-  "dispatched_unknown",
-  "verified",
-]);
-
-export const ComputerUseActionOutcome = Schema.Literals([
-  "confirmed",
-  "partial",
-  "unverifiable",
-  "suspected_noop",
-]);
-
 export const ComputerUseActionResult = Schema.Union([
   Schema.Struct({
-    outcome: ComputerUseActionOutcome,
-    dispatch: ComputerUseDispatch,
-    delivery: ComputerUseDelivery,
-    detail: Schema.optionalKey(Schema.String),
-    /** What changed, as a diff of the observation the action named. */
-    observation: Schema.optionalKey(ComputerUseObservation),
+    ...SentFields,
+    outcome: Schema.Literals(["confirmed", "suspected_noop"]),
+    dispatch: Schema.Literal("verified"),
+  }),
+  Schema.Struct({
+    ...SentFields,
+    outcome: Schema.Literal("partial"),
+    dispatch: Schema.Literals(["dispatched_unknown", "verified"]),
+  }),
+  Schema.Struct({
+    ...SentFields,
+    outcome: Schema.Literal("unverifiable"),
+    dispatch: Schema.Literal("dispatched_unknown"),
   }),
   ComputerUseRefusal,
 ]);
@@ -389,7 +427,10 @@ export const ComputerUseHelloReply = Schema.Union([
     serverApiVersion: Schema.Int,
     binding: ComputerUseHelperBinding,
     capabilities: ComputerUseCapabilities,
-    maxFrameBytes: Schema.Int,
+    /** At most COMPUTER_USE_MAX_FRAME_BYTES; both sides then enforce the smaller limit. */
+    maxFrameBytes: Schema.Int.check(
+      Schema.isBetween({ minimum: 64 * 1024, maximum: COMPUTER_USE_MAX_FRAME_BYTES }),
+    ),
   }),
   ComputerUseRefusal,
 ]);
@@ -400,7 +441,7 @@ export const ComputerUseRequestFrame = Schema.Struct({
   generation: TrimmedNonEmptyString,
   method: ComputerUseMethod,
   /** Milliseconds the helper may spend; past it the client stops waiting. */
-  deadlineMs: Schema.Int,
+  deadlineMs: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 10 * 60 * 1000 })),
   params: Schema.Unknown,
 });
 export type ComputerUseRequestFrame = typeof ComputerUseRequestFrame.Type;
@@ -420,10 +461,13 @@ export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
 export function admitComputerUseReply(input: {
   readonly reply: ComputerUseReplyFrame;
   readonly frameBytes: number;
+  /** The limit the hello agreed on, never above COMPUTER_USE_MAX_FRAME_BYTES. */
+  readonly maxFrameBytes: number;
   readonly generation: string;
   readonly pending: ReadonlySet<string>;
 }): "deliver" | "wrongGeneration" | "notPending" | "frameTooLarge" {
-  if (input.frameBytes > COMPUTER_USE_MAX_FRAME_BYTES) return "frameTooLarge";
+  if (input.frameBytes > Math.min(input.maxFrameBytes, COMPUTER_USE_MAX_FRAME_BYTES))
+    return "frameTooLarge";
   if (input.reply.generation !== input.generation) return "wrongGeneration";
   return input.pending.has(input.reply.id) ? "deliver" : "notPending";
 }

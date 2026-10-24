@@ -33,6 +33,7 @@ import * as Stream from "effect/Stream";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
+  classifyHelperBundle,
   helperBundle,
   makeHelperHost,
   probeHelperGrants,
@@ -175,26 +176,20 @@ const dependencies: DesktopCuaDriverDependencies = {
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
   helperBundlePath: async ({ isPackaged, resourcesPath, platform }) => {
-    const { access } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const configured = isPackaged ? undefined : process.env.GOAT_CUA_HELPER_PATH?.trim();
     if (!isPackaged && !configured) return { kind: "absent" };
-    const candidate =
-      configured ||
-      (platform === "win32"
-        ? join(resourcesPath, "computer-use-helper")
-        : join(resourcesPath, "..", "Helpers", `${COMPUTER_USE_HELPER_NAME}.app`));
-    return access(candidate).then(
-      () => ({ kind: "found", path: candidate }) as const,
-      (error: NodeJS.ErrnoException) =>
-        // Only a packaged build without the helper falls back; a set dev path must exist.
-        error.code === "ENOENT" && !configured
-          ? ({ kind: "absent" } as const)
-          : ({
-              kind: "unusable",
-              message: `${COMPUTER_USE_HELPER_NAME} at ${candidate} cannot be used (${error.code ?? "unknown error"}).`,
-            } as const),
-    );
+    // A set dev path must exist; only a packaged build with nothing at the helper's place falls back.
+    return platform === "win32"
+      ? classifyHelperBundle(
+          configured || join(resourcesPath, "computer-use-helper"),
+          configured !== undefined,
+          (path) => windowsHelperBundle(path, "").executable,
+        )
+      : classifyHelperBundle(
+          configured || join(resourcesPath, "..", "Helpers", COMPUTER_USE_HELPER_NAME + ".app"),
+          configured !== undefined,
+        );
   },
   helperHost: ({ platform, ...options }) =>
     makeHelperHost({
