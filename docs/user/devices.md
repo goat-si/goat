@@ -22,9 +22,9 @@ Choose **Float device over chat** in the toolbar to keep watching and tapping th
 device in a small window while the right panel shows something else; drag the
 window by its handle, resize it from any edge, and use **Open in right panel**
 to bring it back.
-Turn off the device hub in **Settings → Integrations → Devices** to stop the
-helper processes; simulators and emulators keep running until you power them
-off.
+Turn off **Simulators and emulators** in **Settings → Integrations → Devices**
+to stop the device hub and its helper processes; simulators and emulators keep
+running until you power them off.
 
 Simulators run on the machine that hosts the environment server. iOS needs
 macOS with Xcode. Android needs the SDK Platform-Tools, Android Emulator,
