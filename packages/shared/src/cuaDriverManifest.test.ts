@@ -10,6 +10,8 @@ import {
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
   cuaDriverCapabilityManifest,
+  cuaDriverManifestApplications,
+  missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
   prepareCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
@@ -134,6 +136,34 @@ describe("cuaDriverManifest", () => {
     expect(cuaDriverCapabilityManifest({ applications: [] })).not.toMatch(
       /files|browser|processes/,
     );
+  });
+
+  it("reads JSON-quoted app ids without confusing tools or escaped characters", () => {
+    const applications = ['com.example."quoted"', "C:\\Apps\\notes.exe", "com.example.\nline"];
+    expect(cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications }))).toEqual(
+      applications,
+    );
+    expect(
+      cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications: [] })),
+    ).toEqual([]);
+    expect(() => cuaDriverManifestApplications("    - bundle_id: invalid")).toThrow();
+  });
+
+  it("finds missing approvals using the same bundle and Windows path identities as admission", () => {
+    const listed = ["com.apple.TextEdit", "C:\\Apps\\notes.exe", "\\\\server\\share\\app.exe"];
+    expect(
+      missingCuaDriverApplications(
+        [
+          "COM.APPLE.TEXTEDIT",
+          "\\\\?\\C:\\Apps\\notes.exe",
+          "c:/apps//NOTES.exe",
+          "\\\\?\\UNC\\server\\share\\APP.exe",
+          "com.example.new",
+          "C:\\Apps\\new.exe",
+        ],
+        listed,
+      ),
+    ).toEqual(["com.example.new", "C:\\Apps\\new.exe"]);
   });
 
   it("recognizes the driver's startup refusal through wrapped causes", () => {
