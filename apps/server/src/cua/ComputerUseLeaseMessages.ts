@@ -39,13 +39,13 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
     "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",
 };
 
-export const PAUSE_STATE: Readonly<Record<ComputerUsePauseReason, string>> = {
+const PAUSE_STATE: Readonly<Record<ComputerUsePauseReason, string>> = {
   human_input: "A person is using this computer, so computer use is paused",
   takeover: "A person took over the screen, so computer use is paused",
   private: "A password or other secret field has focus on this computer, so computer use is paused",
 };
 
-export const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
+const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
   human_input:
     "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
   takeover:
@@ -66,7 +66,7 @@ export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = 
  * Tools that only read. One the driver already had when a pause or Stop cut it off changed
  * nothing on the screen; any other tool, a script or batch included, may have acted.
  */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "check_permissions",
   "health_report",
   "get_guide",

@@ -28,7 +28,6 @@ import {
   type ComputerUseOverlayCommand,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
-  type ComputerUseRefusalDetail,
   type ComputerUseCallAdmission,
   type ComputerUseCallReservation,
   type ComputerUseForegroundGrant,
