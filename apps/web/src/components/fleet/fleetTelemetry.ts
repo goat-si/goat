@@ -184,6 +184,12 @@ export function fleetHostRows(input: {
   readonly sshAliases: ReadonlyMap<EnvironmentId, ReadonlyArray<string>>;
   readonly reports: ReadonlyMap<EnvironmentId, ReadonlyArray<HostStatusEntry>>;
   readonly primaryEnvironmentId: EnvironmentId | null;
+  /**
+   * Servers that read the primary's SSH config, such as the headless server SSH launches keep
+   * beside the desktop's, so their entries for this client's aliases are machines already
+   * listed too. Defaults to the primary alone.
+   */
+  readonly sharedSshConfigEnvironmentIds?: ReadonlySet<EnvironmentId>;
 }): ReadonlyArray<FleetHostRow> {
   const matched = matchFleetHostEntries(input);
   const sourceOf = new Map<HostStatusEntry, string>();
@@ -191,6 +197,10 @@ export function fleetHostRows(input: {
     for (const entry of hosts) sourceOf.set(entry, hostSourceKey(environmentId, entry.host));
   }
   const claimed = new Set<string>();
+  // An alias the graph resolved to a machine is that machine, under whichever server reported it.
+  for (const machine of input.machines) {
+    for (const route of machine.reportedAliases) claimed.add(hostSourceKey(route.via, route.alias));
+  }
   const rows: FleetHostRow[] = input.machines.map((machine) => {
     const entry = matched.get(machine.id) ?? null;
     const sourceKey = entry === null ? null : (sourceOf.get(entry) ?? null);
@@ -205,12 +215,15 @@ export function fleetHostRows(input: {
     };
   });
   const ownAliases = new Set([...input.sshAliases.values()].flat());
+  const readsClientAliases = (environmentId: EnvironmentId) =>
+    environmentId === input.primaryEnvironmentId ||
+    input.sharedSshConfigEnvironmentIds?.has(environmentId) === true;
   for (const [environmentId, hosts] of input.reports) {
     for (const entry of hosts) {
       if (entry.host === null) continue;
       const key = hostSourceKey(environmentId, entry.host);
       if (claimed.has(key)) continue;
-      if (environmentId === input.primaryEnvironmentId && ownAliases.has(entry.host)) continue;
+      if (readsClientAliases(environmentId) && ownAliases.has(entry.host)) continue;
       claimed.add(key);
       rows.push({
         key,
