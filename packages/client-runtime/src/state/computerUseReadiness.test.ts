@@ -6,6 +6,7 @@ import {
   type CuaHostStatus,
   type ServerConfig,
 } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -104,8 +105,11 @@ const fixture = Effect.fn("ComputerUseReadiness.test.fixture")(function* (unsupp
     new Map(),
   );
   const networkStatus = yield* SubscriptionRef.make<NetworkStatus>("online");
+  // The atoms run on this test's clock, so adjusting it reaches any retry they schedule.
+  const clock = yield* Clock.Clock;
   const runtime = Atom.runtime(
-    Layer.merge(
+    Layer.mergeAll(
+      Layer.succeed(Clock.Clock, clock),
       Layer.mock(EnvironmentRegistry.EnvironmentRegistry)({
         entries,
         networkStatus,
