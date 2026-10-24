@@ -41,6 +41,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
 import * as FleetPlacement from "../fleet/resources/Placement.ts";
@@ -184,6 +185,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(OpenCodexSync.OpenCodexSync)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),
   Layer.mock(FleetPlacement.Placement)({}),

@@ -2,9 +2,10 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, OpenCodexUpdateStatus } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { hostStatusAtom } from "~/state/hostStatus";
+import { OpenCodexSyncButton } from "../opencodex/OpenCodexSyncDialog";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -110,17 +111,39 @@ function DialogWithOpenCodex({
             canCheck: true,
           },
   });
-  return <UpdateDialogView app={everything.appTab} runtimes={runtimes} onConfirm={onConfirm} />;
+  return (
+    <UpdateDialogView
+      app={everything.appTab}
+      runtimes={runtimes}
+      onConfirm={onConfirm}
+      runtimesFooter={
+        everything.localEnvironmentId === null ? null : (
+          <div className="mt-2 flex items-center gap-3 border-t pt-2">
+            <p className="min-w-0 flex-1 text-muted-foreground text-xs">
+              Load OpenCodex's current models into Codex here and on each Child.
+            </p>
+            <OpenCodexSyncButton
+              environmentId={everything.localEnvironmentId}
+              homeLabel="This Mac"
+            />
+          </div>
+        )
+      }
+    />
+  );
 }
 
 export function UpdateDialogView({
   app,
   runtimes,
   onConfirm,
+  runtimesFooter = null,
 }: {
   readonly app: UpdateDialogTab;
   readonly runtimes: UpdateDialogTab;
   readonly onConfirm: (selection: UpdateDialogSelection) => void;
+  /** Shown under the Runtimes rows: the Sync OpenCodex action beside the OpenCodex update. */
+  readonly runtimesFooter?: ReactNode;
 }) {
   const tabs: Record<UpdateTab, UpdateDialogTab> = { app, runtimes };
   const [tab, setTab] = useState<UpdateTab>(() =>
@@ -164,6 +187,7 @@ export function UpdateDialogView({
               unchecked={unchecked[name]}
               onToggle={(id, checked) => toggle(name, id, checked)}
             />
+            {name === "runtimes" ? runtimesFooter : null}
           </div>
         </TabsPanel>
       ))}
