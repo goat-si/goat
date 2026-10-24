@@ -184,6 +184,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
 import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
 import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
@@ -892,6 +893,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),

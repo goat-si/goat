@@ -1,8 +1,8 @@
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration0063 from "../persistence/Migrations/070_RemoteDispatches.ts";
-import Migration0065 from "../persistence/Migrations/072_RemoteDispatchQuestions.ts";
-import Migration0101 from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
+import Migration0063 from "../persistence/Migrations/071_RemoteDispatches.ts";
+import Migration0065 from "../persistence/Migrations/073_RemoteDispatchQuestions.ts";
+import Migration0101 from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { framePendingReports } from "../remoteReports/reportFrame.ts";
 import { assert, it } from "@effect/vitest";

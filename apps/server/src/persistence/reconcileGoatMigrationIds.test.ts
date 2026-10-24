@@ -10,8 +10,9 @@ import { migrationEntries, migrationManifest, runMigrations } from "./Migrations
 // GOAT builds record GOAT's own migrations right after the last upstream one they knew:
 // at 61 before the sync that added PullRequestReviewGuides, at 62 before the one that
 // added ThreadFailureLookupIndex, at 63 before the one that added DropUnusedV1Projections, at 64
-// before the one that added CanonicalizeThreadPullRequestLinks, and at 65 before the one that
-// added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe.
+// before the one that added CanonicalizeThreadPullRequestLinks, at 65 before the one that
+// added CodexUsageNativeTurnIndex, RepairClientSettlementTimestamps and WebhookDedupe, and at 68
+// before the one that added ShellStopRequestIndex.
 const seedGoatLedger = (names: ReadonlyArray<string>, firstGoatId = 61) =>
   Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: firstGoatId - 1 });
@@ -55,34 +56,35 @@ const skippedUpstreamMigrations = [
   [65, "CodexUsageNativeTurnIndex"],
   [66, "RepairClientSettlementTimestamps"],
   [67, "WebhookDedupe"],
+  [68, "ShellStopRequestIndex"],
 ] as const;
 const laterGoatMigrations = [
-  [76, "Memory"],
-  [77, "MemoryHubSync"],
-  [78, "MemorySearchCounters"],
-  [79, "MemoryTaskGrantCeiling"],
-  [80, "MemoryImportLineage"],
-  [81, "MemoryCheckpointAccounting"],
-  [82, "MemoryReportLifecycle"],
-  [83, "MemoryUsageCounters"],
-  [84, "MemoryRevertResults"],
-  [85, "HandoffLookupIndex"],
-  [86, "MemoryLastReadySpace"],
-  [87, "MemoryHubAdministered"],
-  [88, "MemoryCheckpointLifecycle"],
-  [89, "FleetGoals"],
-  [90, "FleetHealth"],
-  [91, "ThreadRunObservedChecks"],
-  [92, "RemoteDispatchObservation"],
-  [93, "MemoryRevisionCheckpointSize"],
-  [94, "HubNodes"],
-  [95, "MemorySummaryWorkThreadIndex"],
-  [96, "ThreadHistoryArchives"],
-  [97, "PermissionProfiles"],
-  [98, "DecisionInbox"],
-  [99, "HumanStepRecords"],
-  [100, "McpRequestReservations"],
-  [101, "RemoteReportInboxRunId"],
+  [77, "Memory"],
+  [78, "MemoryHubSync"],
+  [79, "MemorySearchCounters"],
+  [80, "MemoryTaskGrantCeiling"],
+  [81, "MemoryImportLineage"],
+  [82, "MemoryCheckpointAccounting"],
+  [83, "MemoryReportLifecycle"],
+  [84, "MemoryUsageCounters"],
+  [85, "MemoryRevertResults"],
+  [86, "HandoffLookupIndex"],
+  [87, "MemoryLastReadySpace"],
+  [88, "MemoryHubAdministered"],
+  [89, "MemoryCheckpointLifecycle"],
+  [90, "FleetGoals"],
+  [91, "FleetHealth"],
+  [92, "ThreadRunObservedChecks"],
+  [93, "RemoteDispatchObservation"],
+  [94, "MemoryRevisionCheckpointSize"],
+  [95, "HubNodes"],
+  [96, "MemorySummaryWorkThreadIndex"],
+  [97, "ThreadHistoryArchives"],
+  [98, "PermissionProfiles"],
+  [99, "DecisionInbox"],
+  [100, "HumanStepRecords"],
+  [101, "McpRequestReservations"],
+  [102, "RemoteReportInboxRunId"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -97,6 +99,7 @@ const preMemoryGoatNames = [
 
 describe("GOAT migration ids", () => {
   it.effect.each([
+    ["ledger before ShellStopRequestIndex", 68, goatNames, skippedUpstreamMigrations.slice(7)],
     ["ledger before WebhookDedupe", 65, goatNames, skippedUpstreamMigrations.slice(4)],
     [
       "ledger before CanonicalizeThreadPullRequestLinks",
@@ -117,11 +120,11 @@ describe("GOAT migration ids", () => {
       ["ServerActivityIndexes", "RemoteReports", "RemoteDispatches"],
       [
         ...skippedUpstreamMigrations,
-        [71, "ChannelLedger"],
-        [72, "RemoteDispatchQuestions"],
-        [73, "ThreadRunResults"],
-        [74, "RemoteReportRelay"],
-        [75, "ProjectionTurnItemRequestIndex"],
+        [72, "ChannelLedger"],
+        [73, "RemoteDispatchQuestions"],
+        [74, "ThreadRunResults"],
+        [75, "RemoteReportRelay"],
+        [76, "ProjectionTurnItemRequestIndex"],
         ...laterGoatMigrations,
       ],
     ],
@@ -149,13 +152,13 @@ describe("GOAT migration ids", () => {
 describe("unreleased memory DB", () => {
   it.effect("rejects an old memory ledger before moving any GOAT ids", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toMigrationInclusive: 76 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`UPDATE effect_sql_migrations SET migration_id = 174 WHERE name = 'RemoteReportRelay'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (75 + 100, 'Memory')`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (76 + 100, 'Memory')`;
       // The old Memory id may collide with dev's index, so model the actual pre-sync ledger.
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`UPDATE effect_sql_migrations SET migration_id = 75 WHERE name = 'Memory'`;
+      yield* sql`UPDATE effect_sql_migrations SET migration_id = 76 WHERE name = 'Memory'`;
       const before = yield* history;
       const result = yield* Effect.flip(runMigrations());
       assert.strictEqual(result._tag, "MigrationError");
@@ -168,10 +171,10 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects old memory when other GOAT ids already match", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toMigrationInclusive: 76 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`DELETE FROM effect_sql_migrations WHERE name = 'ProjectionTurnItemRequestIndex'`;
-      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (75, 'Memory')`;
+      yield* sql`INSERT INTO effect_sql_migrations (migration_id, name) VALUES (76, 'Memory')`;
       const before = yield* history;
       const result = yield* Effect.flip(reconcileGoatMigrationIds(migrationEntries));
       if (result._tag !== "MigrationError") return yield* result;
@@ -200,7 +203,7 @@ describe("unreleased memory DB", () => {
 
   it.effect("rejects unrecorded memory tables in an ordinary dev ledger", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toMigrationInclusive: 76 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE memory_payloads (body TEXT)`;
       const before = yield* history;
@@ -213,7 +216,7 @@ describe("unreleased memory DB", () => {
 
   it.effect("upgrades an ordinary dev DB without memory and restarts normally", () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 75 });
+      yield* runMigrations({ toMigrationInclusive: 76 });
       const sql = yield* SqlClient.SqlClient;
       yield* sql`CREATE TABLE unrelated_state (value TEXT)`;
       yield* sql`INSERT INTO unrelated_state VALUES ('keep')`;
@@ -281,15 +284,15 @@ it.effect("restarts the current WP5 registry without rewriting lineage or accoun
     assert.deepStrictEqual(
       migrationManifest.filter(([id]) => id >= 80),
       [
-        [80, "MemoryImportLineage"],
-        [81, "MemoryCheckpointAccounting"],
-        [82, "MemoryReportLifecycle"],
-        [83, "MemoryUsageCounters"],
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
+        [81, "MemoryImportLineage"],
+        [82, "MemoryCheckpointAccounting"],
+        [83, "MemoryReportLifecycle"],
+        [84, "MemoryUsageCounters"],
+        [85, "MemoryRevertResults"],
+        [86, "HandoffLookupIndex"],
+        [87, "MemoryLastReadySpace"],
+        [88, "MemoryHubAdministered"],
+        [89, "MemoryCheckpointLifecycle"],
         ...migrationManifest.filter(([id]) => id > 88),
       ],
     );

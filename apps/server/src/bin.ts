@@ -1,9 +1,9 @@
 /**
  * Every ACP agent spawns `goat acp-mcp-bridge` while opening its session, and terminal-fallback
  * agents run `goat call` (or its alias `goat acp-mcp-call`) per tool call, so their startup sits
- * on first-message latency. They, `goat describe` and the registry's `goat <resource> <verb>`
- * commands dispatch here before the full CLI module graph (seconds of evaluation) loads;
- * everything else defers to the real CLI in ./binCli.ts.
+ * on first-message latency. They, `goat describe`, the registry's `goat <resource> <verb>`
+ * commands and Codex's managed-token helper dispatch here before the full CLI module graph
+ * (seconds of evaluation) loads; everything else defers to the real CLI in ./binCli.ts.
  */
 import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
@@ -23,7 +23,10 @@ if (
   // Guard sockets before either dispatch path can load outbound-capable modules.
   const { ignoreMacosTypeOfServiceEinval } = await import("./outboundHttp.ts");
   ignoreMacosTypeOfServiceEinval();
-  if (command === "acp-mcp-bridge") {
+  if (command === "__managed-chatgpt-token") {
+    const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
+    await runManagedChatGptTokenCli(process.argv.slice(3));
+  } else if (command === "acp-mcp-bridge") {
     const { runAcpMcpBridgeFastPath } = await import("./mcp/AcpMcpStdioBridge.ts");
     await runAcpMcpBridgeFastPath();
   } else if (command === "cua-lease-proxy") {

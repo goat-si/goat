@@ -13,8 +13,8 @@ it.effect("upgrades schema 61 and maintains indexed background roster flags", ()
     ('active-roster', 'claude', 'idle', '2026-10-11', '{"pendingBackgroundTasks":[{"taskId":"background","kind":"subagent"}]}'),
     ('empty-roster', 'claude', 'idle', '2026-10-11', '{}'),
     ('invalid-roster', 'claude', 'idle', '2026-10-11', 'invalid')`;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 68 }), [
-      [68, "ServerActivityIndexes"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 69 }), [
+      [69, "ServerActivityIndexes"],
     ]);
     const read = () => sql<{ provider_thread_id: string; has_pending_background_work: number }>`
     SELECT provider_thread_id, has_pending_background_work FROM orchestration_v2_projection_provider_threads ORDER BY provider_thread_id`;

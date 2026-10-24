@@ -3,7 +3,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./087_MemoryHubAdministered.ts";
+import migration from "./088_MemoryHubAdministered.ts";
 
 it.effect.each(["empty", "admin", "guard", "member", "last-ready"] as const)(
   "082 backfills durable administration from %s",
@@ -30,23 +30,23 @@ it.effect.each(["empty", "admin", "guard", "member", "last-ready"] as const)(
 it.effect("082 participates in the migration ledger and preserves its flag on rerun", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 86 });
+    yield* runMigrations({ toMigrationInclusive: 87 });
     assert.deepStrictEqual(yield* runMigrations(), [
-      [87, "MemoryHubAdministered"],
-      [88, "MemoryCheckpointLifecycle"],
-      [89, "FleetGoals"],
-      [90, "FleetHealth"],
-      [91, "ThreadRunObservedChecks"],
-      [92, "RemoteDispatchObservation"],
-      [93, "MemoryRevisionCheckpointSize"],
-      [94, "HubNodes"],
-      [95, "MemorySummaryWorkThreadIndex"],
-      [96, "ThreadHistoryArchives"],
-      [97, "PermissionProfiles"],
-      [98, "DecisionInbox"],
-      [99, "HumanStepRecords"],
-      [100, "McpRequestReservations"],
-      [101, "RemoteReportInboxRunId"],
+      [88, "MemoryHubAdministered"],
+      [89, "MemoryCheckpointLifecycle"],
+      [90, "FleetGoals"],
+      [91, "FleetHealth"],
+      [92, "ThreadRunObservedChecks"],
+      [93, "RemoteDispatchObservation"],
+      [94, "MemoryRevisionCheckpointSize"],
+      [95, "HubNodes"],
+      [96, "MemorySummaryWorkThreadIndex"],
+      [97, "ThreadHistoryArchives"],
+      [98, "PermissionProfiles"],
+      [99, "DecisionInbox"],
+      [100, "HumanStepRecords"],
+      [101, "McpRequestReservations"],
+      [102, "RemoteReportInboxRunId"],
     ]);
     yield* sql`INSERT INTO memory_hub_administration_state VALUES(1,1)`;
     assert.deepStrictEqual(yield* runMigrations(), []);

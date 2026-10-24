@@ -183,6 +183,7 @@ function watchesEqual(left: ThreadPullRequestWatch, right: ThreadPullRequestWatc
     left.remarkIds.join("\n") === right.remarkIds.join("\n") &&
     left.conflicting === right.conflicting &&
     left.wakes === right.wakes &&
+    left.checksAwaitedSince === right.checksAwaitedSince &&
     // Kept context is merged by the orchestrator; a pass sends only what it kept itself.
     left.automatic === right.automatic
   );

@@ -37,6 +37,9 @@ export function newPullRequestWatch(
       passedChecks: ended.passedChecks,
       conflicting: ended.conflicting,
     }),
+    ...(ended?.checksAwaitedSince !== undefined && {
+      checksAwaitedSince: ended.checksAwaitedSince,
+    }),
     remarksThrough: startedAt,
     remarkIds: [],
     wakes: 0,

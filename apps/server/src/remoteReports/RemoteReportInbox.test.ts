@@ -4,8 +4,8 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-import Migration070 from "../persistence/Migrations/070_RemoteDispatches.ts";
-import Migration101 from "../persistence/Migrations/101_RemoteReportInboxRunId.ts";
+import Migration070 from "../persistence/Migrations/071_RemoteDispatches.ts";
+import Migration101 from "../persistence/Migrations/102_RemoteReportInboxRunId.ts";
 import * as Inbox from "./RemoteReportInbox.ts";
 
 const origin = ThreadId.make("origin");

@@ -6,7 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./084_MemoryRevertResults.ts";
+import migration from "./085_MemoryRevertResults.ts";
 import * as Store from "../../memory/MemoryStore.ts";
 import {
   assertUsageCounters,
@@ -23,7 +23,7 @@ it.effect(
   "079 backfills only correlated evidence, rolls back DDL/results, and preserves 078 accounting",
   () =>
     Effect.gen(function* () {
-      yield* runMigrations({ toMigrationInclusive: 83 });
+      yield* runMigrations({ toMigrationInclusive: 84 });
       const sql = yield* SqlClient.SqlClient;
       for (let n = 10; n < 15; n++)
         yield* sql`INSERT INTO memory_resolutions(space,resolution_id,memory_id,input_revision_ids_json,input_payload_refs_json,judgment_payload_ref,requested_model_selection_json,effective_provider_model_json,resolving_environment_id,fencing_token,result_revision_id,applied_at,revert_deadline,resolution_json) VALUES (${space},${id(n)},${id(2)},'[]','[]','judgment','{}','{}','fixture',1,${id(n + 100)},0,0,'{}')`;
@@ -82,24 +82,24 @@ it.effect(
         yield* sql`SELECT name FROM sqlite_master WHERE name='memory_report_memory_idx'`,
       );
       assert.deepStrictEqual(yield* runMigrations(), [
-        [84, "MemoryRevertResults"],
-        [85, "HandoffLookupIndex"],
-        [86, "MemoryLastReadySpace"],
-        [87, "MemoryHubAdministered"],
-        [88, "MemoryCheckpointLifecycle"],
-        [89, "FleetGoals"],
-        [90, "FleetHealth"],
-        [91, "ThreadRunObservedChecks"],
-        [92, "RemoteDispatchObservation"],
-        [93, "MemoryRevisionCheckpointSize"],
-        [94, "HubNodes"],
-        [95, "MemorySummaryWorkThreadIndex"],
-        [96, "ThreadHistoryArchives"],
-        [97, "PermissionProfiles"],
-        [98, "DecisionInbox"],
-        [99, "HumanStepRecords"],
-        [100, "McpRequestReservations"],
-        [101, "RemoteReportInboxRunId"],
+        [85, "MemoryRevertResults"],
+        [86, "HandoffLookupIndex"],
+        [87, "MemoryLastReadySpace"],
+        [88, "MemoryHubAdministered"],
+        [89, "MemoryCheckpointLifecycle"],
+        [90, "FleetGoals"],
+        [91, "FleetHealth"],
+        [92, "ThreadRunObservedChecks"],
+        [93, "RemoteDispatchObservation"],
+        [94, "MemoryRevisionCheckpointSize"],
+        [95, "HubNodes"],
+        [96, "MemorySummaryWorkThreadIndex"],
+        [97, "ThreadHistoryArchives"],
+        [98, "PermissionProfiles"],
+        [99, "DecisionInbox"],
+        [100, "HumanStepRecords"],
+        [101, "McpRequestReservations"],
+        [102, "RemoteReportInboxRunId"],
       ]);
       assert.deepStrictEqual(
         yield* sql`SELECT resolution_id,revert_operation_id,json_extract(revert_result_json,'$.status') AS status FROM memory_resolutions ORDER BY resolution_id`,
