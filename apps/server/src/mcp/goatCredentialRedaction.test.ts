@@ -100,6 +100,10 @@ describe("redactGoatCredentialChunk", () => {
       `the token is ${TOKEN} ok\n`,
       // A secret that ends with the start of its own tag.
       `${TAG}${"a".repeat(42)}t\n`,
+      // Tokens another server minted, ending like a credential name or a registered tag.
+      `Authorization: Bearer ${"a".repeat(47)}-GOA\n`,
+      `Authorization: Bearer ${"b".repeat(48)}tes\n`,
+      `GOAT_MCP_BEARER_TOKEN=${"c".repeat(47)}-Bea\n`,
     ];
     for (const output of outputs) {
       for (let first = 1; first < output.length; first += 1) {

@@ -106,6 +106,11 @@ const PARTIAL_LABELED = new RegExp(
   "i",
 );
 const LONGEST_NAME = Math.max(...CREDENTIAL_NAMES.map((name) => name.length));
+// What can stand right before a credential value: "Bearer " or a credential variable's assignment.
+const LABEL_BEFORE_VALUE = new RegExp(
+  `(?:(?<![A-Za-z0-9])${BEARER}|${CREDENTIAL_NAME}${ASSIGNMENT}(?:${BEARER})?)$`,
+  "i",
+);
 
 /** Start of the shortest-to-longest tail that a later chunk may turn into a credential. */
 function partialStart(text: string): number {
@@ -151,6 +156,13 @@ function partialStart(text: string): number {
       CREDENTIAL_NAMES.some((name) => name.startsWith(word)))
   ) {
     start = wordStart;
+  }
+  // Never cut inside the trailing run of token characters: the part shown now could be most of a
+  // token whose label the redactor needs to see. Hold the whole run, and the label before it.
+  if (start < text.length && start > runStart) start = runStart;
+  if (start === runStart && start < text.length) {
+    const label = LABEL_BEFORE_VALUE.exec(text.slice(Math.max(0, start - PARTIAL_WINDOW), start));
+    if (label !== null) start -= label[0].length;
   }
   return start;
 }
