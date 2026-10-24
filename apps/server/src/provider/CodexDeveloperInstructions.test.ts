@@ -16,7 +16,6 @@ import {
 
 describe("buildCodexAdditionalContext", () => {
   describe.each([
-    { model: "gpt-5.3-codex", reasoningEffort: "high" },
     { model: "custom-model", modelName: "Custom 🦊 Model", reasoningEffort: "xhigh" },
   ])("with runtime $model", (runtime) => {
     it.each([

@@ -391,6 +391,8 @@ patchedDependencies:
   "@expo/fingerprint@0.21.5": patches/@expo__fingerprint@0.21.5.patch
   # iOS: keep notification responses that arrive while delegates register or replay pending ones.
   expo-notifications@58.1.5: patches/expo-notifications@58.1.5.patch
+  # Observe the owned host exit independently of descendants retaining its stdio.
+  "@muse-code/sdk@1.4.6": patches/@muse-code__sdk@1.4.6.patch
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
 
 peerDependencyRules:

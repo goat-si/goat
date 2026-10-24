@@ -8,7 +8,6 @@ import {
   PreviewAutomationLogsInput,
 } from "./previewAutomation.ts";
 
-const decodeOpenInput = Schema.decodeUnknownSync(PreviewAutomationOpenInput);
 const decodeAutomationHost = Schema.decodeUnknownSync(PreviewAutomationHost);
 const decodeAutomationStatus = Schema.decodeUnknownSync(PreviewAutomationStatus);
 
