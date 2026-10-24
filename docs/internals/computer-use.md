@@ -55,8 +55,13 @@ provider (Codex, Claude, ...)
 - Each session has its own `mcp --direct` driver process under the helper, and ending a session
   kills exactly that process. That is the boundary ADR-0022 measured: cancellation and session
   revoke do not stop a running `run_script`, and killing its transport does. Whether several
-  direct runtimes run side by side cleanly is a qualification item for WS3; if they do not,
-  sessions share one driver process, a Stop restarts it, and the other sessions observe again.
+  direct runtimes run side by side cleanly is a qualification item for WS3. If they do not,
+  sessions share one driver process and a Stop interrupts every session on it: the helper fences
+  their queued input, kills the process, releases held input and sends a cleanup report per
+  session; actions in flight report `partial` or `unverifiable` and are never replayed; the
+  restarted driver is a new generation, so earlier replies are quarantined; and each affected
+  session must observe again before acting. The sessions themselves, their owners and leases
+  survive.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
@@ -64,7 +69,8 @@ provider (Codex, Claude, ...)
   depend on the proxy still being there. A disconnect at any hop ends the session the same way:
   a vanished proxy makes the server end it, and a vanished server or host closes the helper's
   stdin, so the helper ends every session.
-- Sessions of other threads keep running through a Stop; stop all ends every session. ADR-0022's
+- With a driver process per session, sessions of other threads keep running through a Stop;
+  with a shared one they are interrupted as above. Stop all ends every session. ADR-0022's
   six-app `run_script` stop measurement is repeated through this topology before WS6 counts as
   done.
 - Remote machines run their own server and helper. Each server checks its own screen before
@@ -321,11 +327,12 @@ browser.
 ## Permission onboarding
 
 - **macOS.** First run asks for Accessibility and Screen Recording for "GOAT Computer Use", not for
-  GOAT. Readiness is proven, not inferred from switches: a fresh helper must report its own bundle
-  identity, read a non-empty accessibility tree and capture a non-blank window. Today's desktop
-  verify (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already checks this for the Electron host;
-  it moves into the helper. The permission guide drags the helper bundle into System Settings
-  (`apps/desktop/src/permissions/MacPermissionHelper.ts` points at GOAT.app today).
+  GOAT. Readiness is proven, not inferred from switches: the helper's grant probe, then a fresh
+  driver under the helper that reports the helper's bundle identity and service pid, reads a
+  non-empty accessibility tree and captures a non-blank window. The desktop verify
+  (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
+  permission guide should drag the helper bundle into System Settings;
+  `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
 - **Migration.** A person who granted GOAT.app under ADR-0022 sees one prompt explaining that
   computer use now has its own app and grants again. GOAT never removes or resets grants. The
   prompt also says that the old GOAT entries stay on, that only SnapShot still needs them, and

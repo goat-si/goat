@@ -72,8 +72,10 @@ owns it (`apps/desktop/src/cua/DesktopCuaDriver.ts`). On macOS a build that has
 "GOAT Computer Use.app" runs the driver through it (`apps/desktop/src/cua/ComputerUseHelper.ts`):
 packaged builds look in `Contents/Helpers`, development builds need `GOAT_CUA_HELPER_PATH` to a
 helper built by `scripts/build-computer-use-helper.ts`, and a helper that is present but unusable
-keeps computer use off. The helper (`apps/desktop/native/computer-use-helper/main.swift`) checks
-that its parent is GOAT, re-execs itself with responsibility disclaimed, speaks line-delimited
+keeps computer use off. A release helper (`apps/desktop/native/computer-use-helper/main.swift`)
+serves only a parent signed by GOAT's team with the GOAT app identifier; a development helper,
+built with `GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
+with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
 and that the driver it reports is the helper's child. Desktop artifacts do not embed the helper
@@ -83,11 +85,13 @@ host checks both permissions before starting and reports `unavailable` until the
 reuses a running driver, retires a crashed one, and passes the same telemetry and update-check
 opt-outs as the standalone host ([server.md](server.md#computer-use)).
 
-Setup proves the macOS grants from inside the driver (`verify`): Electron's check comes first,
-then a fresh driver (TCC answers are cached per process) must report `host` attribution, pass
-`health_report`'s bundle identity for this process, and capture non-blank pixels plus an
-accessibility tree of a GOAT window. `check_permissions` alone cannot show that capture works.
-The check's driver is always stopped afterwards; the next agent turn starts its own.
+Setup proves the macOS grants from inside the driver (`verify`) for whichever engine runs it. The
+grant check comes first: the helper's own probe with a helper, Electron's with the in-process
+fallback. Then a fresh driver (TCC answers are cached per process) must report `host`
+attribution, pass `health_report`'s bundle identity for its parent (the helper's bundle id and
+service pid, or GOAT's for the fallback), and capture non-blank pixels plus an accessibility tree
+of a GOAT window. `check_permissions` alone cannot show that capture works. The check's driver is
+always stopped afterwards; the next agent turn starts its own.
 
 `stageCuaDriverExecutable` in `scripts/build-desktop-artifact.ts` downloads the pinned archive,
 checks its size and SHA-256, and stages only the executables: the universal binary on macOS, the
