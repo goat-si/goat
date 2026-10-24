@@ -378,7 +378,7 @@ it.live("a snapshot that cannot capture times out on the request's own deadline 
         method === "Page.captureScreenshot" ? captured.promise : original(method, input),
       );
       const error = yield* broker
-        .invoke({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+        .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
         .pipe(Effect.flip);
       // The server browser answered with the deadline the error names, before the broker gave up
       // on it and cut it off.

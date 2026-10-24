@@ -23,6 +23,7 @@ import type { DesktopCuaVerification } from "./cua.ts";
 import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
+import type { DesktopPreviewCaptureEvent, DesktopPreviewPointerEvent } from "./desktopBrowser.ts";
 
 import type {
   DesktopAppActivationRequest,
@@ -770,15 +771,6 @@ export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed())
   Schema.isNonEmpty(),
 );
 
-export interface DesktopPreviewPointerEvent {
-  tabId: string;
-  phase: "move" | "click";
-  x: number;
-  y: number;
-  sequence: number;
-  createdAt: string;
-}
-
 export interface DesktopPreviewOpenLinkEvent {
   tabId: string;
   url: string;
@@ -1423,6 +1415,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onServerTabCapture: (listener: (event: DesktopPreviewCaptureEvent) => void) => () => void;
   onOpenLink: (listener: (event: DesktopPreviewOpenLinkEvent) => void) => () => void;
 }
 
