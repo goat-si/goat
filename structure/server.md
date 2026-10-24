@@ -275,7 +275,7 @@ sandboxes and providers that do not run on this host get nothing, and those thre
 driver. Adapters attach `cuaDriver` as a stdio MCP server named `cua-driver` and add the
 `<computer_use>` instructions (`packages/provider-core/src/server/runtimeInstructions.ts`) only
 when the provider actually has it. Which adapters attach, and when a change reaches a live session,
-is in ADR-0020.
+is in [ADR-0022](decisions/ADR-0022-cua-driver-computer-use.md#per-adapter-decision).
 
 `server.checkComputerUse` reports the host's platform, whether a driver is running, why the last
 start failed, whether a Linux host runs Wayland, and whether the host has a screen the driver can
