@@ -36,11 +36,11 @@ export interface RemoteLaunchHostGroup {
  * the dispatching environment wins, and an id that stays ambiguous resolves
  * to nothing.
  */
-function findRemoteShell(
-  shells: ReadonlyArray<RemoteLaunchShell>,
+export function findRemoteShell<Shell extends RemoteLaunchShell>(
+  shells: ReadonlyArray<Shell>,
   dispatcherEnvironmentId: EnvironmentId,
   threadId: ThreadId,
-): RemoteLaunchShell | null {
+): Shell | null {
   const candidates = shells.filter(
     (shell) => shell.id === threadId && shell.environmentId !== dispatcherEnvironmentId,
   );
