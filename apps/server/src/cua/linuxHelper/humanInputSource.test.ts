@@ -8,6 +8,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   classifyDevices,
+  hierarchyChange,
+  makeDeviceLedger,
   openX11HumanInput,
   parseDevices,
   parseRawEvent,
@@ -57,6 +59,24 @@ function xiEvent(evtype: number, sourceid = 0) {
 
 const RAW_KEY = 13;
 const HIERARCHY = 11;
+const SLAVE_ADDED = 0x4;
+
+/** A hierarchy event whose infos say these ids were added. */
+function hierarchyEvent(added: ReadonlyArray<number>) {
+  const event = new Uint8Array(32 + 12 * added.length);
+  const view = new DataView(event.buffer);
+  event[0] = 35;
+  event[1] = MAJOR;
+  view.setUint32(4, (12 * added.length) / 4, true);
+  view.setUint16(8, HIERARCHY, true);
+  view.setUint32(16, SLAVE_ADDED, true);
+  view.setUint16(20, added.length, true);
+  added.forEach((id, index) => {
+    view.setUint16(32 + 12 * index, id, true);
+    view.setUint32(32 + 12 * index + 8, SLAVE_ADDED, true);
+  });
+  return event;
+}
 
 // As Xvfb lists them, and Cua Driver's MPX devices as its source names them.
 const XVFB: ReadonlyArray<XiDevice> = [
@@ -79,7 +99,12 @@ const DRIVER: ReadonlyArray<XiDevice> = [
  * then XISelectEvents (no reply) and XIQueryDevice, each later XIQueryDevice with the current
  * device list.
  */
-async function scriptedServer(options: { readonly minor: number }) {
+async function scriptedServer(options: {
+  readonly minor: number;
+  /** What to send after the nth XIQueryDevice reply, as one write with it. */
+  readonly after?: (query: number) => ReadonlyArray<Uint8Array>;
+}) {
+  let queries = 0;
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
   const path = NodePath.join(dir, "X0");
   let client: NodeNet.Socket | undefined;
@@ -119,7 +144,12 @@ async function scriptedServer(options: { readonly minor: number }) {
           reply.writeUInt16LE(2, 8);
           reply.writeUInt16LE(options.minor, 10);
           socket.write(reply);
-        } else if (op === MAJOR && minor === 48) socket.write(devicesReply(deviceList));
+        } else if (op === MAJOR && minor === 48) {
+          queries++;
+          socket.write(
+            Buffer.concat([devicesReply(deviceList), ...(options.after?.(queries) ?? [])]),
+          );
+        }
       }
     });
   });
@@ -195,14 +225,14 @@ describe("XInput2 human input", () => {
     // The driver adds its devices and types through them: not a person.
     server.setDevices([...XVFB, ...DRIVER]);
     let applied = listed.next();
-    server.send(xiEvent(HIERARCHY));
+    server.send(hierarchyEvent([8, 10, 11, 12]));
     server.send(xiEvent(RAW_KEY, 11));
     await applied;
     expect(source.latest()).toBeUndefined();
     // A person plugs in a keyboard, which gets an id the driver's keyboard had before.
     server.setDevices([...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }]);
     applied = listed.next();
-    server.send(xiEvent(HIERARCHY));
+    server.send(hierarchyEvent([11]));
     server.send(xiEvent(RAW_KEY, 11));
     await applied;
     expect(source.latest()).toMatchObject({ source: "keyboard" });
@@ -228,6 +258,65 @@ describe("XInput2 human input", () => {
     server.close();
   });
 
+  it("a device change that arrives with the first list is caught up, not lost", async () => {
+    // The first reply carries the driver's keyboard on id 11; a change and a person's key on a
+    // reused 11 follow in the same write, before the source has finished opening.
+    let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
+    const server = await scriptedServer({
+      minor: 2,
+      after: (query) => {
+        if (query !== 1) return [];
+        devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
+        return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
+      },
+    });
+    server.setDevices(devicesNow);
+    const listed = lists();
+    const second = listed.next().then(() => listed.next());
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 7, {
+      socketPath: server.path,
+      onListed: () => {
+        server.setDevices(devicesNow);
+        listed.onListed();
+      },
+    });
+    if (!source) throw new Error("no source");
+    await second;
+    expect(source.latest()).toEqual({ at: 7, source: "keyboard" });
+    source.close();
+    server.close();
+  });
+
+  it("input held across a change keeps waiting for a list read after that change", async () => {
+    // Another change and the person's key arrive in the same write as the list the source was
+    // waiting for; that list predates the change and must not decide the key.
+    let devicesNow: ReadonlyArray<XiDevice> = [...XVFB, ...DRIVER];
+    const server = await scriptedServer({
+      minor: 2,
+      after: (query) => {
+        if (query !== 2) return [];
+        devicesNow = [...XVFB, { id: 11, use: 4, name: "Logitech USB Keyboard" }];
+        return [hierarchyEvent([11]), xiEvent(RAW_KEY, 11)];
+      },
+    });
+    server.setDevices(devicesNow);
+    const listed = lists();
+    const source = await openX11HumanInput({ DISPLAY: ":0" }, () => 9, {
+      socketPath: server.path,
+      onListed: () => {
+        server.setDevices(devicesNow);
+        listed.onListed();
+      },
+    });
+    if (!source) throw new Error("no source");
+    const third = listed.next().then(() => listed.next());
+    server.send(hierarchyEvent([8, 10, 11, 12]));
+    await third;
+    expect(source.latest()).toEqual({ at: 9, source: "keyboard" });
+    source.close();
+    server.close();
+  });
+
   it("a server that goes away leaves the source lost", async () => {
     const server = await scriptedServer({ minor: 2 });
     const lost = Promise.withResolvers<void>();
@@ -239,5 +328,73 @@ describe("XInput2 human input", () => {
     server.close();
     await lost.promise;
     expect(source.lost()).toBe(true);
+  });
+});
+
+describe("makeDeviceLedger", () => {
+  const key = (at: number) => ({ at, source: "keyboard" as const });
+  const driver = new Map([[11, false]]);
+  const person = new Map([[11, true]]);
+
+  it("input under a current list is decided at once", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, person);
+    expect(ledger.input(11, key(1))).toBe("person");
+    ledger.list(0, driver);
+    expect(ledger.input(11, key(2))).toBe("drop");
+  });
+
+  it("input after an unread change waits, and a list read after it decides", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, driver);
+    ledger.change(new Set([11]));
+    expect(ledger.input(11, key(3))).toBe("held");
+    expect(ledger.stale()).toBe(true);
+    expect(ledger.list(1, person)).toEqual([key(3)]);
+    expect(ledger.stale()).toBe(false);
+  });
+
+  it("a list read before the input's change never decides it", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, driver);
+    ledger.change(new Set([11]));
+    expect(ledger.input(11, key(4))).toBe("held");
+    // The list that was in flight covers change 0 only.
+    expect(ledger.list(0, driver)).toEqual([]);
+    expect(ledger.stale()).toBe(true);
+    expect(ledger.list(1, person)).toEqual([key(4)]);
+  });
+
+  it("when a later change touched the input's id, the input counts as a person's", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, person);
+    ledger.change(new Set([11]));
+    expect(ledger.input(11, key(5))).toBe("held");
+    // Then the keyboard goes and the driver's device takes id 11.
+    ledger.change(new Set([11]));
+    expect(ledger.list(2, driver)).toEqual([key(5)]);
+  });
+
+  it("a later change to other ids leaves the list's word on this one", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, driver);
+    ledger.change(new Set([30]));
+    expect(ledger.input(11, key(6))).toBe("held");
+    ledger.change(new Set([31]));
+    expect(ledger.list(2, driver)).toEqual([]);
+  });
+
+  it("input from an id no list has counts as a person's", () => {
+    const ledger = makeDeviceLedger();
+    ledger.list(0, new Map());
+    expect(ledger.input(40, key(7))).toBe("held");
+    expect(ledger.list(0, new Map())).toEqual([key(7)]);
+  });
+});
+
+describe("hierarchyChange", () => {
+  it("names the ids a hierarchy event added or removed", () => {
+    expect(hierarchyChange(hierarchyEvent([11, 12]), MAJOR)).toEqual(new Set([11, 12]));
+    expect(hierarchyChange(xiEvent(RAW_KEY, 11), MAJOR)).toBeUndefined();
   });
 });

@@ -136,13 +136,88 @@ const isPersonDevice = (device: XiDevice) =>
 export const classifyDevices = (devices: ReadonlyArray<XiDevice>) =>
   new Map(devices.map((device) => [device.id, isPersonDevice(device)]));
 
-/** True for an XI2 event saying devices were added, removed or changed. */
-const isHierarchyChanged = (message: Uint8Array, major: number) =>
-  ((message[0] ?? 0) & 0x7f) === GENERIC_EVENT &&
-  message[1] === major &&
-  message.byteLength >= 10 &&
-  new DataView(message.buffer, message.byteOffset, message.byteLength).getUint16(8, true) ===
-    XI_HIERARCHY_CHANGED;
+/** XIHierarchyInfo flags that change which device an id names: master or slave added or removed. */
+const IDENTITY_FLAGS = 0x1 | 0x2 | 0x4 | 0x8;
+
+/**
+ * For an XI2 hierarchy event, the ids it added or removed, or "all" when its infos cannot be
+ * read; undefined for any other message.
+ */
+export function hierarchyChange(
+  message: Uint8Array,
+  major: number,
+): ReadonlySet<number> | "all" | undefined {
+  if (((message[0] ?? 0) & 0x7f) !== GENERIC_EVENT || message[1] !== major) return undefined;
+  if (message.byteLength < 32) return undefined;
+  const view = new DataView(message.buffer, message.byteOffset, message.byteLength);
+  if (view.getUint16(8, true) !== XI_HIERARCHY_CHANGED) return undefined;
+  const count = view.getUint16(20, true);
+  if (32 + 12 * count > message.byteLength) return "all";
+  const ids = new Set<number>();
+  for (let index = 0; index < count; index++) {
+    const at = 32 + 12 * index;
+    if ((view.getUint32(at + 8, true) & IDENTITY_FLAGS) !== 0) ids.add(view.getUint16(at, true));
+  }
+  return ids;
+}
+
+/**
+ * Which device an input came from, across device changes (XI2 reuses ids). Every change is
+ * numbered with the ids it added or removed. Input remembers the change it arrived after, and a
+ * device list remembers the change it was read after. A list decides an input only if no change
+ * between the two touched the input's id; otherwise, or when the list does not have the id at
+ * all, the input counts as a person's, since it cannot be shown not to be.
+ */
+export function makeDeviceLedger() {
+  let changes = 0;
+  const touched = new Map<number, ReadonlySet<number> | "all">();
+  let list: { readonly covers: number; readonly devices: ReadonlyMap<number, boolean> } | undefined;
+  let held: Array<{
+    readonly device: number;
+    readonly change: number;
+    readonly input: HumanInput;
+  }> = [];
+  const touchedBetween = (after: number, upTo: number, device: number) => {
+    for (let change = after + 1; change <= upTo; change++) {
+      const ids = touched.get(change);
+      if (ids === "all" || ids?.has(device)) return true;
+    }
+    return false;
+  };
+  return {
+    changes: () => changes,
+    /** A hierarchy change, with the ids it added or removed. */
+    change: (ids: ReadonlySet<number> | "all") => {
+      changes++;
+      touched.set(changes, ids);
+    },
+    /** Input as it arrives: counted, dropped, or held for a list that covers it. */
+    input: (device: number, input: HumanInput): "person" | "drop" | "held" => {
+      const person = list?.covers === changes ? list.devices.get(device) : undefined;
+      if (person === true) return "person";
+      if (person === false) return "drop";
+      held.push({ device, change: changes, input });
+      return "held";
+    },
+    /** A device list read after change covers; returns held input it shows to be a person's. */
+    list: (covers: number, devices: ReadonlyMap<number, boolean>) => {
+      list = { covers, devices };
+      const people: HumanInput[] = [];
+      const waiting: typeof held = [];
+      for (const entry of held) {
+        if (entry.change > covers) waiting.push(entry);
+        else if (touchedBetween(entry.change, covers, entry.device)) people.push(entry.input);
+        else if (devices.get(entry.device) !== false) people.push(entry.input);
+      }
+      held = waiting;
+      const oldest = Math.min(covers, ...held.map((entry) => entry.change));
+      for (const change of touched.keys()) if (change <= oldest) touched.delete(change);
+      return people;
+    },
+    /** Whether a newer list is needed: a change it has not read, or input it has not covered. */
+    stale: () => list?.covers !== changes || held.length > 0,
+  };
+}
 
 /** What kind of input a raw event is, and from which device; undefined for anything else. */
 export function parseRawEvent(
@@ -197,14 +272,8 @@ export async function openX11HumanInput(
   let closed = false;
   let latest: HumanInput | undefined;
   let major: number | undefined;
-  let devices = new Map<number, boolean>();
-  /** Input from devices the last list did not have, held until the next one classifies them. */
-  let unclassified: Array<{ readonly device: number; readonly input: HumanInput }> = [];
+  const ledger = makeDeviceLedger();
   let refreshing = false;
-  let refreshAgain = false;
-  /** Device changes announced, and how many of them the current list reflects. */
-  let changes = 0;
-  let listed = 0;
   const waiting: Array<(message: Uint8Array | undefined) => void> = [];
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
   const close = () => {
@@ -214,6 +283,9 @@ export async function openX11HumanInput(
     observe.onLost?.();
     setup?.(undefined);
     for (const wake of waiting.splice(0)) wake(undefined);
+  };
+  const count = (input: HumanInput) => {
+    if (latest === undefined || input.at > latest.at) latest = input;
   };
   socket.on("error", close);
   socket.on("close", close);
@@ -242,22 +314,20 @@ export async function openX11HumanInput(
         waiting.shift()?.(message);
         continue;
       }
+      // Events selected before the first list are recorded too; that list then reads them.
       if (major === undefined) continue;
-      if (isHierarchyChanged(message, major)) {
-        // Until a list read after this arrives, an id may name a different device than it did.
-        changes++;
+      const change = hierarchyChange(message, major);
+      if (change !== undefined) {
+        ledger.change(change);
         void refresh();
         continue;
       }
       const raw = parseRawEvent(message, major);
       if (!raw) continue;
       const input = { at: now(), source: raw.source };
-      const person = devices.get(raw.device);
-      if (person === true) latest = input;
-      else if (person === undefined || changes !== listed) {
-        unclassified.push({ device: raw.device, input });
-        void refresh();
-      }
+      const outcome = ledger.input(raw.device, input);
+      if (outcome === "person") count(input);
+      else if (outcome === "held") void refresh();
     }
   });
   const reply = await new Promise<Uint8Array | undefined>((resolve) => {
@@ -281,33 +351,18 @@ export async function openX11HumanInput(
       });
       socket.write(bytes);
     });
-  /** Reads the device list again; one at a time, once more if devices changed meanwhile. */
+  /** Reads device lists, one at a time, until one covers every change and held input. */
   const refresh = async (): Promise<void> => {
-    if (major === undefined || closed) return;
-    if (refreshing) {
-      refreshAgain = true;
-      return;
-    }
+    if (major === undefined || closed || refreshing) return;
     refreshing = true;
     try {
-      for (;;) {
-        refreshAgain = false;
-        // Requests are answered in order, so this list reflects every change announced so far.
-        const covers = changes;
+      while (!closed && ledger.stale()) {
+        // Requests are answered in order, so the list reflects every change announced so far.
+        const covers = ledger.changes();
         const list = await ask(xiQueryDevice(major));
         if (!list || list[0] !== 1) return close();
-        devices = classifyDevices(parseDevices(list));
-        listed = covers;
-        const held = unclassified;
-        unclassified = [];
-        for (const { device, input } of held) {
-          const person = devices.get(device);
-          // Still unknown after a fresh list: a device that came and went. It cannot be shown
-          // not to be a person, so it counts as one.
-          if (person !== false && (latest === undefined || input.at > latest.at)) latest = input;
-        }
+        for (const input of ledger.list(covers, classifyDevices(parseDevices(list)))) count(input);
         observe.onListed?.();
-        if (!refreshAgain || closed) break;
       }
     } finally {
       refreshing = false;
@@ -327,11 +382,11 @@ export async function openX11HumanInput(
   // Raw events name their source device only from XI 2.1.
   if (!supportsSourceId(versionView.getUint16(8, true), versionView.getUint16(10, true)))
     return fail();
-  // Select first, then list: a device added in between is caught by its hierarchy event.
+  // Select first, then list: every change from here on is an event the ledger records, and the
+  // first list (whose reply also proves the select raised no error) catches up with them.
   socket.write(xiSelectRawEvents(opcode, root));
-  const list = await ask(xiQueryDevice(opcode));
-  if (!list || list[0] !== 1) return fail();
-  devices = classifyDevices(parseDevices(list));
   major = opcode;
+  await refresh();
+  if (closed) return fail();
   return { latest: () => latest, lost: () => closed, close };
 }
