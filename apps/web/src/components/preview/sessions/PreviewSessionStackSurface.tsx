@@ -5,6 +5,7 @@ import {
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -151,7 +152,10 @@ export function PreviewSessionStackSurface(props: {
     bridge && native ? (
       <Button
         variant="ghost-muted"
-        size="compact"
+        size="icon-xs"
+        // An icon keeps the header on one line beside Stop all; the label names it.
+        aria-label={floating ? "Dock" : "Pop out"}
+        title={floating ? "Dock into GOAT" : "Pop out over other apps"}
         onClick={() => {
           if (floating) void bridge.request({ type: "dock" }).catch(failure);
           else {
@@ -163,7 +167,7 @@ export function PreviewSessionStackSurface(props: {
           }
         }}
       >
-        {floating ? "Dock" : "Pop out"}
+        {floating ? <MinimizeIcon /> : <PictureInPictureIcon />}
       </Button>
     ) : null;
   const notice = captureNotice(native);
