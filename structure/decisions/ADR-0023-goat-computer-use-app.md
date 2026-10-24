@@ -124,6 +124,17 @@
     GOAT-managed read-only directory. It replaces `COMPUTER_USE_INSTRUCTIONS` as the single source
     of computer use guidance and teaches the observe-act-verify loop, typed results, private mode,
     takeover, Stop and the mini-view stack. Requested by Jun on 2026-10-24 (#1230).
+  - **Mentions.** `@computer` and `@browser` chips in the composer turn on that capability's tools,
+    built-in skill and mini-view for one turn. They are a typed part of the turn input in the
+    contracts, agents and MCP set the same per-turn capability through the same service method,
+    and an unavailable capability shows its readiness reason with a link to onboarding.
+    Requested by Jun on 2026-10-24 (lead decision D13).
+  - **Guided macOS grant.** Onboarding grants Accessibility, then Screen & System Audio Recording,
+    each from the exact System Settings pane with a floating guide panel whose helper icon is a
+    drag source, a Reveal in Finder fallback, readiness checked in a fresh helper process, restart
+    handling, and troubleshooting for stale entries and the wrong app. GOAT never runs
+    `tccutil reset` or edits the TCC database. Windows and Linux follow the same steps. Requested
+    by Jun on 2026-10-24 (lead decision D14).
   - **Safety.** Per-app approvals and a time-bounded control lease. Unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
     Stop and the global kill switch end the transport at once. Human input on a shared desktop

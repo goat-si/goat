@@ -307,6 +307,24 @@ skill, on by default.
   (`packages/provider-core/src/server/runtimeInstructions.ts`), so there is one source of
   computer use guidance.
 
+## Composer mentions
+
+Jun asked for this on 2026-10-24 (lead decision D13): computer use and browser use are invoked
+by mention, the way the Codex app does it. Only the pattern is taken.
+
+- Typing `@` in the composer on web, desktop and mobile offers "Computer" and "Browser" entries
+  in the mention popover; picking one inserts a chip.
+- A chip turns on that capability for that turn only: its tools (computer use through the
+  session proxy and lease path, or the built-in browser preview tools), its built-in skill
+  ([Built-in Computer Use skill](#built-in-computer-use-skill)), and the preview mini-view
+  ([Mini-view stack](#mini-view-stack)). Without a chip, settings and defaults decide as before.
+- An entry for a capability that is not ready says why, from the readiness answers (#1226), and
+  links to onboarding; a chip is never silently ignored.
+- Mentions are a typed part of the turn input in `packages/contracts`, so every client sends the
+  same shape, and providers receive the capability through the same runtime instructions and
+  tool attachment path. Agents and MCP set the same per-turn capability through the same service
+  method; nothing lives only in the composer.
+
 ## Safety
 
 - **Approvals.** A person approves apps per thread, or always, through a handoff that needs
@@ -356,6 +374,19 @@ skill, on by default.
   (`apps/desktop/src/cua/DesktopCuaDriver.ts`) already does this when a helper is present. The
   permission guide should drag the helper bundle into System Settings;
   `apps/desktop/src/permissions/MacPermissionHelper.ts` still drags GOAT.app.
+- **Guided macOS grant** (lead decision D14, Jun's highest priority). Onboarding walks two steps,
+  Accessibility, then Screen & System Audio Recording. Each step opens the exact System Settings
+  pane and places a small always-on-top guide panel next to it that shows the helper's real app
+  icon as a drag source for the list, with the toggle instruction and a "Reveal in Finder"
+  keyboard fallback. Each step turns to success from the helper's own readiness, checked in a
+  fresh helper process because TCC answers are cached per process (#1226); when macOS needs the
+  helper restarted, the step says so and offers to quit and reopen it.
+- **Troubleshooting** covers stale or duplicate entries from old builds or paths, the wrong app
+  toggled (GOAT.app or Terminal instead of the helper), and development builds that need a new
+  grant after each rebuild. `tccutil reset` appears only as text a person can run; GOAT never runs
+  it and never edits the TCC database. The panel follows light and dark, is accessible, and does
+  not animate continuously. Windows and Linux use the same step structure in the shared
+  onboarding component (WS8, #1136).
 - **Migration.** A person who granted GOAT.app under ADR-0022 sees one prompt explaining that
   computer use now has its own app and grants again. GOAT never removes or resets grants. The
   prompt also says that the old GOAT entries stay on, that only SnapShot still needs them, and
