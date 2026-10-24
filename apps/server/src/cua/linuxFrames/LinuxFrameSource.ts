@@ -165,13 +165,19 @@ const make = Effect.gen(function* () {
       const listed = new Map<number, ListedApp>();
       const sdk = yield* loadDriverSdk(fs, path).pipe(Effect.orElseSucceed(() => Option.none()));
       const socket = current.value.mcp.socketPath;
+      // Apps as the agent's calls were judged: a windowed app by its window's app name, which
+      // list_windows gives and list_apps (every process, by command) may not.
       if (Option.isSome(sdk) && socket)
-        learnApps(
-          yield* callDriverTool(sdk.value, socket, "list_apps", {}).pipe(
-            Effect.orElseSucceed(() => undefined),
-          ),
-          listed,
-        );
+        for (const [tool, args] of [
+          ["list_apps", {}],
+          ["list_windows", { pid: target.pid }],
+        ] as const)
+          learnApps(
+            yield* callDriverTool(sdk.value, socket, tool, args).pipe(
+              Effect.orElseSucceed(() => undefined),
+            ),
+            listed,
+          );
       const verdict = scopeVerdict({
         name: "get_window_state",
         args: { pid: target.pid, window_id: target.windowId },
