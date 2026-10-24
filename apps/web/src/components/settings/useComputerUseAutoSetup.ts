@@ -1,0 +1,246 @@
+import type { DesktopCuaGrants, DesktopCuaVerification } from "@goat/contracts";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+
+import { useCuaGrants } from "./CuaGrantSteps";
+import {
+  CUA_PERMISSIONS,
+  cuaGranted,
+  cuaNeedsRelaunch,
+  cuaVerificationRows,
+  type CuaGrantHolder,
+  type CuaPermission,
+} from "./CuaSetupDialog.logic";
+
+/**
+ * Where the one-switch setup is. saving: the setting is being written. checking: this Mac's
+ * grants are read once. granting: a grant is missing; setup resumes on a read newer than
+ * afterRead. verifying: the helper restarts and proves a real capture and tree read. ready:
+ * that proof passed in this session.
+ */
+export type ComputerUseSetupPhase =
+  | { readonly step: "idle" }
+  | { readonly step: "saving" }
+  | { readonly step: "checking" }
+  | { readonly step: "granting"; readonly afterRead: number }
+  | { readonly step: "verifying" }
+  | { readonly step: "ready" }
+  | { readonly step: "failed"; readonly message: string; readonly relaunch: boolean };
+
+export interface ComputerUseSetupActions {
+  /** Writes the setting; resolves to an error message when it could not be saved. */
+  readonly save: (patch: { readonly enableCua: boolean }) => Promise<string | null>;
+  readonly checkGrants: () => Promise<DesktopCuaGrants>;
+  /** Restarts the helper and proves it can capture a window and read its controls. */
+  readonly verify: () => Promise<DesktopCuaVerification>;
+  /** Opens the System Settings pane with the panel to drag the helper into its list. */
+  readonly openGuide: (permission: CuaPermission) => Promise<void>;
+  readonly relaunch?: (() => Promise<void>) | undefined;
+}
+
+const UNREACHABLE: DesktopCuaVerification = {
+  verified: false,
+  steps: [{ id: "restart", ok: false, detail: "Could not reach computer use." }],
+};
+const SAVE_FAILED = "Could not save the setting. Try again.";
+
+const failed = (message: string, relaunch = false): ComputerUseSetupPhase => ({
+  step: "failed",
+  message,
+  relaunch,
+});
+
+function verificationFailure(result: DesktopCuaVerification): string {
+  const row = cuaVerificationRows(result).find((candidate) => candidate.state === "failed");
+  if (row?.detail) return `Setup failed: ${row.detail}`;
+  return row ? `Setup failed: “${row.label}” did not pass.` : "Setup failed.";
+}
+
+/**
+ * Turning computer use on runs the whole setup in order: save the setting, read this Mac's
+ * grants, wait in System Settings for any that are missing, then restart and verify the helper.
+ * Only the Mac that runs the host can read and prove its grants; elsewhere saving is the setup.
+ */
+export function useComputerUseAutoSetup({
+  enabled,
+  localMac,
+  actions,
+}: {
+  readonly enabled: boolean;
+  readonly localMac: boolean;
+  readonly actions: ComputerUseSetupActions;
+}) {
+  const [phase, setPhase] = useState<ComputerUseSetupPhase>({ step: "idle" });
+  // What the person last chose, until the settings stream agrees; a failed save clears it.
+  const [desired, setDesired] = useState<boolean | null>(null);
+  const [opened, setOpened] = useState<CuaPermission | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  // Each run gets a number, so a run that Off, unmount or a later run replaced reports nothing.
+  const run = useRef(0);
+  // Off has its own number: turning off invalidates setup runs, but not the Off save itself.
+  const offRun = useRef(0);
+  const verifying = useRef(false);
+  const on = desired ?? enabled;
+  const busy = phase.step === "saving" || phase.step === "checking" || phase.step === "verifying";
+  // Each read starts a helper process, so it pauses while setup runs its own, rechecks quickly
+  // while the person is in System Settings, and otherwise slowly to catch a revoked grant.
+  const polled = useCuaGrants(
+    actions.checkGrants,
+    localMac && on && !busy,
+    phase.step === "granting" ? 1500 : 15_000,
+  );
+  const grants = localMac ? polled.grants : null;
+  const holder: CuaGrantHolder | null = grants && grants.principal !== "unusable" ? grants : null;
+  const missing = holder ? (CUA_PERMISSIONS.find((id) => !cuaGranted(holder, id)) ?? null) : null;
+
+  if (desired !== null && desired === enabled) setDesired(null);
+  if (opened !== null && holder !== null && cuaGranted(holder, opened)) setOpened(null);
+  // Turned off elsewhere: whatever this client was doing no longer applies. A failure stays
+  // until Retry or the switch, so the person can read it.
+  if (!on && phase.step !== "idle" && phase.step !== "failed") setPhase({ step: "idle" });
+  // A grant revoked in System Settings, or one still missing when the page opens, asks again.
+  if (on && missing !== null && (phase.step === "idle" || phase.step === "ready"))
+    setPhase({ step: "granting", afterRead: polled.reads });
+  useEffect(() => {
+    if (!on) run.current += 1;
+  }, [on]);
+  useEffect(
+    () => () => {
+      run.current += 1;
+    },
+    [],
+  );
+
+  const verifyNow = async (id: number) => {
+    if (verifying.current) return;
+    verifying.current = true;
+    setPhase({ step: "verifying" });
+    const result = await actions.verify().catch(() => UNREACHABLE);
+    verifying.current = false;
+    if (id !== run.current) return;
+    setPhase(
+      result.verified
+        ? { step: "ready" }
+        : failed(
+            verificationFailure(result),
+            actions.relaunch !== undefined &&
+              cuaNeedsRelaunch({ grants: holder, opened, verification: result }),
+          ),
+    );
+  };
+  // Setup goes on by itself once a read made after the prompt shows every grant on.
+  const resume =
+    on &&
+    phase.step === "granting" &&
+    polled.reads > phase.afterRead &&
+    holder !== null &&
+    missing === null;
+  const resumeVerify = useEffectEvent(() => {
+    run.current += 1;
+    void verifyNow(run.current);
+  });
+  useEffect(() => {
+    if (resume) resumeVerify();
+  }, [resume]);
+
+  const start = async () => {
+    run.current += 1;
+    offRun.current += 1;
+    const id = run.current;
+    polled.invalidate();
+    setNotice(null);
+    setOpened(null);
+    setDesired(true);
+    setPhase({ step: "saving" });
+    const failure = await actions.save({ enableCua: true }).catch(() => SAVE_FAILED);
+    if (id !== run.current) return;
+    if (failure !== null) {
+      setDesired(null);
+      setPhase(failed(failure));
+      return;
+    }
+    if (!localMac) {
+      setPhase({ step: "idle" });
+      return;
+    }
+    setPhase({ step: "checking" });
+    const checked = await actions.checkGrants().catch(() => null);
+    if (id !== run.current) return;
+    if (checked === null) {
+      setPhase(failed("Could not check permissions on this Mac."));
+      return;
+    }
+    const read = polled.record(checked);
+    if (checked.principal === "unusable") {
+      setPhase(failed(checked.message));
+      return;
+    }
+    if (CUA_PERMISSIONS.some((permission) => !cuaGranted(checked, permission))) {
+      setPhase({ step: "granting", afterRead: read });
+      return;
+    }
+    await verifyNow(id);
+  };
+
+  const stop = async () => {
+    run.current += 1;
+    offRun.current += 1;
+    const id = offRun.current;
+    polled.invalidate();
+    setNotice(null);
+    setOpened(null);
+    setDesired(false);
+    setPhase({ step: "idle" });
+    const failure = await actions.save({ enableCua: false }).catch(() => SAVE_FAILED);
+    if (failure === null || id !== offRun.current) return;
+    // The setting is still on, so the switch shows that again and Off can be retried.
+    setDesired(null);
+    setNotice("Could not turn off computer use. Try again.");
+  };
+
+  const openGrant = (permission: CuaPermission) => {
+    setOpening(true);
+    setNotice(null);
+    void actions.openGuide(permission).then(
+      () => {
+        setOpening(false);
+        setOpened(permission);
+      },
+      () => {
+        setOpening(false);
+        setNotice("Could not open System Settings. Try again.");
+      },
+    );
+  };
+
+  const relaunch = actions.relaunch
+    ? () => {
+        setNotice(null);
+        void actions
+          .relaunch?.()
+          .catch(() => setNotice("Could not reopen GOAT. Quit it and open it again."));
+      }
+    : undefined;
+
+  return {
+    on,
+    phase,
+    busy,
+    holder,
+    unusable: grants?.principal === "unusable" ? grants.message : null,
+    missing,
+    opened,
+    opening,
+    notice,
+    pollError: localMac ? polled.error : null,
+    /** Quitting and reopening GOAT is the remedy for an app that holds its own grants. */
+    needsRelaunch:
+      relaunch !== undefined && cuaNeedsRelaunch({ grants: holder, opened, verification: null }),
+    start,
+    stop,
+    openGrant,
+    relaunch,
+  };
+}
+
+export type ComputerUseAutoSetup = ReturnType<typeof useComputerUseAutoSetup>;

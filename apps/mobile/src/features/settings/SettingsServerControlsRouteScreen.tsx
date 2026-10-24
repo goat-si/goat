@@ -31,6 +31,10 @@ import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import {
+  ComputerUseAdvancedRow,
+  useComputerUseAdvanced,
+} from "./computerUse/ComputerUseAdvancedRow";
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
@@ -194,6 +198,7 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
     displayTargets.some((entry) => entry.settings[key] !== reference.settings[key]);
   const skillOn = (entry: { settings: ServerSettings }) =>
     !entry.settings.disabledBuiltInSkills.includes("computer-use");
+  const computerUseAdvanced = useComputerUseAdvanced();
   const computerUseSkillOn =
     reference !== null && displayTargets.every((entry) => skillOn(entry) === skillOn(reference))
       ? skillOn(reference)
@@ -470,16 +475,19 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
-                    <SettingsSwitchRow
-                      icon="desktopcomputer"
-                      label="Computer Use skill"
-                      subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
-                      value={computerUseSkillOn}
-                      disabled={disabledFor("disabledBuiltInSkills")}
-                      onValueChange={(value) =>
-                        writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
-                      }
-                    />
+                    <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
+                    {computerUseAdvanced.expanded ? (
+                      <SettingsSwitchRow
+                        icon="desktopcomputer"
+                        label="Computer Use skill"
+                        subtitle="Built in. Teaches agents to work one window at a time: look, act once, check the result, and hand sign-ins and other private steps to you. Off keeps the tools without the skill."
+                        value={computerUseSkillOn}
+                        disabled={disabledFor("disabledBuiltInSkills")}
+                        onValueChange={(value) =>
+                          writeEach(planMobileBuiltInSkillToggle(targets, "computer-use", value))
+                        }
+                      />
+                    ) : null}
                   </SettingsSection>
                   <SettingsSection
                     title="GOAT tools agents see"

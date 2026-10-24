@@ -843,15 +843,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/integrations",
     targetId: "computer",
     searchTerms: [
-      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions",
+      "cua driver apps desktop screen click type agents control mac linux windows accessibility screen recording permissions setup set up retry",
     ],
   },
   {
     id: "computer-use-skill",
     title: "Computer Use skill",
     to: "/settings/integrations",
-    targetId: "computer",
-    searchTerms: ["built in builtin skill computer use instructions agents observe verify"],
+    searchTerms: [
+      "built in builtin skill computer use instructions agents observe verify advanced readiness",
+    ],
   },
   {
     id: "goat-bot-home",
