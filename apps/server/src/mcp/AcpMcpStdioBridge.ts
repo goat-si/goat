@@ -391,7 +391,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
     )(
       function* (line: string, envelope: JsonRpcEnvelope) {
         const response = yield* Effect.tryPromise({
-          try: () =>
+          try: (signal) =>
             fetchImplementation(options.endpoint, {
               method: "POST",
               headers: {
@@ -402,6 +402,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
                 ...(protocolVersion === null ? {} : { "mcp-protocol-version": protocolVersion }),
               },
               body: line,
+              signal,
             }),
           catch: bridgeError,
         });
