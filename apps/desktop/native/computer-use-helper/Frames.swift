@@ -36,7 +36,8 @@ struct FrameTarget {
   init?(_ object: [String: Any]) {
     guard let key = object["key"] as? String, !key.isEmpty,
       let pid = object["pid"] as? Int, pid > 0,
-      let windowId = object["windowId"] as? Int, windowId > 0,
+      // Window 0 is valid on the wire and simply matches no window: windowGone, not a bad request.
+      let windowId = object["windowId"] as? Int, windowId >= 0,
       let maxWidth = object["maxWidth"] as? Int, maxWidth > 0,
       let intervalMs = object["intervalMs"] as? Int, intervalMs > 0
     else { return nil }

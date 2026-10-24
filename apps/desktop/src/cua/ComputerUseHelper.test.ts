@@ -133,6 +133,50 @@ describe("ComputerUseHelper protocol", () => {
     await Promise.all([older.close(), newer.close()]);
   });
 
+  it("passes on only the frames of the capture request in force, once it is sent", async () => {
+    const picture = (framesId: number) => ({
+      type: "frame",
+      framesId,
+      key: "desktop:control:a",
+      width: 320,
+      height: 200,
+      data: "QUJD",
+    });
+    const helper = fakeHelper({
+      greeting: { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID, features: ["frames"] },
+      // A frame of the old request still in the pipe when the new one is answered.
+      reply: ({ params }, write) => {
+        const { framesId } = params as { framesId: number };
+        write(picture(framesId - 1));
+        return { result: { framesId } };
+      },
+      after: ({ params }, write) => {
+        const { framesId } = params as { framesId: number };
+        write(picture(framesId));
+        write({ type: "frameUnavailable", framesId, key: "desktop:control:a", reason: "private" });
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    assert.isTrue(session.canFrame);
+    const seen: Array<{ type: string; framesId: number }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onFrame((frame) => {
+        seen.push({ type: frame.type, framesId: frame.framesId });
+        if (frame.type === "frameUnavailable") resolve();
+      }),
+    );
+    await session.frames(5, [
+      { key: "desktop:control:a", pid: 7, windowId: 3, maxWidth: 320, intervalMs: 500 },
+    ]);
+    await done;
+    assert.deepEqual(seen, [
+      { type: "frame", framesId: 5 },
+      { type: "frameUnavailable", framesId: 5 },
+    ]);
+    assert.deepEqual(helper.received.at(-1)?.method, "frames");
+    await session.close();
+  });
+
   it("delivers the events of the watch in force, switching watches as the answer is read", async () => {
     const target = (windowId: number) => ({ pid: 7, windowId });
     const event = (watchId: string, active: boolean, windowId: number) => ({
