@@ -65,18 +65,32 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
     ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 
+/**
+ * Whether a move_cursor moves the real pointer under pinned cua-driver 0.37.0
+ * (normalize_action_target): only a desktop move with no window selector. Any other form moves
+ * only GOAT's overlay, or is refused before it runs: legacy desktop scope with a pid or window_id
+ * becomes a window move (Linux) or a refusal, and a typed target beside any legacy field, or one
+ * the driver does not accept, is refused. Keys count when present, as the driver checks them.
+ */
+const movesPointer = (given: Readonly<Record<string, unknown>> | undefined) => {
+  const has = (key: string) => given !== undefined && key in given;
+  if (has("target")) {
+    if (has("scope") || has("pid") || has("window_id")) return false;
+    const target = record(given?.target);
+    return (
+      target?.kind === "desktop" &&
+      target.display_id === "primary" &&
+      Object.keys(target).length === 2
+    );
+  }
+  return given?.scope === "desktop" && !has("pid") && !has("window_id");
+};
+
 /** The kinds of event a call can post: none for reads and accessibility-only tools. */
 export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKind> {
   if (READ_ONLY_TOOLS.has(tool) || SEMANTIC_TOOLS.has(tool)) return [];
   const given = record(args);
-  // Pinned cua-driver 0.37.0 moves only the overlay on macOS, Windows and Linux unless the
-  // scope is desktop (including a typed desktop target, which the driver normalizes to scope).
-  if (
-    tool === "move_cursor" &&
-    given?.scope !== "desktop" &&
-    record(given?.target)?.kind !== "desktop"
-  )
-    return [];
+  if (tool === "move_cursor" && !movesPointer(given)) return [];
   // A point makes a keyboard tool click there first; modifiers make a pointer tool press keys.
   const point = typeof given?.x === "number" || typeof given?.y === "number";
   // click, right_click and drag name their held keys `modifier`.
