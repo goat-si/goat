@@ -546,14 +546,11 @@ const make = Effect.gen(function* () {
         }
         // Proxies waiting on a pause hear their control ended.
         if (endedAny) yield* PubSub.publish(signals, undefined);
-        // Read approvals independently of pause state: a paused helper must keep watching.
+        // Read approvals independently of pause state: a paused helper must keep watching. A
+        // failed read never holds back whether the desktop watches (secret fields, #1235): the
+        // apps it last heard stand, and the read is tried again.
         const listed = yield* live().pipe(Effect.option);
-        if (Option.isNone(listed)) {
-          // No new decision on a failed approval read; retry without losing delivered state.
-          yield* Effect.race(PubSub.take(kicks), Effect.sleep(WATCH_RETRY_MS));
-          continue;
-        }
-        const grants = listed.value;
+        const grants = Option.getOrElse(listed, () => []);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         const current = [...controls.values()].filter(
           (record) => acting(record) && DateTime.toEpochMillis(record.expiresAt) > now,
@@ -570,7 +567,7 @@ const make = Effect.gen(function* () {
           for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
           for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
         }
-        const apps = [...approved].sort();
+        const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
         const appsChanged =
           apps.length !== deliveredApps.length ||
           apps.some((app, index) => app !== deliveredApps[index]);
@@ -593,7 +590,8 @@ const make = Effect.gen(function* () {
         const waits = [
           ...(active ? [Math.min(...expiries) - now] : []),
           // A failed write is tried again: the desktop may not reconnect to hear it otherwise.
-          ...(retry ? [WATCH_RETRY_MS] : []),
+          // So is a failed approval read.
+          ...(retry || Option.isNone(listed) ? [WATCH_RETRY_MS] : []),
         ];
         const woken = PubSub.take(kicks);
         yield* waits.length > 0 ? Effect.race(woken, Effect.sleep(Math.min(...waits))) : woken;
