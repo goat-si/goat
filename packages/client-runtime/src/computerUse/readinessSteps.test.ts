@@ -125,6 +125,28 @@ it("keeps missing helper reports and older server tools unknown instead of infer
   );
 });
 
+it("says which macOS grant keeps agents without tools, and only while the tools are unavailable (#1399)", () => {
+  const block = {
+    reason: "permissionsNotGranted",
+    missing: ["screenRecording"],
+    holder: "helper",
+  } as const;
+  const steps = (tools: CuaToolsAvailability) =>
+    computerUseReadinessSteps({ readiness: ready, platform: "darwin", tools, block }).steps.find(
+      (step) => step.id === "tools",
+    );
+  expect(steps("unavailable")).toMatchObject({
+    state: "blocked",
+    detail: [
+      "Computer use cannot start: macOS has not allowed GOAT Computer Use in Screen & System Audio Recording. A person turns it on in System Settings > Privacy & Security.",
+    ],
+  });
+  // Turned off, or running again after the grant: the old reason no longer explains anything.
+  expect(steps("off")?.state).toBe("blocked");
+  expect(steps("off")?.detail[0]).toContain("Computer use is off");
+  expect(steps("available")?.state).toBe("ok");
+});
+
 it("places reasons under their not-ready steps without changing those states", () => {
   const result = view({
     ...ready,
