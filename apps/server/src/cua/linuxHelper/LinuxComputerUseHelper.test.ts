@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The helper's channel is a Node stream; the test feeds it one.
 import * as NodeStream from "node:stream";
 import * as NodeZlib from "node:zlib";
 
@@ -10,7 +11,7 @@ import {
   type ComputerUseActionRequest,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 import type { SecureFocus } from "./atspiFocus.ts";
 import type { DriverClient, DriverToolResult } from "./CuaDriverMcp.ts";
@@ -168,6 +169,15 @@ function fixtureDriver() {
   return { state, client };
 }
 
+/** An action as the agent writes it; the helper fills in the target and observation. */
+type ActionInput = ComputerUseActionRequest extends infer Request
+  ? Request extends ComputerUseActionRequest
+    ? Omit<Request, "target" | "observationId" | "delivery"> & {
+        readonly delivery?: ComputerUseActionRequest["delivery"];
+      }
+    : never
+  : never;
+
 /** One helper behind its real channel, and a client that speaks the protocol to it. */
 async function connect(
   options: {
@@ -234,12 +244,7 @@ async function connect(
       observation: decodeObservation(reply.result),
     };
   };
-  const act = async (
-    action: Omit<ComputerUseActionRequest, "target" | "observationId" | "delivery"> & {
-      delivery?: "background" | "foreground";
-    },
-    from: ComputerUseObservation,
-  ) => {
+  const act = async (action: ActionInput, from: ComputerUseObservation) => {
     const reply = await request(action.action, {
       delivery: "background",
       ...action,
