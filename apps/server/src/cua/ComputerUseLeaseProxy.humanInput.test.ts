@@ -3,7 +3,13 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  call,
+  CONTROL,
+  harness,
+  type ToolAnswer,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy telling a person's input from the agent's", () => {
   it.effect("a person's key during the agent's own click reaches the server", () =>
@@ -36,6 +42,29 @@ describe("ComputerUseLeaseProxy telling a person's input from the agent's", () =
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
       yield* h.nextToProvider;
       assert.equal(yield* h.agentCall, "end 1");
+    }),
+  );
+
+  it.effect("a call whose start report a pause overtook never reaches the next driver", () =>
+    Effect.gen(function* () {
+      const agentInputGate = yield* Deferred.make<void>();
+      const h = yield* harness({ humanInput: true, agentInputGate });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      assert.equal(yield* h.agentCall, "start 1");
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+      yield* h.killed;
+      yield* h.push(active());
+      yield* h.restarted;
+      yield* Deferred.succeed(agentInputGate, undefined);
+      const answer = (yield* h.nextToProvider) as unknown as ToolAnswer;
+      assert.equal(answer.id, 1);
+      assert.deepInclude(answer.result.structuredContent, { detail: "waiting_for_human" });
+      assert.notProperty(answer.result.structuredContent, "effect");
+      // Its start is closed again, after the start, so it hides nobody's input.
+      assert.equal(yield* h.agentCall, "end 1");
+      yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
     }),
   );
 });

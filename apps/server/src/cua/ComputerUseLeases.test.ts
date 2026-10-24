@@ -333,7 +333,10 @@ layer("ComputerUseLeases controls", (it) => {
         );
         assert.isTrue(yield* call("start", 1_000));
         // A report dated far from the server's clock is refused and records nothing.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
+        assert.equal(
+          yield* leases.humanInput(thread, mine.controlId, 10 * 60_000, "pointer"),
+          "refused",
+        );
         assert.isFalse(
           yield* leases.agentInput(other, bots.controlId, {
             call: "8",
@@ -342,12 +345,12 @@ layer("ComputerUseLeases controls", (it) => {
           }),
         );
         // The bot's click, seen by my helper while it runs and just after it answered.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100, "pointer"), "agents");
         yield* call("end", 1_200);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600), "agents");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600, "pointer"), "agents");
         assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
         // A person, a moment later.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000), "paused");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000, "pointer"), "paused");
         assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
           _tag: "paused",
           reason: "human_input",
@@ -356,7 +359,7 @@ layer("ComputerUseLeases controls", (it) => {
         // A call left open by a control that has ended covers nothing.
         yield* call("start", 5_000);
         yield* leases.stop(other);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100), "paused");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100, "pointer"), "paused");
         assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
           _tag: "paused",
           reason: "human_input",
@@ -376,12 +379,12 @@ layer("ComputerUseLeases controls", (it) => {
         yield* leases.agentInput(other, bots.controlId, {
           call: "7",
           state: "start",
-          at: 1_000,
+          at: 30_000,
           kinds: ["pointer"],
         }),
       );
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100, "pointer"), "agents");
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_150, "keyboard"), "paused");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_100, "pointer"), "agents");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 30_150, "keyboard"), "paused");
       assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
         _tag: "paused",
         reason: "human_input",
@@ -398,14 +401,14 @@ layer("ComputerUseLeases controls", (it) => {
       const bots = yield* leases.control(other, Option.none());
       // A click every 400 ms, each answered after 100 ms: its cover never lapses.
       for (let call = 0; call < 30; call++) {
-        const at = 1_000 + call * 400;
+        const at = 30_000 + call * 400;
         const report = { call: String(call), kinds: ["pointer"] as const };
         yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at });
         yield* leases.agentInput(other, bots.controlId, { ...report, state: "end", at: at + 100 });
       }
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_000, "pointer"), "agents");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 34_000, "pointer"), "agents");
       // Past ten seconds of unbroken cover, pointer input pauses the agents, erring toward a person.
-      assert.equal(yield* leases.humanInput(thread, mine.controlId, 12_100, "pointer"), "paused");
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, 41_100, "pointer"), "paused");
     }),
   );
 
@@ -419,11 +422,11 @@ layer("ComputerUseLeases controls", (it) => {
         const mine = yield* leases.control(thread, Option.none());
         const bots = yield* leases.control(other, Option.none());
         // An old proxy, or another thread's control id, pauses nobody.
-        assert.equal(yield* leases.humanInput(thread, "control:old", 0), "refused");
-        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0), "refused");
+        assert.equal(yield* leases.humanInput(thread, "control:old", 0, "pointer"), "refused");
+        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0, "pointer"), "refused");
         assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
 
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "paused");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0, "pointer"), "paused");
         for (const [id, control] of [
           [thread, mine],
           [other, bots],
@@ -435,7 +438,7 @@ layer("ComputerUseLeases controls", (it) => {
         yield* leases.resume;
         yield* leases.stop(thread);
         // An ended control's proxy can no longer pause the agents left.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "refused");
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0, "pointer"), "refused");
         assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
       }),
   );
