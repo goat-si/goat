@@ -190,7 +190,11 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
       render={<div id={props.optionId} />}
       aria-selected={props.isActive}
       aria-description={inactive ? (detail ?? undefined) : undefined}
-      aria-disabled={availability?.state === "checking" || undefined}
+      aria-disabled={
+        availability?.state === "checking" ||
+        (availability?.state === "unavailable" && !availability.setup) ||
+        undefined
+      }
       value={props.item.id}
       data-composer-item-id={props.item.id}
       data-unavailable={inactive ? "true" : undefined}

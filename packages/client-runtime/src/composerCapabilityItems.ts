@@ -34,8 +34,13 @@ export interface ComposerCapabilityContext {
     | { readonly error: string }
     | null;
   readonly interactionMode: ProviderInteractionMode;
-  /** The driver of the provider the next turn goes to. */
-  readonly providerDriver: string | null;
+  /** The drivers of every provider the next send goes to; more than one when it fans out. */
+  readonly providerDrivers: ReadonlyArray<string>;
+  /**
+   * The thread may run unattended (a channel worker, or a task another agent started), where
+   * the server attaches computer use only after a person approves it.
+   */
+  readonly mayRunUnattended: boolean;
 }
 
 const DESCRIPTION: Record<TurnCapability, string> = {
@@ -52,8 +57,7 @@ const AVAILABLE: ComposerCapabilityAvailability = { state: "available", note: nu
 
 /**
  * The same gates the server applies when the turn starts, in the words a person needs to act
- * on them. Turns sent from the composer are attended, so the unattended lease does not apply;
- * a read-only sandbox is the provider's and is reported by the agent if it bites.
+ * on them. A read-only sandbox is the provider's and is reported by the agent if it bites.
  */
 export function turnCapabilityAvailability(
   capability: TurnCapability,
@@ -62,10 +66,16 @@ export function turnCapabilityAvailability(
   if (capability === "browser") return AVAILABLE;
   if (context.interactionMode === "plan")
     return { state: "unavailable", reason: "Computer use is off in plan mode.", setup: false };
-  if (context.providerDriver !== null && !COMPUTER_USE_PROVIDER_DRIVERS.has(context.providerDriver))
+  const supported = context.providerDrivers.filter((driver) =>
+    COMPUTER_USE_PROVIDER_DRIVERS.has(driver),
+  ).length;
+  if (context.providerDrivers.length > 0 && supported === 0)
     return {
       state: "unavailable",
-      reason: "This agent doesn't run on this computer, so it can't use computer use.",
+      reason:
+        context.providerDrivers.length === 1
+          ? "This agent doesn't run on this computer, so it can't use computer use."
+          : "None of the selected agents run on this computer, so they can't use computer use.",
       setup: false,
     };
   const computerUse = context.computerUse;
@@ -87,10 +97,17 @@ export function turnCapabilityAvailability(
     return { state: "unavailable", reason: status.display.reason, setup: true };
   if (!enabled)
     return { state: "unavailable", reason: "Computer use is off for this host.", setup: true };
-  // Limited support (missing grants, Wayland) still runs; the person sees the limit.
-  return status.display?.capability === "partial"
-    ? { state: "available", note: status.display.reason }
-    : AVAILABLE;
+  // Limited support (missing grants, Wayland) still runs; the person sees each limit.
+  const notes = [
+    status.display?.capability === "partial" ? status.display.reason : null,
+    supported < context.providerDrivers.length
+      ? "Some selected agents can't use it and will say so."
+      : null,
+    context.mayRunUnattended
+      ? "This thread can run unattended, so a person approves computer use first."
+      : null,
+  ].filter((note) => note !== null);
+  return notes.length === 0 ? AVAILABLE : { state: "available", note: notes.join(" ") };
 }
 
 /** Entries whose name or a search term starts with the typed query; all of them for a bare @. */
@@ -123,4 +140,18 @@ export function composerCapabilityDetail(item: ComposerCapabilityItem): string {
     case "unavailable":
       return item.availability.reason;
   }
+}
+
+/**
+ * Whether a thread's turns may count as unattended on the server: a channel worker, or a task
+ * another agent started. Threads an agent launched elsewhere are not visible here, so this can
+ * only say "maybe"; the server decides and the agent explains a refusal.
+ */
+export function composerThreadMayRunUnattended(
+  threadId: string | null,
+  lineage: { readonly relationshipToParent: "fork" | "subagent" | null } | undefined,
+): boolean {
+  return (
+    threadId?.startsWith("channel-worker:") === true || lineage?.relationshipToParent === "subagent"
+  );
 }

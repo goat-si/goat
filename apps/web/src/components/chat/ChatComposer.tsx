@@ -182,7 +182,11 @@ import {
   threadContextRecord,
   threadContextReference,
 } from "~/lib/composerContextRecords";
-import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
+import {
+  composerCapabilityTargetDrivers,
+  composerComputerSetupLocation,
+  selectComposerCapability,
+} from "./composerCapabilitySelection";
 import { useNavigate } from "@tanstack/react-router";
 import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
@@ -1223,6 +1227,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
     interactionMode,
+    capabilityTargetDrivers: composerCapabilityTargetDrivers(
+      multipleModelSelections ?? [selectedModelSelection],
+      providerInstanceEntries,
+    ),
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1954,22 +1962,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     };
     if (item.type === "capability") {
       if (trigger.kind !== "path") return;
-      const { availability } = item;
-      if (availability.state === "available") {
-        const record = turnCapabilityContextRecord(item.capability);
-        if (replaceTriggerWith(`${formatInlineContextReference(record)} `))
-          setComposerHighlightedItemId(null);
-      }
-      // Still checking, or nothing in Settings fixes it: the typed text stays and the row says why.
-      if (availability.state !== "unavailable" || !availability.setup) return;
-      if (replaceTriggerWith("")) setComposerHighlightedItemId(null);
-      void navigate({
-        to: "/settings/integrations",
-        // The host this composer sends to, which is the one whose computer use needs setting up.
-        search: { project: undefined, machine: environmentId, checkout: undefined },
-        hash: "computer",
+      return selectComposerCapability({
+        item,
+        replaceTriggerWith,
+        onReplaced: () => setComposerHighlightedItemId(null),
+        openSetup: () => void navigate(composerComputerSetupLocation(environmentId)),
       });
-      return;
     }
     if (item.type === "path") {
       if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;

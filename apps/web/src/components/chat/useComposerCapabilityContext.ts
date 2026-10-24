@@ -11,9 +11,8 @@ import { serverEnvironment } from "../../state/server";
  */
 export function useComposerCapabilityContext(input: {
   readonly environmentId: EnvironmentId;
-  readonly interactionMode: ProviderInteractionMode;
-  readonly providerDriver: string | null;
   readonly active: boolean;
+  readonly turn: Omit<ComposerCapabilityContext, "computerUse">;
 }): ComposerCapabilityContext {
   const enabled = useEnvironmentSettings(input.environmentId, (settings) => settings.enableCua);
   const query = useEnvironmentQuery(
@@ -28,9 +27,5 @@ export function useComposerCapabilityContext(input: {
       : query.data !== null && query.data !== undefined
         ? { enabled, status: query.data }
         : null;
-  return {
-    computerUse,
-    interactionMode: input.interactionMode,
-    providerDriver: input.providerDriver,
-  };
+  return { ...input.turn, computerUse };
 }

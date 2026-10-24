@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   composerCapabilityDetail,
+  composerThreadMayRunUnattended,
   matchComposerCapabilityItems,
   turnCapabilityAvailability,
   type ComposerCapabilityContext,
@@ -9,7 +10,8 @@ import {
 
 const ready: ComposerCapabilityContext = {
   interactionMode: "default",
-  providerDriver: "codex",
+  providerDrivers: ["codex"],
+  mayRunUnattended: false,
   computerUse: {
     enabled: true,
     status: {
@@ -44,7 +46,12 @@ describe("composer capability entries", () => {
 
   it.each([
     ["plan mode", { ...ready, interactionMode: "plan" as const }, false],
-    ["a provider that runs elsewhere", { ...ready, providerDriver: "cursorCloud" }, false],
+    ["a provider that runs elsewhere", { ...ready, providerDrivers: ["cursorCloud"] }, false],
+    [
+      "only fanout targets that run elsewhere",
+      { ...ready, providerDrivers: ["cursorCloud", "muse"] },
+      false,
+    ],
     ["an unsupported platform", status({ platform: "other" }), false],
     [
       "no usable screen",
@@ -84,6 +91,40 @@ describe("composer capability entries", () => {
     expect(turnCapabilityAvailability("computer-use", ready)).toEqual({
       state: "available",
       note: null,
+    });
+  });
+
+  it("judges a fanout by every target and says when only some can use it", () => {
+    expect(
+      turnCapabilityAvailability("computer-use", {
+        ...ready,
+        providerDrivers: ["codex", "claudeAgent"],
+      }),
+    ).toEqual({ state: "available", note: null });
+    expect(
+      turnCapabilityAvailability("computer-use", {
+        ...ready,
+        providerDrivers: ["codex", "cursorCloud"],
+      }),
+    ).toEqual({
+      state: "available",
+      note: "Some selected agents can't use it and will say so.",
+    });
+  });
+
+  it("warns that a thread that may run unattended needs a person's approval first", () => {
+    expect(composerThreadMayRunUnattended("channel-worker:slack:1", undefined)).toBe(true);
+    expect(composerThreadMayRunUnattended("thread-1", { relationshipToParent: "subagent" })).toBe(
+      true,
+    );
+    expect(composerThreadMayRunUnattended("thread-1", { relationshipToParent: "fork" })).toBe(
+      false,
+    );
+    expect(
+      turnCapabilityAvailability("computer-use", { ...ready, mayRunUnattended: true }),
+    ).toEqual({
+      state: "available",
+      note: "This thread can run unattended, so a person approves computer use first.",
     });
   });
 });
