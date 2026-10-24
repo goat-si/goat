@@ -187,9 +187,14 @@ const printedBy = <E>(program: Effect.Effect<unknown, E>) =>
 
 // Synthetic canaries; none of them is a real credential.
 const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktand0In0.Y2FuYXJ5LWp3dC1zaWduYXR1cmU";
+// A valid JWT whose header has spaces, so it does not start with "eyJ".
+const spacedJwt =
+  "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
 const canaries = [
   "canaryGoatEnvToken0123456789",
   canaryJwt,
+  spacedJwt,
+  "canary-array-cookie",
   "canary-cookie-value",
   "canary-set-cookie",
   "canary-json-token",
@@ -202,8 +207,10 @@ const canaries = [
 /** An error whose message, own field and nested cause each carry a credential. */
 const leakyError = (label: string) =>
   Object.assign(
-    new Error(`${label} failed with ${canaryJwt}`, {
-      cause: new Error('upstream echoed {"access_token":"canary-json-token"}'),
+    new Error(`${label} failed with ${canaryJwt} and ${spacedJwt}`, {
+      cause: new Error(
+        'upstream echoed {"access_token":"canary-json-token","setCookie":["sid=canary-array-cookie"]}',
+      ),
     }),
     {
       headers: {

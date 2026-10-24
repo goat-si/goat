@@ -34,16 +34,37 @@ const QUOTINGS = [
 // A value after = or :, whole when it is quoted.
 const VALUE = String.raw`(?:"${DOUBLE_BODY}"?|'${SINGLE_BODY}'?|\S+)`;
 
-const REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
-  // "set-cookie": ["a=1", "b=2"], every element whatever it holds
+/** Whether a base64url part decodes to a JWT or JWE header: a JSON object naming its alg. */
+function isJoseHeader(part: string): boolean {
+  try {
+    const header: unknown = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return typeof header === "object" && header !== null && "alg" in header;
+  } catch {
+    return false;
+  }
+}
+
+const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
+  // "setCookie": ["a=1", "b=2"]: every element of a credential array, whatever it holds
   ...QUOTINGS.map(
     ([quote, body]) =>
       [
         new RegExp(
-          String.raw`(${quote}set-cookie${quote}\s*:\s*)\[(?:\s*${quote}${body}(?:${quote})?\s*,?)*\s*\]?`,
+          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)\[(?:\s*(?:${quote}${body}(?:${quote})?|[^\]\\"',\s]+)\s*,?)*\s*\]?`,
           "gi",
         ),
         `$1[${MASK}]`,
+      ] as const,
+  ),
+  // "cookie": {"sid": "..."}: a credential object, up to its first closing brace
+  ...QUOTINGS.map(
+    ([quote, body]) =>
+      [
+        new RegExp(
+          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)\{(?:${quote}${body}(?:${quote})?|[^{}"'\\])*\}?`,
+          "gi",
+        ),
+        `$1{${MASK}}`,
       ] as const,
   ),
   // "access_token": "value"
@@ -54,10 +75,25 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
         `$1${MASK}`,
       ] as const,
   ),
+  // "pin": 1234: a credential field's bare number, boolean or null
+  ...QUOTINGS.map(
+    ([quote]) =>
+      [
+        new RegExp(
+          String.raw`(${quote}(?:${CREDENTIAL_KEY})${quote}\s*:\s*)(?![\s"'[{\\])[^,}\]\s]+`,
+          "gi",
+        ),
+        `$1${MASK}`,
+      ] as const,
+  ),
   // Cookie and Set-Cookie headers hold every cookie up to the end of the line.
   [/\b((?:set-)?cookie\s*:\s*)[^\r\n]+/gi, `$1${MASK}`],
-  // A JWT: a JSON header, a payload and a signature, each base64url.
-  [/\beyJ[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]{2,}\.[A-Za-z0-9_-]*/g, MASK],
+  // A JWT or JWE: base64url parts led by a JSON header. "{" followed by a quote or whitespace
+  // encodes as "ey" or "ew"; checking the header keeps dotted names such as eyes.width.px.
+  [
+    /\be[wy][A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]*){2,4}/g,
+    (match) => (isJoseHeader(match.slice(0, match.indexOf("."))) ? MASK : match),
+  ],
   // https://user:token@host/repo.git
   [/\b([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
@@ -85,7 +121,10 @@ const MAX_SCANNED = 8 * MAX_STRING;
 export function redactLogText(text: string): string {
   const scanned = text.length <= MAX_SCANNED ? text : text.slice(0, MAX_SCANNED);
   const redacted = REDACTIONS.reduce(
-    (current, [pattern, replacement]) => current.replace(pattern, replacement),
+    (current, [pattern, replacement]) =>
+      typeof replacement === "string"
+        ? current.replace(pattern, replacement)
+        : current.replace(pattern, replacement),
     redactGoatCredentials(scanned),
   );
   return redacted.length <= MAX_STRING && scanned === text

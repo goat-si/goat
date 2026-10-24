@@ -11,6 +11,9 @@ import { defectSummary, redactCause, redactLogMessage, redactLogText } from "./L
 
 // Synthetic canaries throughout; none of them is a real credential.
 const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.Y2FuYXJ5LXNpZ25hdHVyZQ";
+// The header { "alg": "HS256", "typ": "JWT" }, with spaces, encodes as "eyAi…".
+const spacedJwt =
+  "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
 
 describe("redactLogText", () => {
   it.each([
@@ -39,6 +42,14 @@ describe("redactLogText", () => {
     ['{\\"token\\":\\"abc\\\\\\"CANARY\\"}', '{\\"token\\":\\"***\\"}'],
     ["{'password': 'it\\'s CANARY'}", "{'password': '***'}"],
     ['password="two CANARY words" user=me', "password=*** user=me"],
+    // Credential fields holding arrays, objects or bare values, and a JWT whose header has spaces.
+    [
+      '{"setCookie":["sid=CANARY; Path=/"],"cookie":["sid=CANARY", 7]}',
+      '{"setCookie":[***],"cookie":[***]}',
+    ],
+    ['{"cookie":{"sid":"CANARY"},"status":200}', '{"cookie":{***},"status":200}'],
+    ['{"password":123456,"ok":true}', '{"password":***,"ok":true}'],
+    [`id ${spacedJwt} expired`, "id *** expired"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
   });
@@ -50,6 +61,7 @@ describe("redactLogText", () => {
     "the cookie jar is empty",
     "https://github.com/goat-si/goat/pull/1388",
     '{"tokenCount":3,"secretName":"memory-hub-internal"}',
+    "eyes.width.px and ewma.window.size=3",
   ])("leaves %j as it is", (text) => {
     expect(redactLogText(text)).toBe(text);
   });
