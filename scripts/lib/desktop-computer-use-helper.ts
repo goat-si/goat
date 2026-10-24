@@ -3,6 +3,13 @@ import * as Path from "effect/Path";
 import { ChildProcess } from "effect/process";
 import { requireReleaseCommand, runReleaseCommand } from "./release-verify.ts";
 
+/**
+ * The helper channel a packaged app embeds. Never "dev": a dev helper skips its parent check
+ * (GOATComputerUseAllowAnyParent), so it must not ship in a nightly or stable app.
+ */
+export const packagedHelperChannel = (updateChannel: "latest" | "nightly") =>
+  updateChannel === "nightly" ? ("nightly" as const) : ("stable" as const);
+
 export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseHelper")(
   function* (input: {
     readonly repoRoot: string;
@@ -15,7 +22,7 @@ export const stageDesktopComputerUseHelper = Effect.fn("stageDesktopComputerUseH
     const args = [
       path.join(input.repoRoot, "scripts/build-computer-use-helper.ts"),
       "--channel",
-      input.channel === "nightly" ? "nightly" : "stable",
+      packagedHelperChannel(input.channel),
       "--output",
       input.output,
     ];
