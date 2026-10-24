@@ -76,7 +76,7 @@ export function defaultCheckoutWorkers(platform: NodeJS.Platform): string {
  * `git config --show-scope --get-regexp` output for `core.worktree` and
  * `extensions.worktreeConfig` read inside it.
  */
-export function worktreeRootSources(scopedConfig: string) {
+function worktreeRootSources(scopedConfig: string) {
   const entries = scopedConfig.split("\n").map((line) => {
     const [scope = "", entry = ""] = line.split("\t");
     const [key = "", ...value] = entry.split(" ");
