@@ -166,9 +166,23 @@ export function redact(detail: string, environment: NodeJS.ProcessEnv) {
   for (const value of Object.values(environment)) {
     if (value && value.length >= 6) text = text.split(value).join("[redacted]");
   }
-  text = text.replace(/https?:\/\/[^\s<>]+/g, "[link redacted]");
+  // Screen text turns cursor jumps into spaces and keeps wrapped lines, so a value can come back
+  // with whitespace inside it. Mask it with any whitespace between its characters as well.
+  for (const value of Object.values(environment)) {
+    const compact = value?.replace(/\s+/g, "");
+    if (compact && compact.length >= 6) text = text.replace(spacedPattern(compact), "[redacted]");
+  }
+  // A URL wrapped onto following lines keeps its continuation inside the mask.
+  text = text.replace(/https?:\/\/[^\s<>]+(?:\n[^\s<>]+)*/g, "[link redacted]");
   text = text.replace(/(?:sk-ant-|Bearer\s+)[A-Za-z0-9_-]+/gi, "[redacted]");
   return text.slice(0, 1024).trim();
+}
+
+function spacedPattern(compact: string) {
+  const characters = Array.from(compact, (character) =>
+    character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  );
+  return new RegExp(characters.join("\\s*"), "g");
 }
 
 export function readSendReceipt(raw: string, expectedId: string, environment: NodeJS.ProcessEnv) {

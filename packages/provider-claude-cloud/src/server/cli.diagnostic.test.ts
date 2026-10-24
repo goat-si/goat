@@ -30,8 +30,10 @@ it.effect("reads a cursor-spaced, wrapped diagnostic as Claude shows it on scree
 it.effect.each([
   ["fixture  secret", "Error: invalid fixture  secret\n"],
   ["fixture\nsecret", "Error: invalid fixture\r\r\nsecret\r\r\n"],
+  ["fixture-secret", "Error: invalid fixture-\u001b[24Gsecret\n"],
+  ["fixture-secret", "Error: invalid fixture-\u001b[1Csecret\n"],
 ] as const)(
-  "redacts a sign-in value before collapsing the diagnostic's whitespace (%#)",
+  "redacts a sign-in value however the screen spaced or wrapped it (%#)",
   ([value, output]) =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -63,6 +65,22 @@ it.effect("still recognizes a diagnostic whose text starts on the line after Err
       const error = yield* handle.exited.pipe(Effect.flip);
       expect(error.outcome).toBe("uncertain");
       expect(error.detail).toContain("fixture transport interrupted");
+    }),
+  ),
+);
+
+it.effect("masks a wrapped link together with its continuation line", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Error: visit https://example.invalid/?token=\r\r\nprivate-url-token\r\r\n");
+      h.fake.finish(1);
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+      expect(error.detail).toBe("visit [link redacted]");
     }),
   ),
 );
