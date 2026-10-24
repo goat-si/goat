@@ -15,6 +15,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { decodeRemoteDispatchRows, type RemoteDispatchRow } from "./remoteDispatchRow.ts";
 
@@ -30,6 +31,18 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
 ) {
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const sql = yield* SqlClient.SqlClient;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  // The fence goes out under the origin thread's own ceiling, as the remote task cancel replay
+  // does. Launching on another machine needs a full-access caller, so a link that admitted the
+  // launch admits its recovery; a thread lowered or deleted since is never exceeded through it.
+  const ceiling = threads.getThreadShell(row.origin_thread_id).pipe(
+    Effect.map((shell) =>
+      shell === null || shell.deletedAt !== null
+        ? ("approval-required" as const)
+        : shell.runtimeMode,
+    ),
+    Effect.orElseSucceed(() => "approval-required" as const),
+  );
   const answer = yield* ssh.callHostTool(
     {
       host: row.host,
@@ -39,7 +52,7 @@ const resolveLostThreadLaunch = Effect.fn("remoteReports.resolveLostThreadLaunch
       timeoutMs: 60_000,
       arguments: { correlationId: row.correlation_id, readKey: row.read_key },
     },
-    Effect.succeed("approval-required" as const),
+    ceiling,
   );
   const resolution = yield* decodeResolution(answer);
   const at = DateTime.formatIso(yield* DateTime.now);

@@ -1207,6 +1207,7 @@ const make = Effect.gen(function* () {
   const resolveLostLaunches = resolveLostThreadLaunches({ retryAt: resolveRetryAt, start }).pipe(
     Effect.provideService(SqlClient.SqlClient, sql),
     Effect.provideService(SshRemoteDispatch.SshRemoteDispatch, ssh),
+    Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
   );
   // No pass at startup: a row the restart just marked lost is too young to ask about.
   yield* Effect.sleep("1 minute").pipe(
