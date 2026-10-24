@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { type ComputerUseRefusalReason } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -147,24 +148,9 @@ export const ComputerUseLeaseUpdate = Schema.Union([
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
 /**
- * Why computer use refused or stopped one call, shared by the proxy and the native helpers. A
- * policy refusal is targetRefused, never a person's stop (#1146). The agent must observe again or
- * ask for approval; a refused call is never replayed for it.
+ * The proxy's finer account of a refusal, beside its shared reason (ComputerUseRefusalReason in
+ * computerUseProtocol.ts). A policy refusal is targetRefused, never a person's stop (#1146).
  */
-export const ComputerUseRefusalReason = Schema.Literals([
-  "userStoppedSession",
-  "userIntervened",
-  "screenLocked",
-  "permissionsNotGranted",
-  "permissionsPending",
-  "appNotAllowed",
-  "blockedURL",
-  "incompatibleClientVersion",
-  "targetRefused",
-]);
-export type ComputerUseRefusalReason = typeof ComputerUseRefusalReason.Type;
-
-/** The proxy's finer account of a refusal, beside its reason. */
 export const ComputerUseRefusalDetail = Schema.Literals([
   "app_not_approved",
   "desktop_not_approved",
