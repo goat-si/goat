@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { EnvironmentId } from "@goat/contracts";
@@ -40,6 +42,11 @@ interface Fixture {
   readonly strayTunnel?: boolean;
   /** The database a previous instance used, to model a GOAT restart. */
   readonly database?: SqlClient.SqlClient;
+  /** `ocx link add` signals `started`, then waits for `proceed` before linking. */
+  readonly addGate?: {
+    readonly started: Deferred.Deferred<void>;
+    readonly proceed: Deferred.Deferred<void>;
+  };
 }
 
 /** The real membership service and database; the Home's OpenCodex and the device are doubles. */
@@ -66,10 +73,21 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
         return Effect.fail(
           new HubOcxError({ reason: "unreachable", message: "OpenCodex is down." }),
         );
-      links.set(alias!, GOAT_LINK);
-      tunnels.set(portOf(GOAT_LINK), alias!);
-      return Effect.succeed(
-        fixture.addLost ? { code: 124, stdout: "" } : json({ linkId: GOAT_LINK }),
+      const gate = fixture.addGate;
+      return (
+        gate === undefined
+          ? Effect.void
+          : Deferred.succeed(gate.started, undefined).pipe(
+              Effect.andThen(Deferred.await(gate.proceed)),
+            )
+      ).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            links.set(alias!, GOAT_LINK);
+            tunnels.set(portOf(GOAT_LINK), alias!);
+            return fixture.addLost ? { code: 124, stdout: "" } : json({ linkId: GOAT_LINK });
+          }),
+        ),
       );
     }
     if (command === "revoke") {
@@ -306,6 +324,27 @@ it.effect("an add GOAT never saw finish claims nothing: a link a person made lat
     expect(hub.calls).toEqual(["home link status --json"]);
     expect(hub.links.get("boat-builder")).toBe(PERSON_LINK);
     expect((yield* hub.audit).at(-1)).toMatchObject({ action: "hub.release", outcome: "unproven" });
+    expect(yield* hub.membership.pendingReleases).toEqual([]);
+  }),
+);
+
+it.effect("a removal asked for while GOAT's add is under way releases the link once it lands", () =>
+  Effect.gen(function* () {
+    const addGate = {
+      started: yield* Deferred.make<void>(),
+      proceed: yield* Deferred.make<void>(),
+    };
+    const hub = yield* setup({ addGate });
+    const joining = yield* Effect.forkChild(hub.membership.joinProvisioned(scope, "boat-builder"));
+    yield* Deferred.await(addGate.started);
+    // The request takes no hub permit, so it lands while the add holds it.
+    yield* hub.membership.requestRelease("boat-builder");
+    const releasing = yield* Effect.forkChild(hub.membership.releaseProvisioned("boat-builder"));
+    yield* Deferred.succeed(addGate.proceed, undefined);
+    expect((yield* Fiber.join(joining)).state).toBe("child");
+    expect((yield* Fiber.join(releasing)).state).toBe("ready");
+    expect(hub.calls).toContain(`home link revoke --link-id ${GOAT_LINK} --force --yes --json`);
+    expect(hub.links.size).toBe(0);
     expect(yield* hub.membership.pendingReleases).toEqual([]);
   }),
 );
