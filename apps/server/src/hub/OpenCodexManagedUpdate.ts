@@ -24,7 +24,7 @@ import { isRolloutEligible, rolloutBucket } from "../cloud/autoUpdatePolicy.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
-import { countHostThreads, runningSubagents } from "../mcp/hostStatusModel.ts";
+import { countHostThreads, interruptibleTurns, runningSubagents } from "../mcp/hostStatusModel.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -232,15 +232,10 @@ const makeHost = Effect.gen(function* () {
       ? status.value.hosts.find(({ host }) => host === null)
       : undefined;
     const live = entry?.reachability === "ok" && !entry.lastKnown ? entry.metrics : undefined;
-    // Hosts that predate `subagentsRunning` cannot show their children are idle.
-    const subagents = live?.threads.subagentsRunning;
     return {
       alias,
       snapshot: live?.opencodex,
-      runningTurns:
-        live === undefined || subagents === undefined
-          ? undefined
-          : live.threads.running + subagents,
+      runningTurns: live === undefined ? undefined : interruptibleTurns(live.threads),
     };
   });
 
