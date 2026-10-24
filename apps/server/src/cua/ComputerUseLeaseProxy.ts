@@ -920,6 +920,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const detail = decision.status === "refused" ? decision.detail : "unauthorized";
         const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
         const why = reservationRefusal(detail, holder);
+        // Drawn as acting above; it never reaches the driver, so no reply will settle it.
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* options.output(refusal(id, message.method, detail, why, undefined, holder));
       }
       reservationId = decision.reservationId ?? undefined;
