@@ -59,7 +59,7 @@ export const harness = Effect.fn(function* (
      */
     readonly humanInput?: boolean;
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
-    readonly manifestStamp?: Effect.Effect<string | undefined>;
+    readonly manifestStamp?: () => string | undefined;
     readonly acceptHuman?: () => boolean;
   } = {},
 ) {

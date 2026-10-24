@@ -130,9 +130,11 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
   /**
    * Identifies the driver's capability manifest file as it is now (#1416), where the driver
-   * reads one from a known path; absent elsewhere. A change starts a fresh driver child.
+   * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
+   * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
+   * replacement can land in between.
    */
-  readonly manifestStamp?: Effect.Effect<string | undefined>;
+  readonly manifestStamp?: () => string | undefined;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
@@ -499,9 +501,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     );
 
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
-    const child = yield* Scope.fork(scope);
     // Read before the child starts: a change while it starts is caught by the next call.
-    const manifest = options.manifestStamp === undefined ? undefined : yield* options.manifestStamp;
+    const manifest = options.manifestStamp?.();
+    const child = yield* Scope.fork(scope);
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
     const current: Running = { driver, scope: child, manifest };
     running = current;
@@ -714,23 +716,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   /**
    * The desktop rewrote the manifest for a newly approved app (#1416). A driver reads it only
    * when it starts, so an idle child is replaced before the call is judged; every check after
-   * this one sees the new child. Reading the file waits, so a pause, end, replacement or a call
-   * that started meanwhile leaves the child as it is.
+   * this one sees the new child.
    */
   const refreshManifest = Effect.gen(function* () {
     const before = running;
-    if (options.manifestStamp === undefined || before === undefined || outstanding.size > 0) return;
-    const manifest = yield* options.manifestStamp;
-    if (manifest === undefined || manifest === before.manifest) return;
-    if (
-      running !== before ||
-      paused !== undefined ||
-      finished !== undefined ||
-      outstanding.size > 0
-    )
-      return;
+    if (options.manifestStamp === undefined || before === undefined || outstanding.size > 0)
+      return undefined;
+    const manifest = options.manifestStamp();
+    if (manifest === undefined || manifest === before.manifest) return undefined;
     yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
     yield* start();
+    // The child this refresh started, which the call may use as its own.
+    return running;
   });
 
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
@@ -746,10 +743,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && message?.method === "tools/call") {
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
-      yield* refreshManifest;
       // The child this call was admitted under. A pause, takeover or narrowed approval while it
       // waits replaces the child, and the call belongs to what was cut off, never to the next one.
-      const admitted = running;
+      // Only the manifest refresh may replace it for the call.
+      let admitted = running;
+      const refreshed = yield* refreshManifest;
+      if (refreshed !== undefined) admitted = refreshed;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !PROOF_FREE.has(tool));

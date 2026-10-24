@@ -7,7 +7,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFSP from "node:fs/promises";
+import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 
@@ -208,12 +208,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ...(manifestPath === undefined
         ? {}
         : {
-            manifestStamp: Effect.promise(() =>
-              NodeFSP.stat(manifestPath).then(
-                (info) => info.ino + ":" + info.size + ":" + info.mtimeMs,
-                () => undefined,
-              ),
-            ),
+            manifestStamp: () => {
+              try {
+                const info = NodeFS.statSync(manifestPath);
+                return info.ino + ":" + info.size + ":" + info.mtimeMs;
+              } catch {
+                return undefined;
+              }
+            },
           }),
       revokeSessions: (sessions) =>
         // A driver without a socket is a direct child of this connection; killing it ends its
