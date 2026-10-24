@@ -4,9 +4,11 @@
 //
 // No pixel the driver captured reaches the agent, because the driver may have copied them off
 // the screen (CaptureGuard.cs). A get_window_state screenshot is replaced with the helper's own
-// capture of that window at the same size; a zoom with the same region of the helper's capture,
-// scaled as the driver scales it; every other image (verify_state, run_script, run_steps, any
-// tool added later, or a reply the helper cannot pair with its request) is withheld with a note.
+// capture of that window at the same size; a zoom with the region the driver would have cut from
+// the helper's capture. Everything else in any message that is or could be an image (other
+// tools' images, structured or error data, notifications, binary resources, encoded image
+// strings, a reply the helper cannot pair with its request) is withheld with a note, and a driver
+// line the helper cannot read is dropped.
 // screenshot_out_file is dropped wherever it appears, so no image is written around the relay.
 // A request the helper cannot read is refused instead of forwarded unread.
 
@@ -81,10 +83,9 @@ namespace Goat.ComputerUse
         /// <summary>A line from the driver as the agent should receive it, or null to drop it.</summary>
         public string Outbound(string line)
         {
-            // "image" can only be spelled another way through a \u escape.
-            bool mayHoldImage = line.IndexOf("image", StringComparison.Ordinal) >= 0 || line.IndexOf("\\u", StringComparison.Ordinal) >= 0;
             Dictionary<string, object> message = Parse(line);
-            if (message == null) return mayHoldImage ? null : line;
+            // A line that cannot be read cannot be shown to hold no image.
+            if (message == null) return null;
             object id;
             Pending call = null;
             if (message.TryGetValue("id", out id) && id != null)
@@ -93,30 +94,97 @@ namespace Goat.ComputerUse
                     string key = Key(id);
                     if (pending.TryGetValue(key, out call)) pending.Remove(key);
                 }
-            if (!mayHoldImage) return line;
+            bool changed = false;
+            // The only images that pass are the helper's own, in the result's content of a paired
+            // window read or zoom; everything anywhere else that could be one is withheld.
+            var own = new HashSet<object>();
             object result, content;
-            if (!message.TryGetValue("result", out result) || !(result is Dictionary<string, object>) ||
-                !((Dictionary<string, object>)result).TryGetValue("content", out content) || !(content is object[]))
-                return line;
-            var blocks = new List<object>((object[])content);
-            if (!blocks.Exists(IsImage)) return line;
-            for (int i = 0; i < blocks.Count; i++)
+            if (call != null && call.Window != IntPtr.Zero && message.TryGetValue("result", out result) &&
+                result is Dictionary<string, object> &&
+                ((Dictionary<string, object>)result).TryGetValue("content", out content) && content is object[])
             {
-                if (!IsImage(blocks[i])) continue;
-                byte[] own = call == null || call.Window == IntPtr.Zero ? null : Recapture(call, (Dictionary<string, object>)blocks[i]);
-                if (own == null)
+                var blocks = (object[])content;
+                for (int i = 0; i < blocks.Length; i++)
                 {
-                    blocks[i] = Text(Withheld);
-                    continue;
+                    var block = blocks[i] as Dictionary<string, object>;
+                    object type;
+                    if (block == null || !block.TryGetValue("type", out type) || !"image".Equals(type)) continue;
+                    byte[] captured = Recapture(call, block);
+                    if (captured == null) continue;
+                    var image = new Dictionary<string, object>();
+                    image["type"] = "image";
+                    image["mimeType"] = "image/png";
+                    image["data"] = Convert.ToBase64String(captured);
+                    blocks[i] = image;
+                    own.Add(image);
+                    changed = true;
                 }
-                var image = new Dictionary<string, object>();
-                image["type"] = "image";
-                image["mimeType"] = "image/png";
-                image["data"] = Convert.ToBase64String(own);
-                blocks[i] = image;
             }
-            ((Dictionary<string, object>)result)["content"] = blocks.ToArray();
-            return json.Serialize(message);
+            object scrubbed = Scrub(message, own, ref changed);
+            return changed ? json.Serialize(scrubbed) : line;
+        }
+
+        /// <summary>
+        /// Replaces everything that is or could be an image with a note: image and resource-link
+        /// blocks, anything with a blob, anything whose MIME type is an image or is not text, an
+        /// embedded resource holding one, and strings that start like an encoded image.
+        /// </summary>
+        object Scrub(object value, HashSet<object> own, ref bool changed)
+        {
+            var map = value as Dictionary<string, object>;
+            if (map != null)
+            {
+                if (own.Contains(map)) return map;
+                if (ImageLike(map))
+                {
+                    changed = true;
+                    return Text(Withheld);
+                }
+                foreach (string key in new List<string>(map.Keys)) map[key] = Scrub(map[key], own, ref changed);
+                return map;
+            }
+            var array = value as object[];
+            if (array != null)
+            {
+                for (int i = 0; i < array.Length; i++) array[i] = Scrub(array[i], own, ref changed);
+                return array;
+            }
+            var text = value as string;
+            if (text != null && EncodedImage(text))
+            {
+                changed = true;
+                return Withheld;
+            }
+            return value;
+        }
+
+        static bool ImageLike(Dictionary<string, object> map)
+        {
+            string type = Field(map, "type");
+            if (type != null && (type.Equals("image", StringComparison.OrdinalIgnoreCase) || type.Equals("resource_link", StringComparison.OrdinalIgnoreCase)))
+                return true;
+            if (map.ContainsKey("blob")) return true;
+            string mime = Field(map, "mimeType") ?? Field(map, "mime_type") ?? Field(map, "mediaType");
+            if (mime != null && mime.Trim().StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return true;
+            if (mime != null && map.ContainsKey("data") && !mime.Trim().StartsWith("text/", StringComparison.OrdinalIgnoreCase)) return true;
+            object resource;
+            return map.TryGetValue("resource", out resource) && resource is Dictionary<string, object> && ImageLike((Dictionary<string, object>)resource);
+        }
+
+        static bool EncodedImage(string text)
+        {
+            string start = text.TrimStart();
+            foreach (string prefix in new[] { "iVBORw0KGgo", "/9j/", "R0lGOD", "UklGR", "Qk", "data:image/" })
+                if (start.StartsWith(prefix, prefix == "data:image/" ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) &&
+                    (prefix != "Qk" || start.Length > 64))
+                    return true;
+            return false;
+        }
+
+        static string Field(Dictionary<string, object> map, string name)
+        {
+            object value;
+            return map.TryGetValue(name, out value) ? value as string : null;
         }
 
         byte[] Recapture(Pending call, Dictionary<string, object> image)
@@ -144,12 +212,19 @@ namespace Goat.ComputerUse
                 using (Bitmap native = capture(call.Window))
                 {
                     if (native == null || shot.Width <= 0) return null;
-                    // The driver maps zoom coordinates by native width over screenshot width.
+                    // The driver's own crop, so its from_zoom mapping lands where the agent points:
+                    // screenshot to native by native width over screenshot width, then 20% padding,
+                    // whole pixels, clamped (cursor-overlay capture_utils.rs crop_png_to_jpeg).
                     double scale = (double)native.Width / shot.Width;
-                    var region = RectangleF.FromLTRB((float)(x1 * scale), (float)(y1 * scale),
-                        (float)Math.Min(x2 * scale, native.Width), (float)Math.Min(y2 * scale, native.Height));
-                    if (region.Width <= 0 || region.Height <= 0) return null;
-                    return CaptureGuard.Png(native, region, size.Value.Width, size.Value.Height);
+                    double nx1 = x1 * scale, ny1 = y1 * scale, nx2 = x2 * scale, ny2 = y2 * scale;
+                    double padX = Math.Max(nx2 - nx1, 1) * 0.20, padY = Math.Max(ny2 - ny1, 1) * 0.20;
+                    int cx1 = Math.Min((int)Math.Max(nx1 - padX, 0), native.Width);
+                    int cy1 = Math.Min((int)Math.Max(ny1 - padY, 0), native.Height);
+                    int cx2 = Math.Min((int)Math.Min(nx2 + padX, native.Width), native.Width);
+                    int cy2 = Math.Min((int)Math.Min(ny2 + padY, native.Height), native.Height);
+                    int cw = Math.Max(cx2 - cx1, 1), ch = Math.Max(cy2 - cy1, 1);
+                    if (cx1 + cw > native.Width || cy1 + ch > native.Height) return null;
+                    return CaptureGuard.Png(native, new RectangleF(cx1, cy1, cw, ch), size.Value.Width, size.Value.Height);
                 }
             }
             return null;
@@ -209,19 +284,6 @@ namespace Goat.ComputerUse
             catch (FormatException) { return IntPtr.Zero; }
             catch (InvalidCastException) { return IntPtr.Zero; }
             catch (OverflowException) { return IntPtr.Zero; }
-        }
-
-        static bool IsImage(object block)
-        {
-            var map = block as Dictionary<string, object>;
-            object type;
-            if (map == null || !map.TryGetValue("type", out type)) return false;
-            if ("image".Equals(type)) return true;
-            // An embedded or linked resource can carry an image too.
-            object resource, mime;
-            if ("resource".Equals(type) && map.TryGetValue("resource", out resource) && resource is Dictionary<string, object>)
-                map = (Dictionary<string, object>)resource;
-            return map.TryGetValue("mimeType", out mime) && mime is string && ((string)mime).StartsWith("image/", StringComparison.OrdinalIgnoreCase);
         }
 
         static Dictionary<string, object> Text(string text)
