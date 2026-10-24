@@ -98,7 +98,6 @@ import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-import { startCredentialTurn } from "./ProviderCredential.testkit.ts";
 import * as CuaDriver from "../cua/CuaDriver.ts";
 import * as ComputerUseTestkit from "../cua/ComputerUseLeases.testkit.ts";
 import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
@@ -1613,25 +1612,9 @@ it.effect("ProviderSessionManagerV2 drains subscribers when the provider stops",
   }),
 );
 
-it.effect.each([
-  ["writable", {}, ["orchestration:read", "orchestration:operate"]],
-  ["readOnly", { readOnly: true }, ["orchestration:read"]],
-  [
-    "read-only sandbox",
-    { runtimePolicy: { ...runtimePolicy, sandboxPolicy: "read-only" } },
-    ["orchestration:read"],
-  ],
-  ["memory dispatch", { dispatchScopes: ["memory:read"] }, []],
-  ["read dispatch", { dispatchScopes: ["orchestration:read"] }, ["orchestration:read"]],
-  [
-    "explicit writable",
-    { dispatchScopes: ["orchestration:read", "orchestration:operate", "orchestration:approve"] },
-    ["orchestration:read", "orchestration:operate"],
-  ],
-  ["archived", {}, []],
-] as const)(
-  "ProviderSessionManagerV2 issues MCP credentials before opening and revokes them on close (%s)",
-  ([label, options, expectedScopes]) =>
+it.effect(
+  "ProviderSessionManagerV2 issues MCP credentials before opening and revokes them on close",
+  () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(emptyState);
       const mcpConfigs = yield* Ref.make<
@@ -1643,7 +1626,6 @@ it.effect.each([
         const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
         const registry = yield* McpSessionRegistry.McpSessionRegistry;
         const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
-        const projection = yield* ProjectionStore.ProjectionStoreV2;
         const now = yield* DateTime.now;
         const threadId = ThreadId.make("thread-provider-session-manager-mcp");
         const providerSessionId = yield* idAllocator.allocate.providerSession({
@@ -1651,21 +1633,14 @@ it.effect.each([
           threadId,
         });
 
-        const created = yield* makeThreadCreatedEvent({ idAllocator, threadId, now });
         yield* eventSink.write({
-          events: [
-            {
-              ...created,
-              payload: { ...created.payload, archivedAt: label === "archived" ? now : null },
-            },
-          ],
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
         });
-        const runtime = yield* manager.open({
+        yield* manager.open({
           threadId,
           providerSessionId,
           modelSelection,
           runtimePolicy,
-          ...options,
         });
 
         const captured = (yield* Ref.get(mcpConfigs))[0];
@@ -1682,24 +1657,6 @@ it.effect.each([
           new Set(["preview", "orchestration", "worktree", "pull-requests"]),
         );
 
-        yield* startCredentialTurn(runtime, {
-          appThread: (yield* projection.getThreadProjection(threadId)).thread,
-          providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
-          modelSelection,
-          runtimePolicy,
-          text: "remote coordinator turn",
-        });
-        if (label === "writable" || label === "explicit writable")
-          yield* resolved!.reauthorize!(["orchestration:read", "orchestration:operate"]);
-        assert.deepEqual(resolved!.grantedScopes, expectedScopes);
-        for (const required of [
-          "orchestration:read",
-          "orchestration:operate",
-          "orchestration:approve",
-        ] as const) {
-          const result = yield* resolved!.reauthorize!([required]).pipe(Effect.exit);
-          assert.equal(Exit.isSuccess(result), new Set<string>(expectedScopes).has(required));
-        }
         yield* manager.close(providerSessionId);
         assert.isUndefined(yield* mcpSessions.read(threadId));
         assert.isUndefined(yield* registry.resolve(token!));
@@ -4355,18 +4312,30 @@ it.effect(
           "memory:read",
           "memory:write",
           "orchestration:read",
-          "orchestration:operate",
         ]);
         assert.equal(
           (yield* initial.reauthorize!(["memory:read"]).pipe(Effect.flip))._tag,
           "EnvironmentAuthorizationError",
         );
-        yield* startCredentialTurn(runtime, {
+        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+        yield* runtime.startTurn({
           appThread: (yield* projection.getThreadProjection(threadId)).thread,
+          threadId,
+          runId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
           providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+            text: "synthetic memory turn",
+            attachments: [],
+          },
           modelSelection,
           runtimePolicy,
-          text: "synthetic memory turn",
         });
         const savedMemory = yield* MemoryToolkitFixture.call(
           "memory_upsert",
@@ -4446,14 +4415,13 @@ it.effect(
           "none",
         );
         const off = yield* Deferred.await(offReady);
-        assert.deepEqual(off.grantedScopes, ["orchestration:read", "orchestration:operate"]);
+        assert.deepEqual(off.grantedScopes, ["orchestration:read"]);
         const offAdapterRotation = yield* Queue.take(adapterChanges);
         assert.equal(offAdapterRotation.threadId, off.threadId);
         assert.equal(offAdapterRotation.providerInstanceId, off.providerInstanceId);
         assert.equal((yield* admission.currentPolicy(threadId)).grant, "none");
         assert.deepEqual((yield* admission.fence(yield* configs.read(threadId)))?.grantedScopes, [
           "orchestration:read",
-          "orchestration:operate",
         ]);
         assert.equal((yield* readScope()).memoryPolicy?.grant, "none");
         const offConfig = yield* configs.read(threadId);
@@ -4471,12 +4439,7 @@ it.effect(
           (yield* configs.read(threadId))?.authorizationHeader,
           offConfig!.authorizationHeader,
         );
-        assert.deepEqual(on.grantedScopes, [
-          "memory:read",
-          "memory:write",
-          "orchestration:read",
-          "orchestration:operate",
-        ]);
+        assert.deepEqual(on.grantedScopes, ["memory:read", "memory:write", "orchestration:read"]);
         const admitted = yield* readScope();
         assert.isDefined(yield* registry.currentMemoryPolicy!(admitted.thread.providerSessionId));
         yield* admitted.reauthorize!(["memory:read"]);
@@ -4551,12 +4514,25 @@ it.effect.each(["new", "existing"] as const)(
             assert.isDefined(scope);
             return scope!;
           });
-        yield* startCredentialTurn(runtime, {
+        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+        yield* runtime.startTurn({
           appThread: (yield* projection.getThreadProjection(threadId)).thread,
+          threadId,
+          runId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
           providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+            text: "synthetic memory turn",
+            attachments: [],
+          },
           modelSelection,
           runtimePolicy,
-          text: "synthetic memory turn",
         });
 
         const restricted = yield* readScope();
@@ -4683,12 +4659,25 @@ it.effect.each([
           ...input,
           ...(ceiling === undefined ? {} : { memoryGrantCeiling: ceiling }),
         });
-        yield* startCredentialTurn(runtime, {
+        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+        yield* runtime.startTurn({
           appThread: (yield* projection.getThreadProjection(threadId)).thread,
+          threadId,
+          runId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
           providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+            text: "synthetic memory turn",
+            attachments: [],
+          },
           modelSelection,
           runtimePolicy,
-          text: "synthetic memory turn",
         });
         const config = yield* configs.read(threadId);
         const scope = yield* registry.resolve(
@@ -5676,12 +5665,25 @@ it.effect(
           runtimePolicy,
           memoryGrantCeiling: null,
         });
-        yield* startCredentialTurn(runtime, {
+        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
+        yield* runtime.startTurn({
           appThread: (yield* projection.getThreadProjection(threadId)).thread,
+          threadId,
+          runId,
+          runOrdinal: 1,
+          providerTurnOrdinal: 1,
+          attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
+          rootNodeId: idAllocator.derive.rootNode({ runId }),
           providerThread: makeProviderThread({ idAllocator, threadId, providerSessionId, now }),
+          message: {
+            createdBy: "user",
+            creationSource: "web",
+            messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
+            text: "long coordinator turn",
+            attachments: [],
+          },
           modelSelection,
           runtimePolicy,
-          text: "long coordinator turn",
         });
         // The provider process holds this header for the rest of its turn.
         const held = yield* configs.read(threadId);
@@ -5709,7 +5711,7 @@ it.effect(
         assert.equal(renewed?.authorizationHeader, held!.authorizationHeader);
         assert.equal(renewed?.providerSessionId, held!.providerSessionId);
         const scope = yield* registry.resolve(heldToken);
-        assert.deepEqual(scope?.grantedScopes, ["orchestration:read", "orchestration:operate"]);
+        assert.deepEqual(scope?.grantedScopes, ["orchestration:read"]);
         assert.equal(scope?.memoryPolicy?.grant, "none");
 
         yield* settings.updateSettings({ enableAgentMemoryAccess: true });

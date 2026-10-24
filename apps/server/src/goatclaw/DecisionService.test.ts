@@ -4,6 +4,8 @@ import {
   EnvironmentId,
   EnvironmentAuthorizationError,
   OrchestratorMcpFailure,
+  ProviderInstanceId,
+  ThreadId,
   type DecisionItem,
   type PermissionProfile,
 } from "@goat/contracts";
@@ -377,6 +379,55 @@ it.effect(
         unavailableHosts: [{ host: "alpha", code: "capability_denied" }],
       });
       expect(calls).toEqual([]);
+    }),
+);
+
+it.effect(
+  "regression #1405: a launched thread's read-scoped credential lists and answers remote decisions",
+  () =>
+    Effect.gen(function* () {
+      // Provider thread credentials hold orchestration:read only; asking for more fails them.
+      const requested: Array<ReadonlyArray<string>> = [];
+      const caller: Invocation.McpInvocationScope = {
+        ...scope,
+        client: undefined,
+        thread: {
+          threadId: ThreadId.make("launcher"),
+          providerSessionId: "provider-session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        grantedScopes: ["orchestration:read"],
+        reauthorize: (required) => {
+          requested.push(required);
+          return required.every((granted) => granted === "orchestration:read")
+            ? Effect.void
+            : Effect.fail(
+                new EnvironmentAuthorizationError({
+                  message: "not granted",
+                  requiredScope: "orchestration:operate",
+                }),
+              );
+        },
+      };
+      const { result } = yield* run({ caller, aliases: ["alpha"] }, (toolkit) =>
+        Effect.gen(function* () {
+          const listed = yield* toolkit
+            .handle("goat_decision_list", {})
+            .pipe(Stream.unwrap, Stream.runCollect);
+          const answered = yield* toolkit
+            .handle("goat_decision_answer", {
+              id: "decision:collision",
+              host: "alpha",
+              optionId: "wait",
+              reason: "Launcher decides",
+            })
+            .pipe(Stream.unwrap, Stream.runCollect);
+          return { listed, answered };
+        }),
+      );
+      expect(result.listed.at(-1)?.result).toMatchObject({ unavailableHosts: [] });
+      expect(result.answered.at(-1)?.result).toMatchObject({ status: "answered" });
+      expect(requested.length).toBeGreaterThan(0);
     }),
 );
 
