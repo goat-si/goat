@@ -59,6 +59,7 @@ import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
@@ -87,6 +88,10 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
+import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
@@ -109,22 +114,6 @@ const AGENT_CURSOR_CLICK_LEAD_MS = 40;
 const sleepUntil = (deadline: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
 
-const EDITABLE_AT_POINT_SCRIPT = `(x, y) => {
-  let element = document.elementFromPoint(x, y);
-  while (element && element.shadowRoot) {
-    const inner = element.shadowRoot.elementFromPoint(x, y);
-    if (!inner || inner === element) break;
-    element = inner;
-  }
-  if (element && element.tagName === "LABEL" && element.control) element = element.control;
-  if (!element) return false;
-  if (element.tagName === "IFRAME" || element.tagName === "FRAME") return true;
-  if (element.isContentEditable) return true;
-  if (element.tagName === "TEXTAREA") return !element.disabled && !element.readOnly;
-  if (element.tagName !== "INPUT") return false;
-  const nonText = ["button", "checkbox", "color", "file", "hidden", "image", "radio", "range", "reset", "submit"];
-  return !nonText.includes(element.type) && !element.disabled && !element.readOnly;
-}`;
 const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
@@ -169,6 +158,8 @@ export type ServerBrowserViewerOutput =
       readonly canOperate: boolean;
       readonly controller: "agent" | "you" | "another-viewer" | "unclaimed";
       readonly generation: number;
+      /** A secret field has focus: only its controller still gets frames. */
+      readonly private: boolean;
       readonly dialog: {
         readonly type: string;
         readonly message: string;
@@ -246,6 +237,17 @@ export class ServerBrowser extends Context.Service<
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
     readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+
+    /** Every tab with its control state, for the preview session list. */
+    readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
+    /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
+    readonly sessionChanges: Stream.Stream<void>;
+    /** A person's stop or hand back of agent control on one tab; false when it is gone. */
+    readonly controlSession: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly control: "stop" | "handBack";
+    }) => Effect.Effect<boolean>;
   }
 >()("goat/preview/ServerBrowser") {}
 
@@ -390,78 +392,6 @@ const modifiersOf = (message: Record<string, unknown>) => {
   return Number.isInteger(value) && value >= 0 && value < 16 ? value : 0;
 };
 
-// Cmd shortcuts from Apple viewers are no editing shortcut for Linux or headless
-// Chromium, so they carry the command. Ctrl already works natively on Linux,
-// except copy and cut, which headless Chromium only runs as commands.
-const editingCommand = (key: string, modifiers: number) => {
-  const modifier = modifiers & 0b0111;
-  if (modifier !== 2 && modifier !== 4) return null;
-  const lower = key.toLowerCase();
-  const command =
-    lower === "c"
-      ? "copy"
-      : lower === "x"
-        ? "cut"
-        : modifier !== 4
-          ? null
-          : lower === "a"
-            ? "selectAll"
-            : lower === "z"
-              ? modifiers & 8
-                ? "redo"
-                : "undo"
-              : null;
-  return command ? { commands: [command] } : null;
-};
-
-const CLIPBOARD_TEXT_LIMIT = 1024 * 1024;
-const CLIPBOARD_WORLD = "goat-preview-clipboard";
-// Headless Chromium shares one clipboard between every context, so the copy
-// a viewer's copy or cut key makes is read from this world instead of the
-// clipboard. Page scripts cannot see the world, and only a copy made while a
-// real key is handled counts.
-const CLIPBOARD_SCRIPT = `(() => {
-  let keying = false;
-  let copied = "";
-  // The same Ctrl or Cmd + C or X that editingCommand sends as copy or cut.
-  addEventListener("keydown", (event) => {
-    if (!event.isTrusted || event.altKey || event.ctrlKey === event.metaKey) return;
-    const key = event.key.toLowerCase();
-    if (key !== "c" && key !== "x") return;
-    keying = true;
-    copied = "";
-    setTimeout(() => { keying = false; });
-  }, true);
-  const selection = () => {
-    let field = document.activeElement;
-    while (field?.shadowRoot?.activeElement) field = field.shadowRoot.activeElement;
-    if ((field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) && field.selectionStart !== null)
-      return field.value.slice(field.selectionStart, field.selectionEnd ?? field.selectionStart);
-    return String(document.getSelection() ?? "");
-  };
-  const record = (text) => {
-    copied = String(text ?? "").slice(0, ${CLIPBOARD_TEXT_LIMIT});
-  };
-  // Capturing at window runs before page handlers can stop the event, and
-  // before cut removes the selection.
-  const snapshot = (event) => {
-    if (keying && event.isTrusted) record(selection());
-  };
-  // Bubbling back to window picks up text a page handler set instead.
-  const replace = (event) => {
-    if (keying && event.isTrusted && event.defaultPrevented) record(event.clipboardData?.getData("text/plain"));
-  };
-  for (const type of ["copy", "cut"]) {
-    addEventListener(type, snapshot, true);
-    addEventListener(type, replace);
-  }
-  globalThis.takeCopy = () => {
-    const text = copied;
-    copied = "";
-    return text;
-  };
-})();`;
-
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
@@ -475,6 +405,7 @@ const make = Effect.gen(function* () {
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
+  const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
 
   const closedPendingTabs = new Set<string>();
@@ -539,6 +470,7 @@ const make = Effect.gen(function* () {
                 : "unclaimed",
         generation: tab.control.generation,
         dialog: dialogStatus(tab),
+        private: tab.control.isPrivate,
       });
   };
 
@@ -584,6 +516,7 @@ const make = Effect.gen(function* () {
   };
 
   const reportLiveTabs = () => {
+    PubSub.publishUnsafe(sessionChanges, undefined);
     const connectionId = hostConnectionId;
     if (connectionId === null) return;
     runFork(
@@ -756,6 +689,7 @@ const make = Effect.gen(function* () {
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
       ServerBrowserPage.invalidateRefs(page),
     );
+    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     const diagnostics = new ServerBrowserDiagnostics(page);
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
@@ -879,6 +813,7 @@ const make = Effect.gen(function* () {
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
+    tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
     reportLiveTabs();
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
@@ -1108,8 +1043,8 @@ const make = Effect.gen(function* () {
     // Scripts for new documents run only while this session's Page domain is on.
     await cdp.send("Page.enable");
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: CLIPBOARD_SCRIPT,
-      worldName: CLIPBOARD_WORLD,
+      source: ViewerInput.CLIPBOARD_SCRIPT,
+      worldName: ViewerInput.CLIPBOARD_WORLD,
       runImmediately: true,
     });
   };
@@ -1151,7 +1086,7 @@ const make = Effect.gen(function* () {
     return Promise.all(
       frameIds(tree.frameTree).map((frameId) =>
         cdp
-          .send("Page.createIsolatedWorld", { frameId, worldName: CLIPBOARD_WORLD })
+          .send("Page.createIsolatedWorld", { frameId, worldName: ViewerInput.CLIPBOARD_WORLD })
           .then(({ executionContextId }) =>
             cdp.send("Runtime.evaluate", {
               contextId: executionContextId,
@@ -1465,7 +1400,7 @@ const make = Effect.gen(function* () {
       const encoder = await contexts.scratchPage();
       let session: CDPSession | null = null;
       try {
-        await encoder.evaluate(ServerBrowserPage.recordingEncoderScript(recordingFrameRate));
+        await encoder.evaluate(recordingEncoderScript(recordingFrameRate));
         // Seed idle pages before returning so an immediate stop has a frame to encode.
         const firstFrame = await ServerBrowserPage.captureViewport(tab.page, tab.cdp, {
           format: "jpeg",
@@ -1481,6 +1416,11 @@ const make = Effect.gen(function* () {
         session = opened;
         const framesInFlight = new Set<Promise<void>>();
         opened.on("Page.screencastFrame", (frame) => {
+          // A private tab records nothing; the frame still releases Chromium.
+          if (tab.control.isPrivate)
+            return void opened
+              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+              .catch(constVoid);
           const cssWidth = tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth;
           const delivered: Promise<void> = encoder
             .evaluate(
@@ -2004,6 +1944,7 @@ const make = Effect.gen(function* () {
             ...tab,
             renderScale: tab.desktop ? "display" : RENDER_SCALE,
             fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+            captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
             timeoutMs: deadlineMs - performance.now(),
           }),
         );
@@ -2203,7 +2144,7 @@ const make = Effect.gen(function* () {
           viewer.pressedKeys.delete(code || key);
           return;
         }
-        const command = editingCommand(key, modifiers);
+        const command = ViewerInput.editingCommand(key, modifiers);
         const copying =
           !tab.desktop && (command?.commands[0] === "copy" || command?.commands[0] === "cut");
 
@@ -2277,7 +2218,7 @@ const make = Effect.gen(function* () {
         const x = num(message.x);
         const y = num(message.y);
         const result = await session.send("Runtime.evaluate", {
-          expression: `(${EDITABLE_AT_POINT_SCRIPT})(${x}, ${y})`,
+          expression: `(${ViewerInput.EDITABLE_AT_POINT_SCRIPT})(${x}, ${y})`,
           returnByValue: true,
         });
         viewer.push({ _tag: "probe", x, y, editable: result.result.value === true });
@@ -2338,6 +2279,9 @@ const make = Effect.gen(function* () {
       pressedKeys: new Map(),
       pressedButtons: new Map(),
       push: (next) => {
+        // While private only the person who controls the tab sees it.
+        if (next._tag === "frame" && tab.control.isPrivate && tab.control.controller !== viewer.id)
+          return void runFork(next.ack);
         // Dropped frames must still release Chromium.
         if (Queue.offerUnsafe(output, next)) return;
         if (next._tag === "frame") runFork(next.ack);
@@ -2580,6 +2524,16 @@ const make = Effect.gen(function* () {
     reportProfiles,
     openDownload,
     answerFileChooser,
+    sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
+    sessionChanges: Stream.fromPubSub(sessionChanges),
+    controlSession: (input) =>
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(input.threadId, input.tabId));
+        if (!tab) return false;
+        if (input.control === "stop") tab.control.stopAgents();
+        else tab.control.resumeAgents();
+        return true;
+      }),
   });
 });
 

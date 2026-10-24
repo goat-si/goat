@@ -219,8 +219,13 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   ),
   preview_snapshot: McpToolAccess.readsAsCaller((input) => {
-    const { includeImage: _includeImage, save: _save, ...operationInput } = input ?? {};
-    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", operationInput);
+    const { includeImage, save, ...operationInput } = input ?? {};
+    // Nothing shows or saves the image, so the browser skips the capture (L4).
+    const captureImage = includeImage === true || save === true;
+    return invokeTargeted<PreviewAutomationSnapshot>("snapshot", {
+      ...operationInput,
+      captureImage,
+    });
   }),
   preview_logs: McpToolAccess.readsAsCaller((input) =>
     invokeTargeted<PreviewAutomationLogs>("logs", input),

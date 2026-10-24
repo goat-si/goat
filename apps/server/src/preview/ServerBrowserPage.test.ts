@@ -12,6 +12,7 @@ import {
   type Page,
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
+import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
@@ -100,6 +101,22 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
 
+  it("skips the capture for a text-only snapshot and still returns the page", async () => {
+    await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
+    const result = await ServerBrowserPage.snapshot({
+      page,
+      cdp,
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 15_000,
+    });
+    expect(result.screenshot).toBeUndefined();
+    expect(String(result.accessibilityTree)).toContain("Compose");
+  });
+
   it("captures a full document without changing viewport, scroll, or responsive layout", async () => {
     await page.setViewportSize({ width: 800, height: 600 });
     await page.setContent(
@@ -119,7 +136,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
     const bottomPixel = await page.evaluate(`(async () => {
       const image = new Image();
-      image.src = "data:image/png;base64,${result.screenshot.data}";
+      image.src = "data:image/png;base64,${result.screenshot!.data}";
       await image.decode();
       const canvas = document.createElement("canvas");
       canvas.width = image.width; canvas.height = image.height;
@@ -155,11 +172,11 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
         timeoutMs: 15_000,
       });
       expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
-      const image = Buffer.from(result.screenshot.data, "base64");
+      const image = Buffer.from(result.screenshot!.data, "base64");
       expect(image.readUInt32BE(16)).toBe(800);
       expect(image.readUInt32BE(20)).toBe(3000);
-      expect(result.screenshot.byteLength).toBe(image.length);
-      expect(result.screenshot.byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
+      expect(result.screenshot!.byteLength).toBe(image.length);
+      expect(result.screenshot!.byteLength).toBeLessThanOrEqual(8 * 1024 * 1024);
     } finally {
       await retina.close();
     }
@@ -557,5 +574,65 @@ describe("server browser drag", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+});
+
+describe.skipIf(!chromiumInstalled)("server browser private mode", () => {
+  let browser: Browser;
+  let context: BrowserContext;
+  let page: Page;
+  /** Each change the watcher reports, resolved in order. */
+  let changes: Array<PromiseWithResolvers<boolean>>;
+  let reported: number;
+  const nextChange = () => changes[reported++]!.promise;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  });
+  afterAll(async () => {
+    await browser?.close();
+  });
+  beforeEach(async () => {
+    context = await browser.newContext();
+    page = await context.newPage();
+    changes = Array.from({ length: 8 }, () => Promise.withResolvers<boolean>());
+    reported = 0;
+    let delivered = 0;
+    await watchPrivateMode(page, (on) => changes[delivered++]!.resolve(on));
+  });
+  afterEach(async () => {
+    await context.close();
+  });
+
+  // A navigation runs the watcher's script, and passkeys need a secure origin.
+  const load = async (body: string) => {
+    await page.route("https://login.example/**", (route) =>
+      route.fulfill({ contentType: "text/html", body }),
+    );
+    await page.goto("https://login.example/");
+  };
+
+  it("goes private while a password or one-time code field has focus, and back when it leaves", async () => {
+    await load(
+      '<input id="user"><input id="pass" type="password"><input id="otp" autocomplete="one-time-code">',
+    );
+    await page.focus("#pass");
+    expect(await nextChange()).toBe(true);
+    await page.focus("#user");
+    expect(await nextChange()).toBe(false);
+    await page.focus("#otp");
+    expect(await nextChange()).toBe(true);
+  });
+
+  it("goes private for a passkey prompt until it settles, inside a frame too", async () => {
+    await load('<iframe srcdoc="<p>sign in</p>"></iframe>');
+    const frame = page.frames()[1]!;
+    await frame.waitForLoadState();
+    // Headless Chromium has no authenticator, so the ceremony fails; the prompt still counted.
+    void frame.evaluate(
+      "navigator.credentials.get({ publicKey: { challenge: new Uint8Array(16), timeout: 1000 } }).catch(() => {})",
+    );
+    expect(await nextChange()).toBe(true);
+    expect(await nextChange()).toBe(false);
   });
 });

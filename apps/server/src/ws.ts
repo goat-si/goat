@@ -182,6 +182,7 @@ import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.
 import * as DeviceService from "./device/DeviceService.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
 import { makeComputerUseRpcHandlers } from "./cua/ComputerUseRpcHandlers.ts";
+import { makePreviewSessionRpcHandlers } from "./preview/PreviewSessions.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -2549,6 +2550,7 @@ export const layerWsRpc = (
           ),
         [WS_METHODS.serverProbe]: (_input) => Effect.succeed({}),
         ...(yield* makeComputerUseRpcHandlers(currentSessionId)),
+        ...(yield* makePreviewSessionRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetConfig]: (_input) => loadServerConfig({ usageLimitsCommand: false }),
         [WS_METHODS.serverSearchAcpRegistry]: (input) =>
           acpRegistryCatalog

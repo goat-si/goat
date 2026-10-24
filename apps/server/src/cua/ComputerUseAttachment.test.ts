@@ -60,6 +60,7 @@ const fakeLeases = (input: {
     grants: Effect.die("unused"),
     pause: () => Effect.die("unused"),
     resume: Effect.die("unused"),
+    sessions: Effect.die("unused"),
     subscribe: Effect.die("unused"),
     changed: Effect.die("unused"),
     proxy: "proxy" in input ? input.proxy : proxy,

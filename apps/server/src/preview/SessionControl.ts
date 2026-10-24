@@ -17,16 +17,23 @@ const settle = (work: Promise<unknown>) =>
     () => undefined,
   );
 
+const PRIVATE_MESSAGE =
+  "A password, one-time code or passkey prompt has focus, so this tab is private until a person leaves it.";
+const STOPPED_MESSAGE = "A person stopped agent control of this browser tab.";
+
 /** Reserves control immediately, but drains running work before the new owner can act. */
 export class SessionControl {
   readonly agentId: string | null;
   private readonly onGenerationChange: () => void;
+  private readonly listeners = new Set<() => void>();
   private tail: Promise<unknown> = Promise.resolve();
   private pending: Promise<void> = Promise.resolve();
   private readonly handoff = new Set<Promise<void>>();
   private owner: string | null = null;
   private epoch = 0;
   private closed = false;
+  private privateMode = false;
+  private agentStopped = false;
   private activeAgentAction: AbortController | undefined;
 
   constructor(agentId: string | null, onGenerationChange: () => void = () => {}) {
@@ -40,6 +47,58 @@ export class SessionControl {
 
   get generation() {
     return this.epoch;
+  }
+
+  /** A secret field or passkey prompt has focus: agents neither act nor look, viewers see nothing. */
+  get isPrivate() {
+    return this.privateMode;
+  }
+
+  /** A person stopped agents here until they hand the tab back. */
+  get isAgentStopped() {
+    return this.agentStopped;
+  }
+
+  /** Calls back after any change of owner, privacy or stop, for status readers. */
+  onChange(listener: () => void) {
+    this.listeners.add(listener);
+    return () => void this.listeners.delete(listener);
+  }
+
+  private changed() {
+    for (const listener of this.listeners) listener();
+  }
+
+  /** Entering private mode ends whatever an agent is doing and expires every ref it holds. */
+  setPrivate(on: boolean) {
+    if (this.closed || on === this.privateMode) return;
+    this.privateMode = on;
+    this.epoch++;
+    this.onGenerationChange();
+    if (on)
+      this.activeAgentAction?.abort(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
+    this.changed();
+  }
+
+  stopAgents() {
+    if (this.closed || this.agentStopped) return;
+    this.agentStopped = true;
+    this.epoch++;
+    this.onGenerationChange();
+    this.activeAgentAction?.abort(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
+    this.changed();
+  }
+
+  resumeAgents() {
+    if (!this.agentStopped) return;
+    this.agentStopped = false;
+    this.changed();
+  }
+
+  private agentBlocked() {
+    if (this.privateMode) return new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode");
+    if (this.agentStopped) return new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
+    return undefined;
   }
 
   private enqueue<A>(run: () => Promise<A>): Promise<A> {
@@ -78,6 +137,7 @@ export class SessionControl {
         this.closed ? "closed" : owner !== null ? "humanControl" : "interrupted",
       ),
     );
+    this.changed();
   }
 
   private async action<A>(allowed: () => boolean, run: () => Promise<A>, deadlineMs?: number) {
@@ -114,8 +174,10 @@ export class SessionControl {
       return Promise.reject(
         new BrowserControlInterrupted("A human controls this tab.", "humanControl"),
       );
+    const blocked = this.agentBlocked();
+    if (blocked) return Promise.reject(blocked);
     return this.action(
-      () => this.agentMayAct(agentId) && this.owner === null,
+      () => this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked(),
       async () => {
         const action = new AbortController();
         this.activeAgentAction = action;
@@ -130,15 +192,18 @@ export class SessionControl {
   }
 
   agentCanActNow(agentId: string) {
-    return this.agentMayAct(agentId) && this.owner === null;
+    return this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked();
   }
 
   /**
    * A read that needs no control and does not queue, so an agent can look at
-   * a page while a human drives it without holding up the human's input.
+   * a page while a human drives it without holding up the human's input. A
+   * private tab refuses it: a person typing a secret is not shared with agents.
    */
   observe<A>(run: () => Promise<A>) {
     this.assertOpen();
+    if (this.privateMode)
+      return Promise.reject(new BrowserControlInterrupted(PRIVATE_MESSAGE, "privateMode"));
     return run();
   }
 

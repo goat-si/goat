@@ -1,4 +1,8 @@
 import { Schema } from "effect";
+import {
+  PreviewAutomationControlReason,
+  previewControlMessage,
+} from "./previewAutomationControl.ts";
 
 import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
@@ -858,15 +862,18 @@ export const PreviewAutomationSnapshot = Schema.Struct({
   consoleEntries: Schema.Array(PreviewAutomationConsoleEntry),
   networkEntries: Schema.Array(PreviewAutomationNetworkEntry),
   actionTimeline: Schema.Array(PreviewAutomationActionEvent),
-  screenshot: Schema.Struct({
-    mimeType: Schema.Literal("image/png"),
-    data: Schema.String,
-    width: Schema.Int,
-    height: Schema.Int,
-    fullPage: Schema.optional(Schema.Boolean),
-    clipped: Schema.optional(Schema.Boolean),
-    byteLength: Schema.optional(Schema.Int),
-  }),
+  /** Absent when the request skipped the capture because nothing would show or save it. */
+  screenshot: Schema.optional(
+    Schema.Struct({
+      mimeType: Schema.Literal("image/png"),
+      data: Schema.String,
+      width: Schema.Int,
+      height: Schema.Int,
+      fullPage: Schema.optional(Schema.Boolean),
+      clipped: Schema.optional(Schema.Boolean),
+      byteLength: Schema.optional(Schema.Int),
+    }),
+  ),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
 
@@ -1092,17 +1099,6 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
   }
 }
 
-export const PreviewAutomationControlReason = Schema.Literals([
-  "agentMismatch",
-  "humanControl",
-  "tabRequired",
-  "closed",
-  "interrupted",
-  "dialogPending",
-  "tabLimit",
-]);
-export type PreviewAutomationControlReason = typeof PreviewAutomationControlReason.Type;
-
 export class PreviewAutomationControlInterruptedError extends Schema.TaggedError<PreviewAutomationControlInterruptedError>()(
   "PreviewAutomationControlInterruptedError",
   {
@@ -1112,20 +1108,10 @@ export class PreviewAutomationControlInterruptedError extends Schema.TaggedError
   },
 ) {
   override get message(): string {
-    if (this.reason === "agentMismatch")
-      return "This browser tab belongs to another agent session or a human. Open your own tab.";
-    if (this.reason === "humanControl")
-      return "A human controls this browser tab. Wait until they release control.";
-    if (this.reason === "tabRequired")
-      return 'Multiple browser tabs belong to this session. Pass a tabId from goat_call {path:"preview.open"} or from the tabs listed by goat_call {path:"preview.status"}.';
-    if (this.reason === "dialogPending")
-      return 'A browser dialog is pending. Read goat_call {path:"preview.status"} and resolve it with goat_call {path:"preview.dialog"}.';
-    if (this.reason === "tabLimit")
-      return 'Too many server browser tabs are open. Close one with goat_call {path:"preview.close"}, or reuse a tabId from goat_call {path:"preview.status"} tabs.';
-    if (this.reason === "closed") return 'Tab closed. Call goat_call {path:"preview.open"}.';
-    if (this.reason === "interrupted")
-      return "Browser control changed. Take a fresh snapshot before trying again.";
-    return `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`;
+    return (
+      previewControlMessage(this.reason) ??
+      `Preview automation ${this.operation} was interrupted on client ${this.clientId}.`
+    );
   }
 }
 

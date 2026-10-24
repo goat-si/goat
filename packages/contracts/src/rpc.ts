@@ -12,6 +12,11 @@ import {
   CuaHostStatus,
 } from "./cua.ts";
 import {
+  PreviewSessionControlInput,
+  PreviewSessionControlResult,
+  PreviewSessionsSnapshot,
+} from "./previewSession.ts";
+import {
   SshHostAddInput,
   SshPreflightInput,
   SshPreflightReport,
@@ -598,6 +603,8 @@ export const WS_METHODS = {
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
   computerUseResume: "computerUse.resume",
+  previewSessionsSubscribe: "previewSessions.subscribe",
+  previewSessionsControl: "previewSessions.control",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -793,6 +800,21 @@ const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
 const WsComputerUseResumeRpc = Rpc.make(WS_METHODS.computerUseResume, {
   payload: Schema.Struct({}),
   success: Schema.Struct({}),
+  error: EnvironmentAuthorizationError,
+});
+
+/** Every browser and desktop preview session on this host, again whenever one changes. */
+const WsPreviewSessionsSubscribeRpc = Rpc.make(WS_METHODS.previewSessionsSubscribe, {
+  payload: Schema.Struct({}),
+  success: PreviewSessionsSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+/** A person's takeover, hand back, stop or kill switch on a preview session. */
+const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, {
+  payload: PreviewSessionControlInput,
+  success: PreviewSessionControlResult,
   error: EnvironmentAuthorizationError,
 });
 
@@ -2351,6 +2373,8 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
   WsComputerUseResumeRpc,
+  WsPreviewSessionsSubscribeRpc,
+  WsPreviewSessionsControlRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

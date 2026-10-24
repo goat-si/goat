@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import { HttpRouter, HttpServer } from "effect/http";
@@ -88,6 +89,9 @@ it.effect.each([
     });
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -164,6 +168,9 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
     });
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -236,6 +243,9 @@ it.effect.each([
     let attachments = 0;
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
@@ -277,6 +287,9 @@ it.effect("serves a tab's download only to an authorized session", () =>
     const requests: Array<unknown> = [];
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: (input) =>
         Effect.sync(() => {
@@ -325,6 +338,9 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
     const answers: Array<{ chooserId: string; files: Array<{ name: string; text: string }> }> = [];
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
@@ -394,6 +410,9 @@ it.effect.each([
   Effect.gen(function* () {
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
+      sessions: Effect.succeed([]),
+      sessionChanges: Stream.empty,
+      controlSession: () => Effect.succeed(false),
       reportProfiles: () => Effect.void,
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),

@@ -46,6 +46,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.computerUseStop]: AuthOrchestrationOperateScope,
   [WS_METHODS.computerUseStopAll]: AuthOrchestrationOperateScope,
   [WS_METHODS.computerUseResume]: AuthOrchestrationOperateScope,
+  [WS_METHODS.previewSessionsSubscribe]: AuthOrchestrationReadScope,
+  [WS_METHODS.previewSessionsControl]: AuthOrchestrationOperateScope,
   [WS_METHODS.secretsAnswerRequest]: AuthOrchestrationOperateScope,
   [WS_METHODS.memorySearch]: AuthMemoryReadScope,
   [WS_METHODS.memoryList]: AuthMemoryReadScope,

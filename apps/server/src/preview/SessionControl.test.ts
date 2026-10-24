@@ -168,4 +168,47 @@ describe("SessionControl", () => {
     await control.release("viewer-a");
     await expect(control.agent("agent-b", async () => "acted")).resolves.toBe("acted");
   });
+
+  it("refuses agent actions and observation while private, and interrupts the action under way", async () => {
+    const control = new SessionControl("agent");
+    const started = Promise.withResolvers<void>();
+    const running = control.agent("agent", (signal) => {
+      started.resolve();
+      return new Promise((_, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      );
+    });
+    await started.promise;
+    const generation = control.generation;
+    control.setPrivate(true);
+    await expect(running).rejects.toMatchObject({ reason: "privateMode" });
+    expect(control.generation).toBeGreaterThan(generation);
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "privateMode",
+    });
+    // A person driving the tab does not open it to agent reads while a secret is on screen.
+    await control.take("viewer");
+    await expect(control.observe(async () => "snapshot")).rejects.toMatchObject({
+      reason: "privateMode",
+    });
+    await expect(control.human("viewer", async () => "typed")).resolves.toBe("typed");
+    control.setPrivate(false);
+    await expect(control.observe(async () => "snapshot")).resolves.toBe("snapshot");
+  });
+
+  it("keeps agents out after a person's stop until they hand the tab back", async () => {
+    const control = new SessionControl("agent");
+    const changes: Array<boolean> = [];
+    control.onChange(() => changes.push(control.isAgentStopped));
+    control.stopAgents();
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "stopped",
+    });
+    expect(control.agentCanActNow("agent")).toBe(false);
+    // Reads still work: a stopped agent may look, not act.
+    await expect(control.observe(async () => "snapshot")).resolves.toBe("snapshot");
+    control.resumeAgents();
+    await expect(control.agent("agent", async () => "click")).resolves.toBe("click");
+    expect(changes).toEqual([true, false]);
+  });
 });

@@ -171,6 +171,7 @@ import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -1069,7 +1070,12 @@ const layerMakeRoutes = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(layerPullRequestService),
-  Layer.provide(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
+  // Pipe steps are capped at 20, so preview sessions ride with the browser they read.
+  Layer.provide(
+    PreviewSessions.layer.pipe(
+      Layer.provideMerge(ServerBrowser.layer.pipe(Layer.provide(DesktopBrowserChannel.layer))),
+    ),
+  ),
   Layer.provide(PreviewBrowser.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ConnectionCatalogBroker.layer),
