@@ -67,16 +67,35 @@ function buildCredential(): RegExp {
 
 /** Text with every GOAT MCP credential replaced by {@link REDACTED_CREDENTIAL}. */
 export function redactGoatCredentials(text: string): string {
-  return redactBefore(text, text.length, Array.from(text.matchAll(credential)));
+  return redactBetween(text, 0, text.length, matchesFrom(text, 0));
 }
 
 /**
- * The redacted text before end. The matches come from the whole text, so a pattern that looks past
- * end (a token must not run on) sees what really follows.
+ * Credentials in text from `from` on, in the order a scan of the whole text finds them. Starting
+ * the scan there, with the text before it in place, lets lookbehinds see what really precedes.
  */
-function redactBefore(text: string, end: number, matches: ReadonlyArray<RegExpExecArray>): string {
+function matchesFrom(text: string, from: number): Array<RegExpExecArray> {
+  const pattern = new RegExp(credential);
+  pattern.lastIndex = from;
+  const matches: Array<RegExpExecArray> = [];
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
+    matches.push(match);
+  }
+  return matches;
+}
+
+/**
+ * The redacted text between from and end. The matches come from the whole text, so a pattern that
+ * looks past end (a token must not run on) sees what really follows.
+ */
+function redactBetween(
+  text: string,
+  from: number,
+  end: number,
+  matches: ReadonlyArray<RegExpExecArray>,
+): string {
   let redacted = "";
-  let shown = 0;
+  let shown = from;
   for (const match of matches) {
     if (match.index >= end) break;
     const label: string = match[1] ?? match[2] ?? "";
@@ -203,16 +222,43 @@ function partialStart(text: string, matches: ReadonlyArray<RegExpExecArray>): nu
 }
 
 /**
- * Redacts streamed output. emit is safe to show now; carry (at most a few hundred characters) is
- * held back and prefixed to the next chunk, or passed through {@link redactGoatCredentials} when
- * the stream ends.
+ * What a stream keeps between chunks: the output not shown yet (under 800 characters), and the
+ * character shown just before it when a lookbehind would see it (a letter or digit).
+ */
+export interface CredentialStream {
+  readonly before: string;
+  readonly held: string;
+}
+
+export const EMPTY_CREDENTIAL_STREAM: CredentialStream = { before: "", held: "" };
+
+/** The stream is no different from one that starts here. */
+export const isEmptyCredentialStream = (stream: CredentialStream) =>
+  stream.before.length === 0 && stream.held.length === 0;
+
+/**
+ * Redacts streamed output exactly as {@link redactGoatCredentials} would redact all of it. emit is
+ * safe to show now; pass stream to the next call, and to {@link finishGoatCredentialStream} when
+ * the output ends.
  */
 export function redactGoatCredentialChunk(
-  carry: string,
+  stream: CredentialStream,
   chunk: string,
-): { readonly emit: string; readonly carry: string } {
-  const text = carry + chunk;
-  const matches = Array.from(text.matchAll(credential));
-  const start = partialStart(text, matches);
-  return { emit: redactBefore(text, start, matches), carry: text.slice(start) };
+): { readonly emit: string; readonly stream: CredentialStream } {
+  const from = stream.before.length;
+  const text = stream.before + stream.held + chunk;
+  const matches = matchesFrom(text, from);
+  const start = Math.max(from, partialStart(text, matches));
+  const before = text.charAt(start - 1);
+  return {
+    emit: redactBetween(text, from, start, matches),
+    stream: { before: /[A-Za-z0-9]/.test(before) ? before : "", held: text.slice(start) },
+  };
+}
+
+/** The redacted output a stream still holds when it ends. */
+export function finishGoatCredentialStream(stream: CredentialStream): string {
+  const from = stream.before.length;
+  const text = stream.before + stream.held;
+  return redactBetween(text, from, text.length, matchesFrom(text, from));
 }

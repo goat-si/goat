@@ -25,8 +25,11 @@ import * as Stream from "effect/Stream";
 
 import * as EventSink from "./EventSink.ts";
 import {
+  type CredentialStream,
+  EMPTY_CREDENTIAL_STREAM,
+  finishGoatCredentialStream,
+  isEmptyCredentialStream,
   redactGoatCredentialChunk,
-  redactGoatCredentials,
 } from "../mcp/goatCredentialRedaction.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -150,9 +153,10 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   // Insertion order doubles as recency: every write re-inserts its entry.
   const tails = new Map<string, TerminalOutputState>();
-  // Raw output held back because it may be the start of a credential the next chunk completes.
-  const carries = new Map<string, string>();
-  // Commands whose carry was evicted. The next chunk could finish a credential with no context
+  // Redaction state between chunks: output held back because the next chunk may complete a
+  // credential, and the character before it. Commands without any are not kept.
+  const carries = new Map<string, CredentialStream>();
+  // Commands whose state was evicted. The next chunk could finish a credential with no context
   // left to recognize it, so they stream nothing more; their persisted, redacted output shows
   // when they settle. Only finishing clears an entry: dropping one would resume the stream
   // without that context. Entries are a key each, for commands still running.
@@ -182,9 +186,12 @@ export const make = Effect.gen(function* () {
       if (chunk.length === 0) return Effect.void;
       const key = commandKey(target);
       if (blinded.has(key)) return Effect.void;
-      const redacted = redactGoatCredentialChunk(carries.get(key) ?? "", chunk);
-      if (redacted.carry.length > 0)
-        setBounded(carries, key, redacted.carry, MAX_CARRIED_COMMANDS, (evicted) =>
+      const redacted = redactGoatCredentialChunk(
+        carries.get(key) ?? EMPTY_CREDENTIAL_STREAM,
+        chunk,
+      );
+      if (!isEmptyCredentialStream(redacted.stream))
+        setBounded(carries, key, redacted.stream, MAX_CARRIED_COMMANDS, (evicted) =>
           blinded.add(evicted),
         );
       else carries.delete(key);
@@ -211,7 +218,9 @@ export const make = Effect.gen(function* () {
       const carry = carries.get(key);
       carries.delete(key);
       blinded.delete(key);
-      return carry === undefined ? Effect.void : appendRedacted(key, redactGoatCredentials(carry));
+      return carry === undefined
+        ? Effect.void
+        : appendRedacted(key, finishGoatCredentialStream(carry));
     }).pipe(
       Effect.andThen(
         Effect.sync(() => {

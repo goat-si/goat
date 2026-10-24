@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  type CredentialStream,
+  EMPTY_CREDENTIAL_STREAM,
+  finishGoatCredentialStream,
   REDACTED_CREDENTIAL,
   redactGoatCredentialChunk,
   redactGoatCredentials,
@@ -21,16 +24,16 @@ function streamed(chunks: ReadonlyArray<string>): {
   readonly shown: string;
   readonly maxCarry: number;
 } {
-  let carry = "";
+  let stream: CredentialStream = EMPTY_CREDENTIAL_STREAM;
   let shown = "";
   let maxCarry = 0;
   for (const chunk of chunks) {
-    const next = redactGoatCredentialChunk(carry, chunk);
+    const next = redactGoatCredentialChunk(stream, chunk);
     shown += next.emit;
-    carry = next.carry;
-    maxCarry = Math.max(maxCarry, carry.length);
+    stream = next.stream;
+    maxCarry = Math.max(maxCarry, stream.held.length);
   }
-  return { shown: shown + redactGoatCredentials(carry), maxCarry };
+  return { shown: shown + finishGoatCredentialStream(stream), maxCarry };
 }
 
 describe("redactGoatCredentials", () => {
@@ -164,6 +167,8 @@ describe("redactGoatCredentialChunk", () => {
       "-Bearer",
       "x".repeat(52),
       TAG + "x".repeat(250),
+      "xBearer ",
+      "a".repeat(22),
     ];
     let seed = 12_345;
     const random = (bound: number) => {
@@ -178,6 +183,11 @@ describe("redactGoatCredentialChunk", () => {
       const chunks = bounds.slice(1).map((end, at) => output.slice(bounds[at], end));
       expect(streamed(chunks).shown, JSON.stringify(chunks)).toBe(redactGoatCredentials(output));
     }
+  });
+
+  it("sees the output shown before the held-back tail, as a lookbehind needs", () => {
+    const output = `xBearer ${"a".repeat(22)}GOAT_MCP_BEARER_TOKEN=${FOREIGN}\n`;
+    expect(streamed(["x", output.slice(1)]).shown).toBe(redactGoatCredentials(output));
   });
 
   it("finds the same credentials near the cut as in the whole text", () => {
