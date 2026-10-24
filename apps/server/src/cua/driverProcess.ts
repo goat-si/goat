@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The lease proxy owns its driver child process outside Effect's process abstractions.
 import * as NodeChildProcess from "node:child_process";
+import type * as NodeStream from "node:stream";
 
 /**
  * The lease proxy's driver child. On POSIX it gets a process group of its own, so a stop reaches
@@ -14,12 +15,14 @@ export function spawnDriverProcess(
   /** A fourth descriptor, fd 3, for the macOS helper's cursor overlay channel (#1214). */
   overlay = false,
 ) {
+  // Node types a spawn with a fourth descriptor as a bare ChildProcess; stdin and stdout are
+  // pipes either way.
   const child = NodeChildProcess.spawn(command, [...args], {
     env,
     stdio: overlay ? ["pipe", "pipe", "inherit", "pipe"] : ["pipe", "pipe", "inherit"],
     windowsHide: true,
     detached: platform !== "win32",
-  });
+  }) as NodeChildProcess.ChildProcessByStdio<NodeStream.Writable, NodeStream.Readable, null>;
   child.on("error", () => undefined);
   child.stdin.on("error", () => undefined);
   // A leader that dies alone (a helper launcher crash) is not this side's to clean up: once Node
