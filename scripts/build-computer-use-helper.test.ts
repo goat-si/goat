@@ -19,6 +19,7 @@ import {
   signComputerUseHelper,
 } from "./build-computer-use-helper.ts";
 import type { CommandResult, ReleaseCommandRunner } from "./lib/release-verify.ts";
+import { packagedHelperChannel } from "./lib/desktop-computer-use-helper.ts";
 
 const FIND_IDENTITY = [
   '  1) D92256BFF6CC21ABD4275A89CA418AAF8B484B00 "Apple Development: Someone (QQ4ZRC9P5J)"',
@@ -254,8 +255,15 @@ describe("build-computer-use-helper", () => {
       assert.notMatch(render(channel), /@[A-Z_]+@/);
     assert.match(render("stable"), /<string>si\.goat\.desktop\.computer-use<\/string>/);
     assert.match(render("nightly"), /<string>si\.goat\.desktop\.nightly\.computer-use<\/string>/);
-    assert.match(render("stable"), /GOATComputerUseAllowAnyParent<\/key>\s*<false\/>/);
+    // Only a dev helper may skip its parent check; a nightly or stable one never does.
+    for (const channel of ["stable", "nightly"] as const)
+      assert.match(render(channel), /GOATComputerUseAllowAnyParent<\/key>\s*<false\/>/);
     assert.match(render("dev"), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
     assert.match(render("stable", true), /GOATComputerUseAllowAnyParent<\/key>\s*<true\/>/);
+  });
+
+  it("a packaged app never embeds the dev helper, which skips its parent check", () => {
+    assert.strictEqual(packagedHelperChannel("nightly"), "nightly");
+    assert.strictEqual(packagedHelperChannel("latest"), "stable");
   });
 });

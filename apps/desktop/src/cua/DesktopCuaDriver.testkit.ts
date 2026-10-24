@@ -147,6 +147,7 @@ export const fixture = Effect.fn(function* (
     driverPath: string;
     manifestPath: string;
     environment: ReadonlyArray<{ name: string; value: string }>;
+    direct: boolean;
   }> = [];
   const dependencies: DesktopCuaDriverDependencies = {
     connect: async () => {
@@ -187,6 +188,7 @@ export const fixture = Effect.fn(function* (
         driverPath: helper.bundle.driverPath,
         manifestPath: helper.capabilityManifestPath,
         environment: helper.environment,
+        direct: helper.direct === true,
       });
       const manifest = prepared.get(helper.capabilityManifestPath);
       launches.push({
@@ -224,6 +226,21 @@ export const fixture = Effect.fn(function* (
           starts++;
           running = true;
           Deferred.doneUnsafe(starting, Exit.void);
+          // As makeHelperHost: an agent connection gets the helper's own command, no socket.
+          if (helper.direct)
+            return {
+              socketPath: "",
+              pid: HELPER_PID,
+              generation: String(starts),
+              driverVersion: "0.37.0",
+              contractVersion: "",
+              mcpProtocolVersion: "",
+              mcp: {
+                command: helper.bundle.executable,
+                args: ["--mcp", "--capability-manifest", helper.capabilityManifestPath],
+                environment: [...helper.environment],
+              },
+            };
           return {
             socketPath: "/tmp/goat-cu-x/driver.sock",
             pid: 777,

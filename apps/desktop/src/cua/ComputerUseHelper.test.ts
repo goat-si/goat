@@ -189,6 +189,35 @@ describe("ComputerUseHelper protocol", () => {
 });
 
 describe("ComputerUseHelper daemon admission", () => {
+  it("hands an agent connection the helper's own --mcp command and starts no daemon", async () => {
+    const helper = fakeHelper({ reply: () => ({ result: {} }) });
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: "0.37.0",
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+      spawn: () => helper.process,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    });
+    const connection = await host.start();
+    expect(connection.mcp).toEqual({
+      command: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+      args: ["--mcp", "--capability-manifest", "/state/cua-driver/agents.yaml"],
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+    });
+    // No socket and no daemon: the driver exists only under each connection's helper.
+    expect(connection.socketPath).toBe("");
+    expect(helper.received).toEqual([]);
+    await host.stop();
+  });
+
   const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: "0.37.0" };
   const metadata = {
     driverVersion: "0.37.0",

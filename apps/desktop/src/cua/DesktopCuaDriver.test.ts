@@ -493,7 +493,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.equal(report.status, "ready");
         assert.equal(
           report.status === "ready" ? report.mcp.command : "",
-          `${HELPER_BUNDLE}/Contents/Resources/cua-driver/cua-driver`,
+          `${HELPER_BUNDLE}/Contents/MacOS/GOAT Computer Use`,
         );
         assert.deepEqual(test.helperProbes, [{ bundleId: HELPER_ID, prompt: true }]);
         assert.isEmpty(test.constructors);
@@ -812,6 +812,24 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.equal((yield* test.next).status, "ready");
         const running = test.readiness.at(-1);
         assert.isFalse(running ? computerUseReady(running.readiness) : true);
+      }),
+    ),
+  );
+  it.effect("starts no driver daemon for agents on macOS; only the readiness check does", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        const report = yield* test.next;
+        assert.equal(report.status, "ready");
+        // What the server hands each agent's proxy: the helper itself, and no socket to reach.
+        assert.deepEqual(report.status === "ready" ? report.mcp.args.slice(0, 1) : [], ["--mcp"]);
+        assert.isUndefined(report.status === "ready" ? report.mcp.socketPath : "missing");
+        yield* test.verify;
+        assert.deepEqual(
+          test.helperLaunches.map(({ direct }) => direct),
+          [true, false],
+        );
       }),
     ),
   );
