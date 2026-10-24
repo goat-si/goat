@@ -140,7 +140,8 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   `app_not_approved`, `private_mode`, `human_control`, `input_collision`, `stale_element`,
   `target_gone`, `target_refused` (a policy refusal, with the policy named), `blocked_url`,
   `permissions_not_granted`, `permissions_pending`, `screen_locked`, `user_intervened`,
-  `incompatible_client_version`, `unsupported` and `user_stopped`. `user_stopped` is used only
+  `incompatible_client_version`, `unsafe_capture`, `target_bounds_unavailable`, `unsupported` and
+  `user_stopped`. `user_stopped` is used only
   when a person pressed Stop or stop all, and `user_intervened` only when the helper saw a
   person's input. A vendor helper that reports a policy refusal as "stopped by the user" makes
   agents end their turn (#1146); GOAT's helper does not.
@@ -219,17 +220,29 @@ browser.
   panel on click.
 - Each tile shows the app or page title, the window or tab, the thread, the owner and status chip,
   and a live thumbnail, with `stop` (this session), `pause` and `resume`, and `takeover` or
-  `handBack`. The stack header carries `stopAll`, the kill switch (#1209, #1134). `pause` keeps the
-  agent as owner and admits no new actions until `resume`, which requires a fresh observation like
-  a hand-back.
+  `handBack`. The stack header carries `stopAll`, the kill switch (#1209, #1134).
+- `pause` uses the Stop boundary and keeps the session. The proxy refuses new calls, queued
+  primitives are dropped, and the session's driver client is killed, because cancellation does
+  not stop admitted `run_script` or `run_steps` work (ADR-0022). The helper releases held input
+  and sends its cleanup report, results from the paused generation are discarded, and the
+  interrupted action reports `partial` or `unverifiable`. The agent stays owner and the lease
+  keeps running. `resume` checks that the lease is live, that a person has not taken over or
+  entered private mode, and that cleanup was reported. It then starts a new driver client
+  generation, and the agent must observe again before acting; nothing interrupted is replayed.
+  Pause during a nested script, with held input, and around lease expiry are conformance cases.
 - A tile in private mode shows a "Private — paused" placeholder and never pixels.
 - The desktop app docks the stack on the right of the GOAT window by default. Pop-out moves it into
   a floating stack at the right edge of the screen: always on top, never activating, and passing
   clicks through everywhere except its controls, so a person can watch while working elsewhere.
-- The floating stack and the helper's cursor overlay (#1214) are excluded from computer use
-  capture, and they never cover the point an action targets: when an action lands under the
-  stack, the stack moves or hides first. Where a platform cannot exclude a window from capture,
-  the helper refuses actions under the stack until it has moved, which fixtures check.
+- The floating stack and the helper's cursor overlay (#1214) never appear in a computer use
+  capture and never cover the point an action targets; when an action lands under the stack, the
+  stack moves or hides first. Window-only capture cannot include them. A crop of the window's
+  bounds can, so each helper reports a typed exclusion capability: either its capture path
+  excludes GOAT's own windows, or it hides them before each capture and confirms they are off
+  screen before taking it. A helper that can do neither runs without the floating stack and
+  overlay on that host, and a capture that would still include them, or a crop without known
+  window bounds, is refused with a typed reason (`unsafe_capture`, `target_bounds_unavailable`).
+  Tiles never capture other tiles.
 - Web and mobile show the same tiles in the existing right panel or a sheet, without a floating
   mode.
 - A tile captures only the operated window where the platform helper can capture windows, and a
@@ -387,31 +400,32 @@ One protocol, three helpers. Every method is implemented or returns a typed `uns
 reason; nothing fails with an untyped error. "Fallback" means the method works through a
 different route that the result reports.
 
-| Protocol method or surface                                                     | macOS                       | Windows                             | Linux X11                                                                           | Linux Wayland                                                                            |
-| ------------------------------------------------------------------------------ | --------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `hello` / version handshake                                                    | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| readiness (real tree + non-blank capture)                                      | yes                         | yes                                 | yes                                                                                 | after portal consent where the compositor supports discovery and capture; else `partial` |
-| request permission                                                             | TCC prompts                 | `unsupported` (none needed)         | `unsupported`                                                                       | portal consent                                                                           |
-| list apps / windows                                                            | yes                         | yes                                 | yes                                                                                 | compositor dependent, else `unsupported`                                                 |
-| observe full (tree + screenshot)                                               | yes                         | yes                                 | yes                                                                                 | where the target can be captured; else tree only with `partial`                          |
-| observe diff                                                                   | yes (helper computed)       | yes (helper computed)               | yes (helper computed)                                                               | yes (helper computed)                                                                    |
-| observe text-only                                                              | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| stale id → `stale_element`                                                     | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| wait for settle                                                                | accessibility notifications | UIA events                          | AT-SPI events                                                                       | AT-SPI events                                                                            |
-| semantic actions                                                               | AX actions                  | UIA patterns                        | AT-SPI actions                                                                      | AT-SPI actions                                                                           |
-| background pointer and keys                                                    | yes                         | partial, foreground fallback        | with Xorg hotplug and writable `/dev/uinput`; else `partial`, foreground with lease | `unsupported`; foreground with lease                                                     |
-| foreground delivery under lease                                                | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| set value / select text                                                        | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| cancel by request id                                                           | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| end session + held-input release + cleanup report                              | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| private mode detection                                                         | `AXSecureTextField`         | `IsPassword`                        | AT-SPI password role                                                                | AT-SPI password role                                                                     |
-| lock, sleep and session-switch events                                          | yes                         | session change notifications        | logind and screensaver signals                                                      | logind and screensaver signals                                                           |
-| human input collision                                                          | HID idle time               | last-input time, own input filtered | X idle time                                                                         | `unsupported`; exclusive lease                                                           |
-| physical kill switch                                                           | Escape tap (optional grant) | low-level keyboard hook             | XInput2 raw keys                                                                    | `unsupported`; Stop controls only                                                        |
-| preview frames                                                                 | yes                         | yes                                 | yes                                                                                 | through the portal screen cast where granted; else last observation only                 |
-| `takeover`, `handBack`, `requestHandoff`, `pause`, `resume`, `stop`, `stopAll` | yes                         | yes                                 | yes                                                                                 | yes                                                                                      |
-| window-only capture for tiles                                                  | yes                         | yes                                 | yes                                                                                 | where the portal grants a window; else crop of the window's bounds                       |
-| onboarding flow, panel, chips, controls                                        | same                        | same                                | same                                                                                | same                                                                                     |
+| Protocol method or surface                                                     | macOS                                 | Windows                                  | Linux X11                                                                           | Linux Wayland                                                                            |
+| ------------------------------------------------------------------------------ | ------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `hello` / version handshake                                                    | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| readiness (real tree + non-blank capture)                                      | yes                                   | yes                                      | yes                                                                                 | after portal consent where the compositor supports discovery and capture; else `partial` |
+| request permission                                                             | TCC prompts                           | `unsupported` (none needed)              | `unsupported`                                                                       | portal consent                                                                           |
+| list apps / windows                                                            | yes                                   | yes                                      | yes                                                                                 | compositor dependent, else `unsupported`                                                 |
+| observe full (tree + screenshot)                                               | yes                                   | yes                                      | yes                                                                                 | where the target can be captured; else tree only with `partial`                          |
+| observe diff                                                                   | yes (helper computed)                 | yes (helper computed)                    | yes (helper computed)                                                               | yes (helper computed)                                                                    |
+| observe text-only                                                              | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| stale id → `stale_element`                                                     | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| wait for settle                                                                | accessibility notifications           | UIA events                               | AT-SPI events                                                                       | AT-SPI events                                                                            |
+| semantic actions                                                               | AX actions                            | UIA patterns                             | AT-SPI actions                                                                      | AT-SPI actions                                                                           |
+| background pointer and keys                                                    | yes                                   | partial, foreground fallback             | with Xorg hotplug and writable `/dev/uinput`; else `partial`, foreground with lease | `unsupported`; foreground with lease                                                     |
+| foreground delivery under lease                                                | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| set value / select text                                                        | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| cancel by request id                                                           | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| end session + held-input release + cleanup report                              | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| private mode detection                                                         | `AXSecureTextField`                   | `IsPassword`                             | AT-SPI password role                                                                | AT-SPI password role                                                                     |
+| lock, sleep and session-switch events                                          | yes                                   | session change notifications             | logind and screensaver signals                                                      | logind and screensaver signals                                                           |
+| human input collision                                                          | HID idle time                         | last-input time, own input filtered      | X idle time                                                                         | `unsupported`; exclusive lease                                                           |
+| physical kill switch                                                           | Escape tap (optional grant)           | low-level keyboard hook                  | XInput2 raw keys                                                                    | `unsupported`; Stop controls only                                                        |
+| preview frames                                                                 | yes                                   | yes                                      | yes                                                                                 | through the portal screen cast where granted; else last observation only                 |
+| `takeover`, `handBack`, `requestHandoff`, `pause`, `resume`, `stop`, `stopAll` | yes                                   | yes                                      | yes                                                                                 | yes                                                                                      |
+| window-only capture for tiles                                                  | yes                                   | yes                                      | yes                                                                                 | where the portal grants a window; else crop of the window's bounds                       |
+| GOAT's own windows kept out of captures                                        | capture filter, else hide and confirm | capture exclusion, else hide and confirm | hide and confirm, else docked only                                                  | window capture only, else docked only                                                    |
+| onboarding flow, panel, chips, controls                                        | same                                  | same                                     | same                                                                                | same                                                                                     |
 
 Tests enforce it: the contracts package declares the method list, and a conformance suite runs the
 same fixture requests against each platform helper, failing when a method is missing or a refusal
@@ -427,7 +441,8 @@ real gateway with providers, and a signed packaged app on a real OS and display.
   drag targets and counters that record what it received. Negative cases: wrong pid or window,
   stale ids, an epoch change, Stop while queued, held modifiers during a kill, helper death, lost
   listener, a Stop of one thread while a sibling acts, and lock or sleep during a held drag and
-  during typing.
+  during typing, pause and resume during a nested script, and a crop capture while the floating
+  stack or cursor overlay sits inside the window's bounds.
 - **Real apps.** Calculator, TextEdit, Finder, a Chromium browser and an Electron app on macOS, and
   equivalents per platform, each with clean and contaminated runs reported apart.
 - **Latency.** The Codex baseline on Calculator (one run, 2026-10-24, macbookpro-2): full tree
