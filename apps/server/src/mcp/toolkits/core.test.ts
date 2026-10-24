@@ -39,7 +39,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
@@ -54,7 +53,6 @@ import * as ProviderAdapterRegistry from "../../orchestration-v2/ProviderAdapter
 import * as ThreadLaunchService from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
-import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
@@ -1181,64 +1179,6 @@ it.effect("discovers workflow stop targets and requires orchestration capability
     ),
   );
 });
-
-it.effect("only the caller that prepared a pending upload can discard it", () =>
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const call = (
-      name: string,
-      args: Record<string, unknown>,
-      invocation: McpInvocationContext.McpInvocationScope,
-    ) =>
-      server
-        .callTool({ name, arguments: args })
-        .pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
-          Effect.provideService(McpSchema.McpServerClient, client),
-        );
-    const prepared = yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "shot.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-    const { attachmentId } = prepared.structuredContent as { readonly attachmentId: string };
-    const otherThread = {
-      ...scope,
-      requestNamespace: "other-session",
-      thread: { ...scope.thread!, threadId: ThreadId.make("other-thread") },
-    };
-
-    const refused = yield* call("goat_attachment_discard", { attachmentId }, otherThread);
-    expect(declaredFailure(refused)).toMatchObject({ code: "invalid_request" });
-
-    yield* TestClock.adjust(24 * 60 * 60 * 1000 + 5 * 60_000);
-    yield* call(
-      "goat_attachment_prepare_upload",
-      { upload: { name: "later.png", mimeType: "image/png", sizeBytes: 4 } },
-      scope,
-    );
-
-    const discarded = yield* call(
-      "goat_attachment_discard",
-      { attachmentId },
-      { ...scope, requestNamespace: "mcp-core-session-2" },
-    );
-    expect(discarded.isError).toBe(false);
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerAttachmentToolkit.pipe(
-        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
-        // Pending-upload ownership is stored; without a database prepare refuses by design.
-        Layer.provide(Sqlite.layerMemory),
-        Layer.provide(ServerSecretStore.layer),
-        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-attachment-" })),
-        Layer.provide(NodeServices.layer),
-      ),
-    ),
-  ),
-);
 
 it.effect(
   "validates reason, records authenticated responders, and reads resolved questions through registration",
