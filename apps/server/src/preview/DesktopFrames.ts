@@ -34,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as LinuxFrameSource from "../cua/linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
 export class DesktopFrames extends Context.Service<
@@ -190,6 +191,9 @@ interface Viewer extends ViewerAsk {
 const make = Effect.gen(function* () {
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const desktop = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
+  // A Linux server that runs the driver itself captures the same targets (#1370), unless a
+  // desktop host's helper already does.
+  const linux = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
   const viewers = new Map<string, Set<Viewer>>();
   const frameSeq = new Map<string, number>();
   const nextFrameAt = new Map<string, number>();
@@ -249,6 +253,15 @@ const make = Effect.gen(function* () {
             Effect.option,
           );
           current = { seq: Option.getOrElse(seq, () => UNSENT), targets };
+          if (Option.isSome(linux)) {
+            const desktopCaptures =
+              Option.isSome(desktop) &&
+              Option.exists(yield* desktop.value.cuaReadiness, (report) => report.frames === true);
+            yield* linux.value.setTargets(
+              current.seq,
+              desktopCaptures || current.seq === UNSENT ? [] : targets,
+            );
+          }
         }
         yield* schedule(gates, overdue);
         for (const [key, set] of viewers) {
@@ -342,6 +355,8 @@ const make = Effect.gen(function* () {
     );
     yield* desktop.value.cuaFrames.pipe(Stream.runForEach(deliver), Effect.forkScoped);
   }
+  if (Option.isSome(linux))
+    yield* linux.value.frames.pipe(Stream.runForEach(deliver), Effect.forkScoped);
 
   const frames = (input: PreviewSessionFramesInput): Stream.Stream<PreviewSessionFrameEvent> =>
     input.sessionId.startsWith(DESKTOP_PREFIX)

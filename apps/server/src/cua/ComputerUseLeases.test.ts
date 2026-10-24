@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { runMigrations } from "../persistence/Migrations.ts";
+import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
@@ -465,6 +466,41 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       ),
     );
   }),
+);
+
+it.effect(
+  "a Linux server that captures its own windows has live frames without a desktop helper",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // Frames only: a person's input and secret fields still need a helper that reports them.
+      assert.deepEqual(yield* leases.detection, {
+        humanInput: false,
+        privateMode: false,
+        frames: true,
+      });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({}),
+              Layer.succeed(
+                LinuxFrameSource.LinuxFrameSource,
+                LinuxFrameSource.LinuxFrameSource.of({
+                  supported: Effect.succeed(true),
+                  setTargets: () => Effect.void,
+                  frames: Stream.empty,
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
 );
 
 it.effect(

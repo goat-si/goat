@@ -38,6 +38,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -396,7 +397,8 @@ const make = Effect.gen(function* () {
   // says which it can detect at all; a standalone server and an older helper report nothing, so
   // they detect neither (#1235). Read on every admission from the receiver's accepted report,
   // so a downgrade counts from the moment it arrives.
-  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
+  const linuxFrames = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
+  const fromDesktop: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
     ? desktop.value.cuaReadiness.pipe(
         Effect.map(
           Option.match({
@@ -410,6 +412,13 @@ const make = Effect.gen(function* () {
         ),
       )
     : Effect.succeed({ humanInput: false, privateMode: false, frames: false });
+  // A Linux server that runs the driver itself captures its own frames (#1370).
+  const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(linuxFrames)
+    ? Effect.zipWith(fromDesktop, linuxFrames.value.supported, (reported, linux) => ({
+        ...reported,
+        frames: reported.frames || linux,
+      }))
+    : fromDesktop;
   if (Option.isSome(desktop))
     yield* desktop.value.cuaSafety.pipe(
       Stream.runForEach((report) => {
