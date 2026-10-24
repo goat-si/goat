@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
+  endReported,
   finishedWake,
   LaunchWatchDocument,
   launchWatchId,
@@ -12,8 +13,10 @@ import {
   normalizeHost,
   outageWake,
   questionWake,
+  rearmRetriedRun,
   recordContact,
   recordFailure,
+  settleEnd,
   settleRun,
 } from "./launchWatch.ts";
 
@@ -36,6 +39,55 @@ it("reads watches saved before completion webhooks with the webhook off", () => 
     watches: [saved],
   });
   expect(document.watches[0]?.notifyWebhook).toBe(false);
+});
+
+it("gives a retried run's end new ids when an earlier server reported its first end (#978)", () => {
+  const run = RunId.make("run-1");
+  const {
+    reportedEnds: _added,
+    followAgain: _alsoAdded,
+    ...saved
+  } = settleRun(addPendingRun(makeWatch(), run, 0), run, 0);
+  const [upgraded] = Schema.decodeUnknownSync(LaunchWatchDocument)({
+    version: 1,
+    watches: [saved],
+  }).watches;
+  const wake = (watch: typeof upgraded) =>
+    finishedWake({
+      watch: watch!,
+      runId: run,
+      status: "completed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: "2026-10-24T00:00:00.000Z",
+    });
+  const reported = wake(upgraded);
+  const retried = wake(rearmRetriedRun(upgraded!, run, 1));
+  expect(retried.commandId).not.toBe(reported.commandId);
+  expect(retried.messageId).not.toBe(reported.messageId);
+});
+
+it("reports each end it could not read, under ids of its own", () => {
+  const run = RunId.make("run-1");
+  const wake = (watch: ReturnType<typeof makeWatch>) =>
+    finishedWake({
+      watch,
+      runId: run,
+      status: "failed",
+      title: null,
+      branch: null,
+      worktreePath: null,
+      excerpt: null,
+      end: null,
+    });
+  const first = addPendingRun(makeWatch(), run, 0);
+  const second = rearmRetriedRun(settleEnd(first, run, null, 0), run, 1);
+  const third = rearmRetriedRun(settleEnd(second, run, null, 1), run, 2);
+  expect(endReported(second, run, null)).toBe(false);
+  const ids = [first, second, third].map((watch) => wake(watch).commandId);
+  expect(new Set(ids).size).toBe(3);
 });
 
 it.effect("notifies once on the third failure and caps contact backoff at fifteen minutes", () =>

@@ -17,7 +17,7 @@ import {
   RpcInstrumentation,
   rpcInstrumentationLayer as instrumentationLayer,
 } from "../observability/RpcInstrumentation.ts";
-import { makeHubNodesHandlers } from "../ws.ts";
+import { makeHubNodesHandlers } from "./HubNodes.rpc.ts";
 import * as HubNodes from "./HubNodes.ts";
 
 const group = WsHubNodesRpcGroup.middleware(RpcInstrumentation);
