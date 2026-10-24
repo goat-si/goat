@@ -270,14 +270,17 @@ vi.mock("./MemoryScopePicker", () => ({
     items,
     value,
     onChange,
+    label,
     disabled,
   }: {
     items: { id: string; title: string }[];
     value: string | null;
     onChange: (id: string) => void;
+    label: string;
     disabled: boolean;
   }) => (
     <select
+      aria-label={label}
       value={value ?? ""}
       disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
@@ -311,7 +314,7 @@ vi.mock("../ui/select", () => ({
         aria-label={
           isValidElement<{ "aria-label"?: string }>(trigger)
             ? trigger.props["aria-label"]
-            : "Fixture device picker"
+            : undefined
         }
         value={value ?? ""}
         disabled={disabled}
@@ -687,6 +690,22 @@ async function click(label: string) {
   );
   expect(button).toBeDefined();
   await act(async () => button!.click());
+}
+// Settings renders the import and browse scope pickers under one name, so callers pass the section.
+function namedSelect(name: string, section = "") {
+  const matches = container.querySelectorAll<HTMLSelectElement>(
+    `${section} select[aria-label="${name}"]`,
+  );
+  expect(matches, `one select named ${name}`).toHaveLength(1);
+  return matches[0]!;
+}
+async function chooseOption(name: string, value: string, section?: string) {
+  const picker = namedSelect(name, section);
+  expect([...picker.options].map((option) => option.value)).toContain(value);
+  await act(async () => {
+    picker.value = value;
+    picker.dispatchEvent(new Event("change", { bubbles: true }));
+  });
 }
 it("requires confirmation, retains operation identity after failure, and displays settlement separately", async () => {
   await renderForget();
@@ -1244,11 +1263,7 @@ it.each(["write", "read", "reconnect"])(
 
 it("adds a named device, retries install without exposing its key, and confirms removal", async () => {
   const { render } = await supportedScreen(false);
-  const select = container.querySelector<HTMLSelectElement>("select")!;
-  await act(async () => {
-    select.value = "active-device";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await chooseOption("Device", "active-device");
   await click("Add");
   expect(container.textContent).toContain("Add active device?");
   const credential = "ephemeral-key-that-must-not-be-rendered";
@@ -1350,9 +1365,7 @@ it("reloads persisted members, excludes them from Add, and removes an offline un
   ).toBe(true);
   expect(container.textContent).not.toContain("unregistered-private-id");
   expect(container.textContent).toContain("Waiting for the device to confirm");
-  const picker =
-    container.querySelector<HTMLSelectElement>('select[aria-label="Device"]') ??
-    container.querySelector<HTMLSelectElement>("select")!;
+  const picker = namedSelect("Device");
   expect([...picker.options].map((o) => o.value)).not.toContain("active-device");
   const row = [...container.querySelectorAll("[data-test-row]")].find((e) =>
     e.textContent?.startsWith("Unknown device"),
@@ -1450,11 +1463,7 @@ it("ends a confirmed sharing conflict, refreshes and requires a new confirmation
 });
 
 async function selectAddDevice() {
-  const picker = container.querySelector<HTMLSelectElement>("select")!;
-  await act(async () => {
-    picker.value = "active-device";
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await chooseOption("Device", "active-device");
   await click("Add");
 }
 
@@ -1858,7 +1867,7 @@ it.each([false, true])(
     await selectMemoryScope("project:synthetic-project");
     state.projects = [{ ...project, title: "Resolved project" }];
     await render();
-    expect(container.querySelector<HTMLSelectElement>("#memory-browse-scope select")?.value).toBe(
+    expect(namedSelect("Memory scope", "#memory-browse-scope").value).toBe(
       "project:synthetic-project",
     );
     expect(container.querySelector('[aria-label="Search memories"]')).toBeNull();
@@ -1879,7 +1888,7 @@ it.each([false, true])(
 it("offers User and projects without a context-free Thread option in Settings", async () => {
   state.threads = [{ id: "thread-a", environmentId: "remote-owner", title: "Thread A" }];
   await supportedScreen(false);
-  const picker = container.querySelector<HTMLSelectElement>("#memory-browse-scope select")!;
+  const picker = namedSelect("Memory scope", "#memory-browse-scope");
   expect([...picker.options].map((option) => option.value).filter(Boolean)).toEqual(["user"]);
   expect(state.threadReads.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
 });
@@ -2022,13 +2031,7 @@ it("explains why a read-only session cannot look up project keys", async () => {
 });
 
 async function selectMemoryScope(value: string) {
-  const picker = container.querySelector<HTMLSelectElement>(
-    '#memory-browse-scope select[aria-label="Memory scope"]',
-  )!;
-  await act(async () => {
-    picker.value = value;
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await chooseOption("Memory scope", value, "#memory-browse-scope");
 }
 
 it("keeps scope selection in one row with dozens of projects and selects the last project", async () => {
@@ -2046,9 +2049,7 @@ it("keeps scope selection in one row with dozens of projects and selects the las
     }),
   );
   await supportedScreen(false);
-  const picker = container.querySelector<HTMLSelectElement>(
-    '#memory-browse-scope select[aria-label="Memory scope"]',
-  )!;
+  const picker = namedSelect("Memory scope", "#memory-browse-scope");
   expect(picker.closest("section")!.querySelectorAll("[data-test-row]")).toHaveLength(1);
   expect(picker.querySelectorAll("option[value^='project:']")).toHaveLength(60);
   expect(picker.closest("section")!.querySelectorAll("button")).toHaveLength(0);
@@ -2084,14 +2085,6 @@ async function renderControl(element: ReactNode | (() => ReactNode)) {
     });
   await render();
   return { registry, render };
-}
-async function chooseControl(value: string, index = 0) {
-  const picker = container.querySelectorAll("select")[index]!;
-  expect(picker).toBeDefined();
-  await act(async () => {
-    picker.value = value;
-    picker.dispatchEvent(new Event("change", { bubbles: true }));
-  });
 }
 const envId = EnvironmentId.make("remote-owner");
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
@@ -2214,8 +2207,8 @@ it("uses binding CAS, reloads after conflict, and reverses dedicated identity to
   await renderControl(
     <MemoryScopeSettings environmentId={envId} memorySpaceId={spaceId} onChange={selection} />,
   );
-  await chooseControl("project");
-  await chooseControl("project-a", 1);
+  await chooseOption("Memory scope", "project");
+  await chooseOption("Memory project", "project-a");
   expect(selection).toHaveBeenLastCalledWith({
     scope: { kind: "project", projectKey: binding.projectKey },
     project: binding.project,
@@ -2248,10 +2241,10 @@ it("chooses all-project and thread scopes explicitly and clears a removed destin
     <MemoryScopeSettings environmentId={envId} memorySpaceId={spaceId} onChange={selection} />,
   );
   expect(selection).toHaveBeenLastCalledWith(null);
-  await chooseControl("user");
+  await chooseOption("Memory scope", "user");
   expect(selection).toHaveBeenLastCalledWith({ scope: { kind: "user" } });
-  await chooseControl("thread");
-  await chooseControl("thread-a", 1);
+  await chooseOption("Memory scope", "thread");
+  await chooseOption("Memory thread", "thread-a");
   expect(selection).toHaveBeenLastCalledWith({
     scope: { kind: "thread", thread: { environmentId: envId, threadId: "thread-a" } },
   });
@@ -2319,8 +2312,8 @@ it("requires discover, preview, scope and selection confirmation before an expli
     throw new Error("response lost");
   });
   await renderControl(<MemoryImportSettings environmentId={envId} memorySpaceId={spaceId} />);
-  await chooseControl("codex");
-  await chooseControl("user", 1);
+  await chooseOption("Import provider", "codex");
+  await chooseOption("Memory scope", "user");
   await click("Discover profiles");
   await click("Preview profile 1");
   await act(async () =>
@@ -2543,8 +2536,8 @@ it("awaits importer removal before submitting a binding CAS change", async () =>
         onChange={() => undefined}
       />,
     );
-    await chooseControl("project");
-    await chooseControl("project-a", 1);
+    await chooseOption("Memory scope", "project");
+    await chooseOption("Memory project", "project-a");
     await click("Create dedicated shared project");
     await click("Confirm binding change");
     expect(started).toBe(true);
@@ -2672,8 +2665,8 @@ it("renders save failure, retries only on click and shows totals across chunks",
     throw new Error("Unexpected request");
   });
   await renderControl(<MemoryImportSettings environmentId={envId} memorySpaceId={spaceId} />);
-  await chooseControl("codex");
-  await chooseControl("user", 1);
+  await chooseOption("Import provider", "codex");
+  await chooseOption("Memory scope", "user");
   await click("Discover profiles");
   await click("Preview profile 1");
   await act(async () => {
@@ -2755,21 +2748,21 @@ it("keeps 2000 unrelated shells unsubscribed in user/project scope and only repo
   const view = await renderControl(
     <MemoryScopeSettings environmentId={envId} memorySpaceId={spaceId} onChange={selection} />,
   );
-  await chooseControl("user");
+  await chooseOption("Memory scope", "user");
   selection.mockClear();
   state.threadReads.mockClear();
   state.threads = state.threads.map((thread) => ({ ...thread, title: `${thread.title} updated` }));
   await view.render();
   expect(state.threadReads.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
   expect(selection).not.toHaveBeenCalled();
-  await chooseControl("project");
+  await chooseOption("Memory scope", "project");
   selection.mockClear();
   state.threadReads.mockClear();
   await view.render();
   expect(state.threadReads.mock.calls.every(([enabled]) => enabled === false)).toBe(true);
   expect(selection).not.toHaveBeenCalled();
-  await chooseControl("thread");
-  await chooseControl("thread-1999", 1);
+  await chooseOption("Memory scope", "thread");
+  await chooseOption("Memory thread", "thread-1999");
   selection.mockClear();
   state.threads = state.threads.map((thread) => ({ ...thread, title: `${thread.title} again` }));
   await view.render();
@@ -2795,8 +2788,8 @@ it("storage generation notification stops selection without deleting recovery", 
     throw new Error("offline");
   });
   await renderControl(<MemoryImportSettings environmentId={envId} memorySpaceId={spaceId} />);
-  await chooseControl("user", 1);
-  expect(container.querySelectorAll("select")[1]!.value).toBe("user");
+  await chooseOption("Memory scope", "user");
+  expect(namedSelect("Memory scope").value).toBe("user");
   await act(async () =>
     window.dispatchEvent(
       new StorageEvent("storage", {

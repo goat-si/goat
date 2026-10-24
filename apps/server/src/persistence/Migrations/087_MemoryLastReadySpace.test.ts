@@ -34,7 +34,10 @@ it.effect("081 rolls DDL back and preserves the retained destination across ledg
       [100, "HumanStepRecords"],
       [101, "McpRequestReservations"],
       [102, "RemoteReportInboxRunId"],
-      [103, "RemoteReportFences"],
+      [103, "RemoteReportReceipts"],
+      [104, "PendingAttachmentUploads"],
+      [105, "ScheduledTaskWebhookSecretRef"],
+      [106, "RemoteReportFences"],
     ]);
     yield* sql`INSERT INTO memory_last_ready_space(singleton,space) VALUES (1,${space})`;
     assert.deepStrictEqual(yield* runMigrations(), []);

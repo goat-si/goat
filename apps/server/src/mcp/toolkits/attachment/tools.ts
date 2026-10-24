@@ -36,9 +36,29 @@ const shared = {
 const AttachmentUploadTool = Tool.make(agentSurfaceRegistry["attachment.prepare_upload"].name, {
   ...shared,
   description: agentSurfaceRegistry["attachment.prepare_upload"].description,
-  parameters: Schema.Struct({ upload: AttachmentCreateUploadUrlInput }),
+  parameters: withClientRequestId(Schema.Struct({ upload: AttachmentCreateUploadUrlInput })),
   success: AttachmentCreateUploadUrlResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["attachment.prepare_upload"]));
+const AttachmentPendingListTool = Tool.make(agentSurfaceRegistry["attachment.pending_list"].name, {
+  ...shared,
+  description: agentSurfaceRegistry["attachment.pending_list"].description,
+  parameters: Tool.EmptyParams,
+  success: Schema.Struct({
+    uploads: Schema.Array(
+      Schema.Struct({
+        attachmentId: AttachmentCreateUploadUrlResult.fields.attachmentId,
+        type: Schema.Literals(["image", "file"]),
+        name: Schema.String,
+        mimeType: Schema.String,
+        sizeBytes: Schema.Number,
+        expiresAt: AttachmentCreateUploadUrlResult.fields.expiresAt.annotate({
+          description: "When the upload URL stops accepting bytes.",
+        }),
+        uploaded: Schema.Boolean,
+      }),
+    ),
+  }),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["attachment.pending_list"]));
 const AttachmentDiscardTool = Tool.make(agentSurfaceRegistry["attachment.discard"].name, {
   ...shared,
   description: agentSurfaceRegistry["attachment.discard"].description,
@@ -67,6 +87,7 @@ const AttachmentSendTool = Tool.make(agentSurfaceRegistry["thread.send_attachmen
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.send_attachments"]));
 export const AttachmentToolkit = Toolkit.make(
   AttachmentUploadTool,
+  AttachmentPendingListTool,
   AttachmentDiscardTool,
   AttachmentSendTool,
 );

@@ -51,6 +51,18 @@ to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
+## Copy file paths
+
+In the Files panel, `mod+alt+c` copies the full path of the focused file or
+folder and `mod+alt+shift+c` copies its path relative to the thread's
+workspace, the pair VS Code and Zed use on macOS and Linux. Several selected rows copy on
+separate lines. A folder you just opened or closed is still the target. With a
+file open, the shortcuts copy that file while the file view has focus, and the
+copy button beside its breadcrumbs offers both. Right-click a row for the same
+actions. Paths on a remote environment are that machine's paths. The shortcuts
+do nothing while you type in a field or a file's editor, or inside a rendered
+HTML page. Search Settings for “Files: Copy” to change them.
+
 ## Find in a diff
 
 Click into a diff in the Diff panel or a pull request's Code tab, then press
@@ -110,8 +122,9 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
-`turnRunning`, `editableFocus`, `isWeb`, and `isDesktop`.
+`turnRunning`, `editableFocus`, `fileViewFocus`, `isWeb`, and `isDesktop`.
 `editableFocus` is true while a text field, the composer, or another editor has
+the keyboard. `fileViewFocus` is true while the Files panel or an open file has
 the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
 desktop app. Unknown keys evaluate to `false`.
 

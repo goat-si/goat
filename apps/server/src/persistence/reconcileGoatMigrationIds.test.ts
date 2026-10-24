@@ -85,7 +85,10 @@ const laterGoatMigrations = [
   [100, "HumanStepRecords"],
   [101, "McpRequestReservations"],
   [102, "RemoteReportInboxRunId"],
-  [103, "RemoteReportFences"],
+  [103, "RemoteReportReceipts"],
+  [104, "PendingAttachmentUploads"],
+  [105, "ScheduledTaskWebhookSecretRef"],
+  [106, "RemoteReportFences"],
 ] as const;
 const preMemoryGoatNames = [
   "ServerActivityIndexes",
@@ -345,6 +348,10 @@ const NIGHTLY_256_GOAT_LEDGER = [
   [99, "HumanStepRecords"],
   [100, "McpRequestReservations"],
   [101, "RemoteReportInboxRunId"],
+  [102, "RemoteReportReceipts"],
+  [103, "PendingAttachmentUploads"],
+  [104, "ScheduledTaskWebhookSecretRef"],
+  [105, "RemoteReportFences"],
 ] as const;
 
 /** Upstream 1-67 as this build runs them, then the given 256-era GOAT rows under their old ids. */
@@ -372,8 +379,6 @@ const hasShellStopIndex = Effect.gen(function* () {
 
 const currentGoatRow = (name: string) =>
   migrationManifest.find(([, entryName]) => entryName === name)!;
-// GOAT migrations added after nightly 256 are new to its ledger and run on upgrade at their ids.
-const GOAT_SINCE_256 = [currentGoatRow("RemoteReportFences")];
 
 describe("upgrading a nightly 256 ledger past upstream 068", () => {
   it.effect("a new database runs every migration once, upstream 068 included", () =>
@@ -384,15 +389,12 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 
-  it.effect("a 256 ledger runs upstream 068 and newer GOAT, and moves its GOAT rows unrerun", () =>
+  it.effect("a 256 ledger runs only upstream 068 and moves GOAT rows without rerunning them", () =>
     Effect.gen(function* () {
       yield* seedNightly256Ledger(NIGHTLY_256_GOAT_LEDGER);
       assert.isFalse(yield* hasShellStopIndex);
       // GOAT bodies such as ServerActivityIndexes' ALTER TABLE fail if run twice.
-      assert.deepStrictEqual(yield* runMigrations(), [
-        [68, "ShellStopRequestIndex"],
-        ...GOAT_SINCE_256,
-      ]);
+      assert.deepStrictEqual(yield* runMigrations(), [[68, "ShellStopRequestIndex"]]);
       assert.isTrue(yield* hasShellStopIndex);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);
@@ -408,7 +410,6 @@ describe("upgrading a nightly 256 ledger past upstream 068", () => {
       assert.deepStrictEqual(yield* runMigrations(), [
         [68, "ShellStopRequestIndex"],
         ...NIGHTLY_256_GOAT_LEDGER.slice(recorded).map(([, name]) => currentGoatRow(name)),
-        ...GOAT_SINCE_256,
       ]);
       assert.deepStrictEqual(yield* history, migrationManifest);
       assert.deepStrictEqual(yield* runMigrations(), []);

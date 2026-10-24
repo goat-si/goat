@@ -47,7 +47,10 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
       [100, "HumanStepRecords"],
       [101, "McpRequestReservations"],
       [102, "RemoteReportInboxRunId"],
-      [103, "RemoteReportFences"],
+      [103, "RemoteReportReceipts"],
+      [104, "PendingAttachmentUploads"],
+      [105, "ScheduledTaskWebhookSecretRef"],
+      [106, "RemoteReportFences"],
     ]);
     assert.deepStrictEqual(
       yield* sql`SELECT automatic_attempts,report_kind,report_approved FROM memory_report_outbox`,

@@ -13,7 +13,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import bindingsMigration from "../persistence/Migrations/070_RemoteReports.ts";
 import dispatchMigration from "../persistence/Migrations/071_RemoteDispatches.ts";
 import relayMigration from "../persistence/Migrations/075_RemoteReportRelay.ts";
-import fencesMigration from "../persistence/Migrations/103_RemoteReportFences.ts";
+import fencesMigration from "../persistence/Migrations/106_RemoteReportFences.ts";
 import * as RemoteReportService from "./RemoteReportService.ts";
 
 const readKey = "2".repeat(64);

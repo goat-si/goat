@@ -115,7 +115,10 @@ describe("V2 preview upgrade", () => {
         [100, "HumanStepRecords"],
         [101, "McpRequestReservations"],
         [102, "RemoteReportInboxRunId"],
-        [103, "RemoteReportFences"],
+        [103, "RemoteReportReceipts"],
+        [104, "PendingAttachmentUploads"],
+        [105, "ScheduledTaskWebhookSecretRef"],
+        [106, "RemoteReportFences"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -241,7 +244,10 @@ describe("V2 preview upgrade", () => {
         [100, "HumanStepRecords"],
         [101, "McpRequestReservations"],
         [102, "RemoteReportInboxRunId"],
-        [103, "RemoteReportFences"],
+        [103, "RemoteReportReceipts"],
+        [104, "PendingAttachmentUploads"],
+        [105, "ScheduledTaskWebhookSecretRef"],
+        [106, "RemoteReportFences"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

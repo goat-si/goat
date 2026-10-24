@@ -68,7 +68,10 @@ it.effect(
         [100, "HumanStepRecords"],
         [101, "McpRequestReservations"],
         [102, "RemoteReportInboxRunId"],
-        [103, "RemoteReportFences"],
+        [103, "RemoteReportReceipts"],
+        [104, "PendingAttachmentUploads"],
+        [105, "ScheduledTaskWebhookSecretRef"],
+        [106, "RemoteReportFences"],
       ]);
       yield* assertUsageCounters;
       assert.deepStrictEqual(yield* runMigrations(), []);

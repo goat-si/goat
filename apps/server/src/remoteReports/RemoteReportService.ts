@@ -17,6 +17,8 @@ import {
   type RemoteObservedRun,
   type RemoteReportedOutcome,
   RemoteOriginReportInput,
+  type RemoteOriginReportReceipt,
+  RemoteReportKind,
   RemoteOriginReportResult,
   RemoteOriginReportsWaitInput,
   RemoteOriginReportsWaitResult,
@@ -62,6 +64,7 @@ export class RemoteReportError extends Schema.TaggedError<RemoteReportError>()(
       "thread_deleted",
       "relay_unsupported",
       "relay_queue_full",
+      "idempotency_mismatch",
       "fenced",
       "unavailable",
       "storage",
@@ -105,6 +108,33 @@ const decodeReports = (rows: unknown) =>
 const isRemoteReportError = Schema.is(RemoteReportError);
 /** Relays the origin has not collected yet. They are never pruned, so they are capped. */
 export const MAX_PENDING_RELAYS = 50;
+
+/** A keyed report's identity: its clientRequestId and a digest of what it reports. */
+interface ReportKey {
+  readonly clientRequestId: string;
+  readonly digest: string;
+}
+const ReceiptRow = Schema.Struct({
+  clientRequestId: Schema.String,
+  argsDigest: Schema.String,
+  kind: RemoteReportKind,
+  sequence: NonNegativeInt,
+  delivery: Schema.Literals(["origin", "launcher"]),
+  wakeThreadId: Schema.NullOr(ThreadId),
+  wakeCommandId: Schema.NullOr(Schema.String),
+  deliveredAt: Schema.NullOr(Schema.String),
+  createdAt: Schema.String,
+});
+type ReceiptRow = typeof ReceiptRow.Type;
+const decodeReceiptRows = Schema.decodeUnknownEffect(Schema.Array(ReceiptRow));
+const reportDigest = (report: { readonly status: string; readonly summary: string }) =>
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([report.status, report.summary]), "utf8")
+    .digest("hex");
+const recordedResult = (receipt: ReceiptRow): RemoteOriginReportResult =>
+  receipt.delivery === "launcher"
+    ? { sequence: receipt.sequence, delivery: "launcher" }
+    : { sequence: receipt.sequence };
 
 const sameRequestIds = (
   known: ReadonlyArray<string> | undefined,
@@ -170,6 +200,11 @@ export class RemoteReportService extends Context.Service<
       threadId: ThreadId,
       input: RemoteRelaySend,
     ) => Effect.Effect<RemoteOriginReportResult, RemoteReportError>;
+    /** The receipt of this thread's report under clientRequestId; it outlives collection. */
+    readonly receipt: (
+      threadId: ThreadId,
+      clientRequestId: string,
+    ) => Effect.Effect<RemoteOriginReportReceipt | null, RemoteReportError>;
     readonly wait: (
       input: RemoteOriginReportsWaitInput,
     ) => Effect.Effect<RemoteOriginReportsWaitResult, RemoteReportError>;
@@ -254,11 +289,45 @@ const make = Effect.gen(function* () {
     return shell;
   });
   type LiveShell = Effect.Success<ReturnType<typeof liveShell>>;
+  const receiptFor = (threadId: ThreadId, clientRequestId: string) =>
+    sql`
+    SELECT client_request_id AS "clientRequestId", args_digest AS "argsDigest", kind, sequence,
+      delivery, wake_thread_id AS "wakeThreadId", wake_command_id AS "wakeCommandId",
+      delivered_at AS "deliveredAt", created_at AS "createdAt"
+    FROM remote_report_receipts WHERE thread_id = ${threadId} AND client_request_id = ${clientRequestId}
+  `.pipe(
+      Effect.flatMap(decodeReceiptRows),
+      Effect.map((rows) => rows[0]),
+    );
+  /** Read inside each route's transaction, so two calls with one key record one report. */
+  const earlierReceipt = Effect.fnUntraced(function* (threadId: ThreadId, key: ReportKey) {
+    const earlier = yield* receiptFor(threadId, key.clientRequestId);
+    if (earlier !== undefined && earlier.argsDigest !== key.digest)
+      return yield* new RemoteReportError({ reason: "idempotency_mismatch" });
+    return earlier;
+  });
+  const insertReceipt = (
+    threadId: ThreadId,
+    key: ReportKey,
+    receipt: {
+      readonly kind: string;
+      readonly sequence: number;
+      readonly delivery: "origin" | "launcher";
+      readonly wake: { readonly threadId: ThreadId; readonly commandId: string } | null;
+      readonly createdAt: string;
+    },
+  ) =>
+    sql`INSERT INTO remote_report_receipts (thread_id, client_request_id, args_digest, kind,
+      sequence, delivery, wake_thread_id, wake_command_id, delivered_at, created_at)
+      VALUES (${threadId}, ${key.clientRequestId}, ${key.digest}, ${receipt.kind}, ${receipt.sequence},
+        ${receipt.delivery}, ${receipt.wake?.threadId ?? null}, ${receipt.wake?.commandId ?? null},
+        ${receipt.wake === null ? receipt.createdAt : null}, ${receipt.createdAt})`;
   const append = Effect.fn("RemoteReportService.append")(function* (
     threadId: ThreadId,
     shell: LiveShell,
     agentReport: RemoteOriginReportInput,
     agentRelay: RemoteRelaySend | null,
+    key?: ReportKey,
   ) {
     // An agent's report is stored and relayed like its tool output.
     const value = redactGoatCredentialsDeep(agentReport);
@@ -268,6 +337,10 @@ const make = Effect.gen(function* () {
     const result = yield* sql
       .withTransaction(
         Effect.gen(function* () {
+          if (key !== undefined) {
+            const earlier = yield* earlierReceipt(threadId, key);
+            if (earlier !== undefined) return { recorded: earlier };
+          }
           const binding = (yield* bindingForThread(threadId))[0];
           if (binding === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
           if (
@@ -303,6 +376,14 @@ const make = Effect.gen(function* () {
           if (relay?.clientRequestId !== undefined)
             yield* sql`INSERT INTO remote_relay_requests (correlation_id, client_request_id, sequence)
               VALUES (${binding.correlationId}, ${relay.clientRequestId}, ${sequence})`;
+          if (key !== undefined)
+            yield* insertReceipt(threadId, key, {
+              kind: value.status,
+              sequence,
+              delivery: "origin",
+              wake: null,
+              createdAt,
+            });
           // Keep the newest 200 reports, preferring substantive ones over progress. A relay
           // stays until the origin collects it, because a pruned one would never be sent.
           yield* sql`
@@ -325,17 +406,97 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     input: RemoteOriginReportInput,
   ) {
-    // Remote or local, an agent's report is stored and relayed like its tool output.
-    const value = redactGoatCredentialsDeep(
-      yield* decodeReportInput(input).pipe(Effect.mapError(invalid)),
+    const { clientRequestId, ...decoded } = yield* decodeReportInput(input).pipe(
+      Effect.mapError(invalid),
     );
+    const key =
+      clientRequestId === undefined
+        ? undefined
+        : { clientRequestId, digest: reportDigest(decoded) };
+    // Remote or local, an agent's report is stored and relayed like its tool output.
+    const value = redactGoatCredentialsDeep(decoded);
     const shell = yield* liveShell(threadId);
-    return yield* append(threadId, shell, value, null).pipe(
+    const appended = yield* append(threadId, shell, value, null, key).pipe(
       Effect.catchIf(
         (error) => error.reason === "not_bound",
-        () => reportToLauncher(threadId, shell, value),
+        () => reportToLauncher(threadId, shell, value, key),
       ),
     );
+    return "recorded" in appended
+      ? yield* replayRecorded(threadId, shell, value, appended.recorded)
+      : appended;
+  });
+  const transaction = <A, E>(run: Effect.Effect<A, E>) =>
+    sql
+      .withTransaction(run)
+      .pipe(Effect.mapError((cause) => (isRemoteReportError(cause) ? cause : storage(cause))));
+  /** A wake's command id is stable per key, so the orchestrator's receipt keeps it to one message. */
+  const sendWake = Effect.fn("RemoteReportService.sendWake")(function* (
+    threadId: ThreadId,
+    shell: LiveShell,
+    launcherId: ThreadId,
+    value: RemoteOriginReportInput,
+    commandId: CommandId,
+  ) {
+    const text = frameRemoteReport({
+      host: "this machine",
+      correlationId: threadId,
+      kind: value.status,
+      summary: value.summary,
+      source: "agent",
+      standalone: true,
+    });
+    yield* orchestrator
+      .dispatch({
+        type: "message.dispatch",
+        commandId,
+        threadId: launcherId,
+        messageId: MessageId.make(commandId.replace(/^server:/, "message:")),
+        text: `${text}\nRead the thread with goat_call {path: "thread.read", args: {threadId: "${threadId}"}} and answer it with goat_call {path: "thread.send"}.`,
+        attachments: [],
+        createdBy: "agent",
+        creationSource: "server",
+        notification: {
+          source: { kind: "monitor" },
+          outcome: "updated",
+          summary: `${shell.title.slice(0, 80)}: needs_input`,
+        },
+        dispatchMode: { type: "queue_after_active" },
+      })
+      .pipe(Effect.mapError(unavailable));
+  });
+  const markDelivered = (threadId: ThreadId, clientRequestId: string) =>
+    Effect.flatMap(DateTime.now, (now) =>
+      sql`UPDATE remote_report_receipts SET delivered_at = ${DateTime.formatIso(now)}
+        WHERE thread_id = ${threadId} AND client_request_id = ${clientRequestId}
+          AND delivered_at IS NULL`.pipe(Effect.mapError(storage)),
+    );
+  /**
+   * A repeat of a recorded report returns its receipt. A wake recorded but not confirmed sent may
+   * have been cut off on either side of its dispatch; sending it again under its command id is
+   * what makes it go out exactly once.
+   */
+  const replayRecorded = Effect.fn("RemoteReportService.replayRecorded")(function* (
+    threadId: ThreadId,
+    shell: LiveShell,
+    value: RemoteOriginReportInput,
+    receipt: ReceiptRow,
+  ) {
+    if (
+      receipt.deliveredAt === null &&
+      receipt.wakeThreadId !== null &&
+      receipt.wakeCommandId !== null
+    ) {
+      yield* sendWake(
+        threadId,
+        shell,
+        receipt.wakeThreadId,
+        value,
+        CommandId.make(receipt.wakeCommandId),
+      );
+      yield* markDelivered(threadId, receipt.clientRequestId);
+    }
+    return recordedResult(receipt);
   });
   /**
    * A thread launched by a thread on this machine has no origin binding: its origin is that
@@ -346,6 +507,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     shell: LiveShell,
     value: RemoteOriginReportInput,
+    key: ReportKey | undefined,
   ) {
     const parentId = shell.lineage.parentThreadId;
     const subagents =
@@ -358,49 +520,75 @@ const make = Effect.gen(function* () {
         : [];
     const launcherId = localQuestionLauncher(shell, subagents);
     if (launcherId === undefined) return yield* new RemoteReportError({ reason: "not_bound" });
+    const delivered = { sequence: 0, delivery: "launcher" as const };
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    if (value.status === "needs_input") {
+      const commandId = CommandId.make(
+        key === undefined
+          ? `server:origin-report:${threadId}:${NodeCrypto.randomUUID()}`
+          : `server:origin-report:${threadId}:key:${encodeURIComponent(key.clientRequestId)}`,
+      );
+      if (key !== undefined) {
+        // The intent commits before the wake, so a retry can finish a wake cut off mid-send.
+        const earlier = yield* transaction(
+          Effect.gen(function* () {
+            const earlier = yield* earlierReceipt(threadId, key);
+            if (earlier !== undefined) return earlier;
+            yield* insertReceipt(threadId, key, {
+              kind: value.status,
+              sequence: 0,
+              delivery: "launcher",
+              wake: { threadId: launcherId, commandId },
+              createdAt,
+            });
+            return undefined;
+          }),
+        );
+        if (earlier !== undefined) return yield* replayRecorded(threadId, shell, value, earlier);
+      }
+      yield* sendWake(threadId, shell, launcherId, value, commandId);
+      if (key !== undefined) yield* markDelivered(threadId, key.clientRequestId);
+      return delivered;
+    }
     const text = frameRemoteReport({
       host: "this machine",
       correlationId: threadId,
       kind: value.status,
       summary: value.summary,
       source: "agent",
-      standalone: value.status === "needs_input",
+      standalone: false,
     });
-    if (value.status === "needs_input") {
-      const key = `origin-report:${threadId}:${NodeCrypto.randomUUID()}`;
-      yield* orchestrator
-        .dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make(`server:${key}`),
-          threadId: launcherId,
-          messageId: MessageId.make(`message:${key}`),
-          text: `${text}\nRead the thread with goat_call {path: "thread.read", args: {threadId: "${threadId}"}} and answer it with goat_call {path: "thread.send"}.`,
-          attachments: [],
-          createdBy: "agent",
-          creationSource: "server",
-          notification: {
-            source: { kind: "monitor" },
-            outcome: "updated",
-            summary: `${shell.title.slice(0, 80)}: needs_input`,
-          },
-          dispatchMode: { type: "queue_after_active" },
-        })
-        .pipe(Effect.mapError(unavailable));
-    } else {
-      const createdAt = DateTime.formatIso(yield* DateTime.now);
-      yield* sql`INSERT INTO remote_report_inbox
-        (origin_thread_id, correlation_id, kind, text, run_id, created_at)
-        VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text},
-          ${shell.activeRunId}, ${createdAt})`.pipe(Effect.mapError(storage));
-    }
-    return { sequence: 0, delivery: "launcher" as const };
+    const earlier = yield* transaction(
+      Effect.gen(function* () {
+        if (key !== undefined) {
+          const earlier = yield* earlierReceipt(threadId, key);
+          if (earlier !== undefined) return earlier;
+        }
+        yield* sql`INSERT INTO remote_report_inbox
+          (origin_thread_id, correlation_id, kind, text, run_id, created_at)
+          VALUES (${launcherId}, ${`local:${threadId}`}, ${value.status}, ${text},
+            ${shell.activeRunId}, ${createdAt})`;
+        if (key !== undefined)
+          yield* insertReceipt(threadId, key, {
+            kind: value.status,
+            sequence: 0,
+            delivery: "launcher",
+            wake: null,
+            createdAt,
+          });
+        return undefined;
+      }),
+    );
+    return earlier === undefined
+      ? delivered
+      : yield* replayRecorded(threadId, shell, value, earlier);
   });
   const relay = Effect.fn("RemoteReportService.relay")(function* (
     threadId: ThreadId,
     input: RemoteRelaySend,
   ) {
     const value = yield* decodeRelayInput(input).pipe(Effect.mapError(invalid));
-    return yield* append(
+    const appended = yield* append(
       threadId,
       yield* liveShell(threadId),
       {
@@ -409,6 +597,7 @@ const make = Effect.gen(function* () {
       },
       value,
     );
+    return "recorded" in appended ? recordedResult(appended.recorded) : appended;
   });
   const wait = Effect.fn("RemoteReportService.wait")(function* (
     input: RemoteOriginReportsWaitInput,
@@ -749,6 +938,22 @@ const make = Effect.gen(function* () {
       activeRunId: shell?.activeRunId ?? null,
     };
   });
+  const receipt = Effect.fn("RemoteReportService.receipt")(function* (
+    threadId: ThreadId,
+    clientRequestId: string,
+  ) {
+    const row = yield* receiptFor(threadId, clientRequestId).pipe(Effect.mapError(storage));
+    return row === undefined
+      ? null
+      : ({
+          clientRequestId: row.clientRequestId,
+          status: row.kind,
+          sequence: row.sequence,
+          delivery: row.delivery,
+          delivered: row.deliveredAt !== null,
+          createdAt: row.createdAt,
+        } satisfies RemoteOriginReportReceipt);
+  });
   return RemoteReportService.of({
     bind,
     unbind,
@@ -756,6 +961,7 @@ const make = Effect.gen(function* () {
     report,
     relay,
     relayReceipt,
+    receipt,
     wait,
     resolveBinding,
   });
