@@ -183,13 +183,25 @@ function HubDevicesList({
         <Button
           label={busy === "check-all" ? "Checking…" : "Check all"}
           disabled={!canCheck || busy !== null || listed.data === null}
-          onPress={() => void run("check-all", () => check({ environmentId, input: {} }))}
+          onPress={() => {
+            // Checking reaches each machine, so read its OpenCodex link again too.
+            status.refresh();
+            void run("check-all", () => check({ environmentId, input: {} }));
+          }}
         />
       )}
       {error || (listed.error && !unsupported) ? (
         <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
           {error ?? listed.error}
         </Text>
+      ) : null}
+      {status.error ? (
+        <View className="gap-2">
+          <Text className="text-sm text-foreground-muted">
+            Could not read OpenCodex link state. {status.error}
+          </Text>
+          <Button label="Try again" disabled={status.isPending} onPress={status.refresh} />
+        </View>
       ) : null}
       {listed.data?.notices.map((notice) => (
         <View key={notice.id} className="gap-3 rounded-xl bg-grouped-card p-4">

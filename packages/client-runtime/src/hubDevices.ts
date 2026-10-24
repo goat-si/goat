@@ -87,56 +87,65 @@ export function hubDeviceList(input: {
   }
   const byLabel = new Map<string, HubNode | null>();
   for (const node of nodes) byLabel.set(node.label, byLabel.has(node.label) ? null : node);
-  const nodeNamed = (name: string) =>
-    byRoute.get(name) ?? (byRoute.has(name) ? undefined : (byLabel.get(name) ?? undefined));
+  const labelled = (name: string) =>
+    byRoute.has(name) ? undefined : (byLabel.get(name) ?? undefined);
 
-  const setupByHost = new Map<string, OpenCodexChildBootstrapStatus>();
-  for (const entry of input.hosts) {
-    if (entry.host !== null && entry.opencodexChild !== undefined)
-      setupByHost.set(entry.host, entry.opencodexChild);
-  }
-  const claimedHosts = new Set<string>();
-  const childSetupFor = (names: ReadonlyArray<string>) => {
-    for (const name of names) claimedHosts.add(name);
-    const name = names.find((candidate) => setupByHost.has(candidate));
-    return name === undefined ? null : presentChildSetup(setupByHost.get(name));
-  };
-
+  // Route aliases claim devices before any label does, whatever order the devices come in.
   const deviceOf = new Map<HubNode, HubDevice>();
-  const unmatched: HubDevice[] = [];
-  for (const device of input.snapshot?.devices ?? []) {
-    const node = nodeNamed(device.alias);
-    if (node === undefined || deviceOf.has(node)) unmatched.push(device);
-    else deviceOf.set(node, device);
+  const devices = input.snapshot?.devices ?? [];
+  for (const device of devices) {
+    const node = byRoute.get(device.alias);
+    if (node !== undefined && !deviceOf.has(node)) deviceOf.set(node, device);
+  }
+  const placed = new Set(deviceOf.values());
+  for (const device of devices) {
+    if (placed.has(device)) continue;
+    const node = labelled(device.alias);
+    if (node !== undefined && !deviceOf.has(node)) {
+      deviceOf.set(node, device);
+      placed.add(device);
+    }
   }
 
-  const rows: HubDeviceRow[] = nodes.map((node) => {
-    const device = deviceOf.get(node) ?? null;
-    return {
-      key: `node:${node.nodeId}`,
-      label: node.label,
-      node,
-      device,
-      childSetup: childSetupFor([
-        ...routeNames(node),
-        node.label,
-        ...(device === null ? [] : [device.alias]),
-      ]),
-    };
-  });
-  for (const device of unmatched) {
-    rows.push({
-      key: `device:${device.alias}`,
-      label: device.alias,
-      node: null,
-      device,
-      childSetup: childSetupFor([device.alias]),
-    });
+  const rows: HubDeviceRow[] = nodes.map((node) => ({
+    key: `node:${node.nodeId}`,
+    label: node.label,
+    node,
+    device: deviceOf.get(node) ?? null,
+    childSetup: null,
+  }));
+  for (const device of devices) {
+    if (!placed.has(device))
+      rows.push({
+        key: `device:${device.alias}`,
+        label: device.alias,
+        node: null,
+        device,
+        childSetup: null,
+      });
   }
-  for (const [host, status] of setupByHost) {
-    const childSetup = claimedHosts.has(host) ? null : presentChildSetup(status);
-    if (childSetup !== null)
-      rows.push({ key: `setup:${host}`, label: host, node: null, device: null, childSetup });
+
+  // Each setup belongs to exactly one row, by the same rule: route, then unique label, then device.
+  const rowOf = (host: string) => {
+    const node = byRoute.get(host) ?? labelled(host);
+    if (node !== undefined) return rows.findIndex((row) => row.node === node);
+    return rows.findIndex((row) => row.node === null && row.device?.alias === host);
+  };
+  for (const entry of input.hosts) {
+    if (entry.host === null) continue;
+    const childSetup = presentChildSetup(entry.opencodexChild);
+    if (childSetup === null) continue;
+    const index = rowOf(entry.host);
+    const row = rows[index];
+    if (index === -1)
+      rows.push({
+        key: `setup:${entry.host}`,
+        label: entry.host,
+        node: null,
+        device: null,
+        childSetup,
+      });
+    else if (row !== undefined && row.childSetup === null) rows[index] = { ...row, childSetup };
   }
   return rows;
 }

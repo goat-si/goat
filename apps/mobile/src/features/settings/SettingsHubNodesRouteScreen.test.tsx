@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   selectedTargets: [] as Target[],
   selectedIds: null as Set<string> | null,
   hosts: [] as HostStatusEntry[],
+  hostsError: null as string | null,
+  refreshHosts: vi.fn(),
   query: vi.fn(),
   check: vi.fn(),
   remove: vi.fn(),
@@ -107,11 +109,15 @@ beforeEach(() => {
   state.selectedTargets = [first, second];
   state.selectedIds = null;
   state.hosts = [];
+  state.hostsError = null;
+  state.refreshHosts.mockReset();
   state.query
     .mockReset()
     .mockImplementation((target: object) =>
       "hostStatus" in target
-        ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
+        ? state.hostsError === null
+          ? { data: { hosts: state.hosts }, error: null, cause: null, isSuccess: true }
+          : { data: null, error: state.hostsError, cause: null, refresh: state.refreshHosts }
         : { data: { nodes: [device], notices: [] }, error: null, cause: null },
     );
   for (const command of [state.check, state.remove, state.dismiss])
@@ -251,4 +257,18 @@ it("shows each device's OpenCodex link and why the hub could not make it a Child
   expect(container.textContent).toContain("OpenCodex Child setup blocked: npm missing");
   expect(container.textContent).toContain("npm is not installed on lab.");
   expect(button("Check Lab server").textContent).toBe("Check");
+});
+
+it("says when OpenCodex link state could not be read, keeps the hub's devices, and reads it again", async () => {
+  state.environments = [first];
+  state.selectedTargets = [first];
+  state.hostsError = "Host status timed out.";
+  await render();
+  expect(container.textContent).toContain(
+    "Could not read OpenCodex link state. Host status timed out.",
+  );
+  expect(container.textContent).toContain("Lab server");
+  expect(container.textContent).not.toContain("Not linked to OpenCodex");
+  await act(async () => button("Try again").click());
+  expect(state.refreshHosts).toHaveBeenCalledOnce();
 });

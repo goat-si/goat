@@ -117,6 +117,30 @@ describe("hubDeviceList", () => {
     expect(rows).toHaveLength(2);
   });
 
+  it("lets a node's route alias win over its own label whatever order the devices come in", () => {
+    const rows = hubDeviceList({
+      nodes: [node("n1", "label-name", [ssh("route-name")])],
+      snapshot: snapshot([device("label-name"), device("route-name")]),
+      hosts: [],
+    });
+    expect(rows.map((row) => [row.key, row.device?.alias ?? null])).toEqual([
+      ["node:n1", "route-name"],
+      ["device:label-name", "label-name"],
+    ]);
+  });
+
+  it("puts each machine's setup on one row only, the one whose route names it", () => {
+    const rows = hubDeviceList({
+      nodes: [node("n1", "boat-2", [cloud("boat-1")]), node("n2", "second", [cloud("boat-2")])],
+      snapshot: null,
+      hosts: [host("boat-2", { state: "running", checkedAt: 1 })],
+    });
+    expect(rows.map((row) => [row.key, row.childSetup?.state ?? null])).toEqual([
+      ["node:n1", null],
+      ["node:n2", "running"],
+    ]);
+  });
+
   it("shows the Home's setup on the cloud machine's row, and alone when nothing else lists it", () => {
     const rows = hubDeviceList({
       nodes: [node("n1", "boat-1", [cloud("boat-1")])],

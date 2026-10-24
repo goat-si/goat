@@ -472,6 +472,43 @@ describe("fleetAlerts", () => {
     ]);
   });
 
+  it("reads each route's setup from the server that reported that alias, not a namesake elsewhere", () => {
+    const machines = [
+      machine("box", {
+        reportedAliases: [
+          { via: studio, alias: "alpha" },
+          { via: mini, alias: "beta" },
+        ],
+      }),
+    ];
+    const reports = reportsOf(
+      {
+        environmentId: studio,
+        hosts: [
+          entry("alpha"),
+          {
+            ...entry("beta"),
+            opencodexChild: { state: "blocked", reason: "unreachable", checkedAt: NOW },
+          },
+        ],
+      },
+      {
+        environmentId: mini,
+        hosts: [{ ...entry("beta"), opencodexChild: { state: "child", checkedAt: NOW } }],
+      },
+    );
+    const rows = fleetHostRows({
+      machines,
+      sshAliases: new Map(),
+      reports,
+      primaryEnvironmentId: null,
+    });
+    const setups = fleetChildSetups(rows, machines, reports);
+    expect(setups.get("box")?.state).toBe("child");
+    const alerts = fleetAlerts(rows, new Map(), NOW, { childSetups: setups });
+    expect(alerts.filter((alert) => alert.key === "box:child-setup")).toEqual([]);
+  });
+
   it("reports down connections, stale hosts and version drift, most severe first", () => {
     const rows = fleetHostRows({
       machines: [

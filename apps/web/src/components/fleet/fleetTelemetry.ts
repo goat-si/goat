@@ -257,12 +257,12 @@ export function fleetChildSetups(
     const status =
       row.entry?.opencodexChild ??
       routes
-        .flatMap((route) => (route === null ? [] : (reports.get(route.via) ?? [])))
-        .find(
-          (entry) =>
-            entry.opencodexChild !== undefined &&
-            routes.some((route) => route !== null && route.alias === entry.host),
-        )?.opencodexChild;
+        .map((route) =>
+          route === null
+            ? undefined
+            : reports.get(route.via)?.find((entry) => entry.host === route.alias)?.opencodexChild,
+        )
+        .find((candidate) => candidate !== undefined);
     if (status !== undefined) setups.set(row.key, status);
   }
   return setups;
