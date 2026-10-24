@@ -26,8 +26,7 @@ import * as Store from "./MemoryStore.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
-import { scanMemoryValue } from "./MemorySecretScanner.ts";
-import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -726,7 +725,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             // Renewal failure interrupts the provider, including a hung one-shot execution.
             return yield* Effect.raceFirst(
-              hold.guard(holdKey, model(input)).pipe(
+              hold.guard(holdKey, redacted(model(input))).pipe(
                 // A held model or a refusal that repeats retires this attempt without a failure
                 // report (generation_failed is definitive but unreported): its lease is released
                 // and the conflict is claimed again once the model is no longer held.
@@ -756,19 +755,9 @@ const make = Effect.gen(function* () {
             TimeoutError: () => Effect.fail(new M.MemoryHubError({ code: "lease_expired" })),
           }),
         );
-        const decoded = yield* decodeGenerated(generated).pipe(
+        const trusted = yield* decodeGenerated(generated).pipe(
           Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
         );
-        // A model can repeat a GOAT credential it read; the resolution is submitted and signed
-        // with it redacted (#1297).
-        const trusted = {
-          ...decoded,
-          result: {
-            ...decoded.result,
-            text: redactGoatCredentials(decoded.result.text),
-            judgment: redactGoatCredentials(decoded.result.judgment),
-          },
-        };
         if (
           trusted.execution.environmentId !== local ||
           selectionKey(trusted.execution.requestedModelSelection) !==

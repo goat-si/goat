@@ -15,7 +15,6 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
-import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
@@ -220,43 +219,6 @@ describe("MemoryService", () => {
       assert.strictEqual(error._tag, "MemoryStoreConflict");
       if (error._tag === "MemoryStoreConflict")
         assert.strictEqual(error.code, "operation_id_reused");
-    }).pipe(checkUsage, Effect.provide(live)),
-  );
-  it.effect("stores and syncs a memory with its GOAT credentials redacted (#1297)", () =>
-    Effect.gen(function* () {
-      const service = yield* Service.MemoryService;
-      const store = yield* Store.MemoryStore;
-      // Synthetic canaries shaped like registry tokens; none is a real credential.
-      const secret = "canaryMemoryToken".padEnd(43, "0");
-      const tagged = "l01RetryTag".padEnd(51, "1");
-      const text = `notes GOAT_MCP_BEARER_TOKEN=${secret} Authorization: Bearer ${secret} ${tagged}`;
-      const value = { ...input(), payload: { ...input().payload, text } };
-      const first = yield* service.upsert(value, Effect.void);
-
-      const stored = (yield* store.loadAggregate(space, memoryId)).revisions[0]?.payload?.text;
-      assert.include(stored, "GOAT_MCP_BEARER_TOKEN=[redacted]");
-      assert.include(stored, "Bearer [redacted]");
-      assert.notInclude(stored, secret);
-      // The operation is what sync uploads.
-      assert.notInclude(
-        JSON.stringify(yield* store.readOperation(space, value.operationId)),
-        secret,
-      );
-
-      // A retry still finds its receipt after this process learns a run tag that now matches
-      // part of the same text: the request is identified by what the caller sent.
-      registerCredentialRunTag("l01RetryTag");
-      assert.deepStrictEqual(yield* service.upsert(value, Effect.void), first);
-      // Two requests that differ only in their credential are still different requests.
-      const other = {
-        ...value,
-        payload: {
-          ...value.payload,
-          text: text.replaceAll(secret, "differentToken".padEnd(43, "0")),
-        },
-      };
-      const error = yield* service.upsert(other, Effect.void).pipe(Effect.flip);
-      assert.strictEqual(error._tag === "MemoryStoreConflict" && error.code, "operation_id_reused");
     }).pipe(checkUsage, Effect.provide(live)),
   );
   it.effect("denies writes before persisting receipt or payload", () =>

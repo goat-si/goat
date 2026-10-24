@@ -2,6 +2,7 @@ import * as NodeUtil from "node:util";
 
 import { assert, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Redactable from "effect/Redactable";
@@ -137,10 +138,8 @@ describe("redactCause", () => {
 describe("redactLogMessage", () => {
   it("copies a log field as inert data without calling its getters or hooks", () => {
     class Request {
-      constructor(
-        readonly url: string,
-        readonly headers: Record<string, string>,
-      ) {}
+      readonly url = "https://bot:canary-userinfo@example.com/x";
+      readonly headers = { cookie: "sid=canary-cookie" };
       toJSON() {
         return "canary-to-json";
       }
@@ -148,14 +147,14 @@ describe("redactLogMessage", () => {
         return "canary-inspect";
       }
     }
-    const at = Object.assign(new Date(0), { token: "canary-date-field" });
+    const at = Object.assign(DateTime.toDate(DateTime.makeUnsafe(0)), {
+      token: "canary-date-field",
+    });
     const loop: Record<string, unknown> = { name: "loop" };
     loop.self = loop;
     const shared = { kind: "shared" };
     const message = redactLogMessage({
-      request: new Request("https://bot:canary-userinfo@example.com/x", {
-        cookie: "sid=canary-cookie",
-      }),
+      request: new Request(),
       at,
       accessToken: ["canary-array-token"],
       "Bearer canary-key-token-0123": "keyed",

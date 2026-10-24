@@ -1,9 +1,15 @@
 import * as NodePath from "@effect/platform-node/NodePath";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeOS from "node:os";
 import * as NodeUtil from "node:util";
 
-import { ExternalLauncherBrowserSpawnError } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ExternalLauncherBrowserSpawnError,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
@@ -22,6 +28,10 @@ import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 
 import * as ServerConfig from "./config.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import { McpInvocationContext, type McpInvocationScope } from "./mcp/McpInvocationContext.ts";
+import * as McpToolAccessTestkit from "./mcp/McpToolAccess.testkit.ts";
+import * as McpToolAccess from "./mcp/McpToolAccess.ts";
 import * as DefectReporter from "./observability/DefectReporter.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ServerLogger from "./serverLogger.ts";
@@ -226,6 +236,20 @@ const assertRedacted = (output: string) => {
 
 const DyingTool = Tool.make("dying_tool", { success: Schema.String });
 const DyingToolkit = Toolkit.make(DyingTool);
+const invocation: McpInvocationScope = {
+  environmentId: EnvironmentId.make("environment-server-logger"),
+  requestNamespace: "server-logger",
+  thread: {
+    threadId: ThreadId.make("thread-server-logger"),
+    providerSessionId: "server-logger",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  client: undefined,
+  capabilities: new Set(["orchestration"] as const),
+  grantedScopes: [],
+  reauthorize: () => Effect.void,
+  issuedAt: 1,
+};
 const mcpClient = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -282,10 +306,17 @@ describe("ServerLoggerLive", () => {
 
     it.effect("logs a dying MCP tool handler's defect without its credentials", () =>
       Effect.gen(function* () {
-        const registration = Layer.effectDiscard(McpServer.registerToolkit(DyingToolkit)).pipe(
-          Layer.provide(DyingToolkit.toLayer({ dying_tool: () => Effect.die(leakyError("tool")) })),
+        const registration = McpHttpServer.toolkitRegistration(
+          DyingToolkit,
+          McpToolAccess.toLayer(DyingToolkit, {
+            dying_tool: McpToolAccess.reads(() => Effect.die(leakyError("tool"))),
+          }),
+        ).pipe(
           Layer.provide(DefectReporter.layer),
+          Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
           Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provideMerge(NodeServices.layer),
         );
         let isError: boolean | undefined;
         const output = yield* printedBy(
@@ -293,7 +324,10 @@ describe("ServerLoggerLive", () => {
             const server = yield* McpServer.McpServer;
             const result = yield* server
               .callTool({ name: "dying_tool", arguments: {} })
-              .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient));
+              .pipe(
+                Effect.provideService(McpInvocationContext, invocation),
+                Effect.provideService(McpSchema.McpServerClient, mcpClient),
+              );
             isError = result.isError;
           }).pipe(Effect.provide(registration)),
         );

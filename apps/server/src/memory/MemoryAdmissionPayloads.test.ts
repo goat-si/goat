@@ -10,6 +10,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Settings from "../serverSettings.ts";
 import * as RepositoryResolver from "../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../environment/ServerEnvironment.ts";
+import { registerCredentialRunTag } from "../mcp/goatCredentialRedaction.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -628,5 +629,61 @@ describe("memory admission payload reads", () => {
         );
         assert.lengthOf(lateAncestor.revisions, 24);
       }).pipe(Effect.provide(live)),
+  );
+});
+
+describe("memory credential redaction (#1297)", () => {
+  // Synthetic canaries shaped like registry tokens; none is a real credential.
+  const secret = "canaryMemoryToken".padEnd(43, "0");
+  const text = `notes GOAT_MCP_BEARER_TOKEN=${secret} Bearer ${secret} ${"l01RetryTag".padEnd(51, "1")}`;
+  const operationId = M.MemoryOperationId.make(id(22000));
+  const write = (payloadText: string): M.MemoryUpsertInput => ({
+    memorySpaceId: space,
+    memoryId: memory,
+    operationId,
+    expectedHeads: [],
+    scope: { kind: "user" },
+    assertionKind: "inference",
+    payload: { text: payloadText, evidence: [], derivedFromMemoryRevisions: [] },
+    baseBoundary: null,
+  });
+
+  it.effect("stores and syncs a local write with its GOAT credentials redacted", () =>
+    Effect.gen(function* () {
+      const service = yield* Service.MemoryService;
+      const store = yield* Store.MemoryStore;
+      const first = yield* service.upsert(write(text), Effect.void);
+
+      const stored = (yield* store.loadAggregate(space, memory)).revisions[0]?.payload;
+      assert.include(stored?.text, "GOAT_MCP_BEARER_TOKEN=[redacted] Bearer [redacted]");
+      assert.notInclude(stored?.text, secret);
+      // The operation is what sync uploads, and its digest is over the redacted bytes.
+      const sent = yield* store.readOperation(space, operationId);
+      assert.notInclude(JSON.stringify(sent), secret);
+      assert.strictEqual(first.operationDigest, sent && memoryOperationDigest(sent));
+
+      // A retry is matched by what the caller sent, even after this process learns a run tag
+      // that now redacts more of the same text.
+      registerCredentialRunTag("l01RetryTag");
+      assert.deepStrictEqual(yield* service.upsert(write(text), Effect.void), first);
+      // Two requests that differ only in their credential are still different requests.
+      const changed = text.replaceAll(secret, "differentToken".padEnd(43, "0"));
+      const error = yield* service.upsert(write(changed), Effect.void).pipe(Effect.flip);
+      assert.isTrue(isConflict(error) && error.code === "operation_id_reused");
+    }).pipe(Effect.provide(live)),
+  );
+
+  it.effect("keeps a received operation's signed text as its author wrote it", () =>
+    Effect.gen(function* () {
+      const store = yield* Store.MemoryStore;
+      const base = operation(0);
+      const received = { ...base, payload: { ...base.payload, text: `remote ${text}` } };
+      assert.strictEqual((yield* receive(received, 0)).receipt.outcome, "accepted");
+      const stored = yield* store.readOperation(space, received.operationId);
+      assert.strictEqual(
+        stored?.kind === "upsert" ? stored.payload.text : undefined,
+        received.payload.text,
+      );
+    }).pipe(Effect.provide(live)),
   );
 });

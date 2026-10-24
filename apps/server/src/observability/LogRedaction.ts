@@ -215,7 +215,7 @@ function sanitize(value: unknown, depth: number, budget: Budget): unknown {
     case "function":
       return `[Function ${redactLogText(value.name || "anonymous")}]`;
   }
-  if (value === null) return null;
+  if (typeof value !== "object" || value === null) return null;
   if (budget.path.has(value)) return "[Circular]";
   budget.nodes -= 1;
   if (budget.nodes < 0 || depth > MAX_DEPTH) return "[Truncated]";

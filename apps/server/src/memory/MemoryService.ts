@@ -24,8 +24,7 @@ import type {
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
-import { scanMemoryValue } from "./MemorySecretScanner.ts";
-import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -1267,9 +1266,7 @@ const make = Effect.fnUntraced(function* (
         );
         let payload: M.MemoryPayload = yield* normalizeMemoryDependencies(
           value.memorySpaceId,
-          // An agent can paste its own GOAT credential into a memory, which then syncs (#1297).
-          // Redacted after the request digest, so a retry is still matched by what was sent.
-          { ...value.payload, text: redactGoatCredentials(value.payload.text) },
+          redactMemoryText(value.payload),
         ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         if (lineage) {
           payload = yield* decode(
