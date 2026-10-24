@@ -1,6 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off -- checks a real directory the helper made.
-import * as NodeFS from "node:fs";
-import { ThreadId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   memoryToolAvailability,
@@ -89,29 +86,5 @@ describe("thread CLI environment", () => {
       PROVIDER_KEY: "fixture-provider",
     });
     expect(inherited.GOAT_ACP_MCP_AUTHORIZATION).toBe("Bearer parent");
-  });
-
-  it("gives each thread its own existing temporary directory (#1206)", () => {
-    const session = { endpoint: "http://127.0.0.1:43123/mcp", authorizationHeader: "Bearer x" };
-    const first = withThreadMcpEnvironment(
-      {},
-      { ...session, threadId: ThreadId.make("thread-tmp-first") },
-    );
-    const again = withThreadMcpEnvironment(
-      {},
-      { ...session, threadId: ThreadId.make("thread-tmp-first") },
-    );
-    const second = withThreadMcpEnvironment(
-      {},
-      { ...session, threadId: ThreadId.make("thread-tmp-second") },
-    );
-
-    expect(first.TMPDIR).toBe(again.TMPDIR);
-    expect(first.TMPDIR).not.toBe(second.TMPDIR);
-    for (const directory of [first.TMPDIR!, second.TMPDIR!]) {
-      expect(NodeFS.statSync(directory).isDirectory()).toBe(true);
-    }
-    // A process shared by several threads keeps its own.
-    expect(withThreadMcpEnvironment({ TMPDIR: "/inherited" }, undefined).TMPDIR).toBe("/inherited");
   });
 });

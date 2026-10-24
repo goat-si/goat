@@ -766,6 +766,7 @@ describe("CodexAdapterV2 session initialize", () => {
           providerSessionId: `credential-${name}`,
           endpoint: "http://127.0.0.1:43123/mcp",
           authorizationHeader: `Bearer fixture-${name}`,
+          temporaryDirectory: `/tmp/goat-threads-fixture/${name}`,
           browserToolsAvailable: false,
         });
       const initializeAwaitingResponse = yield* Deferred.make<void>();
@@ -803,7 +804,6 @@ describe("CodexAdapterV2 session initialize", () => {
       const providerThreads = [yield* Fiber.join(first), yield* Fiber.join(second)];
       assert.equal(session.initializeRequests(), 1);
       assert.equal(session.processEnvironment().GOAT_ACP_MCP_AUTHORIZATION, "");
-      assert.isUndefined(session.processEnvironment().TMPDIR);
       const temporaryDirectories = new Set<unknown>();
       for (const [index, name] of ["first", "second"].entries()) {
         const { config } = yield* decodeThreadConfig(session.threadConfigs[index]);
