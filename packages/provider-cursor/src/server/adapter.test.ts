@@ -26,6 +26,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { toolOutputImages } from "@goat/shared/toolOutput";
 
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -940,7 +941,18 @@ describe("CursorAdapterV2", () => {
               args: { city: "Berlin" },
             },
             ...(type === "tool-call-completed"
-              ? { result: { status: "success" as const, value: { content: [], isError: false } } }
+              ? {
+                  result: {
+                    status: "success" as const,
+                    value: {
+                      content: [
+                        { text: { text: "Sunny" } },
+                        { image: { data: "iVBORw0KGgo=", mimeType: "image/png" } },
+                      ],
+                      isError: false,
+                    },
+                  },
+                }
               : {}),
           },
         })),
@@ -1226,6 +1238,10 @@ describe("CursorAdapterV2", () => {
         });
         assert.deepEqual(item.input, { city: "Berlin" });
       }
+      // regression: Cursor's image parts reach the timeline as image blocks.
+      assert.deepEqual(toolOutputImages(mcpItems.at(-1)?.output), [
+        { mimeType: "image/png", data: "iVBORw0KGgo=" },
+      ]);
       const fileSearchItems = events.flatMap((event) =>
         event.type === "turn_item.updated" &&
         event.turnItem.type === "file_search" &&
