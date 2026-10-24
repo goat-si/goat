@@ -27,9 +27,9 @@ describe("Cursor Cloud failed run", () => {
   it("keeps the reason to one bounded line", () => {
     const error = resultTask(
       task,
-      failed({ message: `Line one\n\nline two ${"x".repeat(600)}` }),
+      failed({ message: `Line one\n\nline two ${"word ".repeat(120)}` }),
     ).error;
-    expect(error?.startsWith("Cursor stopped this run: Line one line two x")).toBe(true);
+    expect(error?.startsWith("Cursor stopped this run: Line one line two word")).toBe(true);
     expect(error?.length).toBeLessThanOrEqual(300);
     expect(error).not.toContain("\n");
   });
@@ -40,5 +40,20 @@ describe("Cursor Cloud failed run", () => {
     expect(resultTask(task, failed({ message: "   " })).error).toBe(
       "Cursor's agent hit an unexpected error before it finished.",
     );
+  });
+});
+
+describe("Cursor Cloud failed run secrecy", () => {
+  it.each([
+    ["Upload failed for https://user:hunter2@example.invalid/repo.git", "hunter2"],
+    ["See https://example.invalid/billing?token=fixture-query-token", "fixture-query-token"],
+    ["Request rejected: Bearer fixture-bearer-token", "fixture-bearer-token"],
+    ["Invalid api_key=fixture-api-key-value for this team", "fixture-api-key-value"],
+    ["Key crsr_0123456789abcdefghijklmnopqrstuvwxyz was revoked", "crsr_0123456789abcdef"],
+  ])("never shows a credential from Cursor's reason (%#)", (message, secret) => {
+    const error = resultTask(task, failed({ message })).error;
+    expect(error?.startsWith("Cursor stopped this run: ")).toBe(true);
+    expect(error).not.toContain(secret);
+    expect(error).toContain("redacted");
   });
 });

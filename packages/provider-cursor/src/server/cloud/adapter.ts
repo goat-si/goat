@@ -179,9 +179,16 @@ export function resultTask(task: Task, result: RunResult): Task {
   };
 }
 
-// Cursor's own reason (no credits, no access) tells the person what to fix; keep it to one line.
+// Cursor's own reason (no credits, no access) tells the person what to fix. Mask links and
+// anything credential-shaped before showing it, and keep it to one line.
 function runErrorText(message: string | undefined) {
-  const reason = message?.replace(/\s+/g, " ").trim();
+  const reason = message
+    ?.replace(/https?:\/\/[^\s<>]+/gi, "[link redacted]")
+    .replace(/\bBearer\s+[^\s,;]+/gi, "[redacted]")
+    .replace(/\b[\w-]*(?:token|key|secret|password|auth)[\w-]*\s*[=:]\s*[^\s,;&]+/gi, "[redacted]")
+    .replace(/[A-Za-z0-9_\-.+/=]{32,}/g, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim();
   return reason
     ? `Cursor stopped this run: ${reason}`.slice(0, 300)
     : "Cursor's agent hit an unexpected error before it finished.";
