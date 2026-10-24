@@ -42,7 +42,8 @@ the thread and names the apps, such as Calculator or Notes, and until when;
 approve it in a GOAT app and the agent may use those apps' windows in that
 thread until then. Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
-says so; approving it lets the agent act on anything the screen shows.
+says so; approving it lets the agent act on anything the screen shows. Agents
+take screenshots one window at a time, never of the whole display.
 
 **Stop** on a thread also stops its computer use at once, even in the middle of
 an action sequence. The agent gets the screen back on its next turn, within the

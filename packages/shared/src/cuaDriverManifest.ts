@@ -17,7 +17,6 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "list_windows",
   "get_accessibility_tree",
   "get_window_state",
-  "get_desktop_state",
   "get_screen_size",
   "get_cursor_position",
   "verify_state",
@@ -54,6 +53,8 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
  * from the allow list.
  */
 export const CUA_DRIVER_EXCLUDED_TOOLS = {
+  get_desktop_state:
+    "screenshots the whole display, with every other app and GOAT's own windows on it (#1321); get_window_state captures one window",
   install_extension: "installs software on the host",
   install_ffmpeg: "installs software on the host",
   set_config: "driver configuration belongs to GOAT",

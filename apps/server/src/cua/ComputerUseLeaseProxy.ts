@@ -48,6 +48,9 @@ export type LeaseEnd = ComputerUseControlEnd | "lost";
 
 const REQUEST = goatCallText("computer_use.request");
 
+const DESKTOP_CAPTURE_OFF =
+  "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
+
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
   revoked: "A person ended computer use for this thread.",
@@ -379,6 +382,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return refusal(id, message.method, finished, LEASE_END_MESSAGES[finished]);
     if (paused !== undefined)
       return refusal(id, message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    // The driver no longer lists it (cuaDriverManifest.ts); a stale tool list still gets a reason.
+    if (message.params?.name === "get_desktop_state")
+      return refusal(id, message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
     if (verdict._tag === "resolve")
       return refusal(
         id,
