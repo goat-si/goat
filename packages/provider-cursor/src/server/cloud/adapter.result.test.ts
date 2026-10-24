@@ -30,6 +30,12 @@ describe("Cursor Cloud failed run", () => {
     ["Your team hit its spend limit; upgrade to continue.", BILLING],
     ["Authentication: required", ACCESS],
     ["Permission denied for repository fixture/repo", ACCESS],
+    // Supported phrases still count when they end a sentence.
+    ["Insufficient credits.", BILLING],
+    ["Quota exceeded.", BILLING],
+    ["Authentication required.", ACCESS],
+    ["Unauthorized.", ACCESS],
+    ["No access.", ACCESS],
     ["The agent stopped because of an unexpected error.", UNEXPECTED],
     // Transport failures that only share a word with account problems.
     ["WebSocket upgrade failed: 502 Bad Gateway", UNEXPECTED],

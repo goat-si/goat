@@ -2,7 +2,9 @@
 // classified here (on a bounded prefix, with plain phrase tests) and never shown. Phrases must
 // stand alone, not inside a repository name or path, and a bare "upgrade" or "access" is not
 // enough; anything unclear keeps the general sentence.
-const ALONE = (phrases: string) => new RegExp("(?<![\\w./-])(?:" + phrases + ")(?![\\w./-])", "i");
+// A sentence may end in a period, but ".git" or "/path" continues a name.
+const ALONE = (phrases: string) =>
+  new RegExp("(?<![\\w./-])(?:" + phrases + ")(?![\\w/-]|\\.\\w)", "i");
 const ACCOUNT_LIMIT = ALONE(
   [
     "(?:no|insufficient|not enough|out of)(?: usage)? credits?",
