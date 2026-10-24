@@ -2,7 +2,7 @@ import type { ProviderInteractionMode } from "@goat/contracts";
 import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import {
   buildRuntimeInstructions,
-  COMPUTER_USE_INSTRUCTIONS,
+  COMPUTER_USE_INSTRUCTION_SECTIONS,
 } from "@goat/provider-core/server/runtimeInstructions";
 
 import {
@@ -234,14 +234,14 @@ export function buildCodexAdditionalContext(
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
     },
-    // Its own entry keeps the runtime entry under the per-entry cap.
+    // Its own entries keep the runtime entry and each skill section under the per-entry cap.
     ...(typeof toolsAvailable !== "boolean" && toolsAvailable.computerUse === true
-      ? {
-          goat_code_runtime_computer_use: {
-            kind: "application" as const,
-            value: COMPUTER_USE_INSTRUCTIONS,
-          },
-        }
+      ? Object.fromEntries(
+          COMPUTER_USE_INSTRUCTION_SECTIONS.map((section, index) => [
+            `goat_code_runtime_computer_use_${String(index + 1).padStart(2, "0")}`,
+            { kind: "application" as const, value: section },
+          ]),
+        )
       : {}),
     ...(tools ? { goat_code_tools: { kind: "application", value: tools } } : {}),
   };

@@ -1,9 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId } from "@goat/contracts";
+import { type ComputerUseCapabilities, EnvironmentId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as Environment from "../environment/ServerEnvironment.ts";
@@ -15,28 +16,48 @@ import {
   withHarness,
 } from "../handoffs/Handoffs.testkit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { requestComputerUse } from "./ComputerUseRequests.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
-const Detection = {
-  both: { humanInput: true, privateMode: true },
-  none: { humanInput: false, privateMode: false },
-} satisfies Record<string, ComputerUseLeases.ComputerUseDetection>;
+type Signals = ComputerUseCapabilities["signals"];
+const supported = { humanInput: "supported", privateMode: "supported" } satisfies Signals;
 
-/** The real leases, with what the host's helper reports it can detect. */
-const leasesDetecting = (detection: ComputerUseLeases.ComputerUseDetection) =>
-  Layer.effect(
-    ComputerUseLeases.ComputerUseLeases,
-    Effect.map(ComputerUseLeases.ComputerUseLeases, (leases) => ({
-      ...leases,
-      detection: Effect.succeed(detection),
-    })),
-  ).pipe(Layer.provide(ComputerUseLeases.layer));
+/**
+ * The real leases, on a host whose helper's accepted readiness reported these signals;
+ * undefined: a host whose helper never reported.
+ */
+const leasesDetecting = (signals: Signals | undefined) =>
+  ComputerUseLeases.layer.pipe(
+    Layer.provide(
+      DesktopTelemetryReceiver.layerTest({
+        cuaReadiness: Effect.succeed(
+          signals === undefined
+            ? Option.none()
+            : Option.some({
+                version: 1,
+                type: "cuaReadiness",
+                generation: 1,
+                readiness: {
+                  grants: { accessibility: "granted", screenCapture: "granted" },
+                  helper: "authenticated",
+                  capture: "ready",
+                  tree: "ready",
+                  input: "background",
+                  blockers: [],
+                  reasons: [],
+                },
+                signals,
+              } as const),
+        ),
+      }),
+    ),
+  );
 
 const requestFrom = (
   orchestrator: Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"],
-  detection: ComputerUseLeases.ComputerUseDetection,
+  signals: Signals | undefined,
 ) =>
   Effect.gen(function* () {
     const environmentId = EnvironmentId.make("test-environment");
@@ -53,7 +74,7 @@ const requestFrom = (
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(Handoffs.Handoffs, handoffs),
-          leasesDetecting(detection),
+          leasesDetecting(signals),
           Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(true) }),
           Layer.mock(Environment.ServerEnvironment)({
             getEnvironmentId: Effect.succeed(environmentId),
@@ -68,13 +89,22 @@ const requestFrom = (
   });
 
 it.effect(
-  "work that runs on its own is refused where the helper cannot see secrets or people",
+  "work that runs on its own is refused unless the helper reports both safety signals supported",
   () =>
     withHarness(({ orchestrator }) =>
       Effect.gen(function* () {
-        const result = yield* yield* requestFrom(orchestrator, Detection.none);
-        assert.equal(result.kind, "refused");
-        if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
+        for (const signals of [
+          undefined,
+          { humanInput: "unsupported", privateMode: "unsupported" },
+          { humanInput: "supported", privateMode: "unsupported" },
+          { humanInput: "unsupported", privateMode: "supported" },
+        ] satisfies ReadonlyArray<Signals | undefined>) {
+          const result = yield* yield* requestFrom(orchestrator, signals);
+          assert.equal(result.kind, "refused", JSON.stringify(signals));
+          if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
+        }
+        const allowed = yield* yield* requestFrom(orchestrator, supported);
+        assert.equal(allowed.kind, "needs_human");
       }),
     ),
 );
@@ -82,7 +112,7 @@ it.effect(
 it.effect("a repeated request announces the pending handoff's original expiry", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
-      const request = yield* requestFrom(orchestrator, Detection.both);
+      const request = yield* requestFrom(orchestrator, supported);
       const first = yield* request;
       assert.equal(first.kind, "needs_human");
       yield* TestClock.adjust("10 minutes");

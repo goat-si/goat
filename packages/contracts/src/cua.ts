@@ -2,7 +2,9 @@ import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  ComputerUseCapabilities,
   ComputerUseHumanInputSource,
+  ComputerUseReadiness,
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
@@ -71,6 +73,13 @@ export const CuaHostStatus = Schema.Struct({
   wayland: Schema.optionalKey(Schema.Boolean),
   /** Older hosts omit it; they predate the check, so clients fall back to the platform. */
   display: ForwardCompatibleOptional(CuaDisplayCapability),
+  /**
+   * Each readiness step of the host's computer use helper, as it last reported them. Older
+   * hosts and hosts whose helper has not answered yet omit it: not known, never "ready".
+   */
+  readiness: ForwardCompatibleOptional(ComputerUseReadiness),
+  /** Which safety signals that helper raises; absent means neither (#1235). */
+  signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 
@@ -220,21 +229,25 @@ export const DesktopCuaPrivateModeReport = Schema.Struct({
 export type DesktopCuaPrivateModeReport = typeof DesktopCuaPrivateModeReport.Type;
 
 /**
- * Which of the two safety reports the helper sends at all, announced when it starts. Unattended
- * turns run only where both are reported (#1235); a host that never says so has neither.
+ * The desktop host's computer use helper: each readiness step and which safety signals it
+ * raises, sent when either changes and again for every helper launch. generation counts the
+ * desktop's helper launches, so a report from an earlier launch that arrives late is dropped.
+ * The signals here are the only word on what the host detects: unattended turns run only where
+ * both are supported (#1235), and a host that never reports has neither.
  */
-export const DesktopCuaDetectionReport = Schema.Struct({
+export const DesktopCuaReadinessReport = Schema.Struct({
   version: Schema.Literal(1),
-  type: Schema.Literal("cuaDetection"),
-  humanInput: Schema.Boolean,
-  privateMode: Schema.Boolean,
+  type: Schema.Literal("cuaReadiness"),
+  generation: Schema.Int,
+  readiness: ComputerUseReadiness,
+  signals: ComputerUseCapabilities.fields.signals,
 });
-export type DesktopCuaDetectionReport = typeof DesktopCuaDetectionReport.Type;
+export type DesktopCuaReadinessReport = typeof DesktopCuaReadinessReport.Type;
 
 export type DesktopCuaSafetyReport =
   | DesktopCuaHumanInputReport
   | DesktopCuaPrivateModeReport
-  | DesktopCuaDetectionReport;
+  | DesktopCuaReadinessReport;
 
 export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
 export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
