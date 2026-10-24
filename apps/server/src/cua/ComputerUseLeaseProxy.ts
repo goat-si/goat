@@ -183,7 +183,9 @@ const OWN_ID = "goat-proxy:";
 type Stopping =
   | { readonly pause: ComputerUsePauseReason }
   | { readonly end: LeaseEnd }
-  | { readonly idle: true };
+  | { readonly idle: true }
+  /** An approval that drops apps the current one allows: nothing passes until it applies. */
+  | { readonly narrowed: true };
 
 interface Running {
   readonly driver: LeaseProxyDriver;
@@ -521,6 +523,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
 
+  /** Whether an active update drops an app the control allows now. */
+  const narrows = (update: ComputerUseLeaseUpdate) =>
+    Effect.gen(function* () {
+      if (update.state !== "active" || !(yield* Deferred.isDone(confirmed))) return false;
+      const next = approvedApps(update.apps);
+      return next !== undefined && (apps === undefined || [...apps].some((app) => !next.has(app)));
+    });
+
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
@@ -530,10 +540,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const next = approvedApps(update.apps);
     // Fewer apps than before: work already running may be in one of them, so it ends now and
     // anything it still answers is dropped with the old child.
-    const narrowed =
-      (yield* Deferred.isDone(confirmed)) &&
-      next !== undefined &&
-      (apps === undefined || [...apps].some((app) => !next.has(app)));
+    const narrowed = yield* narrows(update);
     apps = next;
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
@@ -577,17 +584,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The server is the authority: the first word for this control confirms it, anything else ends.
   yield* options.leaseUpdates.pipe(
     Stream.runForEach((update) => {
-      const stop: Stopping | undefined =
-        update.state !== "ended" && update.controlId !== options.controlId
-          ? { end: "lost" }
-          : update.state === "paused"
-            ? { pause: update.reason }
-            : update.state === "ended"
-              ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
-              : update.state === "idle"
-                ? { idle: true }
-                : undefined;
       return Effect.gen(function* () {
+        const stop: Stopping | undefined =
+          update.state !== "ended" && update.controlId !== options.controlId
+            ? { end: "lost" }
+            : update.state === "paused"
+              ? { pause: update.reason }
+              : update.state === "ended"
+                ? { end: update.reason === "unauthorized" ? "lost" : update.reason }
+                : update.state === "idle"
+                  ? { idle: true }
+                  : (yield* narrows(update))
+                    ? { narrowed: true }
+                    : undefined;
         // Known before waiting for a manifest refresh: no call may pass a pending stop.
         stopping = stop;
         yield* lifecycle.withPermits(1)(
@@ -872,12 +881,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 "control_idle",
                 "This thread's turn has ended. Computer use is idle until its next turn.",
               )
-            : refusal(
-                requestId,
-                message?.method,
-                interruptionDetail(lastInterruption),
-                interruptionRefusal(lastInterruption),
-              );
+            : stopping !== undefined && "narrowed" in stopping
+              ? refusal(
+                  requestId,
+                  message?.method,
+                  "app_not_approved",
+                  "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
+                )
+              : refusal(
+                  requestId,
+                  message?.method,
+                  interruptionDetail(lastInterruption),
+                  interruptionRefusal(lastInterruption),
+                );
     };
     const stillCurrent = () =>
       running === current &&
