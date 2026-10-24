@@ -23,8 +23,8 @@ A hub is the one GOAT server your phone pairs with, ideally a machine that stays
 on. The phone and the hub must be on the same tailnet, so install Tailscale on
 both and sign in to the same account.
 
-On the hub's desktop app, open **Settings → Connections**. The **Use this device
-as a hub** card at the top has the **Tailscale HTTPS** switch and **Show phone
+On the hub's desktop app, open **Settings → Connections**. The **Connect your
+phone** card at the top has the **Tailscale HTTPS** switch and **Show phone
 QR**. Turn on Tailscale HTTPS first: without it, the QR dialog explains how to
 turn it on, and only offers a tailnet or local network address after you choose
 one. On a hub without the desktop app, run `goat serve --tailscale-serve`, then

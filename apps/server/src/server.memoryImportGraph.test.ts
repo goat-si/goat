@@ -16,6 +16,8 @@ import * as HttpRouter from "effect/http/HttpRouter";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- independent synthetic source hash/mtime oracle.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the git path must be absolute for the host.
+import * as NodePath from "node:path";
 import * as Logger from "effect/Logger";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- independent synthetic source hash oracle.
 import * as NodeCrypto from "node:crypto";
@@ -58,6 +60,9 @@ import {
 // Actual filesystem semantics must not depend on the app's platform override.
 // oxlint-disable-next-line goat/no-global-process-runtime -- synthetic filesystem permission oracle.
 const posixPermissions = NodeOS.platform() !== "win32";
+// The reader rejects a path that is not already normalized and absolute for the host; Windows
+// normalizes "/usr/bin/git" to a backslash path without a drive.
+const gitExecutable = NodePath.resolve("/usr/bin/git");
 
 const grants = ["memory:write", "filesystem:read"] as const;
 const id = () => M.MemoryOperationId.make(NodeCrypto.randomUUID());
@@ -220,7 +225,7 @@ const assembledImport = (profile: MemoryImportFixtureProfile) =>
     const inventory = captureMemoryImportInventory(fixture.sourceRoot);
     const g = yield* graph({
       stateDir: fixture.stateDir,
-      gitExecutable: "/usr/bin/git",
+      gitExecutable,
       roots: [
         {
           format: fixture.snapshot.format,
@@ -546,7 +551,7 @@ hostGit.it(
       const g = yield* graph(
         {
           stateDir: fixture.stateDir,
-          gitExecutable: "/usr/bin/git",
+          gitExecutable,
           roots: [{ format: "omo", rootSlot: "synthetic", path: fixture.trustedRoot }],
           onSnapshotSealed: () =>
             barrier
@@ -610,7 +615,7 @@ it.effect("both grants are rechecked after SQL contention for all four actions",
     const g = yield* graph(
       {
         stateDir: fixture.stateDir,
-        gitExecutable: "/usr/bin/git",
+        gitExecutable,
         roots: [{ format: "codex", rootSlot: "synthetic", path: fixture.trustedRoot }],
       },
       scopes,

@@ -19,6 +19,7 @@ import {
 import { useAuth, useUser } from "@clerk/expo";
 import { useNavigation } from "@react-navigation/native";
 import { Linking, Platform, View } from "react-native";
+import type { ReactNode } from "react";
 import { useWorkspaceSurface } from "../workspace/useWorkspaceSurface";
 import { useDeviceType } from "../../native/native-layout-metrics";
 import { useCompactWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
@@ -79,7 +80,6 @@ function ConfiguredSettingsRouteScreen() {
   const navigation = useNavigation();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
-  const { savedConnectionsById } = useSavedRemoteConnections();
   const accountLabel = !isLoaded
     ? "Checking"
     : !isSignedIn
@@ -96,12 +96,7 @@ function ConfiguredSettingsRouteScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
         <OverflowSection />
-        <SettingsSection title="Connections">
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Devices on this hub"
-            target="SettingsHubNodes"
-          />
+        <ConnectionsSection>
           <SettingsRow
             icon="person.crop.circle"
             label="T3 Account"
@@ -109,15 +104,8 @@ function ConfiguredSettingsRouteScreen() {
             disabled={!isLoaded}
             onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}
           />
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Environments"
-            value={`${Object.keys(savedConnectionsById).length}`}
-            valuePosition="trailing"
-            target="SettingsEnvironments"
-          />
           <SettingsRow icon="bell.badge" label="Notifications" target="SettingsNotifications" />
-        </SettingsSection>
+        </ConnectionsSection>
 
         <SettingsIndexSections />
       </ScrollView>
@@ -127,8 +115,6 @@ function ConfiguredSettingsRouteScreen() {
 
 function LocalSettingsRouteScreen() {
   const insets = useSafeAreaInsets();
-  const { savedConnectionsById } = useSavedRemoteConnections();
-  const environmentCount = Object.keys(savedConnectionsById).length;
 
   return (
     <View collapsable={false} className="flex-1">
@@ -142,7 +128,7 @@ function LocalSettingsRouteScreen() {
         }}
       >
         <OverflowSection />
-        <SettingsSection title="Connections">
+        <ConnectionsSection>
           {!isGoatConnectEnabled() ? (
             <SettingsRow
               icon="globe"
@@ -156,23 +142,29 @@ function LocalSettingsRouteScreen() {
               }}
             />
           ) : null}
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Devices on this hub"
-            target="SettingsHubNodes"
-          />
-          <SettingsRow
-            icon="desktopcomputer"
-            label="Environments"
-            value={`${environmentCount}`}
-            valuePosition="trailing"
-            target="SettingsEnvironments"
-          />
-        </SettingsSection>
+        </ConnectionsSection>
 
         <SettingsIndexSections />
       </ScrollView>
     </View>
+  );
+}
+
+/** Both sign-in states list the hub's devices and saved environments the same way. */
+function ConnectionsSection({ children }: { readonly children?: ReactNode }) {
+  const { savedConnectionsById } = useSavedRemoteConnections();
+  return (
+    <SettingsSection title="Connections">
+      <SettingsRow icon="desktopcomputer" label="Devices on this hub" target="SettingsHubNodes" />
+      <SettingsRow
+        icon="desktopcomputer"
+        label="Environments"
+        value={`${Object.keys(savedConnectionsById).length}`}
+        valuePosition="trailing"
+        target="SettingsEnvironments"
+      />
+      {children}
+    </SettingsSection>
   );
 }
 
@@ -243,7 +235,7 @@ function SettingsIndexSections() {
         <SettingsRow icon="folder" label="Organization" target="SettingsOrganization" />
         <SettingsRow icon="text.bubble" label="Thread behavior" target="SettingsThreads" />
         <SettingsRow icon="arrow.turn.left.up" label="Follow-ups" target="SettingsFollowUp" />
-        <SettingsRow icon="archivebox" label="Archived Threads" target="SettingsArchive" />
+        <SettingsRow icon="archivebox" label="Archived threads" target="SettingsArchive" />
       </SettingsSection>
 
       <SettingsSection title="Server settings">
