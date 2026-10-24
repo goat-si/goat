@@ -1130,6 +1130,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("does not require lipo for single-architecture macOS builds", () =>
+    preflightMacDesktopBuild("arm64").pipe(Effect.provide(macPreflightSpawner(false))),
+  );
+
   it.effect("reports missing Windows toolchain capabilities before building", () =>
     Effect.scoped(
       Effect.gen(function* () {
