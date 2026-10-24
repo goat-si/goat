@@ -100,10 +100,12 @@ interface FakeWindow {
   readonly height: number;
   readonly viewable?: boolean;
   readonly inputOnly?: boolean;
+  readonly overrideRedirect?: boolean;
 }
 
 const ROOT = 0x2b;
 const COMPOSITE = 140;
+const CLIENT_LIST = 301;
 
 /**
  * An X server holding these windows: it answers the requests a capture makes, names the pixmap
@@ -119,6 +121,8 @@ async function scriptedServer(
     readonly stallImage?: boolean;
     /** The target window's size from its second GetGeometry on, as a window that grew. */
     readonly grows?: { readonly width: number; readonly height: number };
+    /** The root's _NET_CLIENT_LIST, the windows a window manager manages; none is no manager. */
+    readonly managed?: ReadonlyArray<number>;
   },
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-x-"));
@@ -221,6 +225,17 @@ async function scriptedServer(
           extra.writeInt16LE(from.x - to.x, 4);
           extra.writeInt16LE(from.y - to.y, 6);
           reply(extra, 1);
+        } else if (op === 16) {
+          const extra = payload(24);
+          extra.writeUInt32LE(CLIENT_LIST, 0);
+          reply(extra);
+        } else if (op === 20) {
+          const list = body.readUInt32LE(4) === ROOT ? (options.managed ?? [0x200001]) : [];
+          const extra = payload(24 + list.length * 4);
+          extra.writeUInt32LE(33, 0);
+          extra.writeUInt32LE(list.length, 8);
+          list.forEach((window, index) => extra.writeUInt32LE(window, 24 + index * 4));
+          reply(extra, 32);
         } else if (op === 3) {
           const found = window(4);
           if (!found) return error();
@@ -228,6 +243,7 @@ async function scriptedServer(
           extra.writeUInt32LE(0x21, 0);
           extra.writeUInt16LE(found.inputOnly ? 2 : 1, 4);
           extra[18] = found.viewable === false ? 0 : 2;
+          extra[19] = found.overrideRedirect ? 1 : 0;
           reply(extra);
         } else if (op === 73) {
           if (options.stallImage) continue;
@@ -343,6 +359,39 @@ describe("X11 window capture against a scripted server", () => {
     expect(
       await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
     ).toMatchObject({ width: 100, height: 80 });
+  });
+
+  it("trusts the top-level's client only when a window manager frames the target", async () => {
+    // Another app's own top-level holding the target and its window beside it (#1335 r11).
+    const appTop: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x400001: { ...FRAMED[0x400001]!, children: [0x200001, 0x400002] },
+      0x400002: { parent: 0x400001, children: [], x: 40, y: 50, width: 30, height: 30 },
+    };
+    for (const [windows, managed] of [
+      [appTop, []],
+      [appTop, [0x200001, 0x400001]],
+      [{ ...appTop, 0x400001: { ...appTop[0x400001]!, overrideRedirect: true } }, [0x200001]],
+    ] as const) {
+      await using server = await scriptedServer(windows, { redirected: [0x400001], managed });
+      expect(
+        await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+      ).toEqual({ refused: SHARED_CAPTURE });
+    }
+  });
+
+  it("refuses when another client's window sits between the target and its frame", async () => {
+    // Its background shows wherever a shaped target leaves a gap (#1335 r11).
+    const nested: Record<number, FakeWindow> = {
+      ...FRAMED,
+      0x400001: { ...FRAMED[0x400001]!, children: [0x600001] },
+      0x600001: { parent: 0x400001, children: [0x200001], x: 10, y: 30, width: 100, height: 80 },
+      0x200001: { ...FRAMED[0x200001]!, parent: 0x600001 },
+    };
+    await using server = await scriptedServer(nested, { redirected: [0x400001] });
+    expect(
+      await captureX11Window(environment, 0x200001, shot, { socketPath: server.path }),
+    ).toEqual({ refused: SHARED_CAPTURE });
   });
 
   it("a window that grew since the driver's screenshot is refused rather than mismatched", async () => {

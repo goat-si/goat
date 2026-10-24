@@ -375,13 +375,64 @@ interface Rect {
 const overlaps = (a: Rect, b: Rect) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
+const internAtom = (x: Connection, name: string) => {
+  const bytes = new TextEncoder().encode(name);
+  return x.ask(
+    request(16, 1, 2 + Math.ceil(bytes.length / 4), (view) => {
+      view.setUint16(4, bytes.length, true);
+      bytes.forEach((byte, index) => view.setUint8(8 + index, byte));
+    }),
+  );
+};
+const MAX_CLIENT_LIST = 1024;
+
+/**
+ * Whether the target's top-level ancestor is a window manager's frame around it: the window
+ * manager lists the target (or an ancestor below the frame) in _NET_CLIENT_LIST and not the
+ * top-level itself, and the top-level is not override-redirect, which nothing manages. Only then
+ * may the top-level's client draw inside it; an app's own top-level that holds another app's
+ * window is not trusted. Undefined when that cannot be read.
+ */
+async function managedFrame(
+  x: Connection,
+  setup: Setup,
+  chain: ReadonlyArray<number>,
+): Promise<boolean | undefined> {
+  const topLevel = chain.at(-1) ?? 0;
+  if (chain.length < 2) return false;
+  const attributes = await getAttributes(x, topLevel);
+  if (!attributes) return undefined;
+  if (attributes[27] !== 0) return false;
+  const atom = await internAtom(x, "_NET_CLIENT_LIST");
+  if (!atom) return undefined;
+  const clientList = u32(atom, 8);
+  if (clientList === 0) return false;
+  const property = await x.ask(
+    request(20, 0, 6, (view) => {
+      view.setUint32(4, setup.root, true);
+      view.setUint32(8, clientList, true);
+      view.setUint32(12, 33, true);
+      view.setUint32(16, 0, true);
+      view.setUint32(20, MAX_CLIENT_LIST, true);
+    }),
+  );
+  if (!property) return undefined;
+  // A list too long to read whole, or of another type, proves nothing.
+  if (property[1] !== 32 || u32(property, 12) !== 0) return false;
+  const managed = new Set(
+    Array.from({ length: u32(property, 16) }, (_, index) => u32(property, 32 + index * 4)),
+  );
+  return !managed.has(topLevel) && chain.slice(0, -1).some((window) => managed.has(window));
+}
+
 /**
  * Whether a window another client drew can show in the target's rectangle inside its top-level
- * ancestor's pixmap: the target's own children, and every sibling of the target or one of its
- * ancestors, with all they hold. Siblings stacked below count too, since a shaped target or one
- * without a background shows what lies under it. The app's own windows and those of the client
- * that owns the top-level window (the window manager's frame, such as Openbox's backing window
- * under the client) are not another app. Undefined when that cannot be read.
+ * ancestor's pixmap: the target's ancestors, which show their background and border wherever
+ * the target leaves a gap (a shaped target), its own children, and every sibling of the target
+ * or one of its ancestors, with all they hold. Siblings stacked below count too, for the same
+ * gaps. The app's own windows are not another app's, and neither are those of a window manager
+ * frame around it (managedFrame), such as Openbox's backing window under the client.
+ * Undefined when that cannot be read.
  */
 async function drawnOver(
   x: Connection,
@@ -390,7 +441,10 @@ async function drawnOver(
   target: Rect,
 ): Promise<boolean | undefined> {
   const client = (window: number) => window & ~setup.idMask;
-  const own = new Set([client(chain[0] ?? 0), client(chain.at(-1) ?? 0)]);
+  const framed = await managedFrame(x, setup, chain);
+  if (framed === undefined) return undefined;
+  const own = new Set([client(chain[0] ?? 0), ...(framed ? [client(chain.at(-1) ?? 0)] : [])]);
+  if (chain.slice(1).some((ancestor) => !own.has(client(ancestor)))) return true;
   const targetTree = await queryTree(x, chain[0] ?? 0);
   if (!targetTree) return undefined;
   const pending: number[] = childrenOf(targetTree);
