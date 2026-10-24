@@ -55,9 +55,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
 
 # Every job runs unless the event is a label other than ci:* or an edit that keeps the base. Those
-# runs skip every job under the name "goat-ci (event ignored)", so no skipped check named like a
-# real one lands on the commit and hides an earlier result. .github/scripts/goat-ci-trigger.test.cjs
-# evaluates these expressions per event.
+# runs skip every job. GitHub does not evaluate a skipped job's name, so its check carries the raw
+# name expression, which no required check matches: no skipped check named like a real one lands on
+# the commit and hides an earlier result. .github/scripts/goat-ci-trigger.test.cjs evaluates these
+# expressions per event.
 jobs:
   scope:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}

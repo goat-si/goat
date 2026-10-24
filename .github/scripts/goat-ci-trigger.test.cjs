@@ -166,16 +166,20 @@ function runFor(eventName, event) {
     },
     matrix: { title: "check" },
   };
-  const gate = (spec) => ({
-    name: interpolate(spec.name, context),
-    runs: evaluate(unwrap(spec.if), context) === true,
-  });
+  // GitHub does not evaluate the name of a job its if: skips; the check lists the raw expression
+  // (seen on goat-ci run 40117079675, a title edit).
+  const named = (spec, runs) => (runs ? interpolate(spec.name, context) : unwrap(spec.name));
+  const gate = (spec) => {
+    const runs = evaluate(unwrap(spec.if), context) === true;
+    return { name: named(spec, runs), runs };
+  };
+  const scope = gate(jobs.scope);
   return {
     triggers: eventName !== "pull_request" || types.includes(event.action),
     group: interpolate(group, context),
     cancel: interpolate(cancel, context) === "true",
-    scope: gate(jobs.scope),
-    ci: interpolate(jobs.ci.name, context),
+    scope,
+    ci: named(jobs.ci, scope.runs),
     screenshot: gate(jobs.screenshot),
     result: gate(jobs.result),
   };
@@ -190,16 +194,32 @@ const realRun = {
   screenshot: { name: "goat-screenshot-gate", runs: true },
   result: { name: "goat-ci-result", runs: true },
 };
-const ignored = { name: "goat-ci (event ignored)", runs: false };
+const requiredNames = [
+  realRun.scope.name,
+  realRun.ci,
+  realRun.screenshot.name,
+  realRun.result.name,
+];
+const skipped = (spec) => ({ name: unwrap(spec.name), runs: false });
 const ignoredRun = {
   triggers: true,
   group: "goat-ci-9001",
   cancel: false,
-  scope: ignored,
-  ci: ignored.name,
-  screenshot: ignored,
-  result: ignored,
+  scope: skipped(jobs.scope),
+  ci: unwrap(jobs.ci.name),
+  screenshot: skipped(jobs.screenshot),
+  result: skipped(jobs.result),
 };
+
+it("lists an ignored run's skipped jobs under names no required check uses", () => {
+  const names = [
+    ignoredRun.scope.name,
+    ignoredRun.ci,
+    ignoredRun.screenshot.name,
+    ignoredRun.result.name,
+  ];
+  for (const name of names) assert.ok(!requiredNames.includes(name), name);
+});
 
 describe("goat-ci pull request triggers", () => {
   it("starts the required checks when a pull request is retargeted, superseding the run against the old base", () => {
