@@ -29,6 +29,8 @@ import {
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
+  type ComputerUseCallAdmission,
+  type ComputerUseCallReservation,
   computerUseRefusalReason,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -109,6 +111,10 @@ export interface LeaseProxyDriver {
 }
 
 export interface LeaseProxyOptions<EU, ED> {
+  readonly connectionId: string;
+  readonly reservation: (
+    call: ComputerUseCallReservation,
+  ) => Effect.Effect<ComputerUseCallAdmission>;
   readonly controlId: string;
   readonly expiresAt: DateTime.Utc;
   /** Lines the provider writes. The proxy stops when this ends. */
@@ -234,6 +240,7 @@ const refusal = (
   detail: ComputerUseRefusalDetail,
   message: string,
   app?: string,
+  holderThreadId?: import("@goat/contracts").ThreadId,
 ) => {
   const refused = { refused: computerUseRefusalReason(detail), detail };
   return JSON.stringify(
@@ -243,7 +250,11 @@ const refusal = (
           id,
           result: {
             content: [{ type: "text", text: message }],
-            structuredContent: { ...refused, ...(app === undefined ? {} : { app }) },
+            structuredContent: {
+              ...refused,
+              ...(app === undefined ? {} : { app }),
+              ...(holderThreadId === undefined ? {} : { holderThreadId }),
+            },
             isError: true,
           },
         }
@@ -254,6 +265,7 @@ const refusal = (
 interface Running {
   readonly driver: LeaseProxyDriver;
   readonly scope: Scope.Closeable;
+  readonly connectionId: string;
 }
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
@@ -265,10 +277,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let deadline = DateTime.toEpochMillis(options.expiresAt);
   let finished: LeaseEnd | undefined;
   let paused: ComputerUsePauseReason | undefined;
+  let idle = false;
   let apps: ReadonlySet<string> | undefined;
   let running: Running | undefined;
   let ownRequests = 0;
+  let driverGeneration = 0;
   let interruptionsSeen: number | undefined;
+  let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
   const outstanding = new Map<
     string,
@@ -277,6 +292,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       readonly method: string;
       readonly tool?: string;
       readonly unfiltered?: boolean;
+      readonly reservationId?: string;
+      readonly connectionId?: string;
+      readonly cancelled?: boolean;
     }
   >();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
@@ -347,12 +365,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // The transport kill is what stops nested work, so nothing runs before it that could wait.
       yield* current.driver.kill;
       yield* Scope.close(current.scope, Exit.void);
+      yield* options.reservation({
+        action: "close",
+        controlId: options.controlId,
+        connectionId: current.connectionId,
+      });
     }
     for (const waiter of ownAnswers.values()) yield* Deferred.succeed(waiter, undefined);
     proven = undefined;
     ownAnswers.clear();
     for (const request of pending)
-      yield* options.output(refusal(request.id, request.method, reason, message));
+      if (!request.cancelled)
+        yield* options.output(refusal(request.id, request.method, reason, message));
   });
 
   const end = Effect.fn("ComputerUseLeaseProxy.end")(function* (reason: LeaseEnd) {
@@ -365,6 +389,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (sessions.size > 0)
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
+
+  const release = (request: { readonly reservationId?: string; readonly connectionId?: string }) =>
+    request.reservationId === undefined || request.connectionId === undefined
+      ? Effect.void
+      : options
+          .reservation({
+            action: "release",
+            controlId: options.controlId,
+            connectionId: request.connectionId,
+            reservationId: request.reservationId,
+          })
+          .pipe(Effect.asVoid);
 
   const readLines = (current: Running) =>
     current.driver.lines.pipe(
@@ -384,6 +420,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            if (request.cancelled) {
+              yield* release(request);
+              if (
+                finished !== undefined ||
+                paused !== undefined ||
+                idle ||
+                running !== current ||
+                !outstanding.has(key)
+              )
+                return;
+              outstanding.delete(key);
+              return;
+            }
             const session = message.result?.structuredContent?.session;
             if (request.method === "tools/call" && typeof session === "string")
               sessions.add(session);
@@ -415,6 +464,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               )
                 return;
               outstanding.delete(key);
+              yield* release(request);
               if (verdict === "other") {
                 yield* options.output(
                   refusal(
@@ -447,7 +497,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const start = Effect.fn("ComputerUseLeaseProxy.startDriver")(function* () {
     const child = yield* Scope.fork(scope);
     const driver = yield* options.startDriver.pipe(Scope.provide(child));
-    const current: Running = { driver, scope: child };
+    if (finished !== undefined) {
+      yield* driver.kill;
+      return yield* Scope.close(child, Exit.void);
+    }
+    const current: Running = {
+      driver,
+      scope: child,
+      connectionId: `${options.connectionId}:${driverGeneration++}`,
+    };
     running = current;
     // A new helper draws nothing yet.
     overlay = initialOverlayState;
@@ -503,8 +561,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ? update.interruptions
         : undefined;
     interruptionsSeen = count;
-    if (paused !== undefined) {
+    const nextIdleEpoch = update.idleEpoch ?? 0;
+    const missedIdle = idleEpochSeen !== undefined && nextIdleEpoch > idleEpochSeen;
+    idleEpochSeen = nextIdleEpoch;
+    if (paused !== undefined || idle) {
       paused = undefined;
+      idle = false;
       if (finished === undefined) yield* start();
     } else if (missedPause !== undefined && finished === undefined && running !== undefined) {
       yield* interrupt(pausedDetail(missedPause.last), PAUSE_MESSAGES[missedPause.last]);
@@ -515,10 +577,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         "An app this call used is no longer approved for this thread, so it was stopped. Observe again before acting.",
       );
       yield* start();
+    } else if (missedIdle && finished === undefined && running !== undefined) {
+      yield* interrupt(
+        "control_idle",
+        "This call overlapped the end of its thread's turn and was stopped.",
+      );
+      yield* start();
     }
     yield* Deferred.succeed(confirmed, undefined);
   }, Effect.uninterruptible);
 
+  yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
 
   // The server is the authority: the first word for this control confirms it, anything else ends.
@@ -530,7 +599,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           ? activate(update)
           : update.state === "paused"
             ? pause(update.reason)
-            : end(update.reason === "unauthorized" ? "lost" : update.reason),
+            : update.state === "idle"
+              ? Effect.sync(() => {
+                  idle = true;
+                }).pipe(
+                  Effect.andThen(
+                    interrupt(
+                      "control_idle",
+                      "This thread's turn has ended, so computer use is idle.",
+                    ),
+                  ),
+                  Effect.andThen(Deferred.succeed(confirmed, undefined)),
+                )
+              : end(update.reason === "unauthorized" ? "lost" : update.reason),
     ),
     Effect.catchCause(() => Effect.void),
     Effect.andThen(end("lost")),
@@ -615,6 +696,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return refusal(id, message.method, finished, LEASE_END_MESSAGES[finished]);
     if (paused !== undefined)
       return refusal(id, message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    if (idle)
+      return refusal(
+        id,
+        message.method,
+        "control_idle",
+        "This thread's turn has ended. Computer use is idle until its next turn.",
+      );
     // The driver no longer lists it (cuaDriverManifest.ts); a stale tool list still gets a reason.
     if (message.params?.name === "get_desktop_state")
       return refusal(id, message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
@@ -640,6 +728,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const message = parse(line);
     const id = message?.id;
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
+    if (isRequest && outstanding.has(JSON.stringify(id)))
+      return yield* options.output(
+        refusal(
+          id,
+          message.method,
+          "invalid_target",
+          "This request id still has work in progress. Use a new request id after observing its result.",
+        ),
+      );
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (finished !== undefined) {
@@ -709,7 +806,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       });
       // A pause or end that came while drawing: refuse, whether or not it has stopped the
       // driver yet. This call never ran.
-      if (running !== current || paused !== undefined || finished !== undefined)
+      if (running !== current || paused !== undefined || idle || finished !== undefined)
         return yield* options.output(
           finished !== undefined
             ? refusal(id, message.method, finished, LEASE_END_MESSAGES[finished])
@@ -721,15 +818,56 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               ),
         );
     }
+    const current = running;
+    let reservationId: string | undefined;
+    if (isRequest && message?.method === "tools/call") {
+      const decision = yield* options.reservation({
+        action: "reserve",
+        controlId: options.controlId,
+        connectionId: current.connectionId,
+        callId: String(ownRequests++),
+        interruptions: interruptionsSeen ?? 0,
+        name: typeof message.params?.name === "string" ? message.params.name : "unknown",
+        args: message.params?.arguments ?? {},
+      });
+      if (decision.status !== "admitted") {
+        const detail = decision.status === "refused" ? decision.detail : "unauthorized";
+        const holder = decision.status === "refused" ? decision.holderThreadId : undefined;
+        const explanation =
+          holder === undefined
+            ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+            : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+        return yield* options.output(
+          refusal(id, message.method, detail, explanation, undefined, holder),
+        );
+      }
+      reservationId = decision.reservationId ?? undefined;
+      if (running !== current || paused !== undefined || idle || finished !== undefined) {
+        if (reservationId !== undefined)
+          yield* release({ reservationId, connectionId: current.connectionId });
+        return yield* options.output(
+          refusal(id, message.method, lastInterruption.reason, lastInterruption.message),
+        );
+      }
+    }
     if (isRequest)
       outstanding.set(JSON.stringify(id), {
         id,
         method: message!.method!,
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
         unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
+        ...(reservationId === undefined
+          ? {}
+          : { reservationId, connectionId: current.connectionId }),
       });
     const cancelled = cancelledRequestKey(line);
-    if (cancelled !== undefined) outstanding.delete(cancelled);
+    if (cancelled !== undefined) {
+      const request = outstanding.get(cancelled);
+      // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
+      if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
+    }
+    if (running !== current || paused !== undefined || idle || finished !== undefined) return;
+    yield* current.driver.send(line);
     if (isRequest && message?.method === "tools/call" && options.onTarget !== undefined) {
       const target = targetOf(message.params?.arguments);
       if (
@@ -739,15 +877,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       )
         reported = target;
     }
-    yield* running.driver.send(line);
   });
 
   yield* options.input.pipe(Stream.runForEach(handle));
   // The provider closed its end: nothing more to serve, and the driver child goes with it.
-  if (finished === undefined) {
-    finished = "lost";
-    if (running !== undefined) yield* running.driver.kill;
-  }
+  if (finished === undefined) yield* end("lost");
   return finished;
 });
 

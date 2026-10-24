@@ -7,10 +7,15 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeReadline from "node:readline";
 import * as NodeStream from "node:stream";
 
-import { CuaDriverMcpConfiguration } from "@goat/contracts";
+import {
+  CuaDriverMcpConfiguration,
+  ComputerUseCallAdmission,
+  type ComputerUseCallReservation,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -25,6 +30,7 @@ import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
+const decodeAdmission = Schema.decodeUnknownOption(ComputerUseCallAdmission);
 /** A window report waits this long at most; the call it rides on goes ahead either way. */
 const TARGET_REPORT_TIMEOUT_MS = 2_000;
 const decodeX11Display = Schema.decodeUnknownOption(
@@ -70,6 +76,28 @@ async function reportTarget(
   }
 }
 
+async function reserveCall(
+  url: string,
+  authorization: string,
+  call: ComputerUseCallReservation,
+): Promise<ComputerUseCallAdmission> {
+  try {
+    const response = await fetch(`${url}/calls`, {
+      method: "POST",
+      headers: { authorization, "content-type": "application/json" },
+      body: JSON.stringify(call),
+      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
+    });
+    if (response.ok) {
+      const decision = decodeAdmission(await response.json());
+      if (Option.isSome(decision)) return decision.value;
+    }
+  } catch {
+    // Lost admission or release acknowledgement grants no authority; server tickets stay held.
+  }
+  return { status: "refused", detail: "unauthorized" };
+}
+
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
   const platform = HostProcess.Platform.defaultValue();
   const drivers = new Set<NodeChildProcess.ChildProcess>();
@@ -109,6 +137,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
 
   await Effect.runPromise(
     runLeaseProxy({
+      connectionId: NodeCrypto.randomUUID(),
+      reservation: (call) => Effect.promise(() => reserveCall(url, authorization, call)),
       controlId,
       expiresAt: expiresAt.value,
       input: Stream.fromAsyncIterable(
@@ -151,23 +181,28 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         }),
         (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
       ).pipe(
-        Effect.map((child) => ({
-          ...(drawsOverlay && child.stdio[3] instanceof NodeStream.Duplex
-            ? { overlay: overlayChannel(child.stdio[3]) }
-            : {}),
-          send: (line: string) =>
-            Effect.sync(() => {
-              if (child.stdin.writable) child.stdin.write(line + "\n");
+        Effect.map((child) => {
+          // A signal is only a request to stop. Releasing ownership waits for process and pipe closure.
+          const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          return {
+            ...(drawsOverlay && child.stdio[3] instanceof NodeStream.Duplex
+              ? { overlay: overlayChannel(child.stdio[3]) }
+              : {}),
+            send: (line: string) =>
+              Effect.sync(() => {
+                if (child.stdin.writable) child.stdin.write(line + "\n");
+              }),
+            lines: Stream.fromAsyncIterable(
+              NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+              () => undefined,
+            ).pipe(Stream.catchCause(() => Stream.empty)),
+            kill: Effect.promise(() => {
+              child.stdin.end();
+              killDriverGroup(platform, child, "SIGKILL");
+              return closed;
             }),
-          lines: Stream.fromAsyncIterable(
-            NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
-            () => undefined,
-          ).pipe(Stream.catchCause(() => Stream.empty)),
-          kill: Effect.sync(() => {
-            child.stdin.end();
-            killDriverGroup(platform, child, "SIGKILL");
-          }),
-        })),
+          };
+        }),
       ),
       ...(placement === undefined
         ? {}

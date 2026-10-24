@@ -141,6 +141,7 @@
         "apps/server/src/server.ts",
         "apps/server/src/ws.ts",
         "apps/server/src/handoffs/Handoffs.ts",
+        "apps/server/src/cua/ComputerUseCallReservations.ts",
         "apps/server/src/orchestration-v2/",
         "apps/server/src/orchestration-v2/ThreadMessageIntake.ts",
         "apps/server/src/orchestration-v2/ThreadManagementService.ts",

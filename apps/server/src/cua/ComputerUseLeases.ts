@@ -16,6 +16,8 @@
  */
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  type ComputerUseCallAdmission,
+  type ComputerUseCallReservation,
   type ComputerUseControlEnd,
   type ComputerUsePauseReason,
   Handoff,
@@ -40,6 +42,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -103,6 +106,8 @@ export type ComputerUseControlState =
       readonly apps: ReadonlyArray<string> | undefined;
       /** When this state can next change without a signal, epoch ms. */
       readonly wakeAt: number;
+      readonly idle?: true;
+      readonly idleEpoch?: number;
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }
   | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
@@ -170,6 +175,10 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       controlId: string,
     ) => Effect.Effect<ComputerUseControlState, ComputerUseLeaseError>;
+    readonly callReservation: (
+      threadId: ThreadId,
+      call: ComputerUseCallReservation,
+    ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -243,6 +252,7 @@ const appsOf = (leases: ReadonlyArray<ComputerUseLease>): ReadonlyArray<string> 
 };
 
 interface ControlRecord extends ComputerUseControl {
+  readonly idleEpoch?: number;
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
@@ -275,6 +285,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  const reservations = makeCallReservations();
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
@@ -369,6 +380,7 @@ const make = Effect.gen(function* () {
       ...(everyApp === undefined ? {} : { everyApp }),
       uses: 0,
     };
+    if (existing !== undefined) reservations.forgetClosed(threadId, existing.controlId);
     controls.set(threadId, next);
     yield* kick;
     // A proxy still holding the previous id hears it was replaced.
@@ -441,6 +453,8 @@ const make = Effect.gen(function* () {
         interruptions,
         apps: scoped(record, undefined),
         wakeAt: DateTime.toEpochMillis(record.expiresAt),
+        ...(record.idle === true ? { idle: true as const } : {}),
+        ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       };
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
@@ -451,6 +465,8 @@ const make = Effect.gen(function* () {
         interruptions,
         apps: scoped(record, grant.lease.apps),
         wakeAt: DateTime.toEpochMillis(record.expiresAt),
+        ...(record.idle === true ? { idle: true as const } : {}),
+        ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       };
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
@@ -464,6 +480,8 @@ const make = Effect.gen(function* () {
         DateTime.toEpochMillis(record.expiresAt),
         ...grants.map((grant) => DateTime.toEpochMillis(grant.expiresAt)),
       ),
+      ...(record.idle === true ? { idle: true as const } : {}),
+      ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
     };
   });
 
@@ -471,6 +489,7 @@ const make = Effect.gen(function* () {
     const record = controls.get(threadId);
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
+    reservations.forgetClosed(threadId, record.controlId);
     // A pause belongs to the agents it held; with none left the next one starts unpaused.
     if (![...controls.values()].some((other) => other.ended === undefined)) paused = undefined;
     return true;
@@ -612,7 +631,7 @@ const make = Effect.gen(function* () {
       after.idle === true
     )
       return false;
-    controls.set(threadId, { ...after, idle: true });
+    controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
     yield* changed;
     return true;
   });
@@ -642,6 +661,40 @@ const make = Effect.gen(function* () {
     everyAppControl,
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
+    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, call) {
+      if (call.action !== "reserve") {
+        const current = controls.get(threadId);
+        return reservations.release(
+          threadId,
+          call,
+          current?.controlId === call.controlId && current.ended === undefined,
+        );
+      }
+      return yield* admission.withPermits(1)(
+        Effect.gen(function* () {
+          const before = controls.get(threadId);
+          const state = yield* controlState(threadId, call.controlId);
+          const now = DateTime.toEpochMillis(yield* DateTime.now);
+          const current = controls.get(threadId);
+          if (state._tag === "ended") return { status: "refused", detail: state.reason } as const;
+          if (state._tag === "paused" || paused !== undefined || privateHost)
+            return { status: "refused", detail: "waiting_for_human" } as const;
+          if (
+            current === undefined ||
+            current.controlId !== call.controlId ||
+            current.ended !== undefined ||
+            current.uses !== before?.uses ||
+            interruptions.count !== call.interruptions
+          )
+            return { status: "refused", detail: "replaced" } as const;
+          if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
+            return { status: "refused", detail: "expired" } as const;
+          if (current.idle === true && callResource(call) !== "read")
+            return { status: "refused", detail: "control_idle" } as const;
+          return reservations.reserve(threadId, call);
+        }),
+      );
+    }),
     stop: (threadId) =>
       Effect.sync(() => end(threadId, "stopped")).pipe(
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
