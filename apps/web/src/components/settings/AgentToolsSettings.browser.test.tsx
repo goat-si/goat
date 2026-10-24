@@ -7,6 +7,7 @@ import { userEvent } from "vite-plus/test/browser";
 
 const state = vi.hoisted(() => ({
   settings: {} as typeof DEFAULT_SERVER_SETTINGS,
+  mixed: false,
   updateSettings: vi.fn(async () => ({ _tag: "Success" as const, value: undefined })),
 }));
 
@@ -50,7 +51,7 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
 vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
   useScopedSettings: (() => state.settings) as never,
-  useScopedSettingsMixed: () => false,
+  useScopedSettingsMixed: () => state.mixed,
 }));
 // The real row reads write permission and project overrides from live environment
 // state; this suite is about what the control writes.
@@ -72,8 +73,9 @@ const shippedDefault = DEFAULT_SERVER_SETTINGS.agentToolListing;
 const otherListing: AgentToolListing = shippedDefault === "core" ? "full" : "core";
 const optionName = (listing: AgentToolListing) => (listing === "core" ? /^Core/ : /^All tools/);
 
-function setup(agentToolListing: AgentToolListing) {
+function setup(agentToolListing: AgentToolListing, mixed = false) {
   state.settings = { ...DEFAULT_SERVER_SETTINGS, agentToolListing };
+  state.mixed = mixed;
   state.updateSettings.mockClear();
 }
 
@@ -91,6 +93,19 @@ it("writes the chosen listing to the environment and resets to the shipped defau
 
   setup(otherListing);
   await screen.rerender(<AgentToolListingSetting />);
+  await userEvent.click(screen.getByRole("button", { name: /^Reset/ }));
+  expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "env",
+    input: { patch: { agentToolListing: shippedDefault } },
+  });
+});
+
+it("offers reset when selected environments disagree even if the shown one uses the default", async () => {
+  setup(shippedDefault, true);
+  await using screen = await render(<AgentToolListingSetting />);
+  await expect
+    .element(screen.getByRole("combobox", { name: "GOAT tools agents see" }))
+    .toHaveTextContent("Mixed");
   await userEvent.click(screen.getByRole("button", { name: /^Reset/ }));
   expect(state.updateSettings).toHaveBeenCalledExactlyOnceWith({
     environmentId: "env",

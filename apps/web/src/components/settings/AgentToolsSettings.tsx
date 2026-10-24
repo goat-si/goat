@@ -41,9 +41,9 @@ export function AgentToolListingSetting() {
       serverScoped
       settingKeys={["agentToolListing"]}
       {...searchableSetting("agent-tool-listing")}
-      description="Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which makes each agent's first prompt much larger."
+      description="Core shows agents two GOAT tools that look up and run the rest. All tools lists every tool up front, which can make each agent's first prompt much larger."
       resetAction={
-        settings.agentToolListing !== shippedDefault ? (
+        mixed || settings.agentToolListing !== shippedDefault ? (
           <SettingResetButton
             label="GOAT tools agents see"
             onClick={() => updateSettings({ agentToolListing: shippedDefault })}

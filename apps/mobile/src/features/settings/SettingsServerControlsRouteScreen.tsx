@@ -137,7 +137,7 @@ const TOOL_LISTING_CHOICES: ReadonlyArray<{
   {
     listing: "full",
     label: "All tools",
-    description: "Every tool up front. Each agent's first prompt is much larger.",
+    description: "Every tool up front. Can make each agent's first prompt much larger.",
   },
 ];
 
