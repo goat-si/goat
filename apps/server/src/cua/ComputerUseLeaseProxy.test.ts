@@ -9,6 +9,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
+import type { NamedWindow } from "./x11WindowPlacement.ts";
 import {
   LEASE_END_MESSAGES,
   leaseUpdateLines,
@@ -41,6 +42,8 @@ const harness = Effect.fn(function* (
     readonly expiresAt?: string;
     /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
     readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+    /** Pids whose windows are not on GOAT's screen; with it, the proxy checks every window. */
+    readonly elsewhere?: ReadonlySet<number>;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -72,6 +75,14 @@ const harness = Effect.fn(function* (
         ),
       };
     }),
+    ...(options.elsewhere === undefined
+      ? {}
+      : {
+          placement: (windows: ReadonlyArray<NamedWindow>) =>
+            Effect.succeed(
+              windows.some((window) => options.elsewhere?.has(window.pid)) ? "other" : "same",
+            ),
+        }),
     revokeSessions: (sessions) =>
       Effect.sync(() => void revoked.push(sessions)).pipe(
         Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
@@ -517,6 +528,55 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(2, "list_windows"));
         assert.equal((yield* h.nextToDriver).id, 2);
       }),
+  );
+
+  it.effect(
+    "a driver that names windows from another display is cut off: a typed refusal, and the driver killed",
+    () =>
+      Effect.gen(function* () {
+        // The person's own desktop runs pid 900; GOAT gave the driver another screen (#1358).
+        const h = yield* harness({ elsewhere: new Set([900]) });
+        yield* h.push(active());
+        yield* h.send(call(1, "list_windows"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { content: [], structuredContent: { windows: [{ pid: 900, window_id: 5 }] } },
+          }),
+        );
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "wrong_display"));
+        yield* h.killed;
+        // Nothing after it runs either.
+        yield* h.send(call(2, "list_windows"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "wrong_display"));
+      }),
+  );
+
+  it.effect("a call naming a window that is not on GOAT's screen never reaches the driver", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ elsewhere: new Set([900]) });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 900, window_id: 5, x: 1, y: 1 }));
+      const refused = yield* h.nextToProvider;
+      assert.equal(refused.id, 1);
+      assert.deepInclude((refused.result as { structuredContent: object }).structuredContent, {
+        detail: "wrong_display",
+      });
+      assert.equal(yield* h.driverQueued, 0);
+      // A window on GOAT's screen is served as before.
+      yield* h.send(call(2, "get_window_state", { pid: 10, window_id: 20 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { content: [], structuredContent: { pid: 10, window_id: 20 } },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 2);
+    }),
   );
 
   it.effect("drops a driver reply to a request the provider cancelled or never made", () =>

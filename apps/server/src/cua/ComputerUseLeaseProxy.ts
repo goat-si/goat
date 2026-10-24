@@ -43,8 +43,9 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
+import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
-export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted";
+export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wrong_display";
 
 const REQUEST = goatCallText("computer_use.request");
 
@@ -63,6 +64,9 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
   helper_restarted:
     "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
+  // The driver answered about another display than the one GOAT gave it (#1358).
+  wrong_display:
+    "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",
 };
 
 export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = {
@@ -103,7 +107,32 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+  /**
+   * Where the windows the driver names are, against the X display GOAT gave it (#1358); absent
+   * where there is no X display to check. Anything but "same" refuses.
+   */
+  readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
 }
+
+const WRONG_DISPLAY =
+  "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
+
+/** Windows a driver reply or request names by pid and window id. */
+const namedWindows = (value: unknown): ReadonlyArray<NamedWindow> => {
+  const one = (entry: unknown): NamedWindow | undefined => {
+    if (typeof entry !== "object" || entry === null) return undefined;
+    const { pid, window_id: windowId } = entry as { pid?: unknown; window_id?: unknown };
+    return typeof pid === "number" && typeof windowId === "number" ? { pid, windowId } : undefined;
+  };
+  const listed =
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { windows?: unknown }).windows)
+      ? ((value as { windows: unknown[] }).windows.map(one).filter(Boolean) as NamedWindow[])
+      : [];
+  const single = one(value);
+  return single === undefined ? listed : [...listed, single];
+};
 
 type JsonRpcId = string | number;
 interface Envelope {
@@ -113,7 +142,10 @@ interface Envelope {
     readonly name?: unknown;
     readonly arguments?: { readonly session?: unknown };
   };
-  readonly result?: { readonly structuredContent?: { readonly session?: unknown } };
+  readonly result?: {
+    readonly structuredContent?: { readonly session?: unknown };
+    readonly isError?: unknown;
+  };
   readonly error?: unknown;
 }
 
@@ -176,6 +208,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
   const outstanding = new Map<string, { readonly id: JsonRpcId; readonly method: string }>();
+  /** Where a reply's windows must be checked before the provider sees it (#1358). */
+  const checkReply = (line: string, message: Envelope) =>
+    options.placement === undefined || message.result?.isError === true
+      ? Effect.succeed("same" as WindowPlacement)
+      : options.placement(namedWindows(message.result?.structuredContent));
   const ownAnswers = new Map<string, Deferred.Deferred<void>>();
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
@@ -239,6 +276,17 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const session = message.result?.structuredContent?.session;
             if (request?.method === "tools/call" && typeof session === "string")
               sessions.add(session);
+            if (request?.method === "tools/call" && (yield* checkReply(line, message)) !== "same") {
+              yield* options.output(
+                refusal(
+                  request.id,
+                  request.method,
+                  "wrong_display",
+                  LEASE_END_MESSAGES.wrong_display,
+                ),
+              );
+              return yield* end("wrong_display");
+            }
           }
           yield* options.output(admitDriverReplyScreenshots(line));
         }),
@@ -424,6 +472,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
       const refused = yield* refuseCall(id, message);
       if (refused !== undefined) return yield* options.output(refused);
+      // A window that is not on GOAT's screen is never acted on, whatever the driver would do.
+      const targets = namedWindows(message.params?.arguments);
+      if (
+        options.placement !== undefined &&
+        targets.length > 0 &&
+        (yield* options.placement(targets)) !== "same"
+      )
+        return yield* options.output(refusal(id, message.method, "wrong_display", WRONG_DISPLAY));
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }

@@ -117,8 +117,32 @@ export class CuaDriver extends Context.Service<
      * screen went away still go through; the next start reports the problem instead.
      */
     readonly admitEnable: Effect.Effect<void, CuaDriverHostError>;
+    /**
+     * The X display the running driver was started on (its DISPLAY and XAUTHORITY), so the lease
+     * proxy can check every window the driver names is really there (#1358). None when the
+     * driver is not running or has no X display.
+     */
+    readonly x11Display?: Effect.Effect<Option.Option<CuaX11Display>>;
   }
 >()("goat/cua/CuaDriver") {}
+
+export interface CuaX11Display {
+  readonly DISPLAY: string;
+  readonly XAUTHORITY?: string;
+}
+
+/** The X display among the variables a driver was started with. */
+const x11DisplayOf = (
+  environment: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+): Option.Option<CuaX11Display> => {
+  const value = (name: string) => environment.find((variable) => variable.name === name)?.value;
+  const display = value("DISPLAY");
+  if (display === undefined || display.trim() === "") return Option.none();
+  const xauthority = value("XAUTHORITY");
+  return Option.some(
+    xauthority === undefined ? { DISPLAY: display } : { DISPLAY: display, XAUTHORITY: xauthority },
+  );
+};
 
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
@@ -341,6 +365,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   );
   return CuaDriver.of({
     acquire,
+    x11Display: Effect.sync(() =>
+      active?.running && active.displayEnvironment !== undefined
+        ? x11DisplayOf(active.displayEnvironment)
+        : Option.none(),
+    ),
     enabled,
     lastFailure: Effect.sync(() => failure),
     status: Effect.gen(function* () {
