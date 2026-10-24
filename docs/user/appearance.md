@@ -1,9 +1,9 @@
 # Appearance and themes
 
 On web and desktop, open **Settings → Appearance** to choose a theme and follow the system
-appearance or stay in light or dark mode. To use different themes for light and dark mode, select
-the corresponding preview within each theme. Appearance preferences are saved separately on each
-device or browser.
+appearance or stay in light or dark mode. To use different themes for light and dark mode, open the
+**Theme** menu and choose **For light mode** or **For dark mode**. Appearance preferences are saved
+separately on each device or browser.
 
 In the desktop app, turn on **System glass** in **Settings → Appearance** to use Mica on
 Windows 11 22H2 or later. Native glass is not available on macOS in this build. System glass

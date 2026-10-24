@@ -12,6 +12,7 @@ import type { FileDiffMetadata } from "@pierre/diffs";
 import { memo, type ReactNode } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
+import type { DiffPanelSourceItem, OpenTurnDiff } from "../../diffPanelStore";
 import { useCheckpointDiff } from "../../lib/checkpointDiffState";
 import {
   DIFF_SURFACE_THEME_UNSAFE_CSS,
@@ -75,21 +76,19 @@ export const FileChangeInlineDiff = memo(function FileChangeInlineDiff(props: {
   readonly runId: RunId;
   readonly workspaceRoot: string | undefined;
   readonly resolvedTheme: "light" | "dark";
-  readonly onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  readonly onOpenTurnDiff: OpenTurnDiff;
 }) {
   const { threadRef, projectedItem, runId, workspaceRoot, resolvedTheme, onOpenTurnDiff } = props;
   const wireItem = projectedItem.item;
   const paths = wireItem.type === "file_change" ? fileChangeTargetPaths(wireItem) : [];
   const hasOwnPatch = wireItem.type === "file_change" && wireItem.patchOmitted === true;
+  const sourceItem: DiffPanelSourceItem = {
+    threadId: projectedItem.sourceThreadId,
+    itemId: projectedItem.sourceItemId,
+    revision: turnItemDetailRevision(wireItem),
+  };
   const detail = useTurnItemDetail(
-    hasOwnPatch
-      ? {
-          environmentId: threadRef.environmentId,
-          threadId: projectedItem.sourceThreadId,
-          itemId: projectedItem.sourceItemId,
-          revision: turnItemDetailRevision(wireItem),
-        }
-      : null,
+    hasOwnPatch ? { environmentId: threadRef.environmentId, ...sourceItem } : null,
   );
   const fetched = detail.data?.item;
   const ownPatch = fetched?.type === "file_change" ? fetched.patch : undefined;
@@ -123,6 +122,7 @@ export const FileChangeInlineDiff = memo(function FileChangeInlineDiff(props: {
         files={matched.length > 0 ? matched : files}
         patch={ownPatch}
         runId={runId}
+        sourceItem={sourceItem}
         workspaceRoot={workspaceRoot}
         resolvedTheme={resolvedTheme}
         onOpenTurnDiff={onOpenTurnDiff}
@@ -161,11 +161,13 @@ function FileDiffCards(props: {
   readonly files: ReadonlyArray<FileDiffMetadata>;
   readonly patch: string;
   readonly runId: RunId;
+  /** Set when the cards show the edit's own patch, which the panel can show mid-turn. */
+  readonly sourceItem?: DiffPanelSourceItem;
   readonly workspaceRoot: string | undefined;
   readonly resolvedTheme: "light" | "dark";
-  readonly onOpenTurnDiff: (runId: RunId, filePath?: string) => void;
+  readonly onOpenTurnDiff: OpenTurnDiff;
 }) {
-  const { files, patch, runId, workspaceRoot, resolvedTheme, onOpenTurnDiff } = props;
+  const { files, patch, runId, sourceItem, workspaceRoot, resolvedTheme, onOpenTurnDiff } = props;
   return (
     // The row toggles on Enter and Space; keys pressed on the card's buttons stay here.
     <div className="flex flex-col gap-2" onKeyDown={(event) => event.stopPropagation()}>
@@ -211,7 +213,7 @@ function FileDiffCards(props: {
             {tooLarge ? (
               <div className="flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
                 <span>{lineCount.toLocaleString()} lines is too long to show here.</span>
-                <InlineButton onClick={() => onOpenTurnDiff(runId, filePath)}>
+                <InlineButton onClick={() => onOpenTurnDiff(runId, filePath, sourceItem)}>
                   Show full diff in panel
                 </InlineButton>
               </div>
