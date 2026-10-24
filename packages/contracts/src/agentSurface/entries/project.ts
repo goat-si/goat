@@ -55,7 +55,9 @@ export const projectEntries = {
     idempotency: "key",
     reconcile: "project.list",
     effect: "destructive",
-    capability: "settings.write",
+    // Worker and manager agents set up the projects they work in (#858); changing or deleting
+    // a project stays with settings.write.
+    capability: "worktree.create",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",
@@ -123,7 +125,7 @@ export const projectEntries = {
     idempotencyReason:
       "SourceControlRepositoryService.prepareDestination refuses a nonempty destination and git clone targets that exact path. Retrying cannot create a second checkout or adopt/overwrite the completed clone.",
     effect: "destructive",
-    capability: "settings.write",
+    capability: "worktree.create",
     hostRoutable: false,
     requires: "either",
     dryRun: "unsupported",

@@ -13,11 +13,16 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 
+import * as ServerConfig from "../../config.ts";
 import type { McpInvocationScope } from "../../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
+import { ProjectStoreV2 } from "../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
+import * as ProcessRunner from "../../processRunner.ts";
+import { layer as recoveryLayer } from "./GoalRecovery.ts";
 import { GoalService, layer as goalServiceLayer } from "./GoalService.ts";
 import { layer as goalStoreLayer } from "./GoalStore.ts";
 import { testSpec } from "./goalTestkit.ts";
@@ -38,6 +43,18 @@ const servicesFor = (profile?: string) =>
       ServerSettings.layerTest({
         goatclaw: { enabled: profile !== undefined, defaultProfile: profile ?? "worker" },
       }),
+    ),
+    Layer.provideMerge(
+      recoveryLayer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectStoreV2)({}),
+            ProcessRunner.layer,
+            ServerConfig.layerTest(process.cwd(), { prefix: "goal-service-" }),
+          ),
+        ),
+        Layer.provide(NodeServices.layer),
+      ),
     ),
     Layer.provideMerge(goalStoreLayer),
     Layer.provideMerge(SqlitePersistence.layerMemory),
@@ -216,9 +233,14 @@ describe("GoalService", () => {
         expect(
           yield* codeOf(apply("thread:owner", input({ id: mine.goal.id, title: "late" }))),
         ).toBe("conflict");
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO fleet_replicas (owner_key, generation, ref, file, commit_oid, captured_at)
+          VALUES (${"goal:" + mine.goal.id + ":s0"}, 1, 'refs/goat/replicas/x/1', '/nonexistent', 'a', '2026-10-21')`;
         expect(
           yield* goals.remove(scopeOf("thread:owner"), { id: mine.goal.id, force: true }),
         ).toMatchObject({ deleted: true });
+        // A forced removal skips the controller, so it drops the goal's replicas itself.
+        expect(yield* sql`SELECT owner_key FROM fleet_replicas`).toEqual([]);
         expect(yield* codeOf(goals.get(scopeOf("thread:owner"), mine.goal.id))).toBe("not_found");
       }).pipe(Effect.provide(services)),
   );

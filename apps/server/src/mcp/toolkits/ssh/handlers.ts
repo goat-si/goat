@@ -541,7 +541,12 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
                   };
                   const authorize = check.pipe(
-                    Effect.andThen(permissions.recheck(scope, admitted, { host: input.host })),
+                    Effect.andThen(
+                      permissions.recheck(scope, admitted, {
+                        host: input.host,
+                        ...(role === undefined ? {} : { role }),
+                      }),
+                    ),
                   );
                   const result = yield* Effect.gen(function* () {
                     if (scope.thread === undefined) {
