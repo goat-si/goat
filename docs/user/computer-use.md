@@ -50,6 +50,12 @@ Windows, a window's screenshot can still include other windows that cover it.
 an action sequence. The agent gets the screen back on its next turn, within the
 apps you approved.
 
+To skip approvals on a computer you trust, turn on **Full access without
+approval** under **Computer use**. Threads in full access mode then use every
+app without asking, including GOAT Bot, scheduled tasks and other work that
+runs on its own. Threads in other modes still ask. Stop, **Stop all** and
+turning the setting or computer use off still end their computer use.
+
 ## Watching agents
 
 While agents use the built-in browser or this computer, GOAT shows them in a

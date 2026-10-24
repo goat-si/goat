@@ -38,6 +38,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -131,10 +132,14 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       handoffId: string,
     ) => Effect.Effect<ComputerUseLeaseState, ComputerUseLeaseError>;
-    /** The thread's live control, minted when it has none or its grant changed. */
+    /**
+     * The thread's live control, minted when it has none or its grant changed. `everyApp` is a
+     * full access thread on a host that admits those without a grant; it lasts while that holds.
+     */
     readonly control: (
       threadId: ThreadId,
       lease: Option.Option<ComputerUseLease>,
+      everyApp?: boolean,
     ) => Effect.Effect<ComputerUseControl>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
@@ -208,6 +213,7 @@ interface ControlRecord extends ComputerUseControl {
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
+  readonly everyApp?: true;
 }
 
 /** Whether an agent can act on the screen through this control now. */
@@ -221,6 +227,14 @@ const make = Effect.gen(function* () {
   const watchKick = yield* PubSub.sliding<void>(1);
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  // An unreadable setting admits nothing, so a control living on it ends.
+  const fullAccessAdmitted = Option.isSome(settings)
+    ? settings.value.getSettings.pipe(
+        Effect.map((value) => value.cuaFullAccessAutoAdmit),
+        Effect.orElseSucceed(() => false),
+      )
+    : Effect.succeed(false);
   const controls = new Map<ThreadId, ControlRecord>();
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
@@ -273,6 +287,7 @@ const make = Effect.gen(function* () {
   const control = Effect.fn("ComputerUseLeases.control")(function* (
     threadId: ThreadId,
     lease: Option.Option<ComputerUseLease>,
+    everyApp = false,
   ) {
     const now = yield* DateTime.now;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
@@ -281,6 +296,7 @@ const make = Effect.gen(function* () {
       existing !== undefined &&
       existing.ended === undefined &&
       existing.handoffId === handoffId &&
+      (existing.everyApp === true) === everyApp &&
       DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
     ) {
       const { idle, ...rest } = existing;
@@ -297,6 +313,7 @@ const make = Effect.gen(function* () {
         ? lease.value.expiresAt
         : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
       ...(handoffId === undefined ? {} : { handoffId }),
+      ...(everyApp ? { everyApp: true as const } : {}),
       uses: 0,
     };
     controls.set(threadId, next);
@@ -330,9 +347,21 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
+    if (record.everyApp === true && !(yield* fullAccessAdmitted)) {
+      if (end(threadId, "revoked")) yield* changed;
+      return { _tag: "ended", reason: "revoked" };
+    }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    if (record.everyApp === true)
+      return {
+        _tag: "active",
+        expiresAt: record.expiresAt,
+        interruptions,
+        apps: scoped(record, undefined),
+        wakeAt: DateTime.toEpochMillis(record.expiresAt),
+      };
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;

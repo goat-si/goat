@@ -40,14 +40,16 @@ const fakeLeases = (input: {
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
 }) => {
   const minted: Array<Option.Option<ComputerUseLeases.ComputerUseLease>> = [];
+  const unrestricted: Array<boolean> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.die("unused"),
     channelOrigin: () => Effect.die("unused"),
     state: () => Effect.die("unused"),
-    control: (threadId, grant) =>
+    control: (threadId, grant, everyApp = false) =>
       Effect.sync(() => {
         minted.push(grant);
+        unrestricted.push(everyApp);
         return {
           controlId: Option.isSome(grant) ? "control:unattended" : "control:interactive",
           threadId,
@@ -72,7 +74,7 @@ const fakeLeases = (input: {
     changed: Effect.die("unused"),
     proxy: "proxy" in input ? input.proxy : proxy,
   });
-  return { leases: Option.some(service), minted };
+  return { leases: Option.some(service), minted, unrestricted };
 };
 const interactiveControl = {
   controlId: "control:interactive",
@@ -174,6 +176,62 @@ describe("computerUseAttachment", () => {
         ),
       );
     }),
+  );
+
+  it.effect.each([
+    { label: "interactive", origin: interactive },
+    { label: "unattended", origin: unattended },
+  ])(
+    "gives a $label full access turn every app without a grant when the host allows it",
+    ({ origin }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const attached = yield* decide(driver, {
+          origin,
+          runtimeMode: "full-access",
+          leases: leases.leases,
+        }).pipe(
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+          ),
+        );
+        assert.equal(attached._tag, "proxied");
+        assert.deepEqual(leases.minted, [Option.none()]);
+        assert.deepEqual(leases.unrestricted, [true]);
+      }),
+  );
+
+  it.effect(
+    "keeps asking an unattended turn for a grant unless it runs in full access on a host that allows it",
+    () =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const unattendedTurn = (runtimeMode: "full-access" | "auto", allow: boolean) => {
+          const leases = fakeLeases({});
+          return decide(driver, { origin: unattended, runtimeMode, leases: leases.leases }).pipe(
+            Effect.provide(
+              ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: allow }),
+            ),
+            Effect.map((attached) => ({ attached, unrestricted: leases.unrestricted })),
+          );
+        };
+        const needsApproval = {
+          _tag: "none",
+          reason: "needs-approval",
+          blockUserConfig: true,
+        } as const;
+        assert.deepEqual((yield* unattendedTurn("auto", true)).attached, needsApproval);
+        assert.deepEqual((yield* unattendedTurn("full-access", false)).attached, needsApproval);
+        // An interactive turn outside full access still attaches, limited to the apps it was granted.
+        const leases = fakeLeases({});
+        yield* decide(driver, { runtimeMode: "auto", leases: leases.leases }).pipe(
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+          ),
+        );
+        assert.deepEqual(leases.unrestricted, [false]);
+      }),
   );
 
   it.effect.each([

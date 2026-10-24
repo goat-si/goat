@@ -33,6 +33,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     environmentId,
     (settings) => settings.disabledBuiltInSkills,
   );
+  const fullAccessAutoAdmit = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.cuaFullAccessAutoAdmit,
+  );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -61,6 +65,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   const save = async (patch: {
     readonly enableCua?: boolean;
     readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+    readonly cuaFullAccessAutoAdmit?: boolean;
   }): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
       return "This connection cannot change settings on this host.";
@@ -71,6 +76,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   return {
     enabled,
     disabledSkills,
+    fullAccessAutoAdmit,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -257,6 +263,7 @@ function ComputerUseControls({
             }
           : {})}
       />
+      {host.enabled ? <FullAccessAutoAdmitRow host={host} hostLabel={hostLabel} /> : null}
       {host.enabled ? <BuiltInSkillRows host={host} /> : null}
       {setupOpen && host.canConfigure ? (
         <ComputerUseSetup host={host} hostLabel={hostLabel} onClose={() => setSetupOpen(false)} />
@@ -299,4 +306,33 @@ function BuiltInSkillRows({ host }: { host: ComputerUseHost }) {
       />
     );
   });
+}
+
+function FullAccessAutoAdmitRow({ host, hostLabel }: { host: ComputerUseHost; hostLabel: string }) {
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  return (
+    <SettingsRow
+      {...searchableSetting("computer-use-full-access")}
+      serverScoped
+      settingKeys={["cuaFullAccessAutoAdmit"]}
+      description={`Threads in full access mode use every app on ${hostLabel} without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them.`}
+      status={saveError ? <span role="status">{saveError}</span> : undefined}
+      control={
+        <Switch
+          aria-label="Full access without approval"
+          checked={host.fullAccessAutoAdmit}
+          disabled={saving || !host.canConfigure}
+          onCheckedChange={(checked) => {
+            setSaveError(null);
+            setSaving(true);
+            void host.save({ cuaFullAccessAutoAdmit: checked }).then((failure) => {
+              setSaving(false);
+              setSaveError(failure);
+            });
+          }}
+        />
+      }
+    />
+  );
 }

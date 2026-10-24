@@ -25,6 +25,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
@@ -571,4 +572,41 @@ it.effect(
         ),
       );
     }),
+);
+
+it.effect(
+  "gives a full access control every app while the host allows it, and ends it when that is turned off",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const auto = ThreadId.make("thread-auto");
+      const control = yield* leases.control(auto, Option.none(), true);
+      const state = yield* leases.controlState(auto, control.controlId);
+      assert.equal(state._tag, "active");
+      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+      // A turn of the same thread outside full access gets a control of its own.
+      const scoped = yield* leases.control(auto, Option.none());
+      assert.notEqual(scoped.controlId, control.controlId);
+      const again = yield* leases.control(auto, Option.none(), true);
+
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
+      assert.deepEqual(yield* leases.controlState(auto, again.controlId), {
+        _tag: "ended",
+        reason: "revoked",
+      });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+            ),
+          ),
+        ),
+      ),
+    ),
 );
