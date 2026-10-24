@@ -24,12 +24,8 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
-  type ComputerUseHumanInputSource,
-  type ComputerUseOverlayCommand,
   ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
-  type ComputerUseCallAdmission,
-  type ComputerUseCallReservation,
   type ComputerUseForegroundGrant,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -49,97 +45,46 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 
 import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
-import { type ComputerUseCallTarget, targetOf, namedWindows } from "./computerUseTarget.ts";
-import { postsInput } from "./agentInputLog.ts";
-import { makeLeaseProxyInput, type LeaseProxyInputOptions } from "./ComputerUseLeaseProxyInput.ts";
+import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
+import { inputKinds } from "./agentInputLog.ts";
+import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import {
   initialOverlayState,
   type OverlayEvent,
   overlayStep,
   replyImageSize,
 } from "./ComputerUseOverlay.ts";
-import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
+import { type Envelope, namedWindows, parse } from "./ComputerUseLeaseProtocol.ts";
 import {
-  type LeaseEnd,
   type Interruption,
+  type LeaseEnd,
   DESKTOP_CAPTURE_OFF,
   FOREGROUND_NOT_APPROVED,
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   scopeMessage,
+} from "./ComputerUseLeaseMessages.ts";
+import {
   type JsonRpcId,
-  refusal,
-  pausedDetail,
+  UNCONFIRMED_DISPLAY,
+  cutOff,
   interruptionDetail,
   interruptionRefusal,
-  cutOff,
   offScreenAnswer,
-  UNCONFIRMED_DISPLAY,
-} from "./ComputerUseLeaseMessages.ts";
+  pausedDetail,
+  refusal,
+} from "./ComputerUseLeaseResponses.ts";
 export {
+  type Interruption,
   type LeaseEnd,
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   MAY_HAVE_ACTED,
   READ_CUT_OFF,
-  type Interruption,
 } from "./ComputerUseLeaseMessages.ts";
 
-export interface LeaseProxyDriver {
-  readonly send: (line: string) => Effect.Effect<void>;
-  readonly lines: Stream.Stream<string>;
-  readonly kill: Effect.Effect<void>;
-  /**
-   * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
-   * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
-   */
-  readonly overlay?: (command: ComputerUseOverlayCommand) => Effect.Effect<void>;
-  /**
-   * Keyboard and pointer events the macOS helper saw, each with when it happened on this
-   * process's clock, every agent's own included (#1235). Absent where the child reports none.
-   */
-  readonly humanInput?: Stream.Stream<{
-    readonly source: ComputerUseHumanInputSource;
-    readonly at: number;
-  }>;
-}
-
-export interface LeaseProxyOptions<EU, ED> extends LeaseProxyInputOptions {
-  readonly connectionId: string;
-  readonly reservation: (
-    call: ComputerUseCallReservation,
-  ) => Effect.Effect<ComputerUseCallAdmission>;
-  readonly controlId: string;
-  readonly expiresAt: DateTime.Utc;
-  /** Lines the provider writes. The proxy stops when this ends. */
-  readonly input: Stream.Stream<string>;
-  readonly output: (line: string) => Effect.Effect<void>;
-  /** The server's view of this thread's control, newest last. Ending or failing ends it. */
-  readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
-  /** Starts one driver child; run again after a pause, each time in its own scope. */
-  readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
-  /**
-   * Identifies the driver's capability manifest file as it is now (#1416), where the driver
-   * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
-   * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
-   * replacement can land in between.
-   */
-  readonly manifestStamp?: () => string | undefined;
-  /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
-  readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
-  /** Deny-only revocation of the driver sessions this connection named. */
-  readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
-  /**
-   * Where the windows the driver names are, against the X display GOAT gave it (#1358); absent
-   * where there is no X display to check. Anything but "same" refuses.
-   */
-  readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
-  /**
-   * Tells the server the window a forwarded call names, the one a live picture shows (#1370);
-   * true when the server took it. Reported only on a change, observations included.
-   */
-  readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
-}
+export type { LeaseProxyDriver, LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 
 const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
@@ -160,38 +105,16 @@ const PROOF_FREE: ReadonlySet<string> = new Set([
   "get_agent_cursor_state",
 ]);
 
-interface Envelope {
-  readonly id?: JsonRpcId | null;
-  readonly method?: string;
-  readonly params?: {
-    readonly name?: unknown;
-    readonly arguments?: { readonly session?: unknown };
-  };
-  readonly result?: {
-    readonly structuredContent?: { readonly session?: unknown };
-    readonly isError?: unknown;
-  };
-  readonly error?: unknown;
-}
-
-const parse = (line: string): Envelope | undefined => {
-  try {
-    const value: unknown = JSON.parse(line);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Envelope)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
 
 /** Ids of the proxy's own requests to the driver; their answers never reach the provider. */
 const OWN_ID = "goat-proxy:";
 
-/** A lease update that stops the current child, by what it means for a call. */
-type Stopping = { readonly pause: ComputerUsePauseReason } | { readonly end: LeaseEnd };
+/** A lease update that stops the current child before another call may run. */
+type Stopping =
+  | { readonly pause: ComputerUsePauseReason }
+  | { readonly end: LeaseEnd }
+  | { readonly idle: true };
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
@@ -207,7 +130,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
-  let stopping: Stopping | { readonly idle: true } | undefined;
+  let stopping: Stopping | undefined;
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
@@ -254,7 +177,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The control's window survives pauses: the server keeps it until the control ends.
   let reported: ComputerUseCallTarget | undefined;
   let overlay = initialOverlayState;
-  const agentInput = yield* makeLeaseProxyInput(options);
+  /** When the agent's own input calls were on their way, to tell a person's input apart. */
+  const agentInput = yield* makeAgentInputReports({
+    send: options.onAgentInput,
+    ended: Deferred.await(ended),
+  });
 
   /** Updates what the overlay shows and waits until the helper has drawn it. */
   const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
@@ -283,7 +210,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const waiters = [...ownAnswers.values()];
     ownAnswers.clear();
     proven = undefined;
-    yield* agentInput.cutoff;
+    yield* agentInput.endAll();
     if (current !== undefined) {
       for (const [, request] of pending)
         yield* current.driver.send(
@@ -451,11 +378,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onStarted: Effect.fn("ComputerUseLeaseProxy.driverStarted")(
       function* (current): Effect.fn.Return<void> {
         const driver = current.driver;
-        yield* agentInput.watch(
-          driver.humanInput,
-          current.scope,
-          () => active() && lifecycle.current === current,
-        );
+        if (driver.humanInput !== undefined && options.onHumanInput !== undefined)
+          yield* forwardHelperInput({
+            events: driver.humanInput,
+            report: options.onHumanInput,
+            current: () => active() && lifecycle.current === current,
+          }).pipe(Effect.scoped, Effect.forkIn(current.scope));
         if (lifecycle.current !== current) return;
         overlay = initialOverlayState;
         // A fresh child hears the provider's handshake again; its answers are dropped.
@@ -590,7 +518,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                       interrupt({
                         _tag: "other",
                         detail: "control_idle",
-                        message: "This thread's turn has ended, so computer use is idle.",
+                        message:
+                          "This thread's turn has ended. Computer use is idle until its next turn.",
                       }),
                     ),
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
@@ -804,7 +733,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // Only the manifest refresh may replace it for the call.
       let admitted = lifecycle.current;
       const refreshed =
-        options.manifestStamp === undefined || !active() ? undefined : yield* refreshManifest;
+        options.manifestStamp === undefined || lifecycle.current === undefined || !active()
+          ? undefined
+          : yield* refreshManifest;
       if (refreshed !== undefined) admitted = refreshed;
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
@@ -877,7 +808,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 requestId,
                 message?.method,
                 "control_idle",
-                "This thread's turn has ended, so computer use is idle.",
+                "This thread's turn has ended. Computer use is idle until its next turn.",
               )
             : refusal(
                 requestId,
@@ -954,6 +885,25 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         return yield* options.output(notSent(id));
       }
     }
+    const kinds =
+      isRequest && message?.method === "tools/call"
+        ? inputKinds(
+            typeof message.params?.name === "string" ? message.params.name : "",
+            message.params?.arguments,
+          )
+        : [];
+    if (isRequest && kinds.length > 0) {
+      yield* agentInput.started(JSON.stringify(id), kinds);
+      // The start report waits on the server; a pause or end meanwhile must not let the call
+      // reach the child that replaced the one it was admitted under.
+      if (!stillCurrent()) {
+        yield* agentInput.ended(JSON.stringify(id));
+        if (reservationId !== undefined)
+          yield* release({ reservationId, connectionId: current.connectionId });
+        return yield* options.output(notSent(id));
+      }
+    }
+    // Nothing waits from here to the send, so the checks above still hold when it goes out.
     if (isRequest)
       outstanding.set(JSON.stringify(id), {
         id,
@@ -963,14 +913,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         connectionId: current.connectionId,
         ...(reservationId === undefined ? {} : { reservationId }),
       });
-    if (!stillCurrent()) return;
-    if (
-      isRequest &&
-      message?.method === "tools/call" &&
-      postsInput(typeof message.params?.name === "string" ? message.params.name : "")
-    )
-      yield* agentInput.started(JSON.stringify(id));
-    if (!stillCurrent()) return;
     yield* current.driver.send(line);
   });
 

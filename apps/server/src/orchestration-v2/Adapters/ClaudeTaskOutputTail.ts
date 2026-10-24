@@ -31,7 +31,7 @@ const MAX_READ_BYTES = 256 * 1024;
 export function claudeTaskOutputRoot(
   environment: Readonly<Record<string, string | undefined>> | undefined,
   path: Path.Path,
-  host: { readonly uid: number | undefined } = { uid: process.getuid?.() },
+  host: { readonly uid: number | undefined },
 ): string | undefined {
   const override = environment?.CLAUDE_CODE_TMPDIR?.trim();
   if (host.uid !== undefined) return path.join(override || "/tmp", `claude-${host.uid}`);

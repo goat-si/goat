@@ -83,6 +83,7 @@ const withRequests = <A, E, R>(
   beforeCompletion?: (
     leases: ComputerUseLeases.ComputerUseLeases["Service"],
   ) => Effect.Effect<void>,
+  failure: Option.Option<CuaDriver.CuaDriverError> = Option.none(),
 ) =>
   Effect.gen(function* () {
     const environmentId = EnvironmentId.make("test-environment");
@@ -125,7 +126,10 @@ const withRequests = <A, E, R>(
     Effect.provide(
       Layer.mergeAll(
         leasesDetecting(signals),
-        Layer.mock(CuaDriver.CuaDriver)({ enabled: Effect.succeed(true) }),
+        Layer.mock(CuaDriver.CuaDriver)({
+          enabled: Effect.succeed(true),
+          block: Effect.succeed(CuaDriver.agentBlock(failure)),
+        }),
         Layer.mock(Environment.ServerEnvironment)({
           getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
         }),
@@ -154,6 +158,34 @@ it.effect(
         }
         const allowed = yield* withRequests(orchestrator, supported, ({ request }) => request());
         assert.equal(allowed.kind, "needs_human");
+      }),
+    ),
+);
+
+it.effect(
+  "refuses with the missing grant when the desktop would not start the driver for it (#1399)",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "permissionsNotGranted",
+          missing: ["screenRecording"],
+          holder: "helper",
+        } as const;
+        const result = yield* withRequests(
+          orchestrator,
+          supported,
+          ({ request }) => request(),
+          undefined,
+          Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+        );
+        assert.deepEqual(result, {
+          kind: "refused",
+          reason: "not_granted",
+          block,
+          message:
+            "Computer use cannot start: macOS has not allowed GOAT Computer Use in Screen & System Audio Recording. A person turns it on in System Settings > Privacy & Security.",
+        });
       }),
     ),
 );

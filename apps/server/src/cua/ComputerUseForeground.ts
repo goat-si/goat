@@ -1,11 +1,14 @@
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type ComputerUseForegroundGrant,
+  type ComputerUseControlEnd,
   type Handoff,
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import type { ComputerUseControl, ComputerUseLease } from "./ComputerUseLeases.ts";
 
 type LiveGrant = Pick<Handoff, "handoffId" | "expiresAt" | "apps" | "computerUseForeground">;
 interface Binding {
@@ -117,5 +120,71 @@ export const makeForegroundApprovals = () => {
       );
     },
     bound,
+  };
+};
+
+export const makeForegroundAuthority = <E>(options: {
+  readonly foreground: ReturnType<typeof makeForegroundApprovals>;
+  readonly controls: ReadonlyMap<
+    ThreadId,
+    ComputerUseControl & {
+      readonly ended?: ComputerUseControlEnd;
+      readonly everyApp?: string;
+    }
+  >;
+  readonly live: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<ComputerUseLease>, E>;
+  readonly blocked: () => boolean;
+  readonly changed: Effect.Effect<unknown>;
+}) => {
+  const foreground = options.foreground;
+  return {
+    foregroundApprovalEpoch: Effect.sync(() => foreground.revision()),
+    approveForeground: Effect.fn("ComputerUseLeases.approveForeground")(function* (
+      handoff: Handoff,
+      observedEpoch: number,
+    ) {
+      const selected = (yield* options.live(handoff.requestedBy.threadId).pipe(Effect.orDie))[0];
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const current = options.controls.get(handoff.requestedBy.threadId);
+      // A newly selected unattended admission mints a different control on the next attachment.
+      // Only this new approval waits for that mint; existing authority never follows it.
+      const awaitingAdmission =
+        current?.everyApp === undefined &&
+        current?.handoffId !== undefined &&
+        selected?.handoffId === handoff.handoffId &&
+        current.handoffId !== selected.handoffId;
+      const controlId =
+        current !== undefined &&
+        current.ended === undefined &&
+        !awaitingAdmission &&
+        DateTime.toEpochMillis(current.expiresAt) > now
+          ? current.controlId
+          : undefined;
+      foreground.approve({
+        handoff,
+        observedRevision: observedEpoch,
+        controlId,
+        now,
+        blocked: options.blocked(),
+      });
+      yield* options.changed;
+    }),
+    foregroundAvailable: Effect.fn("ComputerUseLeases.foregroundAvailable")(function* (
+      threadId: ThreadId,
+      purpose: string,
+    ) {
+      if (!foreground.hasThread(threadId)) return false;
+      const grants = yield* options.live(threadId);
+      const now = DateTime.toEpochMillis(yield* DateTime.now);
+      const current = options.controls.get(threadId);
+      if (options.blocked()) return false;
+      const controlId =
+        current !== undefined &&
+        current.ended === undefined &&
+        DateTime.toEpochMillis(current.expiresAt) > now
+          ? current.controlId
+          : undefined;
+      return foreground.available(threadId, controlId, purpose, grants, now);
+    }),
   };
 };

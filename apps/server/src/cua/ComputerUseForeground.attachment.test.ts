@@ -64,6 +64,7 @@ const attach = Effect.fn("foreground.attachFixture")(function* (fullAccess: bool
     enabled: Effect.succeed(true),
     acquire: Effect.succeedSome({ command: "/fixture/driver", args: ["mcp"], environment: [] }),
     lastFailure: Effect.succeedNone,
+    block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: true }),
     computerUse: Effect.die("unused"),
     admitEnable: Effect.die("unused"),

@@ -30,6 +30,7 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
     name = "type_text",
     connectionId = "driver:1",
     interruptions = 0,
+    foregroundGrantId?: import("@goat/contracts").TurnItemId,
   ) =>
     leases.callReservation(owner, {
       action: "reserve",
@@ -40,6 +41,7 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
       idleEpoch: 0,
       name,
       args,
+      ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
   const release = (owner: typeof a, reservationId: string, connectionId = "driver:1") =>
     leases.callReservation(owner, {
@@ -86,6 +88,37 @@ describe("server computer-use call reservations", () => {
       }
       assert.equal((yield* f.reserve(f.b)).status, "admitted");
     }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect(
+    "refuses competing window mutations and desktop mutations in both admission orders",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const window = { pid: 42, window_id: 7, text: "hello" };
+        const admitted = yield* f.reserve(f.a, window);
+        assert.equal(admitted.status, "admitted");
+        assert.deepEqual(yield* f.reserve(f.b, window), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        assert.deepEqual(yield* f.reserve(f.b, { text: "desktop" }), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.a,
+        });
+        if (admitted.status !== "admitted" || admitted.reservationId === null)
+          return assert.fail("mutation needs an execution reservation");
+        yield* f.release(f.a, admitted.reservationId);
+        assert.equal((yield* f.reserve(f.b, { text: "desktop" })).status, "admitted");
+        assert.deepEqual(yield* f.reserve(f.a, window), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: f.b,
+        });
+        yield* f.close(f.b);
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
   it.effect(
@@ -170,6 +203,51 @@ describe("server computer-use call reservations", () => {
             holderThreadId: f.a,
           });
         }
+      }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
+  it.effect.each([
+    ["FOREGROUND", false],
+    ["FOREGROUND", true],
+    ["fOrEgRoUnD", false],
+    ["fOrEgRoUnD", true],
+  ] as const)(
+    "excludes other windows for delivery_mode %s with foreground first=%s",
+    ([mode, foregroundFirst]) =>
+      Effect.gen(function* () {
+        const f = yield* fixture();
+        const focus = yield* foregroundGrant(
+          foregroundFirst ? f.a : f.b,
+          "handoff:mixed-case-focus",
+        );
+        const foreground = { pid: 42, window_id: 7, delivery_mode: mode };
+        const background = { pid: 99, window_id: 8 };
+        assert.equal(
+          (yield* f.reserve(
+            f.a,
+            foregroundFirst ? foreground : background,
+            "type_text",
+            "driver:1",
+            0,
+            focus.handoffId,
+          )).status,
+          "admitted",
+        );
+        assert.deepEqual(
+          yield* f.reserve(
+            f.b,
+            foregroundFirst ? background : foreground,
+            "type_text",
+            "driver:1",
+            0,
+            focus.handoffId,
+          ),
+          {
+            status: "refused",
+            detail: "target_busy",
+            holderThreadId: f.a,
+          },
+        );
       }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 

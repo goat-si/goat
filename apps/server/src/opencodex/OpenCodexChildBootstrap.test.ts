@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   DEFAULT_SERVER_SETTINGS,
+  CloudMachineError,
   EnvironmentId,
   type HubDeviceOperationResult,
 } from "@goat/contracts";
@@ -9,6 +10,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
@@ -31,6 +33,14 @@ interface Machine {
   prepareExit: number;
   joined: HubDeviceOperationResult["state"];
   owned: Set<string>;
+  /** Machines the cloud catalog no longer counts as this server's: deleted or forgotten. */
+  removed: Set<string>;
+  catalogReadable: boolean;
+  /** Link releases the hub holds as pending, which survive a restart. */
+  pending: Set<string>;
+  revokes: boolean;
+  /** Each catalog check and release the bootstrap ran, in order. */
+  hubEvents: Queue.Queue<string>;
 }
 
 /** Boat, the machine and the Home's OpenCodex as doubles; the bootstrap and its file are real. */
@@ -40,6 +50,7 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
   calls: string[],
 ) {
   let ready: (alias: string) => Effect.Effect<void> = () => Effect.void;
+  let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
   let invalidated: (
     alias: string,
     cause: CloudMachines.CloudAliasInvalidation,
@@ -49,8 +60,17 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       Layer.provide(
         Layer.mock(CloudMachines.CloudMachineService)({
           onReady: (listener) => Effect.sync(() => void (ready = listener)),
+          onRemoving: (listener) => Effect.sync(() => void (removing = listener)),
           onAliasInvalidated: (listener) => Effect.sync(() => void (invalidated = listener)),
           owns: (alias) => Effect.sync(() => machine.owned.has(alias)),
+          isRemoved: (alias) =>
+            Queue.offer(machine.hubEvents, `removed? ${alias}`).pipe(
+              Effect.andThen(
+                machine.catalogReadable
+                  ? Effect.succeed(machine.removed.has(alias))
+                  : Effect.fail(new CloudMachineError({ reason: "storage_failed" })),
+              ),
+            ),
         }),
       ),
       Layer.provide(
@@ -79,6 +99,19 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
                 steps: [],
               };
             }),
+          requestRelease: (alias) => Effect.sync(() => void machine.pending.add(alias)),
+          pendingReleases: Effect.sync(() => [...machine.pending]),
+          releaseProvisioned: (alias) =>
+            Effect.sync(() => {
+              if (machine.revokes) machine.pending.delete(alias);
+              return {
+                deviceAlias: alias,
+                action: "leave" as const,
+                state: machine.revokes ? ("ready" as const) : ("failed" as const),
+                message: "",
+                steps: [],
+              };
+            }).pipe(Effect.tap(() => Queue.offer(machine.hubEvents, `release ${alias}`))),
         }),
       ),
       Layer.provide(
@@ -109,6 +142,8 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
     bootstrap: Context.get(context, Bootstrap.OpenCodexChildBootstrap),
     /** Boat finished readying the machine, as CloudMachineService reports it. */
     ready: (alias: string) => ready(alias),
+    /** CloudMachineService is about to delete or forget the machine. */
+    removing: (alias: string) => removing(alias),
     invalidated: (alias: string, cause: CloudMachines.CloudAliasInvalidation) =>
       invalidated(alias, cause),
   };
@@ -126,6 +161,11 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     prepareExit: 0,
     joined: "child",
     owned: new Set(["boat-builder"]),
+    removed: new Set(),
+    catalogReadable: true,
+    pending: new Set(),
+    revokes: true,
+    hubEvents: yield* Queue.unbounded<string>(),
     ...overrides,
   };
   const calls: string[] = [];
@@ -215,15 +255,61 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
-  it.effect("forgets a machine Boat no longer has, and keeps one that only stopped", () =>
+  it.effect("a stopped machine keeps its setup and link; a removed one releases its link", () =>
     Effect.gen(function* () {
       const home = yield* setup();
       yield* home.bootstrap.ensure("boat-builder");
       yield* home.invalidated("boat-builder", "lifecycle");
       expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("child");
-      home.machine.owned.delete("boat-builder");
-      yield* home.invalidated("boat-builder", "lifecycle");
+      expect(home.machine.pending).toEqual(new Set());
+      // The release is on record before the catalog lets go of the machine.
+      yield* home.removing("boat-builder");
+      expect(home.machine.pending).toEqual(new Set(["boat-builder"]));
+      home.machine.removed.add("boat-builder");
+      yield* home.invalidated("boat-builder", "removed");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
       expect(yield* home.bootstrap.status("boat-builder")).toBeUndefined();
+      expect(home.machine.pending).toEqual(new Set());
+    }),
+  );
+
+  it.effect("a failed release is retried after a restart, once the catalog says it is gone", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ revokes: false });
+      // GOAT stopped before the catalog let go of the machine: the release waits for it.
+      yield* home.removing("boat-builder");
+      yield* build(home.baseDir, home.machine, home.calls);
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(home.machine.pending).toEqual(new Set(["boat-builder"]));
+
+      home.machine.removed.add("boat-builder");
+      yield* home.invalidated("boat-builder", "removed");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
+      expect(home.machine.pending).toEqual(new Set(["boat-builder"]));
+
+      home.machine.revokes = true;
+      yield* build(home.baseDir, home.machine, home.calls);
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
+      expect(home.machine.pending).toEqual(new Set());
+    }),
+  );
+
+  it.effect("an unreadable catalog holds the release until a start that can read it", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ catalogReadable: false });
+      yield* home.removing("boat-builder");
+      home.machine.removed.add("boat-builder");
+      yield* home.invalidated("boat-builder", "removed");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      home.machine.catalogReadable = true;
+      yield* build(home.baseDir, home.machine, home.calls);
+      // The next event is the restart's own check, so the first start released nothing.
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
+      expect(home.machine.pending).toEqual(new Set());
     }),
   );
 });

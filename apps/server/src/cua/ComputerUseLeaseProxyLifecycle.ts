@@ -2,7 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Scope from "effect/Scope";
-import type { LeaseProxyDriver } from "./ComputerUseLeaseProxy.ts";
+import type { LeaseProxyDriver } from "./ComputerUseLeaseProxyOptions.ts";
 
 export interface Running {
   readonly driver: LeaseProxyDriver;

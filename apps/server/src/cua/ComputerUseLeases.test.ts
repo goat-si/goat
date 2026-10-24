@@ -19,7 +19,6 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
-
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -103,70 +102,6 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal(yield* PubSub.remaining(signals), 0);
       }),
     ),
-  );
-
-  it.effect(
-    "refuses competing window mutations and desktop mutations in both admission orders",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const first = ThreadId.make("reservation-first");
-        const second = ThreadId.make("reservation-second");
-        yield* grant(first, "reservation-first-grant");
-        yield* grant(second, "reservation-second-grant");
-        const a = yield* leases.control(first, Option.none());
-        const b = yield* leases.control(second, Option.none());
-        yield* Effect.addFinalizer(() =>
-          leases.stop(first).pipe(Effect.andThen(leases.stop(second))),
-        );
-        const reserve = (owner: ThreadId, controlId: string, callId: string, args: object) =>
-          leases.callReservation(owner, {
-            action: "reserve",
-            controlId,
-            connectionId: "driver:1",
-            callId,
-            interruptions: 0,
-            idleEpoch: 0,
-            name: "type_text",
-            args,
-          });
-        const window = { pid: 42, window_id: 7, text: "hello" };
-        const admitted = yield* reserve(first, a.controlId, "a", window);
-        assert.equal(admitted.status, "admitted");
-        assert.deepEqual(yield* reserve(second, b.controlId, "b", window), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: first,
-        });
-        assert.deepEqual(yield* reserve(second, b.controlId, "c", { text: "desktop" }), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: first,
-        });
-        if (admitted.status !== "admitted" || admitted.reservationId === null)
-          return assert.fail("mutation needs an execution reservation");
-        yield* leases.callReservation(first, {
-          action: "release",
-          controlId: a.controlId,
-          connectionId: "driver:1",
-          reservationId: admitted.reservationId,
-        });
-        assert.equal(
-          (yield* reserve(second, b.controlId, "d", { text: "desktop" })).status,
-          "admitted",
-        );
-        assert.deepEqual(yield* reserve(first, a.controlId, "e", window), {
-          status: "refused",
-          detail: "target_busy",
-          holderThreadId: second,
-        });
-        yield* leases.callReservation(second, {
-          action: "close",
-          controlId: b.controlId,
-          connectionId: "driver:1",
-        });
-      }).pipe(Effect.scoped),
   );
 
   it.effect(
@@ -373,85 +308,6 @@ layer("ComputerUseLeases controls", (it) => {
         // With nobody left on the screen the pause is gone too.
         const after = yield* leases.control(thread, Option.none());
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
-      }),
-  );
-
-  it.effect(
-    "another agent's own input seen by a helper pauses nobody, a person's after it does",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        const call = (state: "start" | "end", at: number) =>
-          leases.agentInput(other, bots.controlId, { call: "7", state, at });
-        // Only a live control's own proxy records its calls.
-        assert.isFalse(
-          yield* leases.agentInput(thread, bots.controlId, { call: "7", state: "start", at: 0 }),
-        );
-        assert.isTrue(yield* call("start", 1_000));
-        // A report dated far from the server's clock is refused and records nothing.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
-        assert.isFalse(
-          yield* leases.agentInput(other, bots.controlId, {
-            call: "8",
-            state: "start",
-            at: 10 * 60_000,
-          }),
-        );
-        // The bot's click, seen by my helper while it runs and just after it answered.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
-        yield* call("end", 1_200);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600), "agents");
-        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
-        // A person, a moment later.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-        yield* leases.resume;
-        // A call left open by a control that has ended covers nothing.
-        yield* call("start", 5_000);
-        yield* leases.stop(other);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-      }),
-  );
-
-  it.effect(
-    "a proxy's report of a person's input pauses every agent, from its live control only",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        // An old proxy, or another thread's control id, pauses nobody.
-        assert.equal(yield* leases.humanInput(thread, "control:old", 0), "refused");
-        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
-
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "paused");
-        for (const [id, control] of [
-          [thread, mine],
-          [other, bots],
-        ] as const)
-          assert.deepEqual(yield* leases.controlState(id, control.controlId), {
-            _tag: "paused",
-            reason: "human_input",
-          });
-        yield* leases.resume;
-        yield* leases.stop(thread);
-        // An ended control's proxy can no longer pause the agents left.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
       }),
   );
 });

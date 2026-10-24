@@ -34,6 +34,8 @@ const fixture = Effect.fnUntraced(function* () {
   const paused = yield* Ref.make<ComputerUsePauseReason | undefined>(undefined);
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    blocked: () => Effect.die("unused"),
+    blockedTurns: Effect.die("unused"),
     active: () => Effect.succeed(Option.none()),
     holder: () => Effect.succeed(Option.none()),
     channelOrigin: () => Effect.succeed(undefined),

@@ -19,7 +19,7 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as PreviewSessions from "./PreviewSessions.ts";
-import { browserSession, desktopSession } from "./PreviewSessions.ts";
+import { blockedSession, browserSession, desktopSession } from "./PreviewSessions.ts";
 
 const base = { environmentId: EnvironmentId.make("env"), host: "mac", platform: "mac" } as const;
 const threadId = ThreadId.make("thread-agent");
@@ -59,6 +59,21 @@ describe("preview sessions", () => {
     }
     expect(desktop.target).toEqual({ kind: "desktop", title: "com.apple.calculator" });
     expect(desktop.lease?.scope).toEqual(["com.apple.calculator"]);
+  });
+
+  it("shows a turn blocked on a missing grant as permission-needed, with nothing to stop (#1399)", () => {
+    const session = blockedSession(base, threadId, {
+      reason: "permissionsNotGranted",
+      missing: ["accessibility", "screenRecording"],
+      holder: "helper",
+    });
+    expect(previewSessionChip(session)).toBe("Permission needed");
+    expect(session.reason).toBe("permissionsNotGranted");
+    expect(session.capabilities.controls).toEqual([]);
+    expect(session.target).toEqual({
+      kind: "desktop",
+      title: "Allow GOAT Computer Use in Accessibility and Screen & System Audio Recording",
+    });
   });
 
   it("names every state with the chips both kinds share", () => {
