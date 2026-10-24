@@ -456,6 +456,32 @@ export const probeAccessibilityBuses = Effect.fnUntraced(function* (
   };
 });
 
+/**
+ * The X displays to try. A server given a DISPLAY uses that display or none: trying the others
+ * would hand computer use whichever desktop answers, such as the person signed in at the seat
+ * when the server was meant for its own Xvfb (#1358). Only a server with no DISPLAY at all, such
+ * as one started over SSH, looks for the local desktop.
+ */
+export function linuxDisplayCandidates(
+  display: string | undefined,
+  sockets: ReadonlyArray<number>,
+): ReadonlyArray<number> {
+  if (display?.trim()) {
+    const named = localDisplayNumber(display);
+    return named === null ? [] : [named];
+  }
+  return sockets.slice(0, MAX_DISPLAYS);
+}
+
+/** The session buses to try, on the same rule: a named bus or none, else this user's own. */
+export function linuxBusCandidates(
+  address: string | undefined,
+  userRuntime: string | null,
+): ReadonlyArray<string> {
+  if (address?.trim()) return [address.trim()];
+  return userRuntime ? [`unix:path=${userRuntime}/bus`] : [];
+}
+
 const probeLinux = Effect.fnUntraced(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -470,10 +496,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const sockets = x11SocketDisplays(
     yield* fs.readDirectory("/tmp/.X11-unix").pipe(Effect.orElseSucceed(() => [])),
   );
-  const candidates = [...new Set([...(preferred === null ? [] : [preferred]), ...sockets])].slice(
-    0,
-    MAX_DISPLAYS,
-  );
+  const candidates = linuxDisplayCandidates(environment.DISPLAY, sockets);
 
   // Xvfb and display managers keep the cookie in a file named only on their command line.
   const serverAuth = new Map<number, string>();
@@ -518,14 +541,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const runtimeDir =
     environment.XDG_RUNTIME_DIR?.trim() ||
     (userRuntime && (yield* exists(userRuntime)) ? userRuntime : null);
-  const busCandidates = [
-    ...new Set(
-      [
-        environment.DBUS_SESSION_BUS_ADDRESS?.trim(),
-        userRuntime ? `unix:path=${userRuntime}/bus` : undefined,
-      ].filter((address): address is string => typeof address === "string" && address !== ""),
-    ),
-  ];
+  const busCandidates = linuxBusCandidates(environment.DBUS_SESSION_BUS_ADDRESS, userRuntime);
   const buses =
     uid === undefined
       ? { sessionBus: null, atSpi: false, issues: ["this user's id is unknown"] }

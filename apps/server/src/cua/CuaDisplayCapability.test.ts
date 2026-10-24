@@ -13,6 +13,8 @@ import {
   tasklistSession,
   x11SetupOutcome,
   x11SetupRequest,
+  linuxBusCandidates,
+  linuxDisplayCandidates,
   x11SocketDisplays,
   xauthorityCookie,
   xServerAuthFile,
@@ -78,6 +80,20 @@ describe("Linux display parsing", () => {
   it("lists local X sockets lowest first and ignores other entries", () => {
     expect(x11SocketDisplays(["X6", "X1", ".lock", "X10", "X3", "X7", "Xfoo"])).toEqual([
       1, 3, 6, 7, 10,
+    ]);
+  });
+
+  it("a server given a display or session bus uses only that one, never another desktop (#1358)", () => {
+    // The server was started for its own Xvfb on :96 while a person is signed in on :1.
+    expect(linuxDisplayCandidates(":96", [1, 96])).toEqual([96]);
+    expect(linuxDisplayCandidates("localhost:10.0", [0, 1])).toEqual([]);
+    expect(linuxBusCandidates("unix:path=/tmp/private-bus", "/run/user/1000")).toEqual([
+      "unix:path=/tmp/private-bus",
+    ]);
+    // A server with neither, such as one started over SSH, looks for the local desktop.
+    expect(linuxDisplayCandidates(undefined, [1, 96])).toEqual([1, 96]);
+    expect(linuxBusCandidates(undefined, "/run/user/1000")).toEqual([
+      "unix:path=/run/user/1000/bus",
     ]);
   });
 

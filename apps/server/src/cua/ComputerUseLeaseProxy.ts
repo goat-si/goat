@@ -254,15 +254,25 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const handshake: Array<string> = [];
   const outstanding = new Map<
     string,
-    { readonly id: JsonRpcId; readonly method: string; readonly tool?: string }
+    {
+      readonly id: JsonRpcId;
+      readonly method: string;
+      readonly tool?: string;
+      readonly unfiltered?: boolean;
+    }
   >();
   /** The driver child that has shown it is on GOAT's screen (#1358); a new child proves again. */
   let proven: Running | undefined;
   /**
    * Where a reply's windows are. "proof" is a reply that shows the driver is on GOAT's screen:
-   * windows it names are all there, or list_windows saw none.
+   * windows it names are all there, or an unfiltered list_windows saw none (a filtered one that
+   * finds nothing says nothing about the screen).
    */
-  const checkReply = Effect.fnUntraced(function* (message: Envelope, tool: string | undefined) {
+  const checkReply = Effect.fnUntraced(function* (
+    message: Envelope,
+    tool: string | undefined,
+    unfiltered: boolean,
+  ) {
     if (options.placement === undefined || message.result?.isError === true) return "same";
     const content = message.result?.structuredContent;
     const windows = namedWindows(content);
@@ -270,7 +280,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const placement = yield* options.placement(windows);
     if (placement !== "same") return placement;
     const listed =
-      tool === "list_windows" && Array.isArray((content as { windows?: unknown })?.windows);
+      tool === "list_windows" &&
+      unfiltered &&
+      Array.isArray((content as { windows?: unknown })?.windows);
     return windows.length > 0 || listed ? "proof" : "same";
   });
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
@@ -338,7 +350,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (request.method === "tools/call" && typeof session === "string")
               sessions.add(session);
             if (request.method === "tools/call") {
-              const verdict = yield* checkReply(message, request.tool);
+              const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
               // Stopped, paused or cancelled while it was checked: that already answered it.
               if (finished !== undefined || running !== current || !outstanding.has(key)) return;
               outstanding.delete(key);
@@ -505,7 +517,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Deferred.await(ended).pipe(Effect.as(undefined)),
     );
     if (answer === undefined || finished !== undefined || running !== current) return;
-    const verdict = yield* checkReply(answer, "list_windows");
+    const verdict = yield* checkReply(answer, "list_windows", true);
     if (finished !== undefined || running !== current) return;
     if (verdict === "other") return yield* end("wrong_display");
     if (verdict === "proof") proven = current;
@@ -615,6 +627,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         id,
         method: message!.method!,
         ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+        unfiltered: Object.keys(message?.params?.arguments ?? {}).every((key) => key === "session"),
       });
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) outstanding.delete(cancelled);

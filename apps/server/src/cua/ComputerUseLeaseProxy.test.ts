@@ -618,6 +618,26 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect("a filtered list_windows that finds nothing does not prove the screen", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ elsewhere: new Set([900]) });
+      yield* h.push(active());
+      yield* h.send(call(1, "list_windows", { pid: 2147483647 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [], structuredContent: { windows: [] } },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 1);
+      // The action still waits for the proxy's own, unfiltered listing.
+      yield* h.send(call(2, "type_text", { pid: 900, text: "hi" }));
+      assert.deepEqual((yield* h.nextToDriver).params, { name: "list_windows", arguments: {} });
+    }),
+  );
+
   it.effect("a reply still being checked when the person stops is never delivered", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
