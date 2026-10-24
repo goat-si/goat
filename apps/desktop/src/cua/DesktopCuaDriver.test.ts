@@ -887,11 +887,6 @@ describe("DesktopCuaDriver app listing for the agents' manifest", () => {
 
   it.effect.each([
     { name: "a build without the helper", platform: "darwin" as const, helper: undefined },
-    {
-      name: "Windows, until its helper lists apps",
-      platform: "win32" as const,
-      helper: { granted: true },
-    },
   ])("keeps listing by running the driver for $name", ({ platform, helper }) =>
     Effect.scoped(
       Effect.gen(function* () {

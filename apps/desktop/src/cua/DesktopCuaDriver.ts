@@ -152,8 +152,11 @@ export interface DesktopCuaDriverDependencies {
     /** Lists apps through the helper, so the driver never runs outside its seal check. */
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
-  /** The apps the macOS helper's driver lists, after the helper verifies it (#1241). */
-  readonly helperApps: (bundle: HelperBundle) => Promise<ReadonlyArray<CuaDriverListedApp>>;
+  /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
+  readonly helperApps: (
+    bundle: HelperBundle,
+    platform: NodeJS.Platform,
+  ) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
   readonly executablePath: string;
@@ -263,8 +266,8 @@ const dependencies: DesktopCuaDriverDependencies = {
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
   prepareManifest: prepareDesktopManifest,
-  helperApps: (bundle) =>
-    listHelperApplications(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId),
+  helperApps: (bundle, platform) =>
+    listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
   processId: process.pid,
   executablePath: process.execPath,
 };
@@ -550,10 +553,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         hostBundleIds: hostBundleIds(engine),
         directory: environment.path.join(environment.stateDir, "cua-driver"),
         platform: environment.platform,
-        // The macOS helper verifies its driver before running it, so it lists the apps too;
-        // running the driver here would execute it unchecked, under GOAT's identity.
-        ...(engine.kind === "helper" && environment.platform === "darwin"
-          ? { listApplications: () => native.helperApps(engine.bundle) }
+        // The helper verifies its driver before running it, so it lists the apps too; running
+        // the driver here would execute it unchecked, under GOAT's identity (#1241).
+        ...(engine.kind === "helper" &&
+        (environment.platform === "darwin" || environment.platform === "win32")
+          ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
           : {}),
       }),
     );
