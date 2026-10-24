@@ -54,6 +54,7 @@ import { SshToolkit } from "./ssh/tools.ts";
 import * as ThreadHandlers from "./thread/handlers.ts";
 import { ThreadToolkit } from "./thread/tools.ts";
 
+const decodeUpload = Schema.decodeUnknownEffect(AttachmentCreateUploadUrlResult);
 const callerId = ThreadId.make("retry-caller");
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("retry-environment"),
@@ -162,7 +163,7 @@ const fixture = () => {
     Layer.mock(PendingQuestions.PendingQuestionsMcpService)({}),
     Layer.mock(ThreadSearch.ThreadSearchMcpService)({}),
     Layer.mock(HostThreads.HostThreadsMcpService)({}),
-    Layer.mock(ManagedFolders.ManagedProjectFolders)({}),
+    Layer.mock(ManagedFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(Repositories.SourceControlRepositoryService)({}),
     Layer.mock(ThreadLaunch.ThreadLaunchMcpService)({}),
     Layer.mock(RepositoryReferences.RepositoryReferenceMcpService)({}),
@@ -262,9 +263,7 @@ it.effect("attachment sends reuse the first message and claimed files on a keyed
   return Effect.gen(function* () {
     const upload = { name: "image.png", mimeType: "image/png", sizeBytes: 4 };
     const prepared = yield* call("goat_attachment_prepare_upload", { upload });
-    const { attachmentId } = Schema.decodeUnknownSync(AttachmentCreateUploadUrlResult)(
-      prepared.structuredContent,
-    );
+    const { attachmentId } = yield* decodeUpload(prepared.structuredContent);
     const fs = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
     yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
