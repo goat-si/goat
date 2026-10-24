@@ -2,6 +2,7 @@ import {
   computerUseReadinessSteps,
   type ReadinessStepState,
 } from "@goat/client-runtime/computerUse/readinessSteps";
+import type { ComputerUseSetupStatus } from "@goat/client-runtime/computer-use-linux-setup";
 import type { EnvironmentId } from "@goat/contracts";
 import { View } from "react-native";
 
@@ -18,6 +19,14 @@ const stateLabels = {
   unsupported: "Unsupported",
   unknown: "Not checked",
 } as const satisfies Record<ReadinessStepState, string>;
+
+const setupLabels = {
+  done: "Done",
+  action: "To do",
+  waiting: "Waiting",
+  limited: "Limited",
+  unavailable: "Unavailable",
+} as const satisfies Record<ComputerUseSetupStatus, string>;
 
 export function ComputerUseReadiness(input: Parameters<typeof computerUseReadinessSteps>[0]) {
   const result = computerUseReadinessSteps(input);
@@ -52,6 +61,31 @@ export function ComputerUseReadiness(input: Parameters<typeof computerUseReadine
           ))}
         </View>
       ))}
+      {result.linuxSetup ? (
+        <View accessibilityLabel="Set up computer use on Linux" className="gap-3">
+          <Text textRole="body">Set up on Linux</Text>
+          {result.linuxSetup.steps.map((step, index) => (
+            <View key={`${step.id}:${index}`} className="gap-1">
+              <Text textRole="body">
+                {step.title} · {setupLabels[step.status]}
+              </Text>
+              <Text textRole="footnote" selectable>
+                {step.detail}
+              </Text>
+              {step.guidance.map((line) => (
+                <Text
+                  key={line.text}
+                  textRole="footnote"
+                  selectable
+                  className={line.kind === "command" ? "font-mono" : undefined}
+                >
+                  {line.text}
+                </Text>
+              ))}
+            </View>
+          ))}
+        </View>
+      ) : null}
       <Text textRole="footnote">Permissions must be granted on this host's desktop.</Text>
     </View>
   );
@@ -59,8 +93,10 @@ export function ComputerUseReadiness(input: Parameters<typeof computerUseReadine
 
 export function ComputerUseHostReadiness({
   environmentId,
+  machine,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly machine?: string | undefined;
 }) {
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
   return (
@@ -72,6 +108,7 @@ export function ComputerUseHostReadiness({
       ) : null}
       <ComputerUseReadiness
         platform={query.data?.platform}
+        machine={machine}
         readiness={query.data?.readiness}
         tools={query.data?.tools}
         signals={query.data?.signals}

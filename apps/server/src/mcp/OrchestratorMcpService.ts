@@ -3,16 +3,13 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import {
   CommandId,
   type GoatclawCeilingAdvice,
-  IsoDateTime,
   isOrchestrationV2WorkActive,
   isProviderAvailable,
   MessageId,
   ModelSelection,
   NodeId,
-  NonNegativeInt,
   type OrchestrationV2Run,
   type OrchestrationV2Subagent,
-  OrchestrationV2TaskRole,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -101,6 +98,19 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as CloudSource from "../orchestration-v2/CloudTaskSourceService.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
+import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import {
+  admissionCorrelationId,
+  admitDelegate,
+  bindChildWork,
+  existingChildWorkConflict,
+  launchChildWork,
+  launchRemoteChildWork,
+  releaseChildWork,
+  releaseReservation,
+} from "./childWorkAdmission.ts";
+import * as ReviewExport from "./reviewExport.ts";
 import { recordRemoteTaskResult } from "../remoteReports/recordRemoteTaskResult.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
@@ -149,51 +159,6 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 const isRemoteDispatchError = (u: unknown): u is RemoteDispatchCoordinator.RemoteDispatchError =>
   Schema.is(RemoteDispatchCoordinator.RemoteDispatchError)(u);
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
-
-const ReviewExportCursor = Schema.fromJsonString(
-  Schema.Struct({
-    from: IsoDateTime,
-    to: IsoDateTime,
-    taskId: NodeId,
-    index: NonNegativeInt,
-  }),
-);
-const decodeReviewExportCursor = Schema.decodeUnknownEffect(ReviewExportCursor);
-const encodeReviewExportCursor = Schema.encodeEffect(ReviewExportCursor);
-const ReviewExportFields = {
-  taskId: NodeId,
-  threadId: ThreadId,
-  role: Schema.optional(OrchestrationV2TaskRole),
-  reviewerModel: Schema.NullOr(ModelSelection),
-  authorModel: Schema.NullOr(ModelSelection),
-};
-const encodeReviewExportEntry = Schema.encodeEffect(
-  Schema.fromJsonString(
-    Schema.Union([
-      Schema.Struct({
-        ...ReviewLedgerEntry.members[0].fields,
-        ...ReviewExportFields,
-        latestOutcome: Schema.NullOr(ReviewLedgerEntry.members[1]),
-      }),
-      Schema.Struct({ ...ReviewLedgerEntry.members[1].fields, ...ReviewExportFields }),
-    ]),
-  ),
-);
-
-/** Latest decisions and any outcome recorded after that decision. */
-function reviewFindings(reviewLedger: ReadonlyArray<ReviewLedgerEntry>) {
-  const findings = new Map<string, OrchestratorMcpReviewFindingsRecordResult["findings"][number]>();
-  for (const entry of reviewLedger) {
-    if (entry.kind === "decision")
-      findings.set(entry.findingId, { decision: entry, latestOutcome: null });
-    else {
-      const finding = findings.get(entry.findingId);
-      if (finding !== undefined)
-        findings.set(entry.findingId, { ...finding, latestOutcome: entry });
-    }
-  }
-  return [...findings.values()];
-}
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
@@ -2443,6 +2408,14 @@ const make = Effect.gen(function* () {
     }),
     delegateTask: Effect.fn("OrchestratorMcpService.delegateTask")(function* (callerScope, input) {
       const { scope, parent } = yield* loadThreadCaller(callerScope, "delegate_task");
+      // Resolved per call: the first memoized construction of this service precedes the
+      // channel layer, so a construction-time capture would bypass channel admission.
+      const channelChildWork = yield* Effect.serviceOption(ChannelChildWork.ChannelChildWork);
+      // Same per-call reason as channelChildWork; absent from the call context only in
+      // fixtures, where keeping the reservation is the safe answer.
+      const commandReceipts = yield* Effect.serviceOption(
+        CommandReceiptStore.CommandReceiptStoreV2,
+      );
       const memoryGrantCeiling = yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
         Effect.mapError(() =>
           failure("invalid_request", "Caller memory authority is no longer available."),
@@ -2466,6 +2439,7 @@ const make = Effect.gen(function* () {
       if (input.target?.host !== undefined && input.remote !== undefined) {
         const host = input.target.host;
         const remote = input.remote;
+        const requestedTarget = input.target;
         const parentNodeId = parentRun.rootNodeId;
         const callerRuntimeMode = yield* authorizeRemoteWrite(scope, parentRun.id);
         let runtimeMode = yield* resolveRuntimeMode(callerRuntimeMode, input.runtimeMode);
@@ -2473,7 +2447,17 @@ const make = Effect.gen(function* () {
           parent.thread.interactionMode,
           input.interactionMode,
         );
-        const key = yield* requestKey(input.clientRequestId);
+        const admission = yield* admitDelegate(channelChildWork, {
+          callerThreadId: scope.thread.threadId,
+          prompt: taskPrompt(input),
+          clientRequestId: input.clientRequestId,
+          target: input.target,
+          role: input.role,
+          remote: { host, cwd: remote.cwd, workspace: remote.workspace },
+        });
+        if (admission !== undefined && admission._tag === "existing")
+          return yield* existingChildWorkConflict(admission);
+        const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
         const commandId = stableCommandId({ scope, requestKey: key, operation: "delegate-task" });
         const taskId = derive.delegatedTaskNode({ commandId });
         const existing = parent.subagents.find((task) => task.id === taskId);
@@ -2486,21 +2470,29 @@ const make = Effect.gen(function* () {
         // A replay or a concurrent duplicate forwards nothing itself, and whether the call that
         // launched carried a ceiling is not recorded, so neither says anything about one.
         if (existing !== undefined) return yield* acknowledge(undefined);
-        yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
-        yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
-        const target = yield* resolveRemoteTarget(scope, parent, {
-          ...input.target,
-          host: input.target.host,
-        });
-        const admitted = yield* permissions.claim(scope, {
-          id: taskId,
-          runtimeMode,
-          host,
-          worktree: remote.workspace?.type === "worktree",
-        });
-        const ceilingAdvice = admitted.enabled
-          ? yield* FleetSync.syncBeforeForwarding(fleet, host)
-          : undefined;
+        // Checks and claims sit between admission and launch; when one fails, the
+        // reservation returns so a rejected request never holds the descendant budget.
+        const prepared = yield* Effect.gen(function* () {
+          yield* permissions.require(scope, "threads.launch", { host, runtimeMode });
+          yield* permissions.require(scope, "threads.remote", { host, runtimeMode });
+          const target = yield* resolveRemoteTarget(scope, parent, {
+            ...requestedTarget,
+            host,
+          });
+          const claimed = yield* permissions.claim(scope, {
+            id: taskId,
+            runtimeMode,
+            host,
+            worktree: remote.workspace?.type === "worktree",
+          });
+          const advice = claimed.enabled
+            ? yield* FleetSync.syncBeforeForwarding(fleet, host)
+            : undefined;
+          return { target, claimed, advice };
+        }).pipe(Effect.onError(() => releaseReservation(channelChildWork, admission)));
+        const target = prepared.target;
+        const admitted = prepared.claimed;
+        const ceilingAdvice = prepared.advice;
         runtimeMode = admitted.runtimeMode;
         const register = Effect.gen(function* () {
           yield* permissions.recheck(scope, admitted, { host });
@@ -2541,6 +2533,7 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(threadManagementFailure));
         });
+        yield* launchRemoteChildWork(channelChildWork, admission, host);
         const launched = yield* remoteDispatch
           .launch(
             {
@@ -2548,6 +2541,9 @@ const make = Effect.gen(function* () {
               originThreadId: scope.thread.threadId,
               delivery: "wake",
               task: { taskId, parentRunId: parentRun.id },
+              // A channel-owned caller's binding id derives from its child-work record, so a
+              // retry collides on the remote_dispatches key instead of launching twice.
+              correlationId: admissionCorrelationId(admission),
               launch: {
                 host,
                 cwd: remote.cwd,
@@ -2574,18 +2570,26 @@ const make = Effect.gen(function* () {
             register,
           )
           .pipe(Effect.result);
-        if (admitted.enabled && launched._tag === "Failure") {
+        if (launched._tag === "Failure") {
+          // The coordinator wraps a failure it proved happened before any remote write
+          // (stage "authorize"); the task key it deleted frees this lane and slot too.
+          const preSend =
+            isRemoteDispatchError(launched.failure) && launched.failure.stage === "authorize";
           const underlying = isRemoteDispatchError(launched.failure)
             ? launched.failure.cause
             : launched.failure;
-          if (
-            underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
-            (underlying.reason === "remote_refused" ||
-              underlying.reason === "invalid_request" ||
-              underlying.reason === "host_unknown") &&
-            underlying.launchMayHaveStarted !== true
-          )
-            yield* permissions.release(taskId);
+          const refusedBeforeLaunch =
+            preSend ||
+            (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
+              (underlying.reason === "remote_refused" ||
+                underlying.reason === "invalid_request" ||
+                underlying.reason === "host_unknown") &&
+              underlying.launchMayHaveStarted !== true);
+          // The destination never started, so the lane and the child-work slot return.
+          if (refusedBeforeLaunch) {
+            if (admitted.enabled) yield* permissions.release(taskId);
+            yield* releaseChildWork(channelChildWork, admission);
+          }
         }
         if (admitted.enabled && launched._tag === "Success")
           yield* permissions.complete(
@@ -2593,6 +2597,7 @@ const make = Effect.gen(function* () {
             launched.success.launch.threadId,
             launched.success.correlationId,
           );
+        if (launched._tag === "Success") yield* bindChildWork(channelChildWork, admission);
         if (
           launched._tag === "Failure" &&
           isRemoteDispatchError(launched.failure) &&
@@ -2613,6 +2618,17 @@ const make = Effect.gen(function* () {
               "invalid_request",
               "An earlier goat_task_create with this clientRequestId did not finish launching; use a new clientRequestId.",
             );
+        }
+        if (
+          launched._tag === "Failure" &&
+          isRemoteDispatchError(launched.failure) &&
+          launched.failure.stage === "authorize"
+        ) {
+          // A proven pre-send failure wraps the one the caller can act on.
+          const ownerError = launched.failure.cause;
+          if (isOrchestratorMcpFailure(ownerError)) return yield* ownerError;
+          if (ownerError instanceof SshRemoteDispatch.SshRemoteDispatchError)
+            return yield* hostFailure(ownerError);
         }
         if (launched._tag === "Failure" || launched.success.launch.runId === null) {
           const refreshed = yield* loadProjection(scope.thread.threadId);
@@ -2671,80 +2687,108 @@ const make = Effect.gen(function* () {
       }
 
       const providers = yield* loadProviders;
-      const key = yield* requestKey(input.clientRequestId);
+      const admission = yield* admitDelegate(channelChildWork, {
+        callerThreadId: scope.thread.threadId,
+        prompt: taskPrompt(input),
+        clientRequestId: input.clientRequestId,
+        target: input.target,
+        isolation: input.isolation,
+        role: input.role,
+      });
+      if (admission !== undefined && admission._tag === "existing")
+        return yield* existingChildWorkConflict(admission);
+      const key = admission?.requestKey ?? (yield* requestKey(input.clientRequestId));
       const commandId = stableCommandId({
         scope,
         requestKey: key,
         operation: "delegate-task",
       });
-      const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
-      const target = yield* resolveTargetRechecking({
-        parent,
-        target: input.target,
-        providers,
-        skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
-      });
-      const requestedRuntimeMode = yield* resolveRuntimeMode(
-        parent.thread.runtimeMode,
-        input.runtimeMode,
-        target,
-      );
-      const interactionMode = yield* resolveInteractionMode(
-        parent.thread.interactionMode,
-        input.interactionMode,
-      );
-      let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
-      if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
-        const project = yield* requireProject(parent.thread.projectId);
-        const base = yield* gitDriver
-          .resolveCommit({
-            cwd: parent.thread.worktreePath ?? project.workspaceRoot,
-            revision: "HEAD",
-          })
-          .pipe(
-            Effect.mapError(() =>
-              failure("invalid_request", "Unable to resolve the parent checkout commit."),
-            ),
-          );
-        // Launch preparation creates the worktree from the project root, so a
-        // parent checkout in another repository (such as a Git folder inside
-        // Scratch) would hand it a commit it cannot find.
-        if (parent.thread.worktreePath !== null) {
-          yield* gitDriver
-            .resolveCommit({ cwd: project.workspaceRoot, revision: base.commitSha })
+      const prepared = yield* Effect.gen(function* () {
+        const isRetryOfAcceptedDelegation = yield* threadManagement.hasReceipt(commandId);
+        const target = yield* resolveTargetRechecking({
+          parent,
+          target: input.target,
+          providers,
+          skipProjectEnablementFilter: isRetryOfAcceptedDelegation,
+        });
+        const requestedRuntimeMode = yield* resolveRuntimeMode(
+          parent.thread.runtimeMode,
+          input.runtimeMode,
+          target,
+        );
+        const interactionMode = yield* resolveInteractionMode(
+          parent.thread.interactionMode,
+          input.interactionMode,
+        );
+        let workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy | undefined;
+        if (input.isolation === "worktree" && !isRetryOfAcceptedDelegation) {
+          const project = yield* requireProject(parent.thread.projectId);
+          const base = yield* gitDriver
+            .resolveCommit({
+              cwd: parent.thread.worktreePath ?? project.workspaceRoot,
+              revision: "HEAD",
+            })
             .pipe(
               Effect.mapError(() =>
-                failure(
-                  "invalid_request",
-                  `Isolation "worktree" creates the child checkout in project "${project.title}" (${project.workspaceRoot}), which does not contain the parent checkout's commit. Use isolation "shared" to work in the parent's checkout.`,
-                ),
+                failure("invalid_request", "Unable to resolve the parent checkout commit."),
               ),
             );
+          // Launch preparation creates the worktree from the project root, so a
+          // parent checkout in another repository (such as a Git folder inside
+          // Scratch) would hand it a commit it cannot find.
+          if (parent.thread.worktreePath !== null) {
+            yield* gitDriver
+              .resolveCommit({ cwd: project.workspaceRoot, revision: base.commitSha })
+              .pipe(
+                Effect.mapError(() =>
+                  failure(
+                    "invalid_request",
+                    `Isolation "worktree" creates the child checkout in project "${project.title}" (${project.workspaceRoot}), which does not contain the parent checkout's commit. Use isolation "shared" to work in the parent's checkout.`,
+                  ),
+                ),
+              );
+          }
+          workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
         }
-        workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
-      }
-      // ThreadManagementService.dispatch is the chokepoint for this command
-      // type's own enablement check, using the same command id and its
-      // receipt-replay exemption, so no separate assert runs here.
-      if (!isRetryOfAcceptedDelegation)
-        yield* preflightCloudLaunch(
-          scope,
-          parent.thread.projectId,
-          target.modelSelection,
-          parent.thread.worktreePath,
-          parent.thread.branch,
+        // ThreadManagementService.dispatch is the chokepoint for this command
+        // type's own enablement check, using the same command id and its
+        // receipt-replay exemption, so no separate assert runs here.
+        if (!isRetryOfAcceptedDelegation)
+          yield* preflightCloudLaunch(
+            scope,
+            parent.thread.projectId,
+            target.modelSelection,
+            parent.thread.worktreePath,
+            parent.thread.branch,
+          );
+        yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
+          Effect.mapError(() =>
+            failure("invalid_request", "Caller memory authority is no longer available."),
+          ),
         );
-      yield* captureMcpTaskMemoryGrantCeiling(scope, false).pipe(
-        Effect.mapError(() =>
-          failure("invalid_request", "Caller memory authority is no longer available."),
-        ),
-      );
-      const admitted = yield* permissions.claim(scope, {
-        id: commandId,
-        childThreadId: derive.delegatedTaskThread({ commandId }),
-        runtimeMode: requestedRuntimeMode,
-        worktree: input.isolation === "worktree",
+        return {
+          isRetryOfAcceptedDelegation,
+          target,
+          requestedRuntimeMode,
+          interactionMode,
+          workspaceStrategy,
+        };
+      }).pipe(Effect.onError(() => releaseReservation(channelChildWork, admission)));
+      const target = prepared.target;
+      const requestedRuntimeMode = prepared.requestedRuntimeMode;
+      const interactionMode = prepared.interactionMode;
+      const workspaceStrategy = prepared.workspaceStrategy;
+      yield* launchChildWork(channelChildWork, admission, {
+        threadId: derive.delegatedTaskThread({ commandId }),
       });
+      const admitted = yield* permissions
+        .claim(scope, {
+          id: commandId,
+          childThreadId: derive.delegatedTaskThread({ commandId }),
+          runtimeMode: requestedRuntimeMode,
+          worktree: input.isolation === "worktree",
+        })
+        .pipe(Effect.onError(() => releaseChildWork(channelChildWork, admission)));
       const runtimeMode = admitted.runtimeMode;
       const result = yield* threadManagement
         .dispatch({
@@ -2775,6 +2819,22 @@ const make = Effect.gen(function* () {
               ? permissions.release(commandId, true).pipe(Effect.ignore)
               : Effect.void,
           ),
+          // Commit certainty from the receipt, not from the dispatch error: an accepted
+          // receipt means the work exists and keeps its slot; a rejected or absent receipt
+          // means the command never ran, so the reservation goes back. An unreadable
+          // receipt proves nothing, so the slot stays rather than double-spend.
+          Effect.onError(() =>
+            commandReceipts._tag === "None"
+              ? Effect.void
+              : commandReceipts.value.getByCommandId(commandId).pipe(
+                  Effect.flatMap((receipt) =>
+                    Option.isSome(receipt) && receipt.value.status === "accepted"
+                      ? Effect.void
+                      : releaseChildWork(channelChildWork, admission),
+                  ),
+                  Effect.ignore,
+                ),
+          ),
           Effect.mapError((error) =>
             error._tag === "ThreadManagementProviderInstanceDisabledError"
               ? threadManagementFailure(error)
@@ -2797,6 +2857,8 @@ const make = Effect.gen(function* () {
       }
       const taskId = taskEvent.event.payload.id;
       const childThreadId = taskEvent.event.payload.childThreadId;
+      if (childThreadId !== null)
+        yield* bindChildWork(channelChildWork, admission, { threadId: childThreadId });
       const childRunEvent = result.storedEvents.find(
         (stored) => stored.event.type === "run.created" && stored.event.threadId === childThreadId,
       );
@@ -2862,7 +2924,11 @@ const make = Effect.gen(function* () {
         const updated = yield* loadProjection(parent.thread.id);
         const reviewLedger =
           updated.subagents.find((task) => task.id === input.taskId)?.reviewLedger ?? [];
-        return { taskId: input.taskId, reviewLedger, findings: reviewFindings(reviewLedger) };
+        return {
+          taskId: input.taskId,
+          reviewLedger,
+          findings: ReviewExport.reviewFindings(reviewLedger),
+        };
       }),
     exportReviewFindings: (scope, input) =>
       Effect.gen(function* () {
@@ -2874,7 +2940,7 @@ const make = Effect.gen(function* () {
         const cursor =
           input.cursor === undefined
             ? undefined
-            : yield* decodeReviewExportCursor(input.cursor).pipe(
+            : yield* ReviewExport.decodeReviewExportCursor(input.cursor).pipe(
                 Effect.mapError(() =>
                   failure("invalid_request", "Invalid review findings cursor."),
                 ),
@@ -2911,7 +2977,7 @@ const make = Effect.gen(function* () {
             reviewerModel: task.modelSelection ?? null,
             authorModel: task.parentModelSelection ?? null,
           };
-          return encodeReviewExportEntry(
+          return ReviewExport.encodeReviewExportEntry(
             entry.kind === "decision"
               ? {
                   ...entry,
@@ -2931,7 +2997,7 @@ const make = Effect.gen(function* () {
           ...(rows.length <= limit || last === undefined
             ? {}
             : {
-                nextCursor: yield* encodeReviewExportCursor({
+                nextCursor: yield* ReviewExport.encodeReviewExportCursor({
                   from: input.from,
                   to: input.to,
                   taskId: last.task.id,

@@ -58,6 +58,57 @@ describe("cuaDriverManifest", () => {
     ).toEqual(["com.apple.TextEdit", "com.apple.finder"]);
   });
 
+  it("admits a running Windows program with no bundle id by its executable, never GOAT's own (#1368)", () => {
+    const goat = "C:\\Program Files\\GOAT\\GOAT.exe";
+    expect(
+      admittedCuaApplications(
+        [
+          // A Start menu app: the driver gives its path as the bundle id.
+          {
+            bundle_id: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            name: "Google Chrome",
+          },
+          // Running with no Start menu entry: only the helper's executable identifies it.
+          { bundle_id: null, name: "fixture.exe", executable: "C:\\work\\fixture.exe" },
+          { bundle_id: null, name: "GOAT.exe", executable: goat },
+          {
+            bundle_id: null,
+            name: "cua-driver.exe",
+            executable: "C:\\GOAT\\cua-driver\\cua-driver.exe",
+          },
+          {
+            bundle_id: null,
+            name: "GOAT Computer Use.exe",
+            executable: "C:\\GOAT\\GOAT Computer Use.exe",
+          },
+          {
+            bundle_id: null,
+            name: "KeePassXC.exe",
+            executable: "C:\\Apps\\KeePassXC\\KeePassXC.exe",
+          },
+          { bundle_id: null, name: "explorer.exe" },
+        ],
+        [goat.toUpperCase()],
+      ),
+    ).toEqual([
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\work\\fixture.exe",
+    ]);
+  });
+
+  it("keeps GOAT out however its own path is spelled: prefixed, UNC, forward slashes or case", () => {
+    const listed = [
+      { bundle_id: null, name: "GOAT.exe", executable: "C:\\Apps\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "GOAT.exe", executable: "\\\\server\\share\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "notes.exe", executable: "C:\\Apps\\notes.exe" },
+    ];
+    for (const host of [
+      ["\\\\?\\C:\\Apps\\GOAT\\GOAT.exe", "\\\\?\\UNC\\server\\share\\GOAT\\GOAT.exe"],
+      ["c:/apps//goat/GOAT.EXE", "//SERVER/share/goat/goat.exe"],
+    ])
+      expect(admittedCuaApplications(listed, host)).toEqual(["C:\\Apps\\notes.exe"]);
+  });
+
   it("writes a v3 manifest: tools, display, admitted apps and no file or profile scope", () => {
     const text = cuaDriverCapabilityManifest({
       applications: ['com.example."quoted"'],

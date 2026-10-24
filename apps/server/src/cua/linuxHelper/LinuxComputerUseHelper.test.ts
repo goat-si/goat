@@ -21,8 +21,10 @@ import { makeSignalMonitor } from "./linuxSignals.ts";
 import {
   detectLinuxSession,
   linuxCapabilities,
+  linuxReadiness,
   linuxSessionFacts,
   pngColors,
+  type ReadinessFacts,
 } from "./linuxSession.ts";
 import { readLinuxReadiness } from "./readiness.ts";
 import { CROPPED_CAPTURE } from "./windowCapture.ts";
@@ -65,6 +67,35 @@ describe("Linux session facts", () => {
     // Only Wayland GNOME reads the version; X11 never runs gnome-shell.
     linuxSessionFacts({ DISPLAY: ":0", XDG_CURRENT_DESKTOP: "GNOME" }, gnomeShellVersion);
     expect(versionReads).toBe(1);
+  });
+});
+
+describe("Linux readiness grants (#1392)", () => {
+  const session = detectLinuxSession(
+    linuxSessionFacts({ DISPLAY: ":0", DBUS_SESSION_BUS_ADDRESS: "unix:path=/tmp/bus" }, () => ""),
+  );
+  const facts = (overrides: Partial<ReadinessFacts>): ReadinessFacts => ({
+    session,
+    driver: { x11: true, wayland: false, atspi: true },
+    capture: "varied",
+    tree: "ready",
+    uinputWritable: false,
+    captureRefused: undefined,
+    ...overrides,
+  });
+
+  it("AT-SPI is granted only after a real read answered, never while it does not answer", () => {
+    const silent = linuxReadiness(
+      facts({ driver: { x11: true, wayland: false, atspi: false }, tree: "unavailable" }),
+    );
+    expect(silent.grants.accessibility).toBe("unknown");
+    expect(silent.reasons.join(" ")).toMatch(/AT-SPI does not answer/);
+    // AT-SPI is up, but no window has been read through it yet.
+    const unread = linuxReadiness(facts({ capture: "noWindow", tree: "unavailable" }));
+    expect(unread.grants.accessibility).toBe("unknown");
+    expect(unread.reasons.join(" ")).toMatch(/No window is open to read app controls/);
+    expect(linuxReadiness(facts({})).grants.accessibility).toBe("granted");
+    expect(linuxReadiness(facts({ tree: "empty" })).grants.accessibility).toBe("granted");
   });
 });
 
