@@ -539,9 +539,9 @@ describe("GoalController", () => {
       },
     );
 
-    it.effect(
-      "never adopts that empty thread when the goal also moved on and its status was lost",
-      () => {
+    it.effect.each([false, true])(
+      "never adopts that empty thread when the goal moved on and its status was lost (lookup fails: %s)",
+      (lookupFails) => {
         const fake = makeFake();
         return Effect.gen(function* () {
           const store = yield* GoalStore;
@@ -556,7 +556,10 @@ describe("GoalController", () => {
               goal.generation,
             );
           }).pipe(Effect.provideService(GoalStore, store), Effect.orDie);
+          // The thread lookup right after the refusal may fail too.
+          fake.lookupFails = lookupFails;
           yield* pass("goal_half_moved");
+          fake.lookupFails = false;
           yield* pass("goal_half_moved");
           yield* pass("goal_half_moved");
           const workers = (yield* record("goal_half_moved")).workers;

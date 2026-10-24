@@ -490,6 +490,9 @@ const make = Effect.gen(function* () {
                 return;
               }
               failed = true;
+              // A refused step is recorded before anything can fail: settled "failed", a thread found
+              // later is one whose first message was refused, never one to adopt.
+              if (isLost(launched.failure)) yield* store.settle(action.actionId, "failed", nowIso);
               // The thread may exist even though the call failed after creating it.
               const created = yield* runtime
                 .findLaunched(current, goal, action.actionId, placed.host)
