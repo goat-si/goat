@@ -206,15 +206,27 @@ it.effect(
     }),
 );
 
-it.effect("a link whose add answer was lost is still GOAT's to release", () =>
-  Effect.gen(function* () {
-    const hub = yield* setup({ addLost: true });
-    expect((yield* hub.membership.joinProvisioned(scope, "boat-builder")).state).toBe("failed");
-    yield* hub.membership.requestRelease("boat-builder");
-    expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("ready");
-    expect(hub.calls).toContain(`home link revoke --link-id ${GOAT_LINK} --force --yes --json`);
-    expect(hub.links.size).toBe(0);
-  }),
+it.effect(
+  "a link whose add answer was lost is left in place, since anyone could have made it",
+  () =>
+    Effect.gen(function* () {
+      for (const raced of [false, true]) {
+        const hub = yield* setup({ addLost: true });
+        expect((yield* hub.membership.joinProvisioned(scope, "boat-builder")).state).toBe("failed");
+        // Raced: someone ran ocx link add for the alias while GOAT's own add was failing.
+        if (raced) hub.replace("boat-builder");
+        const holder = hub.links.get("boat-builder");
+        yield* hub.membership.requestRelease("boat-builder");
+        expect((yield* hub.membership.releaseProvisioned("boat-builder")).state).toBe("degraded");
+        expect(hub.calls.some((call) => call.includes("revoke"))).toBe(false);
+        expect(hub.links.get("boat-builder")).toBe(holder);
+        expect((yield* hub.audit).at(-1)).toMatchObject({
+          action: "hub.release",
+          outcome: "unproven",
+        });
+        expect(yield* hub.membership.pendingReleases).toEqual([]);
+      }
+    }),
 );
 
 it.effect("a revoke that fails stays pending and is retried after GOAT restarts", () =>

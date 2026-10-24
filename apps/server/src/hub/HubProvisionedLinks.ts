@@ -18,11 +18,10 @@ import { type HubOcxError, SAFE_ALIAS } from "./HubOcx.ts";
  * person added, or one that later took the alias over, stays. A release stays pending until the
  * Home shows the link and its tunnel gone, so a failed one is retried after a restart.
  *
- * Every join holds the hub permit from its first link status read, which found no link under the
- * alias, through `ocx link add` and the status read after it. Whatever link holds the alias then is
- * the one GOAT just added, even when the add's own answer was lost. An add that GOAT never saw
- * finish (it stopped, or status was unreadable) is never claimed later: by then a person could
- * have linked the alias, so its release revokes nothing and is audited as unproven.
+ * Only the link id OpenCodex returned for GOAT's own `ocx link add` proves a link is GOAT's. Anyone
+ * with ocx on this machine can link the alias at any time, so an add whose answer was lost (or
+ * that GOAT never saw finish) claims nothing: its release revokes no link that holds the alias and
+ * is audited as unproven.
  */
 
 interface HomeLink {
@@ -82,24 +81,18 @@ export const makeProvisionedLinks = Effect.gen(function* () {
     return true;
   }, Effect.mapError(storageFailure));
 
-  /** After `ocx link add`, still under the permit: records the added link and its tunnel port. */
+  /** After `ocx link add`: records the id it returned and that link's tunnel port. */
   const finishAdd = Effect.fn("HubProvisionedLinks.finishAdd")(function* (
     alias: string,
     linkId: string | undefined,
     homeLinks: Effect.Effect<HomeLinks, HubOcxError>,
   ) {
+    // Without an id the attempt stays unresolved.
+    if (linkId === undefined) return;
     const status = yield* homeLinks.pipe(Effect.orElseSucceed((): HomeLinks => undefined));
-    // Neither the add nor status said what happened, so the attempt stays unresolved.
-    if (linkId === undefined && status === undefined) return;
-    const added = status?.links.find((entry) =>
-      linkId === undefined ? entry.alias === alias : entry.id === linkId,
-    );
-    const id = linkId ?? added?.id;
-    yield* id === undefined
-      ? sql`UPDATE hub_provisioned_links SET adding_since = NULL WHERE alias = ${alias}`
-      : sql`UPDATE hub_provisioned_links
-          SET link_id = ${id}, tunnel_port = ${added?.tunnelPort ?? null}, adding_since = NULL
-          WHERE alias = ${alias}`;
+    const port = status?.links.find((entry) => entry.id === linkId)?.tunnelPort ?? null;
+    yield* sql`UPDATE hub_provisioned_links
+      SET link_id = ${linkId}, tunnel_port = ${port}, adding_since = NULL WHERE alias = ${alias}`;
   }, Effect.mapError(storageFailure));
 
   const releases = (home: {
