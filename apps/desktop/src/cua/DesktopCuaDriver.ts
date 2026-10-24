@@ -34,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { cuaGrantTarget, readCuaGrants, type CuaGrantTarget } from "./DesktopCuaGrants.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import {
   HELPER_SIGNALS,
@@ -95,28 +96,6 @@ type Grants = {
 type Engine =
   | { readonly kind: "helper"; readonly bundle: HelperBundle }
   | { readonly kind: "embedded"; readonly driverPath: string };
-
-/** Helper failures that can pass on their own, so setup keeps asking instead of giving up. */
-const TRANSIENT_HELPER_FAILURES: ReadonlySet<string> = new Set([
-  "no_hello",
-  "helper_exited",
-  "timeout",
-]);
-
-/**
- * The app that must hold the macOS grants and how to read them now. Onboarding drags this app
- * into System Settings and polls it, so it can never name GOAT while a helper ships.
- */
-export type CuaGrantTarget =
-  | {
-      readonly kind: "helper";
-      readonly bundlePath: string;
-      readonly name: string;
-      readonly bundleId: string;
-      readonly read: () => Promise<Grants>;
-    }
-  | { readonly kind: "app"; readonly bundleId: string; readonly read: () => Promise<Grants> }
-  | { readonly kind: "unusable"; readonly message: string };
 
 /**
  * Agents get the general manifest, which leaves GOAT's own windows out. The grant check is the
@@ -967,68 +946,21 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   );
 
   const grantTarget = Effect.gen(function* () {
-    if (environment.platform !== "darwin")
-      return {
-        kind: "unusable",
-        message: "Accessibility and Screen Recording are macOS permissions.",
-      } satisfies CuaGrantTarget;
-    const chosen = yield* engine();
-    if (typeof chosen === "string")
-      return { kind: "unusable", message: chosen } satisfies CuaGrantTarget;
-    if (chosen?.kind === "helper") {
-      const bundle = chosen.bundle;
-      return {
-        kind: "helper",
-        bundlePath: bundle.bundlePath,
-        name: COMPUTER_USE_HELPER_NAME,
-        bundleId: bundle.bundleId,
-        read: () => engineGrants(chosen, false),
-      } satisfies CuaGrantTarget;
-    }
-    return {
-      kind: "app",
-      bundleId: environment.appUserModelId,
-      read: native.checkGrants,
-    } satisfies CuaGrantTarget;
+    const chosen = environment.platform === "darwin" ? yield* engine() : undefined;
+    return cuaGrantTarget({
+      platform: environment.platform,
+      engine: chosen,
+      appBundleId: environment.appUserModelId,
+      readHelper: () =>
+        chosen !== undefined && typeof chosen !== "string"
+          ? engineGrants(chosen, false)
+          : Promise.reject(new Error("no helper")),
+      readApp: native.checkGrants,
+    });
   }).pipe(Effect.withSpan("desktop.cua.grantTarget"));
-
-  const grants = Effect.gen(function* () {
-    const target = yield* grantTarget;
-    if (target.kind === "unusable")
-      return { principal: "unusable", message: target.message } satisfies DesktopCuaGrants;
-    const read = yield* Effect.tryPromise({
-      try: target.read,
-      // A reply that does not decode is a helper speaking another protocol, not a hiccup.
-      catch: (cause) =>
-        cause instanceof ComputerUseHelperError
-          ? cause
-          : new ComputerUseHelperError(
-              "malformed_reply",
-              "its answer about permissions could not be read.",
-            ),
-    }).pipe(
-      Effect.map((value) => ({ ok: true as const, value })),
-      // A helper that answers as another app, speaks another protocol, or refuses its parent
-      // stays that way however often setup asks; only a slow or vanished helper is worth retrying.
-      Effect.catchIf(
-        (error) => !TRANSIENT_HELPER_FAILURES.has(error.code),
-        (error) => Effect.succeed({ ok: false as const, message: error.message }),
-      ),
-    );
-    if (!read.ok)
-      return {
-        principal: "unusable",
-        message: `${COMPUTER_USE_HELPER_NAME} cannot be used: ${read.message}`,
-      } satisfies DesktopCuaGrants;
-    return {
-      principal: target.kind,
-      name: target.kind === "helper" ? target.name : environment.displayName,
-      ...(target.kind === "helper" ? { bundlePath: target.bundlePath } : {}),
-      bundleId: target.bundleId,
-      accessibility: read.value.accessibility,
-      screenRecording: read.value.screenRecording,
-    } satisfies DesktopCuaGrants;
-  }).pipe(Effect.withSpan("desktop.cua.grants"));
+  const grants = grantTarget.pipe(
+    Effect.flatMap((target) => readCuaGrants(target, environment.displayName)),
+  );
 
   return DesktopCuaDriver.of({
     restart,
