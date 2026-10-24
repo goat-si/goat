@@ -25,6 +25,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import { runMigrations } from "../persistence/Migrations.ts";
+import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -89,6 +90,26 @@ const grant = (threadId: ThreadId, id: string, apps?: ReadonlyArray<string>) =>
   });
 
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("tells session lists about a control minted for a thread that had none", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const signals = yield* leases.subscribe;
+        const minted = ThreadId.make("thread-minted");
+        // The layer is shared: a live control left behind would pause later tests' controls.
+        yield* Effect.addFinalizer(() => leases.stop(minted));
+        yield* leases.control(minted, Option.none());
+        // A second thread's session must reach the session list without waiting for another event.
+        assert.isAbove(yield* PubSub.remaining(signals), 0);
+        yield* PubSub.takeAll(signals);
+        // Each later call of the same turn reuses the control and says nothing new.
+        yield* leases.control(minted, Option.none());
+        assert.equal(yield* PubSub.remaining(signals), 0);
+      }),
+    ),
+  );
+
   it.effect(
     "marks a thread's control idle when its last open run ends, and its next turn reuses it",
     () =>
@@ -295,6 +316,85 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
       }),
   );
+
+  it.effect(
+    "another agent's own input seen by a helper pauses nobody, a person's after it does",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.stopAll;
+        const mine = yield* leases.control(thread, Option.none());
+        const bots = yield* leases.control(other, Option.none());
+        const call = (state: "start" | "end", at: number) =>
+          leases.agentInput(other, bots.controlId, { call: "7", state, at });
+        // Only a live control's own proxy records its calls.
+        assert.isFalse(
+          yield* leases.agentInput(thread, bots.controlId, { call: "7", state: "start", at: 0 }),
+        );
+        assert.isTrue(yield* call("start", 1_000));
+        // A report dated far from the server's clock is refused and records nothing.
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
+        assert.isFalse(
+          yield* leases.agentInput(other, bots.controlId, {
+            call: "8",
+            state: "start",
+            at: 10 * 60_000,
+          }),
+        );
+        // The bot's click, seen by my helper while it runs and just after it answered.
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
+        yield* call("end", 1_200);
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600), "agents");
+        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
+        // A person, a moment later.
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000), "paused");
+        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+          _tag: "paused",
+          reason: "human_input",
+        });
+        yield* leases.resume;
+        // A call left open by a control that has ended covers nothing.
+        yield* call("start", 5_000);
+        yield* leases.stop(other);
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100), "paused");
+        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
+          _tag: "paused",
+          reason: "human_input",
+        });
+      }),
+  );
+
+  it.effect(
+    "a proxy's report of a person's input pauses every agent, from its live control only",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* leases.stopAll;
+        const mine = yield* leases.control(thread, Option.none());
+        const bots = yield* leases.control(other, Option.none());
+        // An old proxy, or another thread's control id, pauses nobody.
+        assert.equal(yield* leases.humanInput(thread, "control:old", 0), "refused");
+        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0), "refused");
+        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
+
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "paused");
+        for (const [id, control] of [
+          [thread, mine],
+          [other, bots],
+        ] as const)
+          assert.deepEqual(yield* leases.controlState(id, control.controlId), {
+            _tag: "paused",
+            reason: "human_input",
+          });
+        yield* leases.resume;
+        yield* leases.stop(thread);
+        // An ended control's proxy can no longer pause the agents left.
+        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "refused");
+        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
+      }),
+  );
 });
 
 it.effect(
@@ -470,6 +570,41 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
 );
 
 it.effect(
+  "a Linux server that captures its own windows has live frames without a desktop helper",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // Frames only: a person's input and secret fields still need a helper that reports them.
+      assert.deepEqual(yield* leases.detection, {
+        humanInput: false,
+        privateMode: false,
+        frames: true,
+      });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({}),
+              Layer.succeed(
+                LinuxFrameSource.LinuxFrameSource,
+                LinuxFrameSource.LinuxFrameSource.of({
+                  supported: Effect.succeed(true),
+                  setTargets: () => Effect.void,
+                  frames: Stream.empty,
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+);
+
+it.effect(
   "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
   () =>
     Effect.gen(function* () {
@@ -529,6 +664,8 @@ it.effect(
         yield* Ref.set(accepted, Option.some(supported));
 
         const control = yield* leases.control(thread, Option.none());
+        // The new control is announced to session lists first.
+        yield* PubSub.take(signals);
         yield* Queue.offer(reports, {
           version: 1,
           type: "cuaPrivateMode",
@@ -662,6 +799,22 @@ it.effect(
       });
       yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("lists a full access thread's session as soon as it is admitted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const signals = yield* leases.subscribe;
+      const admitted = ThreadId.make("thread-full-access-listed");
+      yield* threadIn(admitted, "full-access");
+      yield* Effect.addFinalizer(() => leases.stop(admitted));
+      assert.isTrue(Option.isSome(yield* leases.everyAppControl(admitted, false)));
+      // Full access admits without a grant; its session still appears in the list at once.
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
+    }),
+  ).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("lets one unattended thread at a time hold the screen without a grant", () =>

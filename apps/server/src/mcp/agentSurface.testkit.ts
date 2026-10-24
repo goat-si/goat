@@ -5,7 +5,7 @@ import {
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts/settings";
 import * as RepositoryReferenceMcpService from "./RepositoryReferenceMcpService.ts";
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as DecisionService from "../goatclaw/DecisionService.ts";
 import { DecisionToolkit } from "./toolkits/decision/tools.ts";
 import { AgentSurfaceToolkit } from "./toolkits/agentSurface/tools.ts";
 import { NoteToolkit } from "./toolkits/note/tools.ts";
@@ -147,7 +147,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
-  Layer.mock(DecisionInbox.DecisionInbox)({}),
+  Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(NotesService.NotesService)({}),
   Layer.mock(PullRequestReviewGuideService.PullRequestReviewGuideService)({}),
   Layer.mock(WorktreeInventoryService.WorktreeInventoryService)({}),
@@ -293,6 +293,8 @@ const serveVia = <ET, RT>(
   Effect.fn("agentSurfaceTestkit.serveOverHttp")(function* <E, R>(
     scopes: Readonly<Record<string, McpInvocationScope>>,
     registrations: Layer.Layer<never, E, R>,
+    /** Headers a caller sends on every request, the way a configured MCP client does. */
+    headersOf: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
   ) {
     const scopeOf = new Map(
       Object.entries(scopes).map(([caller, scope]) => [`Bearer ${caller}.token`, scope]),
@@ -330,6 +332,7 @@ const serveVia = <ET, RT>(
       const session = sessions.get(caller);
       const response = yield* http.post("/mcp", {
         headers: {
+          ...headersOf[caller],
           accept: "application/json, text/event-stream",
           authorization: `Bearer ${caller}.token`,
           ...(session === undefined
@@ -416,7 +419,8 @@ const serveOverHttpWithProfiles = serveVia(
 const serveWith = <E, R>(
   scopes: Readonly<Record<string, McpInvocationScope>>,
   services: Layer.Layer<Layer.Success<typeof servicesOff>, E, R>,
-) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)));
+  headersOf?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+) => serveOverHttp(scopes, catalog.pipe(Layer.provide(services)), headersOf);
 
 /** Default settings, with the tool listing a test chooses; /mcp reads it for tools/list. */
 const settingsListing = (agentToolListing: AgentToolListing) =>
@@ -427,7 +431,9 @@ const settingsListing = (agentToolListing: AgentToolListing) =>
 export const serveCatalogOverHttp = (
   scopes: Readonly<Record<string, McpInvocationScope>>,
   agentToolListing: AgentToolListing = DEFAULT_AGENT_TOOL_LISTING,
-) => serveWith(scopes, servicesOff).pipe(Effect.provide(settingsListing(agentToolListing)));
+  headersOf?: Readonly<Record<string, Readonly<Record<string, string>>>>,
+) =>
+  serveWith(scopes, servicesOff, headersOf).pipe(Effect.provide(settingsListing(agentToolListing)));
 
 /**
  * serveCatalogOverHttp with goatclaw enforcing, in tools/list as in calls; see
