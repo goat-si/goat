@@ -24,6 +24,15 @@ Test with meaningful project and thread data. Read
 [references/sqlite-fixtures.md](references/sqlite-fixtures.md) only when
 inspecting or seeding SQLite. Stop the test server before direct fixture writes.
 
+For the desktop client, start `GOAT_DEV_INSECURE_SECRET_STORAGE=1 vp run dev:desktop`
+in the worktree, which keeps its isolated home. Without the flag, the unsigned dev
+build makes macOS ask for the login keychain password on start, and that prompt
+takes focus until someone answers it. With the flag, secrets saved through the
+keychain earlier do not open, so enter them again. If saving connections fails on
+an old saved-environment registry, start once without the flag first. Browser
+cookie import still reads the OS key store. See
+[State and ports](../../../docs/operations/development.md#state-and-ports).
+
 ## Use the Browser panel
 
 GOAT's browser tools run through `goat_call`. Call `goat_call {path:"preview.status"}`, then
