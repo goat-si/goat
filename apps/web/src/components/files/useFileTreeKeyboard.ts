@@ -145,6 +145,6 @@ export function useFileTreeKeyboard(input: {
       panel.removeEventListener("click", handleRecursiveClick, true);
       panel.removeEventListener(FILE_TREE_FOCUS_REQUEST, handleFocusRequest);
     };
-  }, [handleFocusRequest, handleRecursiveClick, handleShortcut]);
+  }, [handleFocusRequest, handleRecursiveClick, handleShortcut, panelRef]);
   return { searchInputRef, focusTree };
 }

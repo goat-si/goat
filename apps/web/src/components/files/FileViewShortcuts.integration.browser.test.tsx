@@ -546,7 +546,9 @@ describe("tree item actions", () => {
     await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("# Notes", "file contents"));
     state.readFile.mockResolvedValueOnce({
       _tag: "Failure",
-      cause: Cause.fail(new ProjectReadFileError({ message: "binary", failure: "binary_file" })),
+      cause: Cause.fail(
+        new ProjectReadFileError({ relativePath: "notes.md", failure: "binary_file" }),
+      ),
     });
     await userEvent.keyboard(chord([MOD, "Alt", "Shift"], "v"));
     await vi.waitFor(() =>

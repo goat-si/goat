@@ -6,7 +6,7 @@ import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 
 const isProjectReadFileError = Schema.is(ProjectReadFileError);
 
-export function fileBaseName(path: string): string {
+function fileBaseName(path: string): string {
   const trimmed = path.replace(/[\\/]+$/, "");
   return trimmed.split(/[\\/]/).at(-1) || trimmed;
 }
