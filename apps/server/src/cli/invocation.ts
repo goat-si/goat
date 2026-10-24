@@ -44,6 +44,37 @@ const InstallManifest = Schema.Struct({
 });
 const decodeInstallManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(InstallManifest));
 
+// `t3` and `bin/t3.mjs` are launchers built before the GOAT rename. goat-rename: legacy
+const POSIX_NPM_GLOBAL_ENTRY =
+  /^(.*)\/lib\/node_modules\/(@goat-si\/goat|goat|t3)\/(?:dist\/bin\.mjs|bin\/(?:goat|t3)\.mjs)$/;
+const WINDOWS_NPM_GLOBAL_ENTRY =
+  /^(.*)\/node_modules\/(@goat-si\/goat|goat|t3)\/(bin\/(?:goat|t3)\.mjs|dist\/bin\.mjs)$/; // goat-rename: legacy
+
+/**
+ * Windows npm puts packages in `<prefix>\node_modules` and a `<prefix>\goat.cmd`
+ * shim beside them, with no `lib` or `bin`. The shim naming this exact script
+ * is the ownership proof. The prefix keeps the entry's own separators, since
+ * it is shown to people in a PowerShell command.
+ */
+const resolveWindowsNpmGlobal = Effect.fn("invocation.resolveWindowsNpmGlobal")(function* (
+  entry: string,
+) {
+  const match = WINDOWS_NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"));
+  if (!match?.[1] || match[1].includes("/node_modules/")) return null;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const prefix = entry.slice(0, match[1].length);
+  const script = `node_modules/${match[2]}/${match[3]}`;
+  for (const bin of ["goat", "t3"]) {
+    // goat-rename: legacy
+    const shim = yield* fs.readFileString(path.join(prefix, `${bin}.cmd`)).pipe(Effect.option);
+    if (Option.isSome(shim) && shim.value.replaceAll("\\", "/").includes(`%dp0%/${script}`)) {
+      return { kind: "npm-global", prefix } satisfies ServerInstallation;
+    }
+  }
+  return null;
+});
+
 /**
  * The script this CLI was started through: the `goat` npm launcher that
  * downloaded and ran this executable (it names itself in
@@ -80,23 +111,25 @@ export const resolveServerInstallation = Effect.gen(function* () {
   const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
   const entry = yield* fs.realPath(yield* resolveEntryPath);
-  // `t3` and `bin/t3.mjs` are launchers built before the GOAT rename. goat-rename: legacy
+  if (platform === "win32") {
+    const owned = yield* resolveWindowsNpmGlobal(entry);
+    if (owned !== null) return owned;
+  }
+  // Matched with `/` so the layout reads the same whatever separators the host returns.
   const match =
-    /^(.*)\/lib\/node_modules\/(@goat-si\/goat|goat|t3)\/(?:dist\/bin\.mjs|bin\/(?:goat|t3)\.mjs)$/.exec(
-      entry,
-    );
+    platform === "win32" ? null : POSIX_NPM_GLOBAL_ENTRY.exec(entry.replaceAll("\\", "/"));
   if (!match) {
     const runner = detectCliRunner(entry);
     return runner === null
       ? null
       : ({ kind: runner === "pnpm dlx" ? "pnpm-dlx" : runner } satisfies ServerInstallation);
   }
-  if (platform === "win32") return null;
-  const prefix = match[1] || "/";
+  const layoutPrefix = match[1] ?? "";
+  const prefix = entry.slice(0, layoutPrefix.length) || "/";
   if (
-    prefix.includes("/node_modules/") ||
-    /\/(?:Cellar|Caskroom)\//i.test(prefix) ||
-    /\/mise\/installs\/(?!node\/)[^/]+\//.test(prefix)
+    layoutPrefix.includes("/node_modules/") ||
+    /\/(?:Cellar|Caskroom)\//i.test(layoutPrefix) ||
+    /\/mise\/installs\/(?!node\/)[^/]+\//.test(layoutPrefix)
   )
     return null;
 
@@ -163,24 +196,8 @@ export const resolveNpmUpdateCommand = Effect.fn("invocation.resolveNpmUpdateCom
   const entry = yield* resolveEntryPath;
   const platform = yield* HostProcess.Platform;
   const environment = yield* HostProcess.Environment;
+  // A Windows launcher without a proven global shim is run through `npm exec`.
   if (platform === "win32" && entry === environment.GOAT_NPM_LAUNCHER_PATH?.trim()) {
-    const match =
-      /^(.*)\/node_modules\/(@goat-si\/goat|goat|t3)\/(bin\/(?:goat|t3)\.mjs|dist\/bin\.mjs)$/.exec(
-        entry.replaceAll("\\", "/"),
-      ); // goat-rename: legacy
-    if (match && !match[1]?.includes("/node_modules/")) {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const prefix = match[1] ?? "";
-      const script = `node_modules/${match[2]}/${match[3]}`;
-      for (const bin of ["goat", "t3"]) {
-        // goat-rename: legacy
-        const shim = yield* fs.readFileString(path.join(prefix, `${bin}.cmd`)).pipe(Effect.option);
-        if (Option.isSome(shim) && shim.value.replaceAll("\\", "/").includes(`%dp0%/${script}`)) {
-          return `npm --prefix ${hostShellWord(platform, prefix)} install --global ${cliNpmPackageUrl(version)}`;
-        }
-      }
-    }
     return cliNpmExecCommand(version);
   }
   return detectCliRunner(entry) === null ? undefined : cliNpmExecCommand(version);

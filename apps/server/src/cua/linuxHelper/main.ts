@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process outside the server's runtime.
-// @effect-diagnostics globalDate:off -- Request deadlines are wall-clock budgets in a plain Node process.
 // @effect-diagnostics globalTimers:off -- Settle waits and the parent check are plain process timers.
 /**
  * goat-computer-use for Linux: the helper GOAT spawns to observe and act on one desktop
@@ -12,12 +11,14 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import { COMPUTER_USE_MAX_FRAME_BYTES } from "@goat/contracts";
+import { COMPUTER_USE_MAX_FRAME_BYTES, type ComputerUseWindowTarget } from "@goat/contracts";
 import { cuaDriverListingEnvironment, cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 
 import { gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
 import { startDriver } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
+import { openX11HumanInput } from "./humanInputSource.ts";
+import { makeSignalMonitor } from "./linuxSignals.ts";
 import { makeLinuxHelper } from "./LinuxComputerUseHelper.ts";
 import {
   detectLinuxSession,
@@ -71,6 +72,41 @@ const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const driverPath =
   environment.GOAT_COMPUTER_USE_DRIVER?.trim() || NodePath.join(here, "cua-driver", "cua-driver");
 
+// A person's input is read from XInput2 raw events, which name their device (X11 only). Under
+// Wayland, XWayland sees only input to X clients and the compositor names no devices, so
+// humanInput is unsupported there. Opened before the driver starts, so its devices are new.
+const gdbus = gdbusRunner(driverEnvironment);
+const input =
+  session.unavailable === undefined &&
+  session.unsupported === undefined &&
+  session.displayServer === "x11"
+    ? await openX11HumanInput(environment)
+    : undefined;
+const generation = NodeCrypto.randomUUID();
+// Deadlines and event spacing need a clock that never steps back when the system time changes.
+const monotonic = () => performance.now();
+const secureFocus = makeSecureFocusProbe(gdbus);
+let windowOpen: (target: ComputerUseWindowTarget) => Promise<boolean | undefined> = async () =>
+  undefined;
+const signals = makeSignalMonitor({
+  secureFocus,
+  windowOpen: (target) => windowOpen(target),
+  input,
+  // The pause goes out first; then the helper ends so a restart reports humanInput unsupported.
+  inputLost: () => void setImmediate(() => end(1)),
+  now: monotonic,
+  every: (ms, task) => {
+    const timer = setInterval(() => void task(), ms);
+    return () => clearInterval(timer);
+  },
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
+  afterReply: (task) => void setImmediate(() => void task()),
+  // Events are a few hundred bytes, far inside any frame limit.
+  emit: (watchId, event) =>
+    process.stdout.write(JSON.stringify({ generation, watchId, event }) + "\n"),
+});
+const capabilities = linuxCapabilities(session, input !== undefined);
+
 const helper = makeLinuxHelper({
   session,
   screen: environment.DISPLAY || environment.WAYLAND_DISPLAY || "none",
@@ -80,7 +116,7 @@ const helper = makeLinuxHelper({
       environment: driverEnvironment,
       expectedVersion: driverVersion,
     }),
-  secureFocus: makeSecureFocusProbe(gdbusRunner(driverEnvironment)),
+  secureFocus,
   uinputWritable: () =>
     NodeFS.promises.access("/dev/uinput", NodeFS.constants.W_OK).then(
       () => true,
@@ -88,14 +124,20 @@ const helper = makeLinuxHelper({
     ),
   settle: () => new Promise((resolve) => setTimeout(resolve, SETTLE_MS)),
   newId: () => NodeCrypto.randomUUID(),
-  now: () => Date.now(),
+  now: monotonic,
+  signals,
+  capabilities,
 });
+windowOpen = helper.windowOpen;
 
 let ending = false;
 const end = (code: number) => {
   if (ending) return;
   ending = true;
-  void helper.close().finally(() => process.exit(code));
+  void helper.close().finally(() => {
+    input?.close();
+    process.exit(code);
+  });
 };
 process.once("SIGTERM", () => end(0));
 process.once("SIGINT", () => end(0));
@@ -113,9 +155,9 @@ void serveHelperChannel({
     executable:
       environment.GOAT_COMPUTER_USE_EXECUTABLE?.trim() || process.argv[1] || process.execPath,
     pid: process.pid,
-    generation: NodeCrypto.randomUUID(),
+    generation,
   },
-  capabilities: linuxCapabilities(session),
+  capabilities,
   maxFrameBytes: COMPUTER_USE_MAX_FRAME_BYTES,
   helper,
 }).then(() => end(0));
