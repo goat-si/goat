@@ -33,6 +33,7 @@ import * as Settings from "../serverSettings.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as Inbox from "./DecisionInbox.ts";
 import * as Profiles from "./PermissionProfiles.ts";
+import { origin } from "./DecisionDestination.testkit.ts";
 
 // A provider approval on a full-access thread, projected into the inbox as a human-required item.
 const target = ThreadId.make("pending-thread");
@@ -217,3 +218,47 @@ it.effect("refuses an outside client without approvals and a thread credential",
     }
   }),
 );
+
+for (const [name, forwarded, access, accepted] of [
+  ["narrow forwarded ceiling", "auto", "full-access", false],
+  ["narrow session ceiling", "full-access", "auto-accept-edits", false],
+  ["matching ceilings", "full-access", "full-access", true],
+] as const) {
+  it.effect(
+    `#1405 ${accepted || access !== "full-access" ? "preservation" : "baseline-failing"}: an approve-scoped transport respects ${name}`,
+    () =>
+      Effect.gen(function* () {
+        const commands = yield* Ref.make<ReadonlyArray<OrchestrationV2ServerCommand>>([]);
+        yield* Effect.gen(function* () {
+          yield* seed;
+          const inbox = yield* Inbox.DecisionInbox;
+          const item = (yield* inbox.list(person, {})).items[0]!;
+          const profile = (yield* (yield* Settings.ServerSettingsService).getSettings).goatclaw
+            .profiles.worker!;
+          const input = {
+            id: item.id,
+            decision: "accept" as const,
+            reason: "Authorized at the origin ceiling",
+            transportEnvironmentId: origin,
+            permissionProfileCeiling: { ...profile, runtimeModeCeiling: forwarded },
+          };
+          const result = yield* inbox
+            .answer(outsideClient(true, access), input)
+            .pipe(Effect.result);
+          if (accepted) {
+            expect(result).toMatchObject({ _tag: "Success", success: { answeredBy: "mcp:bot" } });
+            expect(yield* Ref.get(commands)).toMatchObject([
+              { type: "runtime-request.respond", decision: "accept" },
+            ]);
+          } else {
+            expect(result).toMatchObject({
+              _tag: "Failure",
+              failure: { code: "orchestration_error" },
+            });
+            expect(yield* Ref.get(commands)).toEqual([]);
+            expect((yield* inbox.get(person, item.id)).status).toBe("open");
+          }
+        }).pipe(Effect.provide(fixture(commands)));
+      }),
+  );
+}
