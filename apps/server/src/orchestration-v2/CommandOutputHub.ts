@@ -24,6 +24,13 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as EventSink from "./EventSink.ts";
+import {
+  type CredentialStream,
+  EMPTY_CREDENTIAL_STREAM,
+  finishGoatCredentialStream,
+  isEmptyCredentialStream,
+  redactGoatCredentialChunk,
+} from "../mcp/goatCredentialRedaction.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
 /**
@@ -46,6 +53,11 @@ const COMMAND_OUTPUT_MAX_APPEND_CHARS = 16 * 1024;
 const MAX_LIVE_COMMANDS = 64;
 /** Finished tails kept for a settle that reports no output of its own (an interrupt). */
 const MAX_FINISHED_COMMANDS = 16;
+/**
+ * Commands with output held back as a possible credential. Kept apart from the display tails:
+ * evicting a tail must not forget that the next chunk may finish a token.
+ */
+const MAX_CARRIED_COMMANDS = 4 * MAX_LIVE_COMMANDS;
 /** Final output read from persistence is normalized from at most this many trailing chars. */
 const MAX_FINAL_SOURCE_CHARS = TERMINAL_OUTPUT_TAIL_CHARS * 4;
 
@@ -141,6 +153,14 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   // Insertion order doubles as recency: every write re-inserts its entry.
   const tails = new Map<string, TerminalOutputState>();
+  // Redaction state between chunks: output held back because the next chunk may complete a
+  // credential, and the character before it. Commands without any are not kept.
+  const carries = new Map<string, CredentialStream>();
+  // Commands whose state was evicted. The next chunk could finish a credential with no context
+  // left to recognize it, so they stream nothing more; their persisted, redacted output shows
+  // when they settle. Only finishing clears an entry: dropping one would resume the stream
+  // without that context. Entries are a key each, for commands still running.
+  const blinded = new Set<string>();
   const finished = new Map<string, TerminalOutputState>();
   const subscribers = new Map<string, Set<Subscriber>>();
 
@@ -165,7 +185,23 @@ export const make = Effect.gen(function* () {
     Effect.suspend(() => {
       if (chunk.length === 0) return Effect.void;
       const key = commandKey(target);
-      const tail = appendTerminalOutput(tails.get(key) ?? EMPTY_TERMINAL_OUTPUT, chunk);
+      if (blinded.has(key)) return Effect.void;
+      const redacted = redactGoatCredentialChunk(
+        carries.get(key) ?? EMPTY_CREDENTIAL_STREAM,
+        chunk,
+      );
+      if (!isEmptyCredentialStream(redacted.stream))
+        setBounded(carries, key, redacted.stream, MAX_CARRIED_COMMANDS, (evicted) =>
+          blinded.add(evicted),
+        );
+      else carries.delete(key);
+      return appendRedacted(key, redacted.emit);
+    });
+
+  const appendRedacted = (key: string, text: string) =>
+    Effect.suspend(() => {
+      if (text.length === 0) return Effect.void;
+      const tail = appendTerminalOutput(tails.get(key) ?? EMPTY_TERMINAL_OUTPUT, text);
       setBounded(tails, key, tail, MAX_LIVE_COMMANDS, (oldest) => {
         // Its viewers no longer share the hub's state; resync them on the next frame.
         for (const subscriber of subscribers.get(oldest) ?? []) {
@@ -173,17 +209,29 @@ export const make = Effect.gen(function* () {
           subscriber.pendingAppend = "";
         }
       });
-      return wakeAll(key, chunk);
+      return wakeAll(key, text);
     });
 
   const finish: CommandOutputHubShape["finish"] = (target) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       const key = commandKey(target);
-      const tail = tails.get(key);
-      if (tail === undefined) return;
-      tails.delete(key);
-      setBounded(finished, key, tail, MAX_FINISHED_COMMANDS);
-    });
+      const carry = carries.get(key);
+      carries.delete(key);
+      blinded.delete(key);
+      return carry === undefined
+        ? Effect.void
+        : appendRedacted(key, finishGoatCredentialStream(carry));
+    }).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          const key = commandKey(target);
+          const tail = tails.get(key);
+          if (tail === undefined) return;
+          tails.delete(key);
+          setBounded(finished, key, tail, MAX_FINISHED_COMMANDS);
+        }),
+      ),
+    );
 
   const subscribe: CommandOutputHubShape["subscribe"] = (target) =>
     Stream.unwrap(
