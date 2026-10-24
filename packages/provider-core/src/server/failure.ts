@@ -93,6 +93,11 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeAppendSystemPromptMissingValueError":
         case "CursorModelUnavailableError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
+        // Devin Cloud's CLI checks speak in GOAT's own words; only relay details carry vendor text.
+        case "DevinCloudCliError":
+          if ((cause as Record<string, unknown>).stage !== "relay")
+            return { known: stringField(cause, "message"), category: categoryMessage() };
+          break;
         case "ContextHandoffDeliveryUncertainError":
           return {
             known:
