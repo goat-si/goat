@@ -903,8 +903,7 @@ export function useComposerSend(input: ComposerSendInput) {
         previewAnnotations: sendContextPreviewAnnotations,
         direct: directAnnotation,
       });
-    // A direct "send annotation" writes the draft and sends in the same tick; the reference
-    // must be in the text now, not after the next render.
+    // Include a same-tick annotation reference before React renders its draft.
     const promptForSend = directAnnotation
       ? ensureInlineContextReferences(promptRef.current, [
           previewAnnotationContextReference(directAnnotation.annotation),
@@ -914,6 +913,7 @@ export function useComposerSend(input: ComposerSendInput) {
       text: promptForSend,
       records: composerThreadContexts,
       environmentId,
+      hostRoutingEnvironmentId: sendCtx?.threadContextRoutingEnvironmentId,
     })[0];
     if (strandedThread) {
       const owner =
@@ -1377,8 +1377,8 @@ export function useComposerSend(input: ComposerSendInput) {
         .getState()
         .getComposerDraft(composerDraftTarget);
       const changedBeforeDecline = draftChangedSinceSend();
-      const pendingIdsBeforeDecline = pendingApprovalsRef.current.map(
-        (approval) => approval.requestId,
+      const pendingIdsBeforeDecline = new Set(
+        pendingApprovalsRef.current.map(({ requestId }) => requestId),
       );
       const approvalResponding = approvalsToDecline.some((approval) =>
         respondingRequestIdsRef.current.includes(approval.requestId),
@@ -1433,7 +1433,7 @@ export function useComposerSend(input: ComposerSendInput) {
       // An approval that arrived during the decline would block the redirect; keep the draft so
       // the next send declines it too.
       const approvalArrived = pendingApprovalsRef.current.some(
-        (approval) => !pendingIdsBeforeDecline.includes(approval.requestId),
+        (approval) => !pendingIdsBeforeDecline.has(approval.requestId),
       );
       if (
         !declined ||

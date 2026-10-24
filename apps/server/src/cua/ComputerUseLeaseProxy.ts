@@ -623,7 +623,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         id,
         message.method,
         "app_not_approved",
-        scopeMessage("app_not_approved", `the app with pid ${verdict.pid}`),
+        scopeMessage(
+          "app_not_approved",
+          listed.get(verdict.pid)?.id ?? `the app with pid ${verdict.pid}`,
+        ),
       );
     if (verdict._tag === "refuse")
       return refusal(
