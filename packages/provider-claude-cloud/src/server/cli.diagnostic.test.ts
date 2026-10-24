@@ -190,3 +190,21 @@ it.effect.each([
     }),
   ),
 );
+
+it.effect("a wrapped diagnostic stops at the session receipt that follows it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeCliHarness();
+      const fiber = yield* h.service
+        .start(LOGIN, "/fixture/project", "task")
+        .pipe(Effect.forkChild);
+      yield* h.fake.ready;
+      h.fake.emit("Error: first\r\r\nwrapped end\r\r\n" + RECEIPT);
+      const handle = yield* Fiber.join(fiber);
+      h.fake.finish(1);
+      const error = yield* handle.exited.pipe(Effect.flip);
+      expect(error.outcome).toBe("uncertain");
+      expect(error.detail).toBe("first wrapped end");
+    }),
+  ),
+);

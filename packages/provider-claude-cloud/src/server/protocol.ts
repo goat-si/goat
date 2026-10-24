@@ -95,6 +95,12 @@ export function readDiagnostic(raw: string, environment: NodeJS.ProcessEnv) {
   const rest = /^(?:\n[ \t]*\S[^\n]*\n)*/.exec(text.slice(first.index + first[0].length))?.[0];
   let offset = first.index + first[0].length;
   for (const piece of (rest ?? "").split("\n").slice(0, -1)) {
+    // The session receipt and the folder trust question are Claude's next records, not the error.
+    if (
+      /^\s*(?:Created cloud session:|View:|Resume with:)/.test(piece) ||
+      FOLDER_QUESTION.test(piece)
+    )
+      break;
     if (piece.trim()) lines.push(cells.slice(offset, offset + piece.length));
     offset += piece.length + 1;
   }
