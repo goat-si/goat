@@ -13,6 +13,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeStream from "node:stream";
 import * as NodeUtil from "node:util";
 
 import {
@@ -93,7 +94,7 @@ try {
     ["ignore", "ignore", "ignore", "pipe"],
   );
   const displayOutput = xvfb.stdio[3];
-  if (!displayOutput || !("on" in displayOutput)) throw new Error("Xvfb has no display pipe.");
+  if (!(displayOutput instanceof NodeStream.Readable)) throw new Error("Xvfb has no display pipe.");
   const display = await Promise.race([
     new Promise<string>((resolve) =>
       NodeReadline.createInterface({ input: displayOutput }).once("line", (line) =>
