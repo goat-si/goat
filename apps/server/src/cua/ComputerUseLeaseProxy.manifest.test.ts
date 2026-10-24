@@ -7,6 +7,35 @@ import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.
 
 describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
   it.effect(
+    "a lease update that fails to apply ends the control instead of leaving it running",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({
+          // The helper cannot hide the overlay for the pause, once.
+          overlay: (command) =>
+            command.op === "hide" && command.reason === "human_input"
+              ? Effect.die("overlay channel closed")
+              : Effect.void,
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        // The driver goes, the click is answered, and nothing after it runs.
+        yield* h.killed;
+        const answer = yield* h.nextToProvider;
+        assert.equal(answer.id, 1);
+        yield* h.send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        assert.deepInclude(
+          ((yield* h.nextToProvider).result as Record<string, unknown>).structuredContent as object,
+          { detail: "lost" },
+        );
+        yield* h.close;
+        assert.equal(yield* Fiber.join(h.proxy), "lost");
+      }),
+  );
+
+  it.effect(
     "a rewritten manifest gets a fresh driver before the next idle call, never under a running one",
     () =>
       Effect.gen(function* () {
