@@ -483,15 +483,17 @@ const make = Effect.gen(function* () {
   };
 
   /** The thread's control when it is the live one this report names, expiry included. */
-  const liveControl = (threadId: ThreadId, controlId: string) =>
-    Effect.gen(function* () {
-      const record = controls.get(threadId);
-      if (record?.controlId !== controlId || record.ended !== undefined) return undefined;
-      // An expired control is ended to every reader even before anything marks it so.
-      const now = yield* DateTime.now;
-      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return undefined;
-      return record;
-    });
+  const liveControl = Effect.fn("ComputerUseLeases.liveControl")(function* (
+    threadId: ThreadId,
+    controlId: string,
+  ) {
+    const record = controls.get(threadId);
+    if (record?.controlId !== controlId || record.ended !== undefined) return undefined;
+    // An expired control is ended to every reader even before anything marks it so.
+    const now = yield* DateTime.now;
+    if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return undefined;
+    return record;
+  });
 
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
