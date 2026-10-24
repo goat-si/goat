@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   ComputerUseCapabilities,
+  ComputerUseHumanInputSource,
   ComputerUseReadiness,
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
@@ -24,6 +25,20 @@ export const DesktopCuaDriverRequest = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type DesktopCuaDriverRequest = typeof DesktopCuaDriverRequest.Type;
+
+/**
+ * Whether any agent controls this host right now; the desktop's helper watches for secret
+ * fields and a person's input only while it does (D7, #1235). seq grows with every change the
+ * server sends, so the desktop drops one that arrives after a newer one; the server sends the
+ * current value again whenever the desktop reconnects.
+ */
+export const DesktopCuaWatch = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaWatch"),
+  seq: Schema.Int,
+  active: Schema.Boolean,
+});
+export type DesktopCuaWatch = typeof DesktopCuaWatch.Type;
 
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
@@ -62,6 +77,9 @@ export const CuaDisplayCapability = Schema.Struct({
 });
 export type CuaDisplayCapability = typeof CuaDisplayCapability.Type;
 
+export const CuaToolsAvailability = Schema.Literals(["available", "off", "unavailable"]);
+export type CuaToolsAvailability = typeof CuaToolsAvailability.Type;
+
 /** Driver readiness on one host, independent of the enableCua setting. */
 export const CuaHostStatus = Schema.Struct({
   platform: Schema.Literals(["darwin", "linux", "win32", "other"]),
@@ -79,6 +97,8 @@ export const CuaHostStatus = Schema.Struct({
   readiness: ForwardCompatibleOptional(ComputerUseReadiness),
   /** Which safety signals that helper raises; absent means neither (#1235). */
   signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
+  /** Decided by the server's setting and running driver, never by the helper. */
+  tools: ForwardCompatibleOptional(CuaToolsAvailability),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 
@@ -209,8 +229,8 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const DesktopCuaHumanInputReport = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("cuaHumanInput"),
-  /** unknown: the helper saw a person's input but not which device sent it. */
-  source: Schema.Literals(["keyboard", "pointer", "unknown"]),
+  /** The same sources the helper's own humanInput event carries (computerUseProtocol.ts). */
+  source: ComputerUseHumanInputSource,
 });
 export type DesktopCuaHumanInputReport = typeof DesktopCuaHumanInputReport.Type;
 
@@ -302,3 +322,21 @@ export const ComputerUseRequestResult = Schema.Union([
   }),
 ]);
 export type ComputerUseRequestResult = typeof ComputerUseRequestResult.Type;
+
+/**
+ * Providers whose agent process runs on this host and can spawn the driver's
+ * stdio MCP server. Cloud providers run elsewhere, and the driver would
+ * operate this host's desktop on their behalf; Muse only accepts HTTP session
+ * servers. See ADR-0022 for the per-adapter table. Clients read it to say why
+ * `@computer` cannot run before a turn is sent.
+ */
+export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
+  "claudeAgent",
+  "codex",
+  "cursor",
+  "grok",
+  "antigravity",
+  "acpRegistry",
+  "opencode",
+  "pi",
+]);

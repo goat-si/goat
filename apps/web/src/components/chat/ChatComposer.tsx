@@ -182,6 +182,12 @@ import {
   threadContextRecord,
   threadContextReference,
 } from "~/lib/composerContextRecords";
+import {
+  composerCapabilityTargetDrivers,
+  composerComputerSetupLocation,
+  selectComposerCapability,
+} from "./composerCapabilitySelection";
+import { useNavigate } from "@tanstack/react-router";
 import { rememberCopiedComposerAttachments } from "~/lib/copiedComposerAttachments";
 import { useThreadContextDrop, threadContextDropTargetProps } from "./threadContextDrag";
 import { readThreadShell } from "~/state/entities";
@@ -1220,6 +1226,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedProviderSkills,
     selectedProviderSlashCommands,
     showSkillsInSlashMenu: settings.showSkillsInSlashMenu,
+    interactionMode,
+    capabilityTargetDrivers: composerCapabilityTargetDrivers(
+      multipleModelSelections ?? [selectedModelSelection],
+      providerInstanceEntries,
+    ),
   });
 
   const composerMenuOpen = Boolean(composerTrigger);
@@ -1929,6 +1940,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const { onUsageLimitsCommand } = props;
+  const navigate = useNavigate();
   const onSelectComposerItem = (item: ComposerCommandItem) => {
     if (composerSelectLockRef.current) return;
     composerSelectLockRef.current = true;
@@ -1937,17 +1949,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     });
     const { snapshot, trigger } = resolveActiveComposerTrigger();
     if (!trigger) return;
-    if (item.type === "path") {
-      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
-      const replacement = `${serializeComposerFileLink(item.path)} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+    // Replaces the typed trigger, swallowing one following space so chips never double it.
+    const replaceTriggerWith = (replacement: string) => {
+      const end = extendReplacementRangeForTrailingSpace(
         snapshot.value,
         trigger.rangeEnd,
         replacement,
       );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+      return applyPromptReplacement(trigger.rangeStart, end, replacement, {
+        expectedText: snapshot.value.slice(trigger.rangeStart, end),
       });
+    };
+    if (item.type === "capability") {
+      if (trigger.kind !== "path") return;
+      return selectComposerCapability({
+        item,
+        replaceTriggerWith,
+        onReplaced: () => setComposerHighlightedItemId(null),
+        openSetup: () => void navigate(composerComputerSetupLocation(environmentId)),
+      });
+    }
+    if (item.type === "path") {
+      if (!isPathSuggestionCurrent(item.searchTarget, trigger, environmentId, gitCwd)) return;
+      const replacement = `${serializeComposerFileLink(item.path)} `;
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -1996,14 +2021,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       const replacement = `/${item.command.name} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -2011,14 +2029,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     if (item.type === "skill") {
       const replacement = `$${item.skill.name} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         setComposerHighlightedItemId(null);
       }
@@ -2035,14 +2046,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const replacement = `${formatInlineContextReference(
         reviewCommentContextReference(comment),
       )} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         addComposerDraftReviewComment(composerDraftTarget, comment, {
           appendReference: false,
@@ -2057,14 +2061,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       if (!shell) return;
       const record = threadContextRecord(item.thread, shell.title);
       const replacement = `${formatInlineContextReference(threadContextReference(record))} `;
-      const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
-        snapshot.value,
-        trigger.rangeEnd,
-        replacement,
-      );
-      const applied = applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-        expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-      });
+      const applied = replaceTriggerWith(replacement);
       if (applied) {
         addComposerDraftThreadContexts(attachmentDraftTarget, [record], {
           appendReference: false,

@@ -49,6 +49,7 @@ const fixture = Effect.fnUntraced(function* () {
     pause: () => Effect.die("unused"),
     detection: Effect.succeed({ humanInput: true, privateMode: true }),
     resume: Effect.die("unused"),
+    sessions: Effect.die("unused"),
     subscribe: PubSub.subscribe(signals),
     changed: PubSub.publish(signals, undefined).pipe(Effect.asVoid),
     proxy: undefined,

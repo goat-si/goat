@@ -168,4 +168,124 @@ describe("SessionControl", () => {
     await control.release("viewer-a");
     await expect(control.agent("agent-b", async () => "acted")).resolves.toBe("acted");
   });
+
+  it("refuses agent actions and observation while private, and interrupts the action under way", async () => {
+    const control = new SessionControl("agent");
+    const started = Promise.withResolvers<void>();
+    const running = control.agent("agent", (signal) => {
+      started.resolve();
+      return new Promise((_, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      );
+    });
+    await started.promise;
+    const generation = control.generation;
+    control.setPrivate(true);
+    await expect(running).rejects.toMatchObject({ reason: "privateMode" });
+    expect(control.generation).toBeGreaterThan(generation);
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "privateMode",
+    });
+    // A person driving the tab does not open it to agent reads while a secret is on screen.
+    await control.take("viewer");
+    await expect(control.observe(async () => "snapshot")).rejects.toMatchObject({
+      reason: "privateMode",
+    });
+    await expect(control.human("viewer", async () => "typed")).resolves.toBe("typed");
+    control.setPrivate(false);
+    await expect(control.observe(async () => "snapshot")).resolves.toBe("snapshot");
+  });
+
+  it("keeps agents out after a person's stop until they hand the tab back", async () => {
+    const control = new SessionControl("agent");
+    const changes: Array<boolean> = [];
+    control.onChange(() => changes.push(control.isAgentStopped));
+    control.stopAgents();
+    await expect(control.agent("agent", async () => "click")).rejects.toMatchObject({
+      reason: "stopped",
+    });
+    expect(control.agentCanActNow("agent")).toBe(false);
+    // Reads still work: a stopped agent may look, not act.
+    await expect(control.observe(async () => "snapshot")).resolves.toBe("snapshot");
+    control.resumeAgents();
+    await expect(control.agent("agent", async () => "click")).resolves.toBe("click");
+    expect(changes).toEqual([true, false]);
+  });
+
+  it("answers a stopped action at once even when its work ignores the signal, and keeps later actions behind that work", async () => {
+    const control = new SessionControl("agent");
+    const work = Promise.withResolvers<string>();
+    const started = Promise.withResolvers<void>();
+    const events: Array<string> = [];
+    const stuck = control.agent("agent", () => {
+      started.resolve();
+      return work.promise;
+    });
+    await started.promise;
+    control.stopAgents();
+    await expect(stuck).rejects.toMatchObject({ reason: "stopped" });
+    expect(() => control.assertAgentMayDispatch()).toThrow(BrowserControlInterrupted);
+    control.resumeAgents();
+    const next = control.agent("agent", async () => events.push("next"));
+    work.resolve("late click");
+    await next;
+    expect(events).toEqual(["next"]);
+  });
+
+  it("withholds what an observation read when a secret appeared before it returned", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    control.setPrivate(true);
+    read.resolve("snapshot with the password field");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+  });
+
+  it("holds input from a gate passed before the action returned, and from a click left on a dialog", async () => {
+    const control = new SessionControl("agent");
+    const held: Array<Promise<unknown>> = [];
+    control.onDispatchCut((work) => held.push(work));
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const lateClick = Promise.withResolvers<void>();
+    const acting = control.agent("agent", () => {
+      // A key press passes its gate synchronously, before run() returns its promise.
+      const gate = control.dispatchGate();
+      gate();
+      gate.linger(lateClick.promise);
+      started.resolve();
+      return finish.promise;
+    });
+    await started.promise;
+    control.setPrivate(true);
+    expect(held).toHaveLength(2);
+    await expect(acting).rejects.toMatchObject({ reason: "privateMode" });
+    finish.resolve();
+    // The action is over, but the click it left on the dialog is still covered.
+    control.setPrivate(false);
+    control.stopAgents();
+    expect(held).toHaveLength(3);
+    lateClick.resolve();
+  });
+
+  it("keeps an action's input cancelled after a brief secret ends", async () => {
+    const control = new SessionControl("agent");
+    const gate = control.dispatchGate();
+    control.setPrivate(true);
+    control.setPrivate(false);
+    expect(control.agentCanActNow("agent")).toBe(true);
+    expect(gate).toThrow(BrowserControlInterrupted);
+    expect(control.dispatchGate()).not.toThrow();
+  });
+
+  it("withholds a read that a brief secret overlapped, even after the secret is gone", async () => {
+    const control = new SessionControl("agent");
+    const read = Promise.withResolvers<string>();
+    const observing = control.observe(() => read.promise);
+    control.setPrivate(true);
+    control.setPrivate(false);
+    read.resolve("frame that showed the password field");
+    await expect(observing).rejects.toMatchObject({ reason: "privateMode" });
+    await expect(control.observe(async () => "next read")).resolves.toBe("next read");
+  });
 });
