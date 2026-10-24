@@ -60,6 +60,8 @@ export const harness = Effect.fn(function* (
     readonly humanInput?: boolean;
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
     readonly manifestStamp?: () => string | undefined;
+    /** Holds the first driver's kill open until done, as a child slow to stop would. */
+    readonly firstKillGate?: Deferred.Deferred<void>;
     readonly acceptHuman?: () => boolean;
   } = {},
 ) {
@@ -115,6 +117,11 @@ export const harness = Effect.fn(function* (
           }).pipe(Effect.andThen(Queue.offer(driver.toDriver, line)), Effect.asVoid),
         lines: Stream.fromQueue(driver.fromDriver),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(
+            driver === drivers[0] && options.firstKillGate !== undefined
+              ? Deferred.await(options.firstKillGate)
+              : Effect.void,
+          ),
           Effect.andThen(Queue.end(driver.fromDriver)),
         ),
         ...(options.overlay
@@ -174,6 +181,12 @@ export const harness = Effect.fn(function* (
     killed: Effect.suspend(() => Deferred.await(first.killed)),
     isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
     restarted: Queue.take(started),
+    /** Driver children started and not killed. */
+    liveDrivers: Effect.suspend(() =>
+      Effect.forEach(drivers, (driver) => Deferred.isDone(driver.killed)).pipe(
+        Effect.map((killed) => killed.filter((done) => !done).length),
+      ),
+    ),
     /** Driver children started and not yet taken with restarted. */
     startedQueued: Queue.size(started),
     revokeCalled: Deferred.await(revokeCalled),

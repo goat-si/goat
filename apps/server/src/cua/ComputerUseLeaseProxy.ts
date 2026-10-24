@@ -40,6 +40,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
@@ -304,6 +305,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: ComputerUsePauseReason | undefined;
   let apps: ReadonlySet<string> | undefined;
   let running: Running | undefined;
+  /**
+   * Held while a lease update or a manifest refresh stops or starts a driver child, so one never
+   * replaces a child the other just started or stopped.
+   */
+  const lifecycle = yield* Semaphore.make(1);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   const handshake: Array<string> = [];
@@ -535,6 +541,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     }
     yield* readLines(current).pipe(Effect.forkIn(scope));
+    return current;
   });
 
   const pausedDetail = (reason: ComputerUsePauseReason) =>
@@ -598,13 +605,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   // The server is the authority: the first word for this control confirms it, anything else ends.
   yield* options.leaseUpdates.pipe(
     Stream.runForEach((update) =>
-      update.state !== "ended" && update.controlId !== options.controlId
-        ? end("lost")
-        : update.state === "active"
-          ? activate(update)
-          : update.state === "paused"
-            ? pause(update.reason)
-            : end(update.reason === "unauthorized" ? "lost" : update.reason),
+      lifecycle.withPermits(1)(
+        update.state !== "ended" && update.controlId !== options.controlId
+          ? end("lost")
+          : update.state === "active"
+            ? activate(update)
+            : update.state === "paused"
+              ? pause(update.reason)
+              : end(update.reason === "unauthorized" ? "lost" : update.reason),
+      ),
     ),
     Effect.catchCause(() => Effect.void),
     Effect.andThen(end("lost")),
@@ -718,17 +727,26 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * when it starts, so an idle child is replaced before the call is judged; every check after
    * this one sees the new child.
    */
-  const refreshManifest = Effect.gen(function* () {
-    const before = running;
-    if (options.manifestStamp === undefined || before === undefined || outstanding.size > 0)
-      return undefined;
-    const manifest = options.manifestStamp();
-    if (manifest === undefined || manifest === before.manifest) return undefined;
-    yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
-    yield* start();
-    // The child this refresh started, which the call may use as its own.
-    return running;
-  });
+  const refreshManifest = lifecycle.withPermits(1)(
+    Effect.gen(function* () {
+      const before = running;
+      if (
+        options.manifestStamp === undefined ||
+        before === undefined ||
+        paused !== undefined ||
+        finished !== undefined ||
+        outstanding.size > 0
+      )
+        return undefined;
+      const manifest = options.manifestStamp();
+      if (manifest === undefined || manifest === before.manifest) return undefined;
+      yield* interrupt("helper_restarted", LEASE_END_MESSAGES.helper_restarted);
+      // Stopping the old child waits; an expiry or a driver exit may have ended the control.
+      if (paused !== undefined || finished !== undefined) return undefined;
+      // The child this refresh started, which the call may use as its own.
+      return yield* start();
+    }),
+  );
 
   const handle = Effect.fn("ComputerUseLeaseProxy.forward")(function* (line: string) {
     const message = parse(line);

@@ -667,6 +667,37 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect(
+    "a pause and resume while a refresh stops the old child leave one child, and the call is refused",
+    () =>
+      Effect.gen(function* () {
+        let manifest = "v1";
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ manifestStamp: () => manifest, firstKillGate: gate });
+        yield* h.push(active());
+        manifest = "v2";
+        const forwarded = yield* h
+          .send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }))
+          .pipe(Effect.forkChild);
+        // The refresh is stopping the first child; the person takes the screen and hands it back.
+        yield* h.killed;
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.push(active());
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(forwarded);
+        const answer = yield* h.nextToProvider;
+        assert.deepInclude((answer.result as Record<string, unknown>).structuredContent as object, {
+          detail: "waiting_for_human",
+        });
+        // The refresh's child, then the resume's: each replaced in turn, never two at once.
+        yield* h.restarted;
+        yield* h.restarted;
+        assert.equal(yield* h.startedQueued, 0);
+        assert.equal(yield* h.liveDrivers, 1);
+        assert.equal(yield* h.driverQueued, 0);
+      }),
+  );
+
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
     Effect.gen(function* () {
       const h = yield* harness();
