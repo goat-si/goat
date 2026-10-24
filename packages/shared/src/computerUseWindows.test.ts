@@ -91,10 +91,14 @@ describe("Windows computer use observations (conformance)", () => {
     );
     assert.equal(second.kind, "diff");
     if (second.kind !== "diff") return;
-    // Agree's checked state is not in the protocol yet (#1231), so only Note changes.
+    // The toggled Agree box now shows up through element state (#1231).
+    const agree = refs.find((entry) => entry.label === "Agree")?.ref ?? "";
     assert.deepEqual(
-      second.changed.map((entry) => [entry.label, entry.ref, entry.value]),
-      [["Note", note, "hello from GOAT"]],
+      second.changed.map((entry) => [entry.label, entry.ref, entry.value, entry.state]),
+      [
+        ["Note", note, "hello from GOAT", undefined],
+        ["Agree", agree, undefined, { selected: true }],
+      ],
     );
     assert.deepEqual([second.added, second.removed], [[], []]);
     assert.deepEqual(
