@@ -7,6 +7,10 @@
       "types": "./src/hubNodes.ts",
       "default": "./src/hubNodes.ts"
     },
+    "./hub-devices": {
+      "types": "./src/hubDevices.ts",
+      "default": "./src/hubDevices.ts"
+    },
     "./cloud-machines": {
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"

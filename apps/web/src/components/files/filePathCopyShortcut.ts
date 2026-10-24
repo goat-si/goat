@@ -1,36 +1,9 @@
-import type { ResolvedKeybindingsConfig } from "@goat/contracts";
 import type { FileTree } from "@pierre/trees";
 
 import { toastManager } from "~/components/ui/toast";
 import { copyFilePath, resolveFilePathCopyTargets } from "~/filePathCopy";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
-import { isEditableFocused } from "~/lib/editableFocus";
 
 export type FilePathCopyCommand = "files.copyPath" | "files.copyRelativePath";
-
-const FILE_VIEW_CONTEXT = { fileViewFocus: true } as const;
-
-/**
- * The copy command a key press inside a file view asks for. Typing in a field
- * never copies, even under a custom rule without a when clause.
- */
-export function filePathCopyCommandForEvent(
-  event: KeyboardEvent,
-  keybindings: ResolvedKeybindingsConfig,
-): FilePathCopyCommand | null {
-  if (event.defaultPrevented || event.isComposing || isEditableFocused(event.target)) return null;
-  const command = resolveShortcutCommand(event, keybindings, {
-    context: { ...FILE_VIEW_CONTEXT, editableFocus: false },
-  });
-  return command === "files.copyPath" || command === "files.copyRelativePath" ? command : null;
-}
-
-export function filePathCopyShortcutLabel(
-  keybindings: ResolvedKeybindingsConfig,
-  command: FilePathCopyCommand,
-): string | null {
-  return shortcutLabelForCommand(keybindings, command, { context: FILE_VIEW_CONTEXT });
-}
 
 /**
  * The rows a copy acts on, by VS Code's explorer rule: a multi-selection wins,

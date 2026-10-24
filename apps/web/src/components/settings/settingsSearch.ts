@@ -1116,14 +1116,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "hub-nodes",
-    title: "Devices on this hub",
-    to: "/settings/connections",
-    searchTerms: [
-      "hub devices nodes machines ssh hosts linked goat servers cloud machines phone check routes",
-    ],
-  },
-  {
     id: "provider-host-matrix",
     title: "Providers on your machines",
     to: "/settings/connections",
