@@ -33,6 +33,8 @@ describe("cuaDriverManifest", () => {
       "browser_set_input_files",
       "clipboard_read",
       "kill_app",
+      // A whole-display screenshot shows every other app (#1321).
+      "get_desktop_state",
     ])
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
   });
