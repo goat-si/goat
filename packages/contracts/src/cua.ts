@@ -100,6 +100,23 @@ export const ComputerUseLeaseTarget = Schema.Struct({
 });
 export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 
+/**
+ * Proxy -> server, on the same route: a person's own keyboard or pointer input that the lease
+ * proxy's helper saw while the control was live, outside the agent's own input calls (#1235).
+ * Only the kind of input, never what was typed or where.
+ */
+export const ComputerUseLeaseHumanInput = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource }),
+});
+export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
+
+export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeaseTarget,
+  ComputerUseLeaseHumanInput,
+]);
+export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
+
 export const DesktopCuaDriverReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),

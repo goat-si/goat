@@ -181,6 +181,12 @@ export class ComputerUseLeases extends Context.Service<
       controlId: string,
       target: { readonly pid: number; readonly windowId: number },
     ) => Effect.Effect<boolean>;
+    /**
+     * A person's own input that a control's proxy saw through its helper (#1235): every agent on
+     * the host pauses, as for the desktop's report. False when the control is not the thread's
+     * live one, so an old proxy cannot pause anyone.
+     */
+    readonly humanInput: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
     /**
@@ -476,6 +482,17 @@ const make = Effect.gen(function* () {
     return true;
   };
 
+  /** The thread's control when it is the live one this report names, expiry included. */
+  const liveControl = (threadId: ThreadId, controlId: string) =>
+    Effect.gen(function* () {
+      const record = controls.get(threadId);
+      if (record?.controlId !== controlId || record.ended !== undefined) return undefined;
+      // An expired control is ended to every reader even before anything marks it so.
+      const now = yield* DateTime.now;
+      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return undefined;
+      return record;
+    });
+
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
       // A person's input with no agent on the screen is just a person using their computer,
@@ -651,11 +668,8 @@ const make = Effect.gen(function* () {
       controlId: string,
       target: { readonly pid: number; readonly windowId: number },
     ) {
-      const record = controls.get(threadId);
-      if (record?.controlId !== controlId || record.ended !== undefined) return false;
-      // An expired control is ended to every reader even before anything marks it so.
-      const now = yield* DateTime.now;
-      if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) return false;
+      const record = yield* liveControl(threadId, controlId);
+      if (record === undefined) return false;
       if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
         return true;
       controls.set(threadId, {
@@ -663,6 +677,14 @@ const make = Effect.gen(function* () {
         target: { pid: target.pid, windowId: target.windowId },
       });
       yield* changed;
+      return true;
+    }),
+    humanInput: Effect.fn("ComputerUseLeases.humanInput")(function* (
+      threadId: ThreadId,
+      controlId: string,
+    ) {
+      if ((yield* liveControl(threadId, controlId)) === undefined) return false;
+      yield* pause("human_input");
       return true;
     }),
     stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(

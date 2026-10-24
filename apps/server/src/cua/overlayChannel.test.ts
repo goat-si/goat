@@ -53,6 +53,19 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("passes on the helper's input reports and ignores lines it cannot read", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const seen: Array<unknown> = [];
+      overlayChannel(helper.socket, (input) => seen.push(input));
+      helper.socket.push(JSON.stringify({ humanInput: { source: "keyboard", ageMs: 120 } }) + "\n");
+      helper.socket.push(JSON.stringify({ humanInput: { source: "typed text", ageMs: 1 } }) + "\n");
+      helper.socket.push("not json\n");
+      yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+      assert.deepEqual(seen, [{ source: "keyboard", ageMs: 120 }]);
+    }),
+  );
+
   it.effect("sends nothing and returns at once once the helper is gone", () =>
     Effect.gen(function* () {
       const helper = helperEnd(true);
