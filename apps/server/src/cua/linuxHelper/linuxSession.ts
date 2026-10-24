@@ -1,0 +1,245 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; zlib reads its own capture.
+import * as NodeZlib from "node:zlib";
+
+import {
+  COMPUTER_USE_METHODS,
+  COMPUTER_USE_PROTOCOL_VERSION,
+  type ComputerUseCapabilities,
+} from "@goat/contracts";
+
+/**
+ * The desktop a Linux helper drives and what it can do there (WS10 #1138). X11 and XWayland
+ * windows go through Cua Driver's X11 backend. A Wayland session without XWayland gets AT-SPI
+ * only in the background, because Wayland has no way to send input or capture one window
+ * without focus; the driver's experimental Wayland backend is turned on for it except on
+ * GNOME 50 or later, where pinned 0.37.0 lacks 0.38.0's guard against starting its GNOME Shell
+ * helper unsafely.
+ */
+
+export type LinuxDisplayServer = "x11" | "xwayland" | "wayland" | "none";
+
+export interface LinuxSessionFacts {
+  readonly display: string | undefined;
+  readonly waylandDisplay: string | undefined;
+  readonly sessionBus: string | undefined;
+  readonly currentDesktop: string | undefined;
+  /** Major version from `gnome-shell --version`, when GNOME Shell is installed. */
+  readonly gnomeShellMajor: number | null;
+}
+
+export interface LinuxSession {
+  readonly displayServer: LinuxDisplayServer;
+  /** Why this helper cannot reach a desktop at all; every window method refuses with it. */
+  readonly unavailable?: string;
+  /** Why the driver may not drive this Wayland compositor; window methods are unsupported. */
+  readonly unsupported?: string;
+  readonly pointerAndKeysInBackground: boolean;
+  /** Extra driver environment this session needs. */
+  readonly driverEnvironment: Readonly<Record<string, string>>;
+}
+
+const present = (value: string | undefined) => value !== undefined && value.trim() !== "";
+
+export function detectLinuxSession(facts: LinuxSessionFacts): LinuxSession {
+  const x11 = present(facts.display);
+  const wayland = present(facts.waylandDisplay);
+  const displayServer: LinuxDisplayServer = x11
+    ? wayland
+      ? "xwayland"
+      : "x11"
+    : wayland
+      ? "wayland"
+      : "none";
+  const base = { displayServer, pointerAndKeysInBackground: x11, driverEnvironment: {} };
+  if (displayServer === "none")
+    return {
+      ...base,
+      unavailable:
+        "No desktop session is reachable: neither DISPLAY nor WAYLAND_DISPLAY is set. Sign in to a desktop on this computer or start Xvfb.",
+    };
+  if (!present(facts.sessionBus))
+    return {
+      ...base,
+      unavailable:
+        "No D-Bus session bus is set (DBUS_SESSION_BUS_ADDRESS), and AT-SPI needs one to read app controls.",
+    };
+  if (displayServer !== "wayland") return base;
+  const gnome = (facts.currentDesktop ?? "").toUpperCase().split(":").includes("GNOME");
+  if (gnome && facts.gnomeShellMajor !== null && facts.gnomeShellMajor >= 50)
+    return {
+      ...base,
+      unsupported:
+        "GNOME " +
+        facts.gnomeShellMajor +
+        " on Wayland is not supported by Cua Driver 0.37.0, which cannot start its GNOME Shell helper safely there. Sign in to an X11 session, or wait for GOAT to carry Cua Driver 0.38.0.",
+    };
+  // 0.37.0 ships its Wayland backend off.
+  return { ...base, driverEnvironment: { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" } };
+}
+
+export const parseGnomeShellMajor = (output: string): number | null => {
+  const match = /GNOME Shell (\d+)/u.exec(output);
+  return match ? Number(match[1]) : null;
+};
+
+export function linuxCapabilities(session: LinuxSession): ComputerUseCapabilities {
+  return {
+    protocol: COMPUTER_USE_PROTOCOL_VERSION,
+    platform: "linux",
+    methods: Object.fromEntries(
+      COMPUTER_USE_METHODS.map((method) => [
+        method,
+        session.unsupported !== undefined && method !== "capabilities" && method !== "permissions"
+          ? "unsupported"
+          : "supported",
+      ]),
+    ) as ComputerUseCapabilities["methods"],
+    backgroundDelivery: session.unavailable === undefined && session.unsupported === undefined,
+  };
+}
+
+/**
+ * Readiness as separate answers (computer-use.md, Permission onboarding). Linux has no OS grant
+ * on X11; Wayland asks for portal consent, which is pending until a capture proves it.
+ */
+export interface LinuxReadiness {
+  readonly displayServer: LinuxDisplayServer;
+  /** AT-SPI answered and the driver reached it. */
+  readonly accessibility: "ready" | "unavailable";
+  /** A real window capture with more than one color in it. */
+  readonly capture: "ready" | "blank" | "noWindow" | "portalPending" | "unavailable";
+  /** Background pointer and keys need a writable /dev/uinput; else foreground only. */
+  readonly input: "background" | "foregroundOnly" | "unavailable";
+  readonly reasons: ReadonlyArray<string>;
+}
+
+export interface ReadinessFacts {
+  readonly session: LinuxSession;
+  readonly driver: {
+    readonly x11: boolean;
+    readonly wayland: boolean;
+    readonly atspi: boolean;
+  } | null;
+  readonly capture: "uniform" | "varied" | "noWindow" | "failed" | "unproven";
+  readonly uinputWritable: boolean;
+}
+
+export function linuxReadiness(facts: ReadinessFacts): LinuxReadiness {
+  const { session } = facts;
+  const blocked = session.unavailable ?? session.unsupported;
+  if (blocked !== undefined || facts.driver === null)
+    return {
+      displayServer: session.displayServer,
+      accessibility: "unavailable",
+      capture: "unavailable",
+      input: "unavailable",
+      reasons: [blocked ?? "Cua Driver did not start."],
+    };
+  const reasons: string[] = [];
+  const accessibility = facts.driver.atspi ? "ready" : "unavailable";
+  if (!facts.driver.atspi)
+    reasons.push(
+      "AT-SPI does not answer on the session bus, so app controls cannot be read. Turn on assistive technologies or install at-spi2-core.",
+    );
+  const wayland = session.displayServer === "wayland";
+  const capture =
+    facts.capture === "varied"
+      ? "ready"
+      : facts.capture === "uniform"
+        ? "blank"
+        : facts.capture === "noWindow"
+          ? "noWindow"
+          : wayland
+            ? "portalPending"
+            : "unavailable";
+  if (capture === "blank") reasons.push("A window capture came back as one solid color.");
+  if (capture === "noWindow") reasons.push("No window is open to prove capture with.");
+  if (capture === "portalPending")
+    reasons.push(
+      "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
+    );
+  if (capture === "unavailable") reasons.push("The driver could not capture a window.");
+  const input = wayland ? "foregroundOnly" : facts.uinputWritable ? "background" : "foregroundOnly";
+  if (input === "foregroundOnly")
+    reasons.push(
+      wayland
+        ? "Wayland cannot send pointer or key input to a window in the background; controls still work through AT-SPI."
+        : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices; controls still work through AT-SPI.",
+    );
+  return { displayServer: session.displayServer, accessibility, capture, input, reasons };
+}
+
+/**
+ * Whether a PNG holds a single color: "uniform", "varied", or undefined for a layout this does
+ * not read (only 8-bit truecolor, with or without alpha, not interlaced).
+ */
+export function pngColors(bytes: Uint8Array): "uniform" | "varied" | undefined {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.byteLength < 33 || view.getUint32(0) !== 0x89504e47) return undefined;
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let channels = 0;
+  const data: Uint8Array[] = [];
+  while (offset + 8 <= bytes.byteLength) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    const body = bytes.subarray(offset + 8, offset + 8 + length);
+    if (type === "IHDR") {
+      const header = new DataView(body.buffer, body.byteOffset, body.byteLength);
+      width = header.getUint32(0);
+      height = header.getUint32(4);
+      const depth = body[8];
+      const color = body[9];
+      if (depth !== 8 || (color !== 2 && color !== 6) || body[12] !== 0) return undefined;
+      channels = color === 6 ? 4 : 3;
+    } else if (type === "IDAT") data.push(body);
+    else if (type === "IEND") break;
+    offset += 12 + length;
+  }
+  if (width === 0 || height === 0 || channels === 0) return undefined;
+  let raw: Uint8Array;
+  try {
+    raw = NodeZlib.inflateSync(Buffer.concat(data));
+  } catch {
+    return undefined;
+  }
+  const stride = width * channels;
+  if (raw.byteLength < (stride + 1) * height) return undefined;
+  let previous = new Uint8Array(stride);
+  let first: Uint8Array | undefined;
+  for (let row = 0; row < height; row++) {
+    const filter = raw[row * (stride + 1)];
+    const line = raw.subarray(row * (stride + 1) + 1, (row + 1) * (stride + 1));
+    const out = new Uint8Array(stride);
+    for (let i = 0; i < stride; i++) {
+      const left = i >= channels ? (out[i - channels] ?? 0) : 0;
+      const up = previous[i] ?? 0;
+      const corner = i >= channels ? (previous[i - channels] ?? 0) : 0;
+      const value = line[i] ?? 0;
+      const predicted =
+        filter === 1
+          ? left
+          : filter === 2
+            ? up
+            : filter === 3
+              ? (left + up) >> 1
+              : filter === 4
+                ? paeth(left, up, corner)
+                : 0;
+      out[i] = (value + predicted) & 0xff;
+    }
+    first ??= out.slice(0, channels);
+    for (let i = 0; i < stride; i++) if (out[i] !== first[i % channels]) return "varied";
+    previous = out;
+  }
+  return "uniform";
+}
+
+function paeth(a: number, b: number, c: number) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
