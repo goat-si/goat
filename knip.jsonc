@@ -17,8 +17,8 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly. release-desktop.yml bundles the
+      // Knip loads its preprocessor through a CLI option; native verification,
+      // worktree setup (from t3.json) and worktree creation run directly. release-desktop.yml bundles the
       // Windows verify script with esbuild through a path knip does not trace, and
       // electron-builder loads the macOS signer by path.
       "entry": [
@@ -27,6 +27,7 @@
         "knip-schemas.ts",
         "mobile-native-client.ts",
         "setup-worktree.ts",
+        "worktree-add.ts",
         "bench-ssh-post-connect.mjs",
         "export-brand-icons.ts",
         "goat-rename.ts",

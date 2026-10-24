@@ -1,7 +1,14 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
-import { cloudVersionSupported, probeCli, type CliResult } from "./cli.ts";
+import { ProviderSessionId } from "@goat/contracts";
+import {
+  knownProviderFailureMessage,
+  makeProviderFailure,
+} from "@goat/provider-core/server/failure";
+import { ProviderAdapterOpenSessionError } from "@goat/provider-core/server/ProviderAdapter";
+import { DRIVER } from "./capabilities.ts";
+import { cloudVersionSupported, DevinCloudCliError, probeCli, type CliResult } from "./cli.ts";
 
 it("gates exact numeric version and rejects malformed/prerelease output", () => {
   assert.isFalse(cloudVersionSupported("3000.10.21 (old)"));
@@ -138,3 +145,38 @@ it.effect("nonzero exit and unexpected auth output fail without exposing process
     }
   }),
 );
+
+it("a launch that cannot open Devin Cloud reports the CLI's own reason, never raw relay text", () => {
+  const opened = (cause: DevinCloudCliError) =>
+    new ProviderAdapterOpenSessionError({
+      driver: DRIVER,
+      providerSessionId: ProviderSessionId.make("session-fixture"),
+      cause,
+    });
+  // ProviderTurnStartService shows this message when opening the session fails.
+  assert.equal(
+    knownProviderFailureMessage(opened(new DevinCloudCliError({ stage: "auth" }))),
+    "Sign in to Devin to use Devin Cloud.",
+  );
+  assert.equal(
+    knownProviderFailureMessage(opened(new DevinCloudCliError({ stage: "version" }))),
+    "Update the Devin CLI to 3000.11.1 or newer.",
+  );
+  assert.equal(
+    makeProviderFailure({ cause: opened(new DevinCloudCliError({ stage: "auth" })) }).message,
+    "Sign in to Devin to use Devin Cloud.",
+  );
+  // Relay details can carry the vendor's own error text.
+  assert.isUndefined(
+    knownProviderFailureMessage(
+      opened(new DevinCloudCliError({ stage: "relay", detail: "vendor token=fixture-secret" })),
+    ),
+  );
+  // Only known CLI stages count; a decoded error without one is not trusted.
+  assert.isUndefined(
+    knownProviderFailureMessage({
+      _tag: "DevinCloudCliError",
+      message: "vendor /fixture/private-path",
+    }),
+  );
+});
