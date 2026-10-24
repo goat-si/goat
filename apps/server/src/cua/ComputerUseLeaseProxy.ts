@@ -800,13 +800,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // call never reached a driver, so it is refused; once sent, an interruption answers it as
     // cut off instead (interrupt above).
     const current = running;
-    const notSent = () =>
+    const notSent = (requestId: JsonRpcId) =>
       finished !== undefined
-        ? refusal(id, message?.method, finished, LEASE_END_MESSAGES[finished])
+        ? refusal(requestId, message?.method, finished, LEASE_END_MESSAGES[finished])
         : paused !== undefined
-          ? refusal(id, message?.method, pausedDetail(paused), PAUSE_MESSAGES[paused])
+          ? refusal(requestId, message?.method, pausedDetail(paused), PAUSE_MESSAGES[paused])
           : refusal(
-              id,
+              requestId,
               message?.method,
               interruptionDetail(lastInterruption),
               interruptionRefusal(lastInterruption),
@@ -823,7 +823,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       });
       // A pause or end that came while drawing: refuse, whether or not it has stopped the
       // driver yet. This call never ran.
-      if (!stillCurrent()) return yield* options.output(notSent());
+      if (!stillCurrent()) return yield* options.output(notSent(id));
       if (options.onTarget !== undefined) {
         const target = targetOf(message.params?.arguments);
         if (
@@ -834,7 +834,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           reported = target;
         // The report waits on the server; a pause or end meanwhile must not let the call reach
         // the child that replaced the one it was admitted under.
-        if (!stillCurrent()) return yield* options.output(notSent());
+        if (!stillCurrent()) return yield* options.output(notSent(id));
       }
     }
     const cancelled = cancelledRequestKey(line);
