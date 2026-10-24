@@ -36,6 +36,7 @@ const active = {
   expiresAt: control.expiresAt,
   apps: ["com.apple.calculator"],
   wakeAt: 0,
+  interruptions: { count: 0, last: "human_input" },
 } as const;
 
 describe("preview sessions", () => {
