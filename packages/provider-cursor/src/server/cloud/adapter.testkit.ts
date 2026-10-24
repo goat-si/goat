@@ -106,7 +106,11 @@ export const harness = Effect.gen(function* () {
       const iterator: AsyncGenerator<SDKMessage, void> = {
         next: async () => {
           Deferred.doneUnsafe(streamStarted, Effect.void);
-          if (index < messages.length) return { done: false, value: messages[index++]! };
+          const value = messages[index];
+          if (value !== undefined) {
+            index++;
+            return { done: false, value };
+          }
           Deferred.doneUnsafe(streamWaiting, Effect.void);
           await gate;
           return { done: true, value: undefined };
