@@ -105,9 +105,9 @@ const run = <A, E>(
                 Effect.map(ComputerUseLeases.ComputerUseLeases, (leases) =>
                   Layer.succeed(ComputerUseLeases.ComputerUseLeases, {
                     ...leases,
-                    holder: (except) =>
+                    holder: (except, apps) =>
                       leases
-                        .holder(except)
+                        .holder(except, apps)
                         .pipe(Effect.tap(() => options.afterHolder ?? Effect.void)),
                   }),
                 ),
