@@ -55,6 +55,8 @@ const harness = Effect.fn(function* (
     readonly elsewhere?: ReadonlySet<number>;
     /** Holds every placement answer until it is done, as a slow X server would. */
     readonly placementGate?: Deferred.Deferred<void>;
+    /** Answers each window report; reports land in `targets`. */
+    readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -66,11 +68,18 @@ const harness = Effect.fn(function* (
   const revoked: Array<ReadonlyArray<string>> = [];
   const log: Array<string> = [];
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
+  const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const proxy = yield* runLeaseProxy({
     controlId: CONTROL,
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
+    ...(options.onTarget === undefined
+      ? {}
+      : {
+          onTarget: (target: { pid: number; windowId: number }) =>
+            Queue.offer(targets, target).pipe(Effect.as(options.onTarget?.(target) ?? true)),
+        }),
     leaseUpdates: Stream.fromQueue(updates),
     startDriver: Effect.gen(function* () {
       const driver: FakeDriver = {
@@ -149,6 +158,9 @@ const harness = Effect.fn(function* (
     revokeCalled: Deferred.await(revokeCalled),
     /** The windows of the next placement check, once it has started. */
     checking: Queue.take(checking),
+    /** The next window the proxy reported to the server. */
+    reported: Queue.take(targets),
+    reportedQueued: Queue.size(targets),
     revoked,
     log,
     proxy,
@@ -701,6 +713,38 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(2, "list_windows"));
         // The fresh child sees only the new call; the held click is gone.
         assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
+  it.effect(
+    "reports the window each forwarded call names to the server once per change, observations included",
+    () =>
+      Effect.gen(function* () {
+        let accept = false;
+        const h = yield* harness({ onTarget: () => accept });
+        yield* h.push(active());
+        // A rejected report is not remembered, so the same window is reported again.
+        yield* h.send(call(1, "zoom", { pid: 4, window_id: 9 }));
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        assert.equal((yield* h.nextToDriver).id, 1);
+        accept = true;
+        yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
+        assert.deepEqual(yield* h.reported, { pid: 4, windowId: 9 });
+        assert.equal((yield* h.nextToDriver).id, 2);
+        yield* h.send(call(3, "click", { target: { kind: "window", pid: 4, window_id: 9 } }));
+        yield* h.send(call(4, "list_apps"));
+        assert.equal((yield* h.nextToDriver).id, 3);
+        assert.equal((yield* h.nextToDriver).id, 4);
+        assert.equal(yield* h.reportedQueued, 0);
+        yield* h.send(call(5, "click", { pid: 6, window_id: 2 }));
+        assert.deepEqual(yield* h.reported, { pid: 6, windowId: 2 });
+        assert.equal((yield* h.nextToDriver).id, 5);
+        // A refused call names nothing: it never ran.
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+        yield* h.killed;
+        yield* h.send(call(6, "click", { pid: 8, window_id: 1 }));
+        yield* h.nextToProvider;
+        assert.equal(yield* h.reportedQueued, 0);
       }),
   );
 

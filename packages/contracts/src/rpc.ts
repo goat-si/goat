@@ -14,6 +14,8 @@ import {
 import {
   PreviewSessionControlInput,
   PreviewSessionControlResult,
+  PreviewSessionFrameEvent,
+  PreviewSessionFramesInput,
   PreviewSessionsSnapshot,
 } from "./previewSession.ts";
 import {
@@ -606,6 +608,7 @@ export const WS_METHODS = {
   computerUseResume: "computerUse.resume",
   previewSessionsSubscribe: "previewSessions.subscribe",
   previewSessionsControl: "previewSessions.control",
+  previewSessionsFrames: "previewSessions.frames",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -824,6 +827,14 @@ const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, 
   payload: PreviewSessionControlInput,
   success: PreviewSessionControlResult,
   error: EnvironmentAuthorizationError,
+});
+
+/** A desktop session's live picture for one viewer, or why there is none (#1370). */
+const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
+  payload: PreviewSessionFramesInput,
+  success: PreviewSessionFrameEvent,
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
@@ -2384,6 +2395,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseResumeRpc,
   WsPreviewSessionsSubscribeRpc,
   WsPreviewSessionsControlRpc,
+  WsPreviewSessionsFramesRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

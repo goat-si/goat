@@ -149,6 +149,7 @@ export const ChannelTaskReportInput = Schema.Struct({
   generation: PositiveInt,
   status: Schema.Literals(["running", "waiting_input", "completed", "failed"]),
   summary: TrimmedNonEmptyString,
+  milestone: Schema.optional(Schema.Boolean),
   question: Schema.optional(TrimmedNonEmptyString),
 });
 export type ChannelTaskReportInput = typeof ChannelTaskReportInput.Type;

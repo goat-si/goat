@@ -277,7 +277,8 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
           answer.text.split("\n", 1)[0] || "Cua Driver could not capture this window.",
         );
       const own = await route.capture(input.windowId, shot);
-      if ("refused" in own) return refuseShot(own.refused);
+      if ("refused" in own)
+        return own.transient ? { result: refusal("busy", own.refused) } : refuseShot(own.refused);
       offered = { mimeType: "image/png", data: Buffer.from(own.png).toString("base64") };
     } else if (route?.route === "driver") offered = answer.images[0];
     // The screenshot is declared from its own bytes, so the size the agent points in is the
