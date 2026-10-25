@@ -1,6 +1,8 @@
 import type { ComputerUseReadiness } from "@goat/contracts";
 import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
-import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
+import { listCuaDriverApplications, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
+import { fromLenientJson } from "@goat/shared/schemaJson";
+import * as Schema from "effect/Schema";
 import type { CuaDriverLike, ToolResult } from "@trycua/cua-driver";
 import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 
@@ -120,6 +122,9 @@ export interface DesktopCuaDriverDependencies {
     /** Lists apps through the helper, so the driver never runs outside its seal check. */
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
+  readonly listApps: typeof listCuaDriverApplications;
+  /** Read the local server's persisted opt-in, not whether an agent driver happens to run. */
+  readonly computerUseEnabled: (settingsPath: string) => Promise<boolean>;
   readonly readManifest: (path: string) => Promise<string>;
   /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
   readonly helperApps: (
@@ -145,6 +150,10 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
   }
   return lit / sampled >= 0.01;
 }
+
+const decodeComputerUseSetting = Schema.decodeUnknownSync(
+  fromLenientJson(Schema.Struct({ enableCua: Schema.optionalKey(Schema.Boolean) })),
+);
 
 export const dependencies: DesktopCuaDriverDependencies = {
   loadEmbedded: async () => {
@@ -195,6 +204,12 @@ export const dependencies: DesktopCuaDriverDependencies = {
     return !decoded.isEmpty() && bitmapHasContent(decoded.toBitmap());
   },
   prepareManifest: prepareDesktopManifest,
+  listApps: listCuaDriverApplications,
+  computerUseEnabled: async (settingsPath) => {
+    const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
+    const settings = decodeComputerUseSetting(raw);
+    return settings.enableCua === true;
+  },
   readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),
   helperApps: (bundle, platform) =>
     listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),

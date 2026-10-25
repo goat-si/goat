@@ -151,13 +151,7 @@ export function admittedCuaApplications(
     const bundle = app.bundle_id?.trim() ?? "";
     const id = bundle || (app.executable?.trim() ?? "");
     if (!id) continue;
-    if (host.has(identityKey(id)) || EXCLUDED_BUNDLE_IDS.has(id.toLowerCase())) continue;
-    if (
-      EXCLUDED_NAME.test(app.name ?? "") ||
-      EXCLUDED_NAME.test(id) ||
-      EXCLUDED_EXECUTABLE.test(id)
-    )
-      continue;
+    if (excludedCuaApplication(app, id, host)) continue;
     if (!bundle && id.startsWith("/")) {
       const names = executables.get(id) ?? new Set<string>();
       const name = app.name?.trim();
@@ -171,6 +165,39 @@ export function admittedCuaApplications(
   const key = (entry: CuaDriverAdmittedApp) =>
     typeof entry === "string" ? entry : entry.executable;
   return entries.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+function excludedCuaApplication(
+  app: CuaDriverListedApp,
+  id: string,
+  host: ReadonlySet<string>,
+): boolean {
+  return (
+    host.has(identityKey(id)) ||
+    EXCLUDED_BUNDLE_IDS.has(id.toLowerCase()) ||
+    EXCLUDED_NAME.test(app.name ?? "") ||
+    EXCLUDED_NAME.test(id) ||
+    EXCLUDED_EXECUTABLE.test(id)
+  );
+}
+
+/**
+ * Listings are best effort: absence must be judged against every identity the host attests,
+ * including the executable when an installed-app lookup loses its bundle id.
+ */
+export function cuaRequestableApps(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+  hostBundleIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const host = new Set(hostBundleIds.map(identityKey));
+  const requestable = new Set<string>();
+  for (const app of apps) {
+    const bundle = app.bundle_id?.trim() ?? "";
+    const ids = [bundle || app.name?.trim() || "", app.executable?.trim() || ""].filter(Boolean);
+    if (ids.some((id) => excludedCuaApplication(app, id, host))) continue;
+    for (const id of ids) requestable.add(id);
+  }
+  return [...requestable].sort();
 }
 
 /**
@@ -301,7 +328,7 @@ const LIST_APPS_TIMEOUT_MS = 15_000;
  * the manifest. macOS needs --direct to own the runtime in this process instead of reaching for a
  * daemon; listing apps reads LaunchServices and needs no grant.
  */
-function listCuaDriverApplications(input: {
+export function listCuaDriverApplications(input: {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
