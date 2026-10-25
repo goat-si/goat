@@ -57,6 +57,9 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
   const cancels = new Map<string, Deferred.Deferred<void>>();
   const reply = (id: JsonRpcId, result: unknown) =>
     options.output(JSON.stringify({ jsonrpc: "2.0", id, result }));
+  const listChanged = Effect.suspend(() =>
+    options.output(JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })),
+  );
 
   /** Sends each request to a fresh child in turn and returns its answer to the last one. */
   const ask = Effect.fn("ComputerUseLeaseProxy.askHandshakeChild")(function* (
@@ -183,12 +186,20 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
     /** Immediate setup answers avoid accumulating work while a predecessor is closing. */
     answerCached: (id: JsonRpcId, method: string) => {
       if (method !== "ping" && !answers.has(method)) return undefined;
-      // Answers are only ever replaced, never removed: read the newest one when this runs, so a
-      // refresh landing in between is never answered with the list it replaced.
+      // Served from the start, so a recheck running before this reply is written still runs.
+      if (method === "tools/list") served = true;
       return Effect.suspend(() => {
         if (Deferred.isDoneUnsafe(options.ended)) return whenEnded(id, method);
-        if (method === "tools/list") served = true;
-        return reply(id, method === "ping" ? {} : answers.get(method));
+        const seen = listings;
+        // A newer list can land while this reply is being written, after its list_changed went
+        // out: say so again, so the provider lists once more instead of keeping this one.
+        return reply(id, method === "ping" ? {} : answers.get(method)).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              method === "tools/list" && listings !== seen ? listChanged : Effect.void,
+            ),
+          ),
+        );
       });
     },
     pending: (key: string) => cancels.has(key),
@@ -214,10 +225,7 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       listings++;
       const before = JSON.stringify(answers.get("tools/list"));
       answers.set("tools/list", answer.result);
-      if (JSON.stringify(answer.result) !== before)
-        yield* options.output(
-          JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }),
-        );
+      if (JSON.stringify(answer.result) !== before) yield* listChanged;
     }),
   };
 };
