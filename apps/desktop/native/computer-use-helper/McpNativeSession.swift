@@ -63,8 +63,9 @@ private final class SettleOperation {
 private struct NativePending {
   let original: McpIdentity
   let forwarded: Data
-  let method: String
-  let tool: String?
+  // Routing flags only: retained method or tool strings would escape the ID byte budget.
+  let catalog: Bool
+  let toolCall: Bool
   let recovery: Bool
 }
 
@@ -88,6 +89,8 @@ final class McpNativeSession {
   private var deliveries: [String: McpGeneration] = [:]
   private var recovery: SettleRequest?
   private var invalidated = Set<String>()
+  // A queued result that carries sampled tokens; losing it before delivery needs recovery.
+  private var undelivered: [String: (request: SettleRequest, invalidated: Set<String>)] = [:]
   private let namespace = "goat-native-settle:"
 
   init(driver: any McpWriting, provider: any McpWriting, manifest: NativeManifest?, runtime: SettleRuntime = .live,
@@ -127,12 +130,18 @@ final class McpNativeSession {
     let delivery = gate ?? McpGeneration()
     deliveries[id.key] = delivery
     return { [self] in
-      provider.enqueue(frame, live: { self.generation.isActive && delivery.isActive }) { _ in
+      provider.enqueue(frame, live: { self.generation.isActive && delivery.isActive }) { written in
         self.lock.lock()
         if self.deliveries[id.key] === delivery { self.deliveries.removeValue(forKey: id.key) }
+        if let lost = self.undelivered.removeValue(forKey: id.key), !written { self.requireRecovery(lost) }
         self.lock.unlock()
       }
     }
+  }
+
+  private func requireRecovery(_ lost: (request: SettleRequest, invalidated: Set<String>)) {
+    recovery = lost.request
+    invalidated.formUnion(lost.invalidated)
   }
 
   private func refusal(_ id: McpIdentity, code: String, message: String) throws -> [Action] {
@@ -151,7 +160,12 @@ final class McpNativeSession {
       }
       if method == "notifications/cancelled", let raw = object.object("params")?.raw("requestId") {
         let id = McpIdentity(raw)
-        if let gate = deliveries[id.key] { gate.invalidate() }
+        if let gate = deliveries[id.key] {
+          gate.invalidate()
+          // Fence now: the blocked writer reports the drop later, after the next call may arrive.
+          // A frame already written gets one redundant full read, which is the safe direction.
+          if let lost = undelivered.removeValue(forKey: id.key) { requireRecovery(lost) }
+        }
         if let op = active, op.id.key == id.key { return try effects(op, op.state.receive(.cancel, now: runtime.now())) }
         if let found = pending.first(where: { $0.value.original.key == id.key }),
           found.key != id.key, let params = object.object("params") {
@@ -177,7 +191,7 @@ final class McpNativeSession {
           let arguments = params?.raw("arguments"), let request = settleArguments(arguments)
         else { return try refusal(id, code: "invalid_arguments", message: "Settle needs one exact PID/window and valid quiet/deadline bounds.") }
         guard active == nil, samples.isEmpty, recovery == nil, deliveries.isEmpty,
-          !pending.values.contains(where: { $0.tool != nil })
+          !pending.values.contains(where: { $0.toolCall })
         else { return try refusal(id, code: "busy", message: "Another observation or tool call is outstanding. Finish it before waiting for notifications.") }
         guard let app = runtime.bundleID(request.pid), manifest?.permits(bundleID: app) == true else {
           return try refusal(id, code: "app_not_approved", message: "The native observation is outside this helper's app or observation ceiling.")
@@ -221,7 +235,7 @@ final class McpNativeSession {
         outgoing = changed.replacing("id", with: forwardedID.raw)
       }
       pending[forwardedID.key] = NativePending(original: id, forwarded: forwardedID.raw,
-        method: method, tool: tool, recovery: recovering)
+        catalog: method == "tools/list", toolCall: tool != nil, recovery: recovering)
       pendingBytes += id.raw.count
       return [{ try self.driver.write(outgoing, live: { self.generation.isActive }) }]
     }
@@ -247,7 +261,7 @@ final class McpNativeSession {
       guard let call = pending.removeValue(forKey: id.key) else { return [{ try self.provider.write(frame, live: { self.driverOutput.isActive }) }] }
       pendingBytes -= call.original.raw.count
       var outgoing = object.replacing("id", with: call.original.raw)
-      if call.method == "tools/list", let tools = object.object("result")?.span("tools"), frame[tools.lowerBound] == 0x5b {
+      if call.catalog, let tools = object.object("result")?.span("tools"), frame[tools.lowerBound] == 0x5b {
         var insertion = try mcpJSON(windowSettleTool)
         let content = frame[(tools.lowerBound + 1)..<(tools.upperBound - 1)]
         if content.contains(where: { ![UInt8(0x20), 0x09, 0x0d, 0x0a].contains($0) }) { insertion.insert(0x2c, at: 0) }
@@ -400,7 +414,12 @@ final class McpNativeSession {
           structured["invalidated_snapshot_ids"] = Array(invalidated).sorted()
           result["structuredContent"] = structured
         }
-        if generation.isActive { actions.append(try answer(op.id, result: result, gate: op.delivery)) }
+        if generation.isActive {
+          if completion.sample != nil || !invalidated.isEmpty {
+            undelivered[op.id.key] = (op.request, invalidated)
+          }
+          actions.append(try answer(op.id, result: result, gate: op.delivery))
+        }
         if samples.isEmpty && recovery == nil { invalidated.removeAll() }
       }
     }

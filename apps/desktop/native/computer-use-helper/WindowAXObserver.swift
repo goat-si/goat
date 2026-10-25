@@ -184,11 +184,13 @@ final class WindowAXWatch: SettleWatch {
     let pending = terminal ? pendingCheck : nil
     if terminal { emit = nil; pendingCheck = nil }
     lock.unlock()
-    if terminal { cleanup() }
     // The caller updates its core synchronously here, then schedules IO outside its lock.
     // Its generation fence also covers a delivery already admitted when cancellation arrives.
+    // Terminal state lands before cleanup: detachment is blocking AX IPC, during which the
+    // driver could otherwise finish a final sample as settled.
     callback?(event)
     pending?.ready(false)
+    if terminal { cleanup() }
   }
 
   private func refuse(_ reason: String) { deliver(.unsupported(reason), terminal: true) }

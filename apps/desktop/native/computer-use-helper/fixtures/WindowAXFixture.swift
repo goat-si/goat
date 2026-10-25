@@ -40,6 +40,7 @@ private final class FakeAXSubscription: WindowAXSubscription {
   var detached = false
   var duringAdd: (() -> Void)?
   var duringAttach: (() -> Void)?
+  var duringDetach: (() -> Void)?
   func add(_ element: WindowAXElement, notification: String) -> Bool {
     roots.append(element.reference as! String)
     registered.append(notification)
@@ -51,7 +52,7 @@ private final class FakeAXSubscription: WindowAXSubscription {
     if !invalidated { attached = true }
   }
   func invalidate() { invalidated = true }
-  func detach() { invalidate(); detached = true }
+  func detach() { duringDetach?(); invalidate(); detached = true }
 }
 
 private final class FakeAX: WindowAXFunctions {
@@ -180,8 +181,12 @@ private func runObserverFixture(_ scenario: String) {
     f.send(f.api.other, "AXUIElementDestroyed")
     check(f.events == ["ready"] && f.api.queries.isEmpty, "known other destroyed window ignored without querying")
     f.api.cannotComplete = true
+    // Real detachment is blocking AX IPC; the coordinator must already hold the terminal state.
+    var destroyedBeforeDetach = false
+    f.api.subscription.duringDetach = { destroyedBeforeDetach = f.events.last == "destroyed" }
     f.send(WindowAXElement("window" as NSString), "AXUIElementDestroyed")
     check(f.events == ["ready", "destroyed"], "CFEqual exact target destruction")
+    check(destroyedBeforeDetach, "destruction reaches the coordinator before blocking detachment")
     check(f.api.queries.isEmpty, "never query destroyed reference")
     check(f.api.subscription.detached, "destruction detaches")
     let child = WatchFixture()
@@ -229,8 +234,11 @@ private func runObserverFixture(_ scenario: String) {
     let f = WatchFixture()
     f.start()
     f.api.privateFocus = true
+    var refusedBeforeDetach = false
+    f.api.subscription.duringDetach = { refusedBeforeDetach = f.events.last?.hasPrefix("unsupported:") == true }
     f.send(f.api.child)
     f.unsupported("private focus at callback receipt fails closed")
+    check(refusedBeforeDetach, "privacy refusal reaches the coordinator before blocking detachment")
     check(!f.events.contains("changed"), "private callback never delivers changed")
     let revoked = WatchFixture()
     revoked.start()

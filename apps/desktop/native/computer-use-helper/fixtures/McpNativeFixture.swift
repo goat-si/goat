@@ -347,10 +347,21 @@ private func cancellation() throws {
   let queued = Harness()
   try queued.call(); queued.ready(); try queued.reply(0); try queued.clock.advance(200)
   queued.provider.held = true
-  try queued.reply(1)
+  try queued.reply(1, token: "undelivered", invalidated: ["queued-old"])
   try queued.cancel()
   queued.provider.flush()
   try require(queued.provider.frames.isEmpty, "Cancellation must invalidate a native result already queued for delivery")
+  queued.provider.held = false
+  // The provider never saw the sampled tokens, so the next action needs the same recovery fence.
+  try queued.call("action", "click"); try queued.expectCode("fresh_observation_required")
+  let readIndex = queued.driver.frames.count
+  try queued.call("recover", "get_window_state", ["pid": 41, "window_id": 73])
+  try queued.reply(readIndex, token: "recovered")
+  try require(Set(try queued.detail(1)["invalidated_snapshot_ids"] as? [String] ?? []) == ["queued-old"],
+    "Recovery must surface invalidations from the undelivered result")
+  let actionIndex = queued.driver.frames.count
+  try queued.call("action-after-recovery", "click")
+  try require(queued.driver.frames.count == actionIndex + 1, "Action resumes after full recovery")
 }
 
 private func busy() throws {
