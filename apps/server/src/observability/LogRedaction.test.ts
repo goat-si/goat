@@ -30,6 +30,16 @@ const spacedJwt =
   "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
 
 describe("redactLogText", () => {
+  /**
+   * A huge text whose scanned part ends with secret. A masked field before it shrinks the text
+   * below the shown bound, so the end of the scanned part shows.
+   */
+  const endingTheScannedPart = (secret: string) => {
+    const lead = `{"token":"${"t".repeat(255_000)}"} `;
+    const pad = "p".repeat(256_000 - lead.length - secret.length - 1);
+    return `${lead}${pad} ${secret}${"Z".repeat(64)} end`;
+  };
+
   it.each([
     [
       "fatal: unable to access 'https://bot:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git/'",
@@ -206,11 +216,15 @@ describe("redactLogText", () => {
     ["an authorization assignment", "authorization=Custom+Scheme CANARY12"],
     ["a cookie assignment", "cookie=sid=1; theme=CANARY12"],
   ])("hides %s that the scanned part of a huge text cuts short", (_family, secret) => {
-    // A masked field shrinks the text below the shown bound, so the end of the scanned part shows.
-    const lead = `{"token":"${"t".repeat(255_000)}"} `;
-    const pad = "p".repeat(256_000 - lead.length - secret.length - 1);
-    const text = redactLogText(`${lead}${pad} ${secret}${"Z".repeat(64)} end`);
+    const text = redactLogText(endingTheScannedPart(secret));
     expect(text).toMatch(/cut from \d+ characters\]$/);
+    expect(text).not.toContain("CANARY");
+  });
+
+  it("hides a whole JOSE token when the scanned part ends on a provider prefix inside it", () => {
+    const header = Buffer.from('{"alg":"RSA-OAEP","enc":"A256GCM"}').toString("base64url");
+    const text = redactLogText(endingTheScannedPart(`${header}.Zm9v${aiza}CANARY12`));
+    expect(text).not.toContain(header);
     expect(text).not.toContain("CANARY");
   });
 

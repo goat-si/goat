@@ -408,13 +408,20 @@ const MAX_STRING = 32_000;
 // Only the start of a huge text can be shown; scanning all of it would slow every log call.
 const MAX_SCANNED = 8 * MAX_STRING;
 
+/**
+ * A cut text with whatever credential its cut leaves unfinished masked. The JOSE and provider token
+ * passes each mask a tail of the text, so both read the cut text itself and the longer mask wins:
+ * neither can hide from the other the run it needs to see.
+ */
+function maskUnfinished(cut: string): string {
+  const jose = maskUnfinishedJose(cut);
+  const token = maskUnfinishedToken(cut);
+  return maskUnfinishedUrl(jose.length <= token.length ? jose : token);
+}
+
 /** Text with credentials replaced, then cut to a bound, so the cut never splits a credential. */
 export function redactLogText(text: string): string {
-  // A cut provider token is found first, before a later pass can mask part of the word holding it.
-  const scanned =
-    text.length <= MAX_SCANNED
-      ? text
-      : maskUnfinishedUrl(maskUnfinishedJose(maskUnfinishedToken(text.slice(0, MAX_SCANNED))));
+  const scanned = text.length <= MAX_SCANNED ? text : maskUnfinished(text.slice(0, MAX_SCANNED));
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) =>
       typeof replacement === "string"
