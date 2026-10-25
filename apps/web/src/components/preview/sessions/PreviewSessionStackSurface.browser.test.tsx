@@ -4,6 +4,7 @@ import type {
 } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+import { useState } from "react";
 
 import { act, render } from "../../../../test/render";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -124,6 +125,47 @@ it("restores only the persisted popout and keeps it available while the right pa
   await expect
     .element(screen.getByRole("region", { name: "Session stack" }))
     .not.toBeInTheDocument();
+});
+
+/** A card's own state, as a stopped card's last frame is (#1518). */
+function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    <button type="button" onClick={() => setCount(count + 1)}>
+      Clicked {count}
+    </button>
+  );
+}
+
+// #1518: Pop out and Dock mounted the stack anew, so every card lost its own state, including
+// the last frame a stopped desktop session no longer sends.
+it("keeps each card's state through Pop out and Dock, and a click counts once in either place", async () => {
+  using fixture = setup();
+  using _open = vi.spyOn(window, "open").mockReturnValue(fixture.child);
+  await using screen = await render(
+    <PreviewSessionStackSurface hasContent dockedHidden={false}>
+      {({ toggle }) => (
+        <section data-stack-interactive aria-label="Session stack">
+          <Counter />
+          {toggle}
+        </section>
+      )}
+    </PreviewSessionStackSurface>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Clicked 0" }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 1" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Pop out" }));
+  await vi.waitFor(() => expect(fixture.child.document.body.textContent).toContain("Clicked 1"));
+  const floating = () =>
+    [...fixture.child.document.querySelectorAll("button")].find((button) =>
+      button.textContent?.startsWith("Clicked"),
+    );
+  await act(() => floating()?.click());
+  await vi.waitFor(() => expect(floating()?.textContent).toBe("Clicked 2"));
+  await act(() => fixture.emit({ poppedOut: false, open: false, visible: false }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 2" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Clicked 2" }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 3" })).toBeVisible();
 });
 
 it("keeps web sessions docked when no Electron bridge exists", async () => {

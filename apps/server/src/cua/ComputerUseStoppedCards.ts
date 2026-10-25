@@ -11,13 +11,14 @@
  */
 import type { ComputerUseControlEnd, ThreadId } from "@goat/contracts";
 
-import type { ComputerUseControl, ComputerUseControlState } from "./ComputerUseControl.ts";
+import {
+  type ComputerUseControl,
+  type ComputerUseControlState,
+  hasCard,
+} from "./ComputerUseControl.ts";
 
 type Stopped = Extract<ComputerUseControlEnd, "stopped" | "stopped_all">;
 type Listed = { readonly control: ComputerUseControl; readonly state: ComputerUseControlState };
-
-const stoppedBy = (state: ComputerUseControlState) =>
-  state._tag === "ended" && (state.reason === "stopped" || state.reason === "stopped_all");
 
 export const makeStoppedCards = () => {
   const byThread = new Map<
@@ -26,11 +27,17 @@ export const makeStoppedCards = () => {
   >();
   const released = new Set<string>();
   return {
-    /** Keeps a control a newer one replaces, when a person stopped it. */
+    /**
+     * Keeps a control a newer one replaces, when a person stopped it and its card was shown: its
+     * agent acted (#1555). One never shown leaves the card kept before it in place.
+     */
     replaced: (
       control: ComputerUseControl & { readonly ended?: ComputerUseControlEnd | undefined },
     ) => {
-      if (control.ended === "stopped" || control.ended === "stopped_all")
+      if (
+        (control.ended === "stopped" || control.ended === "stopped_all") &&
+        control.acted === true
+      )
         byThread.set(control.threadId, { control, reason: control.ended });
     },
     release: (handoffIds: Iterable<string>) => {
@@ -58,11 +65,10 @@ export const makeStoppedCards = () => {
             state.apps?.length === 0
           ),
       );
+      // Covered by a newer control only once the list shows it, by the list's own rule.
       const covered = new Set(
         shown
-          .filter(({ control, state }) =>
-            state._tag === "ended" ? stoppedBy(state) : control.idle !== true,
-          )
+          .filter(({ control, state }) => hasCard(control, state))
           .map(({ control }) => control.threadId),
       );
       return [

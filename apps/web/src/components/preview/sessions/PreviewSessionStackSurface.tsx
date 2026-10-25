@@ -2,7 +2,7 @@ import {
   PREVIEW_SESSION_STACK_WINDOW_NAME,
   type DesktopPreviewSessionStackState,
 } from "@goat/contracts";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
@@ -35,6 +35,12 @@ const failure = (error: unknown) => {
   });
 };
 
+/**
+ * The document the stack shows in now. Cards move between GOAT and the floating window without
+ * remounting, so listeners on "the card's document" follow this instead of reading it once.
+ */
+export const StackDocumentContext = createContext<Document | null>(null);
+
 function copyStyles(doc: Document) {
   doc.head.replaceChildren(
     ...Array.from(document.head.querySelectorAll('style,link[rel="stylesheet"]'), (node) =>
@@ -48,7 +54,12 @@ function copyStyles(doc: Document) {
   doc.body.style.margin = "0";
 }
 
-/** A portal keeps navigation, stores and the existing thumbnail stream in the owning React tree. */
+/**
+ * A portal keeps navigation, stores and the existing thumbnail stream in the owning React tree.
+ * With a desktop bridge the stack always renders into one host element, which moves between its
+ * place in GOAT and the floating window: a card survives Pop out and Dock with its own state,
+ * such as the last frame a stopped session no longer sends (#1518).
+ */
 export function PreviewSessionStackSurface(props: {
   readonly hasContent: boolean;
   readonly dockedHidden: boolean;
@@ -66,6 +77,13 @@ export function PreviewSessionStackSurface(props: {
   const child = useRef<Window | null>(null);
   const visible = useDocumentVisible(target?.ownerDocument);
   const content = useRef<HTMLDivElement>(null);
+  const anchor = useRef<HTMLDivElement>(null);
+  const [host] = useState(() => {
+    if (!bridge) return null;
+    const element = document.createElement("div");
+    element.style.display = "contents";
+    return element;
+  });
   const floating = target !== null;
   const shown = props.hasContent && (floating || !props.dockedHidden);
   const interactive = useRef(false);
@@ -80,6 +98,13 @@ export function PreviewSessionStackSurface(props: {
     next.document.body.replaceChildren(root);
     setTarget(root);
   });
+
+  // Before paint, so the stack never shows in both places or in neither.
+  useLayoutEffect(() => {
+    if (!host) return;
+    const place = target ?? anchor.current;
+    if (place && host.parentNode !== place) place.append(host);
+  }, [host, target]);
 
   useEffect(() => {
     if (!bridge) return;
@@ -181,26 +206,29 @@ export function PreviewSessionStackSurface(props: {
         captureNotice: floating ? notice : null,
       })
     : null;
-  if (!target) return stack;
+  if (!host) return stack;
   const portal = createPortal(
-    <TooltipContainerContext value={target.ownerDocument.body}>
-      <div
-        ref={content}
-        className="p-1"
-        onMouseMove={(event) => setInteractive(event.target)}
-        onMouseLeave={() => setInteractive(null)}
-      >
-        {stack}
-      </div>
-    </TooltipContainerContext>,
-    target,
+    <StackDocumentContext.Provider value={target?.ownerDocument ?? document}>
+      <TooltipContainerContext value={target ? target.ownerDocument.body : null}>
+        <div
+          ref={content}
+          className={floating ? "p-1" : "contents"}
+          onMouseMove={floating ? (event) => setInteractive(event.target) : undefined}
+          onMouseLeave={floating ? () => setInteractive(null) : undefined}
+        >
+          {stack}
+        </div>
+      </TooltipContainerContext>
+    </StackDocumentContext.Provider>,
+    host,
   );
   return (
     <>
       {/* Linux cannot forward ignored mouse movement; Dock remains reachable in GOAT. */}
-      {native?.mouseEventForwarding === false ? (
+      {floating && native?.mouseEventForwarding === false ? (
         <div className="fixed top-14 right-3 z-40 rounded-lg border bg-popover p-1">{toggle}</div>
       ) : null}
+      {floating ? null : <div ref={anchor} className="contents" />}
       {portal}
     </>
   );

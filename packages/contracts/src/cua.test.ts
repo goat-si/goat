@@ -7,12 +7,20 @@ import {
   ComputerUseLeaseUpdate,
   ComputerUseForegroundGrant,
   ComputerUseRequestInput,
+  ComputerUseRequestResult,
   CuaHostStatus,
   DesktopCuaWatch,
 } from "./cua.ts";
+import {
+  DesktopTelemetryControlMessage,
+  DesktopHostTelemetryMessage,
+} from "./resourceTelemetry.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
 
+const decodeControlMessage = Schema.decodeUnknownSync(DesktopTelemetryControlMessage);
+const decodeTelemetryMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
+const decodeRequestResult = Schema.decodeUnknownSync(ComputerUseRequestResult);
 const decodeCallReservation = Schema.decodeUnknownSync(ComputerUseCallReservation);
 const decodeLeaseUpdate = Schema.decodeUnknownSync(ComputerUseLeaseUpdate);
 const decodeCallAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
@@ -39,6 +47,37 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("decodes correlated app listing controls, reports and actionable unknown-app refusals", () => {
+    const request = { version: 1, type: "cuaAppsRequest", requestId: "apps-1" };
+    expect(decodeControlMessage(request)).toEqual(request);
+    const decode = decodeTelemetryMessage;
+    const listed = {
+      version: 1,
+      type: "cuaApps",
+      requestId: "apps-1",
+      status: "listed",
+      apps: ["com.example.Editor", "fixture.exe"],
+    };
+    expect(decode(listed)).toEqual(listed);
+    const unavailable = { version: 1, type: "cuaApps", requestId: "apps-1", status: "unavailable" };
+    expect(decode(unavailable)).toEqual(unavailable);
+    for (const invalid of [
+      { ...listed, requestId: " " },
+      { ...listed, apps: [" "] },
+      { ...listed, apps: [7] },
+      { ...listed, apps: Array.from({ length: 1001 }, () => "app") },
+      { ...listed, status: "ready" },
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const refusal = {
+      kind: "refused",
+      reason: "unknown_app",
+      unknownApps: ["Editor window"],
+      message: "Call list_apps and ask again.",
+    };
+    expect(decodeRequestResult(refusal)).toEqual(refusal);
+  });
+
   it("preserves the admitted app scope and rejects malformed permission deadlines", () => {
     const admitted = { status: "admitted", reservationId: "ticket" };
     expect(decodeCallAdmission(admitted)).toEqual(admitted);

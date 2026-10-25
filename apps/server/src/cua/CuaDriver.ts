@@ -135,6 +135,7 @@ export class CuaDriver extends Context.Service<
   {
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
+    readonly listedApps: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
     /**
      * Why an agent cannot use the computer here until a person acts, from the last failure and
@@ -225,6 +226,7 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 });
 
 export interface CuaDriverOptions {
+  readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
@@ -447,6 +449,12 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     ),
     ...(options.binary === undefined ? {} : { beforeTurn: beforeTurn(options.binary) }),
     enabled,
+    listedApps: Effect.gen(function* () {
+      if (!(yield* enabled)) return Option.none();
+      // Standalone/Linux hosts do not yet offer a fresh request-time listing.
+      const apps = yield* options.listedApps ?? Effect.succeedNone;
+      return (yield* enabled) ? apps : Option.none();
+    }),
     lastFailure: Effect.sync(() => failure),
     block: (options.helperReadiness ?? Effect.succeedNone).pipe(
       Effect.map((helper) =>
@@ -726,6 +734,33 @@ export const desktopHelperReadiness = Effect.map(
     }),
 );
 
+export const makeDesktopAppsListing = Effect.fn("CuaDriver.makeDesktopAppsListing")(function* () {
+  const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
+  const crypto = yield* Crypto.Crypto;
+  return Effect.gen(function* () {
+    const requestId = yield* crypto.randomUUIDv4();
+    const ready = yield* Deferred.make<Option.Option<ReadonlyArray<string>>>();
+    // Subscribe before sending: a desktop can answer during the write itself.
+    yield* receiver.cuaApps.pipe(
+      Stream.runForEach((report) =>
+        report.requestId === requestId
+          ? Deferred.succeed(
+              ready,
+              report.status === "listed" ? Option.some(report.apps) : Option.none(),
+            )
+          : Effect.void,
+      ),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* receiver.requestCuaApps(requestId);
+    return yield* Deferred.await(ready);
+  }).pipe(
+    Effect.scoped,
+    Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone }),
+    Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
+  );
+});
+
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
@@ -879,6 +914,7 @@ export const layer = Layer.effect(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return yield* make(factory, probe, {
+      ...(config.mode === "desktop" ? { listedApps: yield* makeDesktopAppsListing() } : {}),
       ...(install ? { install } : {}),
       ...(helperReadiness ? { helperReadiness } : {}),
       ...(binary ? { binary } : {}),

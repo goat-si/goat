@@ -11,6 +11,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { cuaRequestableApps } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -95,6 +96,7 @@ const withRequests = <A, E, R>(
     after: failure,
     starts: 0,
   },
+  listedApps: Option.Option<ReadonlyArray<string>> = Option.none(),
 ) => {
   let current = failure;
   return Effect.gen(function* () {
@@ -140,6 +142,7 @@ const withRequests = <A, E, R>(
         leasesDetecting(signals),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
+          listedApps: Effect.succeed(listedApps),
           block: Effect.sync(() => CuaDriver.agentBlock(current)),
           acquire: Effect.sync(() => {
             retry.starts += 1;
@@ -158,6 +161,90 @@ const withRequests = <A, E, R>(
     Effect.provideService(HostProcess.Hostname, "test-host"),
   );
 };
+
+it.effect(
+  "refuses a window title absent from the host app listing without creating an approval (#1536)",
+  () =>
+    withHarness(({ orchestrator }) =>
+      withRequests(
+        orchestrator,
+        supported,
+        ({ request }) =>
+          Effect.gen(function* () {
+            const result = yield* request({ apps: ["GOAT computer use fixture"] });
+            const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+            assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+            assert.equal(result.kind, "refused");
+            if (result.kind !== "refused")
+              return assert.fail("an unknown app must not ask a person");
+            assert.equal(result.reason, "unknown_app");
+            assert.deepEqual(result.unknownApps, ["GOAT computer use fixture"]);
+            for (const guidance of [
+              "list_apps",
+              "window title",
+              "open it first",
+              "bundle_id",
+              "executable path",
+            ])
+              assert.include(result.message, guidance);
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.some(["computer-use-windows-fixture.exe"]),
+      ),
+    ),
+);
+
+it.effect("admits an attested executable from a partial listing but refuses a window title", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          assert.equal((yield* request({ apps: ["c:\\apps\\editor.exe"] })).kind, "needs_human");
+          const refused = yield* request({ apps: ["Editor window"] });
+          assert.equal(refused.kind, "refused");
+          if (refused.kind !== "refused") return assert.fail("a title is not an app identity");
+          assert.equal(refused.reason, "unknown_app");
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.equal(records.turnItems.filter((item) => item.type === "human_handoff").length, 1);
+        }),
+      undefined,
+      undefined,
+      undefined,
+      Option.some(
+        cuaRequestableApps([{ name: "Editor.exe", executable: "C:\\Apps\\Editor.exe" }], []),
+      ),
+    ),
+  ),
+);
+
+it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<string>>()])(
+  "a listed app matches case-insensitively and an unavailable listing keeps approval behavior (%s)",
+  (listing) =>
+    withHarness(({ orchestrator }) =>
+      withRequests(
+        orchestrator,
+        supported,
+        ({ request }) =>
+          Effect.gen(function* () {
+            const result = yield* request({ apps: ["com.example.Editor"] });
+            assert.equal(result.kind, "needs_human");
+            const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+            assert.equal(
+              records.turnItems.filter((item) => item.type === "human_handoff").length,
+              1,
+            );
+          }),
+        undefined,
+        undefined,
+        undefined,
+        listing,
+      ),
+    ),
+);
 
 it.effect(
   "work that runs on its own requires private-field detection but not human-input detection",

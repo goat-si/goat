@@ -22,6 +22,7 @@ export const layerInteractive = (input: {
       CuaDriver.CuaDriver.of({
         enabled: input.enabled,
         acquire: input.acquire.pipe(Effect.map(Option.some)),
+        listedApps: Effect.succeedNone,
         lastFailure: Effect.succeed(Option.none()),
         block: Effect.succeed(undefined),
         status: Effect.succeed({ platform: "darwin", running: true }),
