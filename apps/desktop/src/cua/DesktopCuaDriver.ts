@@ -447,9 +447,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
     if (selected?.kind === "helper") {
       helperSeen = true;
-      // The probe's own helper said what this build can do (#1532), on every platform; the
-      // check's own helper may not (the macOS readiness check runs it as an MCP child).
-      learnHelper(grants.features);
       // A check stands on its own reads: until it proves capture and the tree again, they are not.
       yield* noteHelper((state) => withoutProof(withGrants(state, grants, false)));
     }
@@ -472,6 +469,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const request = owned ? currentRequest : undefined;
     currentRequest = undefined;
     const stopped = yield* stop;
+    // The probe's own helper said what this build can do (#1532), on every platform; the
+    // check's own helper may not (the macOS readiness check runs it as an MCP child). It speaks
+    // for this desktop only once the helper running before is gone; a check that stopped
+    // earlier leaves that helper, and what it said, as they were.
+    if (stopped && selected?.kind === "helper") learnHelper(grants.features);
     if (request)
       yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
     const connection: Option.Option<EmbeddedDriverConnection> =

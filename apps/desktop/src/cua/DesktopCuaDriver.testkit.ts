@@ -52,6 +52,8 @@ export interface HelperAnswer {
   readonly blocker?: ComputerUseReadiness["blockers"][number];
   /** Fails the read the way a helper that cannot answer does. */
   readonly fails?: Error;
+  /** Whether the probed helper's hello lists watch, when it differs from the running one's. */
+  readonly canWatch?: boolean;
 }
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
@@ -201,7 +203,7 @@ export const fixture = Effect.fn(function* (
         screenRecording: granted,
         // A probe's helper says in its hello what it can do, as an agent's helper does.
         features: {
-          canWatch: options.helperWithoutWatch !== true,
+          canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
           reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
           canFrame: false,
         },
