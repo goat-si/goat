@@ -37,10 +37,18 @@ export function captureRoute(deps: {
   const { displayServer } = deps.session;
   if (displayServer === "x11" || displayServer === "xwayland")
     return { route: "own", capture: deps.captureX11 };
-  const present = (name: string) => (deps.driverEnvironment[name] ?? "").trim() !== "";
+  return displayServer === "wayland"
+    ? waylandCaptureRoute(deps.driverEnvironment)
+    : { route: "refused", reason: CROPPED_CAPTURE };
+}
+
+/** Wayland without an X display: the driver's own export on Hyprland, refused anywhere else. */
+export function waylandCaptureRoute(
+  driverEnvironment: Readonly<Record<string, string | undefined>>,
+): CaptureRoute {
+  const present = (name: string) => (driverEnvironment[name] ?? "").trim() !== "";
   // The driver's own test: the Wayland backend on, a Hyprland instance, and not injecting.
   const hyprland =
-    displayServer === "wayland" &&
     present("CUA_DRIVER_RS_ENABLE_WAYLAND") &&
     present("WAYLAND_DISPLAY") &&
     present("HYPRLAND_INSTANCE_SIGNATURE") &&

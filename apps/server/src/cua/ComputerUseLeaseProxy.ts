@@ -94,6 +94,7 @@ import {
   unsentCallRefusal,
 } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 
 const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
@@ -136,6 +137,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       readonly method: string;
       readonly tool?: string;
       readonly unfiltered?: boolean;
+      readonly windowId?: number;
       readonly reservationId?: string;
       readonly connectionId: string;
       readonly cancelled?: boolean;
@@ -262,6 +264,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         Effect.gen(function* () {
           if (finished !== undefined || lifecycle.current !== current) return;
           const message = parse(line);
+          let delivered = line;
           if (message?.id !== undefined && message.id !== null && message.method === undefined) {
             const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
             // Only the answer to a list_apps request still waiting for it says which app a pid is.
@@ -303,6 +306,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               // Stopped, paused or cancelled while it was checked: that already answered it.
               if (finished !== undefined || lifecycle.current !== current || !outstanding.has(key))
                 return;
+              // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
+              const shots = options.screenshots;
+              if (shots && verdict !== "other" && verdict !== "unknown") {
+                delivered = yield* shots({ tool: request.tool, windowId: request.windowId, line });
+                if (finished !== undefined || lifecycle.current !== current) return;
+              }
               // Every answered call updates the overlay; a display refusal counts as failed. It is
               // drawn while the call is still outstanding, so a stop or pause that lands during
               // the draw answers the call itself, and the check below drops this reply. A pause
@@ -354,7 +363,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
             }
           }
-          yield* options.output(admitDriverReplyScreenshots(line));
+          yield* options.output(admitDriverReplyScreenshots(delivered));
         }),
       ),
       // A driver that exits on its own cannot be trusted with the rest of the control. A helper
@@ -951,6 +960,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           id,
           method: message!.method!,
           ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+          ...windowArgument(message?.params?.arguments),
           unfiltered: Object.keys(message?.params?.arguments ?? {}).every(
             (key) => key === "session",
           ),

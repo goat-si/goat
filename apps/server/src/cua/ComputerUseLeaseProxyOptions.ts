@@ -77,6 +77,15 @@ export interface LeaseProxyOptions<EU, ED> {
    */
   readonly placement?: (windows: ReadonlyArray<NamedWindow>) => Effect.Effect<WindowPlacement>;
   /**
+   * What a reply's images may show before the agent gets it (Linux, #1677): returns the line to
+   * deliver, its images kept, replaced by GOAT's own capture, or withheld.
+   */
+  readonly screenshots?: (reply: {
+    readonly tool: string | undefined;
+    readonly windowId: number | undefined;
+    readonly line: string;
+  }) => Effect.Effect<string>;
+  /**
    * Tells the server the window a forwarded call names, the one a live picture shows (#1370);
    * true when the server took it. Reported only on a change, observations included.
    */
