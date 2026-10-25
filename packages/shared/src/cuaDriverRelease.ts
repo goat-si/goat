@@ -1,7 +1,7 @@
-// #1591: replace this version with 0.37.0-goat.1 and the five archive triples below together
-// after the fork release is published and verified. These are still the upstream pins; the
-// fork download URL is prepared, but these values cannot install the unpublished release.
-export const CUA_DRIVER_VERSION = "0.37.0";
+// GOAT's Cua Driver fork (goat-si/cua-driver): unsigned release archives with build-provenance
+// attestations; GOAT signs the driver inside its helper. The daemon reports this version, and
+// hosts compare it exactly. Bump it with the archive pins and third-party-licenses.config.json.
+export const CUA_DRIVER_VERSION = "0.37.0-goat.1";
 
 /** The macOS helper app that owns computer use's TCC identity (Contents/Helpers in GOAT.app). */
 export const COMPUTER_USE_HELPER_NAME = "GOAT Computer Use";
@@ -11,29 +11,29 @@ export const computerUseHelperBundleId = (desktopAppId: string) => `${desktopApp
 
 const archives = {
   "darwin-universal": {
-    archiveName: "cua-driver-rs-0.37.0-darwin-universal-binary.tar.gz",
-    bytes: 53_254_204,
-    sha256: "7d491f67f54be5f3b380ffd85c64b242eaefd05dad6df78012cde227c95aee2a",
+    archiveName: "cua-driver-rs-0.37.0-goat.1-darwin-universal-binary.tar.gz",
+    bytes: 53_277_134,
+    sha256: "d30475e13937abf3c8bf61b7bb80367c42d98d6b23c40b14e02bbcec0b1e8206",
   },
   "linux-x64": {
-    archiveName: "cua-driver-rs-0.37.0-linux-x86_64-binary.tar.gz",
-    bytes: 36_941_258,
-    sha256: "c7ac376b10da7c207e510b2d90b88a9588bec9852a237962c273fe81b9cd5623",
+    archiveName: "cua-driver-rs-0.37.0-goat.1-linux-x86_64-binary.tar.gz",
+    bytes: 37_058_935,
+    sha256: "388bd14f164908e00d6a7621ce9412d2b2cbae4adbbbdad04da0956352994d76",
   },
   "linux-arm64": {
-    archiveName: "cua-driver-rs-0.37.0-linux-arm64-binary.tar.gz",
-    bytes: 36_518_124,
-    sha256: "879e8040a4ce24caeee34b2e4ac6119be01661082202919db1bcc1ab0b97e4c8",
+    archiveName: "cua-driver-rs-0.37.0-goat.1-linux-arm64-binary.tar.gz",
+    bytes: 36_706_322,
+    sha256: "9463fa6289f5da122b965f14e4b365b632896f55bc7f76107352e251054c3d80",
   },
   "win32-x64": {
-    archiveName: "cua-driver-rs-0.37.0-windows-x86_64-binary.zip",
-    bytes: 35_838_756,
-    sha256: "40481b55073f1225b0010235b30217bd640ef1f323e982aec0a5f6131d3e4a99",
+    archiveName: "cua-driver-rs-0.37.0-goat.1-windows-x86_64-binary.zip",
+    bytes: 35_794_153,
+    sha256: "0be08aa1ccd6491a188140f4938e81a1cdc2178b71e9e5838ed9a344d1d28105",
   },
   "win32-arm64": {
-    archiveName: "cua-driver-rs-0.37.0-windows-arm64-binary.zip",
-    bytes: 33_606_104,
-    sha256: "0fce682b251775e25fd76bf29ff856f7f5ab5aae5759d6b76a40f8312a194a5a",
+    archiveName: "cua-driver-rs-0.37.0-goat.1-windows-arm64-binary.zip",
+    bytes: 33_549_040,
+    sha256: "93cd21d7fdfd56c1dc88db60c64ab6596dc62f348cef7321cbe8c63822f5e065",
   },
 } as const;
 
