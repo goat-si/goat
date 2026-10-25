@@ -24,6 +24,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import { buildOutputKeeps, findBuildOutputs } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
+import { holdsGoatData, resolveGoatDataPaths } from "./goatData.ts";
 import {
   type ContentStamp,
   contentStamp,
@@ -244,6 +245,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   });
 
   const other = yield* resolveOtherServerPaths(config.dbPath);
+  const goat = yield* resolveGoatDataPaths(other.bindings.databases);
   const cwds = yield* (yield* LocalGoatServers).workingDirectories;
   if (cwds === null)
     notes.push("Running processes could not be listed, so no checkout is offered for removal.");
@@ -487,6 +489,16 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           : yield* childDirectories(first.path);
         for (const candidate of candidates) {
           if (referenced(candidate.path)) continue;
+          // A worktrees folder set to a GOAT home holds GOAT's own data beside checkouts.
+          if (holdsGoatData(candidate.path, goat, rules)) continue;
+          // Another worktrees folder nested in this one is scanned as its own root.
+          if (
+            managedRoots.some(
+              (root) =>
+                isStrictlyInside(managedRoot, root, rules) && overlaps(root, candidate.path, rules),
+            )
+          )
+            continue;
           if (now - candidate.stat.mtimeMs < ORPHAN_MIN_AGE_MS) continue;
           const otherReason = otherServerReason(other, candidate.path, rules);
           const working = processInside(cwds, [candidate.path], rules);
@@ -653,6 +665,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
+    if (holdsGoatData(target, goat, rules)) continue;
     const { decision, token, stamp } = yield* stamped(
       "temp:" + target,
       target,

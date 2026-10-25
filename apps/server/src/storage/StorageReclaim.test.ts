@@ -464,6 +464,37 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live(
+    "never takes GOAT's own data for leftovers when the worktrees folder is the GOAT home",
+    () =>
+      Effect.gen(function* () {
+        const { fs, path, config, reclaim } = yield* setup;
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+          worktreesDirectory: config.baseDir,
+        });
+        const runtime = path.join(pinnedRuntimeVersionsDir(path, config.baseDir), "0.0.1");
+        yield* fs.makeDirectory(runtime, { recursive: true });
+        yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+        yield* fs.writeFileString(path.join(config.attachmentsDir, "kept.png"), "image\n");
+        const stray = path.join(config.baseDir, "some-repo", "old-checkout");
+        yield* fs.makeDirectory(stray, { recursive: true });
+        yield* fs.writeFileString(path.join(stray, "notes.txt"), "old\n");
+        yield* backdate(config.baseDir);
+
+        const leftovers = (yield* reclaim.usage({ rescan: true })).items.filter(
+          (item) => item.kind === "orphan_folder" && item.path.startsWith(config.baseDir),
+        );
+        // Runtimes, state, logs and attachments are GOAT's own, and the default worktrees folder
+        // inside the home is scanned as itself: only real leftovers are offered.
+        expect(
+          leftovers.map((item) => path.relative(config.baseDir, item.path)).toSorted(),
+        ).toEqual([
+          path.join("some-repo", "old-checkout"),
+          path.join("worktrees", "goat", "old-branch"),
+        ]);
+      }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("keeps rotated logs while a thread works in the logs folder", () =>
     Effect.gen(function* () {
       const { fs, path, config, reclaim } = yield* setup;

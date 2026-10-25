@@ -38,6 +38,7 @@ import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.
 import { tryWithWorkspaceSubtree, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
+import { holdsGoatData, resolveGoatDataPaths } from "./goatData.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import {
   type ContentStamp,
@@ -388,6 +389,10 @@ const make = Effect.gen(function* () {
               if (reason !== null) return reason;
               const own = yield* ownReference(item.path);
               if (own !== null) return own;
+              const goat = yield* resolveGoatDataPaths(
+                (yield* resolveOtherServerPaths(config.dbPath)).bindings.databases,
+              );
+              if (holdsGoatData(item.path, goat, rules)) return "it holds GOAT's own data";
               // A batch removes items one after another; this one may have changed meanwhile.
               const changed = yield* changedSinceReview(item.path, target.stamp);
               if (changed !== null) return changed;
