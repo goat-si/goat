@@ -41,6 +41,7 @@ const fixture = Effect.fnUntraced(function* () {
     channelOrigin: () => Effect.succeed(undefined),
     state: () => Effect.die("unused"),
     control: () => Effect.die("unused"),
+    attached: () => Effect.succeedNone,
     everyAppControl: () => Effect.die("unused"),
     serializeAdmission: (effect) => effect,
     controlState: () =>

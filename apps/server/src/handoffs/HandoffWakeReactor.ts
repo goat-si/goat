@@ -172,7 +172,8 @@ const make = Effect.gen(function* () {
   ) {
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const retry = retries.get(wake.messageId) ?? { next: 0, eligibleAt: 0 };
-    if (now < retry.eligibleAt) return;
+    // False: nothing was sent, the retry is not due yet.
+    if (now < retry.eligibleAt) return false;
     for (let attempt = retry.next; ; attempt++) {
       const sent = yield* wakeThread(threads, threadId, {
         ...wake,
@@ -182,7 +183,7 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.result);
       if (sent._tag === "Success") {
         retries.delete(wake.messageId);
-        return;
+        return true;
       }
       // An earlier rejection under this id: move on without spending a fresh attempt.
       if (sent.failure._tag === "OrchestratorCommandPreviouslyRejectedError") continue;
@@ -234,6 +235,8 @@ const make = Effect.gen(function* () {
           });
         // A late event for a state this grant has left wakes nothing; its current state does.
         if (current.state !== handoff.state) return;
+        // A request whose call is waiting, or already returned this answer, needs no wake.
+        return yield* handoffs.deliverComputerUseWake(current, dispatchWake(threadId, wake));
       }
       if (
         handoff.state !== "completed" ||

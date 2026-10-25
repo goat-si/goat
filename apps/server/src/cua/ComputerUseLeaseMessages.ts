@@ -15,7 +15,7 @@ export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wr
 
 const REQUEST = goatCallText("computer_use.request");
 
-export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps, then end your turn. Pause or Stop requires new foreground approval.`;
+export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps; the request waits for the person's answer in this turn. A full-access thread a person directs needs no request except after a pause or Stop in this turn; automatic foreground authority returns only next turn. Respect the pause or Stop.`;
 
 export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
@@ -118,7 +118,7 @@ export const scopeMessage = (
     : launch === "unverifiable"
       ? "On this computer the driver may open another app than the name, path or URL given, so a thread limited to approved apps cannot launch apps here and the call did not run. Work in an approved app's window that is already open, or ask the person to open the app."
       : reason === "app_not_approved"
-        ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}, then end your turn.`
+        ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}. It waits for the person's answer, and once approved this turn can go on.`
         : opaque
           ? "This thread may control only its approved apps, and a script or batch cannot be checked against them, so it did not run. Make the calls one at a time, each with the pid and window_id of an approved app's window."
           : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;

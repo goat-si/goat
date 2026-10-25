@@ -118,6 +118,7 @@ export function fixtureDriver() {
     typeof token === "string" && token.startsWith("s" + state.snapshot + ":");
   const call: DriverClient["call"] = async (tool, args) => {
     if (tool === "check_permissions") return ok({ x11: true, wayland: false, atspi: true });
+    if (tool === "get_screen_size") return ok({ width: 1280, height: 800, scale_factor: 1 });
     if (tool === "list_windows" && state.nextListError) {
       state.nextListError = false;
       return {

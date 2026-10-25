@@ -29,15 +29,11 @@ import {
 
 export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-advanced-open";
 // Settings search jumps that land on a row inside Advanced.
-const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
-  "computer-use-skill",
-  "computer-use-full-access",
-]);
+const ADVANCED_TARGETS: ReadonlySet<string> = new Set(["computer-use-skill"]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
-  readonly cuaFullAccessAutoAdmit?: boolean;
 }
 
 interface StatusLine {
@@ -177,7 +173,6 @@ export function ComputerUsePanel({
   localMac,
   localCheck,
   disabledSkills,
-  fullAccessAutoAdmit,
   save,
   bridge,
 }: {
@@ -192,7 +187,6 @@ export function ComputerUsePanel({
   /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
-  fullAccessAutoAdmit: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -236,7 +230,7 @@ export function ComputerUsePanel({
         {...searchableSetting("computer-use")}
         serverScoped
         settingKeys={["enableCua"]}
-        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Turning it on sets everything up; turning it off stops computer use right away.`}
+        description={`Let agents see and use apps on ${hostLabel} in the background, without taking over your cursor. Threads in full access mode use every app without asking; other threads ask you first. Turning it on sets everything up; turning it off stops computer use right away.`}
         status={
           line || (setup.on && !advanced.open) ? (
             <ComputerUseStatus
@@ -292,15 +286,6 @@ export function ComputerUsePanel({
                 ) : null}
               </div>
             ) : null}
-            <SettingSwitchRow
-              {...searchableSetting("computer-use-full-access")}
-              settingKey="cuaFullAccessAutoAdmit"
-              description={`Threads in full access mode use every app on ${hostLabel} without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them.`}
-              label="Full access without approval"
-              checked={fullAccessAutoAdmit}
-              canConfigure={canConfigure}
-              onChange={(checked) => save({ cuaFullAccessAutoAdmit: checked })}
-            />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
               canConfigure={canConfigure}
@@ -416,7 +401,7 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills" | "cuaFullAccessAutoAdmit";
+  settingKey: "disabledBuiltInSkills";
   description: string;
   label: string;
   checked: boolean;

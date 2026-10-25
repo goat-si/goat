@@ -484,7 +484,7 @@ function ServerSettingsDetail(props: {
                     <SettingsSwitchRow
                       icon="desktopcomputer"
                       label="Computer use"
-                      subtitle="Allow agents to see and use apps on the selected environments' computers. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
+                      subtitle="Allow agents to see and use apps on the selected environments' computers. Threads in full access mode use every app without asking; other threads ask you first. A Mac also needs Accessibility and Screen Recording, granted at that Mac. A computer without a usable screen says why it cannot turn on."
                       value={uniform("enableCua")}
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
@@ -492,14 +492,6 @@ function ServerSettingsDetail(props: {
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
                       <>
-                        <SettingsSwitchRow
-                          icon="desktopcomputer"
-                          label="Full access without approval"
-                          subtitle="Threads in full access mode use every app on these computers without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them."
-                          value={uniform("cuaFullAccessAutoAdmit")}
-                          disabled={disabledFor("cuaFullAccessAutoAdmit")}
-                          onValueChange={(value) => write({ cuaFullAccessAutoAdmit: value })}
-                        />
                         <SettingsSwitchRow
                           icon="desktopcomputer"
                           label="Computer Use skill"

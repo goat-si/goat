@@ -2,9 +2,10 @@
 
 ## First checkout
 
-Install `vp` using the [root README](../../README.md#install-vp). The checkout requires Node 24.x,
-at least 24.16.0, because earlier `node:sqlite` builds cut TEXT values off at the first NUL character and
-the server's memory tests round-trip such text. Bun is optional. From the repository root:
+Install `vp` using the [root README](../../README.md#install-vp). The checkout pins the exact Node 26
+release in the root `package.json` `engines.node`, and `vp` installs and uses it. CI and the standalone
+`goat` executable use the same version, so change it there and nowhere else. The server's own `engines.node`
+stays wider because the desktop app runs it on Electron's Node 24. Bun is optional. From the repository root:
 
 ```sh
 vp i
@@ -285,7 +286,7 @@ hash, so its grants stop applying after a rebuild and System Settings adds anoth
 same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
 
 A signed macOS package always carries the Developer ID helper in `GOAT.app/Contents/Helpers`.
-An unsigned one carries an ad-hoc helper when asked to:
+An unsigned one keeps computer use off unless built with an ad-hoc helper:
 
 ```sh
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper

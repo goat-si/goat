@@ -6,6 +6,7 @@
  */
 import type { ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import type { ComputerUseLease } from "./ComputerUseLeases.ts";
 import { approvedApps } from "./ComputerUseScope.ts";
 
@@ -26,7 +27,7 @@ export const appsOf = (
  * undefined when they share none. Without a list an admission reaches every app, so it overlaps
  * every other: the driver acts under it on the whole desktop and in scripts.
  */
-export const overlap = (
+const overlap = (
   held: ReadonlyArray<string> | undefined,
   wanted: ReadonlyArray<string> | undefined,
 ): { readonly apps?: ReadonlyArray<string> } | undefined => {
@@ -44,6 +45,27 @@ export interface ComputerUseHolder {
   /** The holder's apps in the way, as its grant names them; absent when it holds the whole screen. */
   readonly apps?: ReadonlyArray<string>;
 }
+
+/**
+ * The thread other than `except` whose admission reaches an app `apps` names, or any app when
+ * `apps` is absent: a live grant first, else unattended work admitted to every app.
+ */
+export const holderOf = (
+  grants: ReadonlyArray<ComputerUseLease>,
+  except: ThreadId | undefined,
+  apps: ReadonlyArray<string> | undefined,
+  admitted: { readonly threadId: ThreadId; readonly expiresAt: DateTime.Utc } | undefined,
+): Option.Option<ComputerUseHolder> => {
+  for (const lease of grants) {
+    if (lease.threadId === except) continue;
+    const shared = overlap(lease.apps, apps);
+    if (shared !== undefined)
+      return Option.some({ threadId: lease.threadId, expiresAt: lease.expiresAt, ...shared });
+  }
+  return admitted === undefined
+    ? Option.none()
+    : Option.some({ threadId: admitted.threadId, expiresAt: admitted.expiresAt });
+};
 
 const heldApps = (holder: ComputerUseHolder) =>
   holder.apps === undefined ? "the whole screen" : holder.apps.join(", ");

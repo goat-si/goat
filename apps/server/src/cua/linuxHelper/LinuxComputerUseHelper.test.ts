@@ -81,6 +81,7 @@ describe("Linux readiness grants (#1392)", () => {
     tree: "ready",
     uinputWritable: false,
     captureRefused: undefined,
+    listingRefused: false,
     ...overrides,
   });
 
@@ -711,5 +712,58 @@ describe("pngColors", () => {
     expect(pngColors(png(16, 8, false))).toBe("uniform");
     expect(pngColors(png(16, 8, true))).toBe("varied");
     expect(pngColors(Buffer.from("not a png"))).toBeUndefined();
+  });
+});
+
+describe("Linux readiness on a Wayland desktop the driver cannot read (#1610)", () => {
+  // Native GNOME Wayland: readiness's own listing answers, but the agent's listing passes the
+  // driver's consent, which needs the screen layout get_screen_size cannot read there.
+  const readinessWith = (screenSize: "fails" | "answers", agentLacksHyprland = false) =>
+    readLinuxReadiness(
+      {
+        agentLacksHyprland,
+        session: detectLinuxSession(
+          linuxSessionFacts(
+            {
+              WAYLAND_DISPLAY: "wayland-0",
+              XDG_CURRENT_DESKTOP: "GNOME",
+              DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+            },
+            () => "GNOME Shell 46.0\n",
+          ),
+        ),
+        uinputWritable: async () => false,
+        secureFocus: async () => NOT_SECURE,
+        capture: { route: "refused", reason: CROPPED_CAPTURE },
+        call: async (tool) => {
+          const ok = (structured: unknown) => ({
+            isError: false,
+            text: "",
+            structured,
+            images: [],
+          });
+          if (tool === "check_permissions") return ok({ x11: false, wayland: true, atspi: true });
+          if (tool === "list_windows") return ok({ windows: [{ pid: 30, window_id: 1 }] });
+          if (tool === "get_screen_size")
+            return screenSize === "answers"
+              ? ok({ width: 1600, height: 1000, scale_factor: 1 })
+              : { isError: true, text: "$DISPLAY variable not set", structured: null, images: [] };
+          return "unexpected";
+        },
+      },
+      15_000,
+    );
+
+  it("does not call app controls ready when the driver refuses to list windows for agents", async () => {
+    const refused = await readinessWith("fails");
+    expect(refused.tree).toBe("unavailable");
+    expect(refused.reasons.join(" ")).toMatch(/cannot read this Wayland desktop's screen layout/);
+    // AT-SPI itself answered: the grant stays true to what was read.
+    expect(refused.grants.accessibility).toBe("granted");
+    const answered = await readinessWith("answers");
+    expect(answered.tree).toBe("ready");
+    // Native Hyprland: this helper's driver reads the layout, the agents' embedded one cannot.
+    const hyprland = await readinessWith("answers", true);
+    expect(hyprland.tree).toBe("unavailable");
   });
 });

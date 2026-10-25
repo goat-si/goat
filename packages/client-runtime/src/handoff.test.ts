@@ -2,10 +2,12 @@ import {
   ContextHandoffId,
   ProviderInstanceId,
   RunId,
+  ThreadId,
   type OrchestrationV2ThreadProjection,
   type ServerProvider,
 } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import { computerUseGrantLabel } from "./computerUseGrant.ts";
 import {
   resolveHandoffEndpoints,
   resolvePendingHandoff,
@@ -14,6 +16,20 @@ import {
 
 const from = ProviderInstanceId.make("codex_personal");
 const to = ProviderInstanceId.make("claudeAgent");
+
+it("distinguishes a replaced computer use request from a person's cancellation", () => {
+  const cancelled = { state: "cancelled", resolvedBy: "Person" } as const;
+  expect(
+    computerUseGrantLabel(
+      { ...cancelled, actor: { type: "agent", threadId: ThreadId.make("thread") } },
+      null,
+    ),
+  ).toBe("Replaced by a newer request");
+  expect(
+    computerUseGrantLabel({ ...cancelled, actor: { type: "client", label: "Person" } }, null),
+  ).toBe("Ended by Person");
+});
+
 const item = {
   runId: RunId.make("target"),
   fromProviderInstanceIds: [from],

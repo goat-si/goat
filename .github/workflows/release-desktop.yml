@@ -261,22 +261,32 @@ jobs:
           if [[ "${{ inputs.version }}" =~ -nightly\.[0-9]{8}\.[0-9]+$ ]]; then brand=nightly; fi
           node scripts/apply-web-brand-assets.ts "$brand" apps/server/dist/client
 
-      # The single-executable is built with a Node that supports --build-sea
-      # (25.7+); the repo itself stays on the engines.node version. A native
-      # build injects into the runner's own Node; a Windows target downloads its
-      # node.exe.
+      # Setup Vite+ selected the exact engines.node version from package.json,
+      # which supports --build-sea. A native build injects into that Node; a
+      # Windows target downloads the same version's node.exe.
       - name: Build CLI single-executable
         if: inputs.cli_archive
         shell: bash
         env:
-          # The exact version, not a major: vp downloads it from nodejs.org/dist on
-          # the runner, and only exact versions have a dist directory. Keep in
-          # step with SEA_NODE_VERSION in apps/server/vite.config.ts.
-          VP_NODE_VERSION: "26.8.2"
           # The executable bundles the server again, so it needs the same stamp
           # as release.yml's JS bundle.
           GOAT_TELEMETRY_CHANNEL: ${{ github.repository == 'pingdotgg/t3code' && inputs.release_channel || 'dev' }}
-        run: node apps/server/scripts/cli.ts build-exe --verbose ${{ inputs.platform == 'win' && format('--target win-{0}', inputs.arch) || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Commits before the Node 26 pin declare a Node 24 range, which cannot run
+          # --build-sea. Stable promotion rebuilds such commits, so they take the exact
+          # pin from this workflow's revision instead.
+          pin="$(node -p 'require("./package.json").engines.node')"
+          if [[ ! "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            pinned="$RUNNER_TEMP/workflow-package.json"
+            curl -fsSL --retry 3 -o "$pinned" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/package.json?ref=$GITHUB_WORKFLOW_SHA"
+            VP_NODE_VERSION="$(node -p 'require(process.argv[1]).engines.node' "$pinned")"
+            export VP_NODE_VERSION
+          fi
+          node apps/server/scripts/cli.ts build-exe --verbose ${{ inputs.platform == 'win' && format('--target win-{0}', inputs.arch) || '' }}
 
       - name: Import macOS signing certificate for the CLI archive
         if: inputs.cli_archive && inputs.platform == 'mac'

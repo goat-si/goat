@@ -1,8 +1,9 @@
 # Computer use
 
 Computer use lets agents see and use apps on the computer that runs your GOAT
-environment. Agents work with windows in the background, so they do not take
-over your cursor or keyboard while you work. It is powered by
+environment. Agents normally work with windows in the background. Foreground
+input can briefly take your screen; threads you direct in full access mode can
+use it without asking. It is powered by
 [Cua Driver](https://cua.ai/docs/cua-driver).
 
 Computer use is off until you turn it on, and it works on macOS, Windows, and
@@ -19,9 +20,10 @@ use**. Pick the environment whose computer agents should use, then turn on
 **Computer use**. On mobile, use **Settings → Agent behavior → Computer use**.
 
 Agents get the computer use tools from their next turn, including sessions that
-are already open; Pi picks them up the next time it starts. Plan mode and
-read-only sessions never get them. Agents running in the cloud and Muse Code do
-not get computer use, because it controls the computer that runs GOAT.
+are already open; Pi picks them up the next time it starts. Once an agent has
+the tools, approving an app request lets it continue in the same turn. Plan
+mode and read-only sessions never get them. Agents running in the cloud and
+Muse Code do not get computer use, because it controls the computer that runs GOAT.
 
 ## What agents can use
 
@@ -37,28 +39,35 @@ them do at that keyboard.
 
 ## Approving apps
 
-An agent in a thread you run asks before it uses an app. The request appears in
-the thread and names apps by the `bundle_id` that `list_apps` reports (on Windows
-usually the executable path), or by the listed name when it has no `bundle_id`,
-never a window title. It also says when the approval expires. Approve it in a GOAT
-app and the agent may use those apps' windows in that thread until then.
-Until it has an approval, the agent can list apps and
-windows but not look inside or type into them. A request for the whole screen
-says so; approving it lets the agent act on anything the screen shows. Agents
+Every thread in full access mode uses every app without asking, whatever
+started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
+channel. Threads you direct in full access mode also get foreground input
+without asking. In other modes, the agent asks before it uses an app. The
+request names the apps and says when approval expires. Approve it in a GOAT app
+and the agent continues in the same turn, using those apps until then. Until
+approved, it can list apps and windows but cannot look inside or type into them.
+A request for foreground control says so; approving it lets the agent bring
+apps forward and use keyboard or pointer focus for the stated purpose. Agents
 cannot screenshot the whole display; they look at one window at a time. On
 Windows, a window's screenshot can still include other windows that cover it.
 
-**Stop** on a thread also stops its computer use at once, even in the middle of
-an action sequence. The agent gets the screen back on its next turn, within the
-apps you approved.
+Declining or cancelling ends that request. A newer request replaces the old
+one. An agent waits up to ten minutes for your answer, or until the request
+expires if sooner. If it stops waiting, answering later wakes the thread so it
+can continue.
 
-To skip approvals on a computer you trust, turn on **Full access without
-approval** under **Computer use**. Threads in full access mode then use every
-app without asking, including GOAT Bot, scheduled tasks and other work that
-runs on its own. Threads in other modes still ask, and a thread that leaves full
-access stops at once. Work that runs on its own still uses the screen one thread
-at a time. Stop, **Stop all** and turning the setting or computer use off still
-end their computer use.
+**Stop** on a thread stops its computer use at once, even in the middle of an
+action sequence. Pause, takeover and private mode also revoke foreground
+control. After pause or Stop, a full-access thread gets foreground control
+automatically only on its next turn.
+
+Full access skips only the app approval. Everything else on this page still
+applies to it: password managers and GOAT's own windows stay off limits, a
+secret field still pauses agents, each action stays within what its call may
+reach, and work that runs on its own still asks for foreground control, still
+needs a computer that can tell when you type a secret, and still shares the
+screen one thread at a time. **Stop**, **Stop all** and turning computer use off
+end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
 **Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
@@ -75,8 +84,8 @@ control** hands it to you.
 
 **Stop** on a tile stops that agent until you choose **Hand back**. On a tile
 for this computer, Stop also ends that thread's approval, so its apps are free
-for other threads at once; the thread asks again to go on, unless **Full access
-without approval** lets it use every app. **Stop all**
+for other threads at once. On its next turn, the thread asks again unless it is
+in full access. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
@@ -95,20 +104,22 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 
 ## Work that runs on its own
 
-Work nobody is watching does not get computer use by itself: GOAT Bot, work
-started from Slack or iMessage, scheduled and webhook tasks, and threads any of
-them start. When such a thread needs the screen, GOAT asks in that thread. The
-request names the thread, this computer, what the agent wants to do, and until
-when. Someone allowed to change this environment's settings approves it in a
-GOAT app; a reply in a chat channel does not count.
+GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
+threads any of them start use every app without asking when they run in full
+access mode, and need approval otherwise. They still need approval for
+foreground control. When such a thread needs approval, GOAT asks in that
+thread. The request names the thread, this computer, what the agent wants to do,
+and until when. Someone allowed to change this environment's settings approves
+it in a GOAT app; a reply in a chat channel does not count.
 
 Such work only gets the screen on a computer whose GOAT can tell when you enter
 a password or another secret; elsewhere the request is refused and says why.
-Admitted work keeps running while you use the keyboard and mouse. Approving
-admits that thread until the time shown. It does not approve each
-action. Threads approved for different apps work at the same time, each in its
-own apps. An app belongs to one thread at a time, and approving the whole screen
-waits until no other thread holds an app. While another thread holds apps, an
+Admitted work keeps running while you use the keyboard and mouse. Approval lasts
+until the time shown and does not approve each action. If the agent already has
+the tools, it continues in the same turn; otherwise, GOAT wakes it in a new turn
+with computer use available. Threads approved for different apps work at the
+same time, each in its own apps. An app belongs to one thread at a time, and
+approving the whole screen waits until no other thread holds an app. While another thread holds apps, an
 agent works on its windows in the background and does not bring them to the
 front or move the pointer. Threads you run yourself can still use the screen
 meanwhile, so they may get in each other's way.
@@ -119,7 +130,7 @@ sequence: the step already under way finishes, and nothing after it runs.
 
 If such work sends a message to a thread you are running, it does not join your
 turn; it waits and runs as that thread's next turn, without computer use unless
-that thread is approved.
+that thread is approved or runs in full access mode.
 
 ## macOS permissions
 

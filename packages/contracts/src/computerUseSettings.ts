@@ -12,9 +12,9 @@ export const CuaSettingsFields = {
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   /**
-   * Threads in full access mode control every app on this host without a computer_use.grant,
-   * unattended ones included. Stop, the kill switch and secret-field detection still hold them;
-   * a person typing does not pause admitted work.
+   * No longer read. Every full access run uses every app without approval whatever started it
+   * (ADR-0023 D16), so the server ignores this. Kept so settings files and older clients that
+   * still send it decode.
    */
   cuaFullAccessAutoAdmit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 };

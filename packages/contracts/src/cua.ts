@@ -689,6 +689,8 @@ export const ComputerUseRequestResult = Schema.Union([
   }),
   Schema.Struct({
     ...needsHumanFields("approval", "goat_computer_use_request"),
+    /** This call waited its budget for the answer; the request stays open and wakes the thread. */
+    waitTimedOut: Schema.optionalKey(Schema.Literal(true)),
     message: Schema.String,
   }),
   Schema.Struct({
@@ -706,6 +708,15 @@ export const ComputerUseRequestResult = Schema.Union([
        */
       "not_granted",
       "unknown_app",
+      /** The person declined, or cancelled the request before answering. */
+      "declined",
+      "cancelled",
+      /** The request reached its expiry unanswered. */
+      "expired",
+      /** A newer, different request from this thread replaced it. */
+      "superseded",
+      /** Approved, but this turn's computer use ended or paused meanwhile; a later turn has it. */
+      "interrupted",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
     unknownApps: Schema.optionalKey(Schema.Array(Schema.String)),

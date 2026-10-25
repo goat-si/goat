@@ -119,7 +119,6 @@ function Harness({ f }: { f: Fixture }) {
       localMac={f.localMac}
       localCheck={f.localCheck}
       disabledSkills={f.disabledSkills}
-      fullAccessAutoAdmit={false}
       save={f.save}
       bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
     />
@@ -377,10 +376,9 @@ it("keeps the readiness list and skill switch in Advanced, closed by default and
   expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBe("false");
 });
 
-it.each([
-  ["computer-use-skill", "Computer Use skill"],
-  ["computer-use-full-access", "Full access without approval"],
-])("a settings search for %s opens Advanced without remembering it", async (target, name) => {
+it("a settings search for the Computer Use skill opens Advanced without remembering it", async () => {
+  const target = "computer-use-skill";
+  const name = "Computer Use skill";
   const f = setup({ enabled: true });
   state.searchTargetId = target;
   await using screen = await render(panel(f));
@@ -388,11 +386,7 @@ it.each([
   expect(document.getElementById(target)).not.toBeNull();
   expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBeNull();
   await clickSwitch(name);
-  expect(f.save).toHaveBeenLastCalledWith(
-    target === "computer-use-skill"
-      ? { disabledBuiltInSkills: ["computer-use"] }
-      : { cuaFullAccessAutoAdmit: true },
-  );
+  expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });
 });
 it("On again while an earlier check still runs waits for it, then checks for the new run", async () => {
   const f = setup();
