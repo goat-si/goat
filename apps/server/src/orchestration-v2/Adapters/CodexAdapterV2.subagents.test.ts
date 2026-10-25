@@ -358,6 +358,25 @@ describe("Codex native subagents as their thread's background work", () => {
           yield* replay.terminal;
           assert.equal(replay.subagentStatuses.at(-1), "completed");
           assert.include(replay.subagentStatuses, "interrupted");
+          // The parent's subagent node reopens under turn 2 while the child runs (#1654).
+          const subagentNode = allocator.derive.nodeFromProviderItem({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeItemId: `spawn-${child}:${child}`,
+          });
+          const updates = replay.nodes.filter((node) => node.id === subagentNode);
+          const swept = updates.findIndex((node) => node.status === "interrupted");
+          assert.isAtLeast(swept, 0);
+          const reopened = updates[swept + 1];
+          assert.equal(reopened?.status, "running");
+          assert.isNull(reopened?.completedAt);
+          assert.equal(
+            reopened?.providerTurnId,
+            allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-2",
+            }),
+          );
+          assert.equal(updates.at(-1)?.status, "completed");
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );

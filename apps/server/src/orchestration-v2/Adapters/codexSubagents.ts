@@ -80,11 +80,14 @@ interface NodeOwner {
   readonly task: OrchestrationV2Subagent;
 }
 
-/** A child's current root and its parent's subagent node share the same terminal outcome. */
+/**
+ * A child's current root and its parent's subagent node share the same outcome: terminal, or
+ * running again (null completedAt) when a real turn reopens a child Stop swept.
+ */
 export function terminalNodes(input: {
   readonly subagent: NodeOwner;
   readonly status: OrchestrationV2ExecutionNode["status"];
-  readonly completedAt: DateTime.Utc;
+  readonly completedAt: DateTime.Utc | null;
   readonly root?: Pick<
     OrchestrationV2ExecutionNode,
     "id" | "threadId" | "rootNodeId" | "providerTurnId" | "startedAt"

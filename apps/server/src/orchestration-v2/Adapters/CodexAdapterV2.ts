@@ -3205,6 +3205,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ? { reopen: true, result: null }
                 : {}),
             });
+            // The Stop sweep ended its parent's subagent node too; reopen it under its current
+            // parent turn (#1654).
+            if (subagent.endedByStop === true)
+              for (const node of CodexSubagents.terminalNodes({
+                subagent,
+                status: "running",
+                completedAt: null,
+              }).filter((node) => node.kind === "subagent"))
+                yield* emitProviderEvent({ type: "node.updated", driver: CODEX_PROVIDER, node });
             const now = yield* DateTime.now;
             yield* emitProviderEvent({
               type: "provider_thread.updated",
