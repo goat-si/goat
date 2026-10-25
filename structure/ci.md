@@ -45,7 +45,8 @@ nothing. On a pull request the `goat-scope` job diffs the merge commit against i
 run: `check`, `typecheck`, and `test-changed`, the test files beside the changed files that
 `vp run check:changed` runs before a push (`scripts/lib/changed-tests.ts`, so the two never pick
 different files). Suites that find their files another way are added: shared prompt text adds the
-replay suites, and a change or deletion under an app's `src` adds its `reactCompilerCoverage` suite.
+replay suites, and a changed or deleted non-test `.ts`/`.tsx` file under an app's `src` adds that
+app's `reactCompilerCoverage` suite when it has one (web and mobile do).
 Documentation alone runs only `check`, and a change that selects no tests skips `test-changed`. The
 full suite runs on request: the `ci:full` label, or a manual run of the branch.
 `goat-scope` always runs `node scripts/goat-rename.ts --check` before task selection, so new upstream product names fail `goat-ci-result`.
