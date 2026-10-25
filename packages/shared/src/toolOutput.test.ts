@@ -70,6 +70,16 @@ describe("toolOutputSettle", () => {
     ).toEqual(pending);
   });
 
+  it("reads a reason that lists several privacy problems", () => {
+    const reason =
+      "private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204,tree_role:AXUnknown,tree_subrole:AXTextField";
+    expect(
+      toolOutputSettle(
+        `Notification settle: unsupported (${reason}). Quiet does not establish task completion.`,
+      ),
+    ).toEqual({ outcome: "unsupported", reason });
+  });
+
   it("reads a reason that names an AX notification", () => {
     const reason = { outcome: "unsupported", reason: "notification_unsupported:AXMoved" };
     const line =
