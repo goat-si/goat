@@ -6,7 +6,7 @@ import {
   StorageMcpUsageResult,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
-import { Tool, Toolkit } from "effect/ai";
+import { Tool } from "effect/ai";
 
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as StorageConsent from "../../../storage/StorageConsent.ts";
@@ -23,7 +23,8 @@ const dependencies = [
   HostThreadsMcpService.HostThreadsMcpService,
 ];
 
-const StorageUsageTool = Tool.make(agentSurfaceRegistry["storage.usage"].name, {
+/** Served in the worktree toolkit, where most of what they clean lives. */
+export const StorageUsageTool = Tool.make(agentSurfaceRegistry["storage.usage"].name, {
   description: agentSurfaceRegistry["storage.usage"].description,
   parameters: StorageMcpUsageInput,
   success: StorageMcpUsageResult,
@@ -32,7 +33,7 @@ const StorageUsageTool = Tool.make(agentSurfaceRegistry["storage.usage"].name, {
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["storage.usage"]));
 
-const StorageCleanTool = Tool.make(agentSurfaceRegistry["storage.clean"].name, {
+export const StorageCleanTool = Tool.make(agentSurfaceRegistry["storage.clean"].name, {
   description: agentSurfaceRegistry["storage.clean"].description,
   parameters: StorageMcpCleanInput,
   success: StorageMcpCleanResultJson,
@@ -40,5 +41,3 @@ const StorageCleanTool = Tool.make(agentSurfaceRegistry["storage.clean"].name, {
   failureMode: "return",
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["storage.clean"]));
-
-export const StorageToolkit = Toolkit.make(StorageUsageTool, StorageCleanTool);

@@ -109,14 +109,13 @@ const make = Effect.gen(function* () {
   const sizes = new Map<string, { readonly bytes: number; readonly at: number }>();
   const lock = yield* Semaphore.make(1);
 
-  const scanNow = (measure: boolean) =>
-    Effect.gen(function* () {
-      const startedAt = yield* Clock.currentTimeMillis;
-      const scan = yield* scanStorage({ measure, sizes });
-      const durationMs = (yield* Clock.currentTimeMillis) - startedAt;
-      if (measure) yield* Ref.set(latest, { scan, durationMs });
-      return { scan, durationMs };
-    }).pipe(Effect.provideContext(context));
+  const scanNow = Effect.fn("StorageReclaim.scan")(function* (measure: boolean) {
+    const startedAt = yield* Clock.currentTimeMillis;
+    const scan = yield* scanStorage({ measure, sizes });
+    const durationMs = (yield* Clock.currentTimeMillis) - startedAt;
+    if (measure) yield* Ref.set(latest, { scan, durationMs });
+    return { scan, durationMs };
+  }, Effect.provideContext(context));
 
   const usage: StorageReclaim["Service"]["usage"] = Effect.fn("StorageReclaim.usage")(
     function* (input) {
@@ -138,175 +137,174 @@ const make = Effect.gen(function* () {
     Effect.tryPromise(() => NodeFSP.realpath(target)).pipe(Effect.orElseSucceed(() => null));
 
   /** One line per intent and outcome; a deletion whose intent cannot be written does not run. */
-  const log = (entry: Omit<typeof StorageLogLine.Type, "at">) =>
-    Effect.gen(function* () {
-      const at = DateTime.formatIso(yield* DateTime.now);
-      yield* Effect.tryPromise(() => NodeFSP.mkdir(config.logsDir, { recursive: true }));
-      yield* Effect.tryPromise(() =>
-        NodeFSP.appendFile(logPath, encodeLogLine({ at, ...entry }) + "\n", "utf8"),
-      );
-    });
+  const log = Effect.fn("StorageReclaim.log")(function* (
+    entry: Omit<typeof StorageLogLine.Type, "at">,
+  ) {
+    const at = DateTime.formatIso(yield* DateTime.now);
+    yield* Effect.tryPromise(() => NodeFSP.mkdir(config.logsDir, { recursive: true }));
+    yield* Effect.tryPromise(() =>
+      NodeFSP.appendFile(logPath, encodeLogLine({ at, ...entry }) + "\n", "utf8"),
+    );
+  });
 
   /**
    * Deletes target only while it is still the reviewed folder or file, not a link, with no link in
    * its path, strictly inside root. Node's rm never follows links inside the tree it removes.
    */
-  const removeChecked = (root: string, target: string, identity: FileIdentity) =>
-    Effect.gen(function* () {
-      const stat = yield* lstatOf(target);
-      if (stat === null) return "it is already gone";
-      if (stat.isLink) return "it is a link";
-      if (!sameIdentity(stat.identity, identity)) return "it changed since it was reviewed";
-      const realRoot = yield* real(root);
-      const realTarget = yield* real(target);
-      if (realRoot === null || realTarget === null) return "its location could not be resolved";
-      if (!samePath(realTarget, path.resolve(target), rules)) return "a link sits in its path";
-      if (!isStrictlyInside(realRoot, realTarget, rules)) return "it is outside " + root;
-      yield* Effect.tryPromise({
-        try: () => NodeFSP.rm(target, { recursive: true, force: false }),
-        catch: (cause) =>
-          new RemoveFailed({ message: cause instanceof Error ? cause.message : String(cause) }),
-      });
-      return null;
+  const removeChecked = Effect.fn("StorageReclaim.removeChecked")(function* (
+    root: string,
+    target: string,
+    identity: FileIdentity,
+  ) {
+    const stat = yield* lstatOf(target);
+    if (stat === null) return "it is already gone";
+    if (stat.isLink) return "it is a link";
+    if (!sameIdentity(stat.identity, identity)) return "it changed since it was reviewed";
+    const realRoot = yield* real(root);
+    const realTarget = yield* real(target);
+    if (realRoot === null || realTarget === null) return "its location could not be resolved";
+    if (!samePath(realTarget, path.resolve(target), rules)) return "a link sits in its path";
+    if (!isStrictlyInside(realRoot, realTarget, rules)) return "it is outside " + root;
+    yield* Effect.tryPromise({
+      try: () => NodeFSP.rm(target, { recursive: true, force: false }),
+      catch: (cause) =>
+        new RemoveFailed({ message: cause instanceof Error ? cause.message : String(cause) }),
     });
+    return null;
+  });
 
   /** Why a checkout or its build outputs must stay right now; null when nothing uses it. */
-  const inUse = (folder: string) =>
-    Effect.gen(function* () {
-      const other = yield* resolveOtherServerPaths(config.dbPath);
-      const otherReason = otherServerReason(other, folder, rules);
-      if (otherReason !== null) return otherReason;
-      const realFolder = (yield* real(folder)) ?? folder;
-      const working = processInside(
-        yield* (yield* LocalGoatServers).workingDirectories,
-        [folder, realFolder],
-        rules,
-      );
-      if (working === null) return "running processes could not be listed";
-      if (working) return "a process is running in it";
-      const open = yield* sql<{ readonly id: string | null; readonly cwd: string | null }>`
+  const inUse = Effect.fn("StorageReclaim.inUse")(function* (folder: string) {
+    const other = yield* resolveOtherServerPaths(config.dbPath);
+    const otherReason = otherServerReason(other, folder, rules);
+    if (otherReason !== null) return otherReason;
+    const realFolder = (yield* real(folder)) ?? folder;
+    const working = processInside(
+      yield* (yield* LocalGoatServers).workingDirectories,
+      [folder, realFolder],
+      rules,
+    );
+    if (working === null) return "running processes could not be listed";
+    if (working) return "a process is running in it";
+    const open = yield* sql<{ readonly id: string | null; readonly cwd: string | null }>`
         SELECT json_extract(payload_json, '$.id') AS "id", json_extract(payload_json, '$.cwd') AS "cwd"
         FROM orchestration_v2_projection_provider_sessions WHERE status != 'stopped'
       `.pipe(
-        NodeSqliteClient.readOnly,
-        Effect.orElseSucceed(() => null),
-      );
-      if (open === null) return "provider sessions could not be read";
-      for (const session of open) {
-        if (session.id === null || session.cwd === null) continue;
-        const cwd = path.resolve(session.cwd);
-        if (
-          (samePath(cwd, folder, rules) || isStrictlyInside(folder, cwd, rules)) &&
-          (yield* sessions.isLive(ProviderSessionId.make(session.id)))
-        )
-          return "a provider session is still open in it";
-      }
-      const pending = yield* sql<{ readonly one: number }>`
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    if (open === null) return "provider sessions could not be read";
+    for (const session of open) {
+      if (session.id === null || session.cwd === null) continue;
+      const cwd = path.resolve(session.cwd);
+      if (
+        (samePath(cwd, folder, rules) || isStrictlyInside(folder, cwd, rules)) &&
+        (yield* sessions.isLive(ProviderSessionId.make(session.id)))
+      )
+        return "a provider session is still open in it";
+    }
+    const pending = yield* sql<{ readonly one: number }>`
         SELECT 1 AS "one" FROM orchestration_v2_effect_outbox AS effect
         JOIN orchestration_v2_projection_threads AS thread ON thread.thread_id = effect.thread_id
         WHERE effect.status NOT IN ('succeeded', 'cancelled')
           AND json_extract(thread.payload_json, '$.worktreePath') = ${folder}
         LIMIT 1
       `.pipe(
-        NodeSqliteClient.readOnly,
-        Effect.orElseSucceed(() => null),
-      );
-      if (pending === null) return "pending thread work could not be read";
-      if (pending.length > 0) return "a thread that used it still has work queued";
-      return null;
-    }).pipe(Effect.provideContext(context));
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    if (pending === null) return "pending thread work could not be read";
+    if (pending.length > 0) return "a thread that used it still has work queued";
+    return null;
+  }, Effect.provideContext(context));
 
-  const act = (item: StorageItem, target: StorageTarget) =>
-    Effect.gen(function* () {
-      switch (target.kind) {
-        case "worktree": {
-          const result = yield* worktrees
-            .removeAbandoned({
-              path: item.path,
-              head: target.head,
-              branch: target.branch,
-              verify: inUse(item.path),
-            })
-            .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-          return result.removed ? null : result.reason;
-        }
-        case "path": {
-          if (target.worktree === null) {
-            if (item.kind === "orphan_folder") {
-              const reason = yield* inUse(item.path);
-              if (reason !== null) return reason;
-            }
-            return yield* removeChecked(target.root, item.path, target.identity);
-          }
-          const worktree = target.worktree;
-          return yield* withWorkspaceLease(
-            path.resolve(worktree),
-            Effect.gen(function* () {
-              const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
-              const entry = facts?.find((fact) =>
-                samePath(fact.entry.path, worktree, rules),
-              )?.entry;
-              if (entry === undefined) return "its worktree is no longer listed";
-              if (entry.threads.some((thread) => thread.busy))
-                return "a thread is running in its worktree";
-              const reason = yield* inUse(worktree);
-              if (reason !== null) return reason;
-              return yield* removeChecked(target.root, item.path, target.identity);
-            }),
-          );
-        }
-        case "stale": {
-          const listed = yield* git
-            .execute({
-              operation: "StorageReclaim.staleRegistrations",
-              cwd: target.repository,
-              args: ["worktree", "list", "--porcelain", "-z"],
-              allowNonZeroExit: true,
-              maxOutputBytes: 1024 * 1024,
-            })
-            .pipe(Effect.orElseSucceed(() => null));
-          if (listed === null || listed.exitCode !== 0) return "git could not list its worktrees";
-          const missing: Array<string> = [];
-          for (const record of listed.stdout.split("\0\0")) {
-            const field = record.split("\0").find((value) => value.startsWith("worktree "));
-            if (field === undefined) continue;
-            const worktreePath = path.resolve(target.repository, field.slice("worktree ".length));
-            if (
-              !(yield* FileSystem.FileSystem.pipe(
-                Effect.flatMap((fs) => fs.exists(worktreePath)),
-                Effect.orElseSucceed(() => true),
-              ))
-            )
-              missing.push(worktreePath);
-          }
-          // git prune forgets every missing worktree of the repository, so the set must be the reviewed one.
-          if (missing.toSorted().join("\n") !== target.missing.join("\n"))
-            return "its missing worktrees changed since it was reviewed";
-          yield* git
-            .pruneWorktrees({ cwd: target.repository })
-            .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-          return null;
-        }
-        case "runtime": {
-          const removed = yield* removeUnusedPinnedRuntime({
-            baseDir: config.baseDir,
-            keep: [packageJson.version],
-            version: target.version,
-          }).pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-          return removed ? null : "it is in use now";
-        }
-        case "files": {
-          for (const file of target.files) {
-            const reason = yield* removeChecked(target.root, file.path, file.identity);
-            if (reason !== null && reason !== "it is already gone")
-              return file.path + ": " + reason;
-          }
-          return null;
-        }
-        case "none":
-          return "it is shown for information only";
+  const act = Effect.fn("StorageReclaim.act")(function* (item: StorageItem, target: StorageTarget) {
+    switch (target.kind) {
+      case "worktree": {
+        const result = yield* worktrees
+          .removeAbandoned({
+            path: item.path,
+            head: target.head,
+            branch: target.branch,
+            verify: inUse(item.path),
+          })
+          .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
+        return result.removed ? null : result.reason;
       }
-    }).pipe(Effect.provideContext(context));
+      case "path": {
+        if (target.worktree === null) {
+          if (item.kind === "orphan_folder") {
+            const reason = yield* inUse(item.path);
+            if (reason !== null) return reason;
+          }
+          return yield* removeChecked(target.root, item.path, target.identity);
+        }
+        const worktree = target.worktree;
+        return yield* withWorkspaceLease(
+          path.resolve(worktree),
+          Effect.gen(function* () {
+            const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
+            const entry = facts?.find((fact) => samePath(fact.entry.path, worktree, rules))?.entry;
+            if (entry === undefined) return "its worktree is no longer listed";
+            if (entry.threads.some((thread) => thread.busy))
+              return "a thread is running in its worktree";
+            const reason = yield* inUse(worktree);
+            if (reason !== null) return reason;
+            return yield* removeChecked(target.root, item.path, target.identity);
+          }),
+        );
+      }
+      case "stale": {
+        const listed = yield* git
+          .execute({
+            operation: "StorageReclaim.staleRegistrations",
+            cwd: target.repository,
+            args: ["worktree", "list", "--porcelain", "-z"],
+            allowNonZeroExit: true,
+            maxOutputBytes: 1024 * 1024,
+          })
+          .pipe(Effect.orElseSucceed(() => null));
+        if (listed === null || listed.exitCode !== 0) return "git could not list its worktrees";
+        const missing: Array<string> = [];
+        for (const record of listed.stdout.split("\0\0")) {
+          const field = record.split("\0").find((value) => value.startsWith("worktree "));
+          if (field === undefined) continue;
+          const worktreePath = path.resolve(target.repository, field.slice("worktree ".length));
+          if (
+            !(yield* FileSystem.FileSystem.pipe(
+              Effect.flatMap((fs) => fs.exists(worktreePath)),
+              Effect.orElseSucceed(() => true),
+            ))
+          )
+            missing.push(worktreePath);
+        }
+        // git prune forgets every missing worktree of the repository, so the set must be the reviewed one.
+        if (missing.toSorted().join("\n") !== target.missing.join("\n"))
+          return "its missing worktrees changed since it was reviewed";
+        yield* git
+          .pruneWorktrees({ cwd: target.repository })
+          .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
+        return null;
+      }
+      case "runtime": {
+        const removed = yield* removeUnusedPinnedRuntime({
+          baseDir: config.baseDir,
+          keep: [packageJson.version],
+          version: target.version,
+        }).pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
+        return removed ? null : "it is in use now";
+      }
+      case "files": {
+        for (const file of target.files) {
+          const reason = yield* removeChecked(target.root, file.path, file.identity);
+          if (reason !== null && reason !== "it is already gone") return file.path + ": " + reason;
+        }
+        return null;
+      }
+      case "none":
+        return "it is shown for information only";
+    }
+  }, Effect.provideContext(context));
 
   const clean: StorageReclaim["Service"]["clean"] = Effect.fn("StorageReclaim.clean")(
     function* (input) {

@@ -2,6 +2,8 @@ import {
   OrchestratorMcpFailure,
   StorageMcpUsageResult,
   type StorageMcpCleanResult,
+  type StorageMcpCleanInput,
+  type StorageMcpUsageInput,
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import * as Effect from "effect/Effect";
@@ -12,7 +14,6 @@ import * as StorageReclaim from "../../../storage/StorageReclaim.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
-import { StorageToolkit } from "./tools.ts";
 
 const decodeUsage = Schema.decodeUnknownEffect(StorageMcpUsageResult);
 const failed = (error: { readonly message: string }) =>
@@ -20,10 +21,11 @@ const failed = (error: { readonly message: string }) =>
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
 
-const handlers = {
+/** goat_storage_usage and goat_storage_clean, spread into the worktree toolkit's handlers. */
+export const storageHandlers = {
   goat_storage_usage: McpToolAccess.readsOrReachesHost(
-    (input) => input.host !== undefined,
-    (input) =>
+    (input: StorageMcpUsageInput) => input.host !== undefined,
+    (input: StorageMcpUsageInput) =>
       Effect.gen(function* () {
         const { host, ...rest } = input;
         if (host !== undefined) {
@@ -41,9 +43,9 @@ const handlers = {
   ),
   // A dry run deletes nothing; deleting needs a full-access caller and a person's approval.
   goat_storage_clean: McpToolAccess.removesCheckouts(
-    (input) => input.dryRun === false,
+    (input: StorageMcpCleanInput) => input.dryRun === false,
     () => false,
-    (input) =>
+    (input: StorageMcpCleanInput) =>
       Effect.gen(function* (): Effect.fn.Return<
         StorageMcpCleanResult,
         OrchestratorMcpFailure,
@@ -105,6 +107,4 @@ const handlers = {
         return { kind: "cleaned", ...result };
       }),
   ),
-} satisfies McpToolAccess.Handlers<typeof StorageToolkit.tools>;
-
-export const layer = McpToolAccess.toLayer(StorageToolkit, handlers);
+};

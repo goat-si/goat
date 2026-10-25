@@ -46,8 +46,7 @@ const walk = Effect.fnUntraced(
     const path = yield* Path.Path;
     const pending = [target];
     let bytes = 0;
-    while (pending.length > 0) {
-      const current = pending.pop()!;
+    for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
       // Effect's stat follows links; a readable link is skipped, which also skips junctions.
       const isLink = yield* fs.readLink(current).pipe(
         Effect.as(true),

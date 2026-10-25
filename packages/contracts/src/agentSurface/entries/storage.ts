@@ -5,7 +5,7 @@ export const storageEntries = {
     resource: "storage",
     verb: "usage",
     name: "goat_storage_usage",
-    toolkit: "storage",
+    toolkit: "worktree",
     summary: "Show what GOAT's folders hold on a machine",
     description:
       "Read free disk space and what GOAT's own folders hold on this machine or host: worktrees and their node_modules and target/, leftover folders, stale git registrations, old runtimes, rotated logs, temp folders, kache. Each item says whether cleanup may remove it and why. Supports host.",
@@ -26,7 +26,7 @@ export const storageEntries = {
     resource: "storage",
     verb: "clean",
     name: "goat_storage_clean",
-    toolkit: "storage",
+    toolkit: "worktree",
     summary: "Delete removable GOAT storage after a person approves",
     description:
       "Preview or delete removable items from goat_storage_usage on this machine. dryRun defaults to true. dryRun:false asks a person to approve exactly those items; call again with the same items and approvalId once they have.",

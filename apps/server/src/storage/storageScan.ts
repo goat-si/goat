@@ -693,8 +693,8 @@ const findBuildOutputs = Effect.fn("storageScan.findBuildOutputs")(function* (wo
   const pending: Array<{ readonly folder: string; readonly depth: number }> = [
     { folder: worktree, depth: 0 },
   ];
-  while (pending.length > 0) {
-    const { folder, depth } = pending.pop()!;
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const { folder, depth } = next;
     const names = yield* fs
       .readDirectory(folder)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
@@ -725,8 +725,8 @@ const rotatedLogFiles = Effect.fn("storageScan.rotatedLogFiles")(function* (logs
   const pending: Array<{ readonly folder: string; readonly depth: number }> = [
     { folder: logsDir, depth: 0 },
   ];
-  while (pending.length > 0) {
-    const { folder, depth } = pending.pop()!;
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const { folder, depth } = next;
     for (const name of yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => []))) {
       const target = path.join(folder, name);
       const stat = yield* lstatOf(target);

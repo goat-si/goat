@@ -8,18 +8,18 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 
 ## Snapshot
 
-| Measure                                                | Value            |
-| ------------------------------------------------------ | ---------------- |
-| MCP tools mounted on /mcp                              | 202              |
-| Toolkits                                               | 25               |
-| Mutating tools, by enforced handler access             | 129              |
-| Mutating tools that accept clientRequestId             | 48               |
-| Mutating tools whose clientRequestId GOAT deduplicates | 35               |
-| Input parameters with a description                    | 162 of 768 (21%) |
-| Tool descriptions with an example                      | 3 of 202         |
-| CLI commands, listed / unlisted                        | 60 / 19          |
-| CLI commands with usage examples                       | 0 of 79          |
-| Listed CLI leaf commands with --json                   | 11 of 46         |
+| Measure                                                | Value                   |
+| ------------------------------------------------------ | ----------------------- |
+| MCP tools mounted on /mcp                              | 202                     |
+| Toolkits                                               | 24 (unmounted: storage) |
+| Mutating tools, by enforced handler access             | 129                     |
+| Mutating tools that accept clientRequestId             | 48                      |
+| Mutating tools whose clientRequestId GOAT deduplicates | 35                      |
+| Input parameters with a description                    | 162 of 768 (21%)        |
+| Tool descriptions with an example                      | 3 of 202                |
+| CLI commands, listed / unlisted                        | 60 / 19                 |
+| CLI commands with usage examples                       | 0 of 79                 |
+| Listed CLI leaf commands with --json                   | 11 of 46                |
 
 | Toolkit                | Tools | Mutating | clientRequestId | Paginated | failureMode   | Error tags | Source                                                     |
 | ---------------------- | ----- | -------- | --------------- | --------- | ------------- | ---------- | ---------------------------------------------------------- |
@@ -42,8 +42,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | `thread`               | 18    | 11       | 5               | 2         | return        | 1          | apps/server/src/mcp/toolkits/thread/tools.ts               |
 | `previewControls`      | 2     | 1        | 0               | 1         | return        | 19         | apps/server/src/mcp/toolkits/previewControls/tools.ts      |
 | `project`              | 8     | 5        | 3               | 1         | return        | 1          | apps/server/src/mcp/toolkits/project/tools.ts              |
-| `storage`              | 2     | 1        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/storage/tools.ts              |
-| `worktree`             | 6     | 3        | 1               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
+| `worktree`             | 8     | 4        | 1               | 1         | return        | 2          | apps/server/src/mcp/toolkits/worktree/tools.ts             |
 | `pullRequests`         | 7     | 5        | 1               | 0         | error         | 15         | apps/server/src/mcp/toolkits/pullRequests/tools.ts         |
 | `memory`               | 9     | 3        | 0               | 4         | return        | 1          | apps/server/src/mcp/toolkits/memory/tools.ts               |
 | `memoryAdministration` | 3     | 2        | 0               | 0         | return        | 1          | apps/server/src/mcp/toolkits/memoryAdministration/tools.ts |
@@ -109,6 +108,8 @@ Toolkits do not match the resource in the name, which matters once docs or permi
 | `goat_repository_snapshot`         | `project`        | packages/contracts/src/agentSurface/entries/repository.ts         |
 | `goat_review_findings_export`      | `orchestrator`   | packages/contracts/src/agentSurface/entries/review_findings.ts    |
 | `goat_review_findings_record`      | `orchestrator`   | packages/contracts/src/agentSurface/entries/review_findings.ts    |
+| `goat_storage_clean`               | `worktree`       | packages/contracts/src/agentSurface/entries/storage.ts            |
+| `goat_storage_usage`               | `worktree`       | packages/contracts/src/agentSurface/entries/storage.ts            |
 | `goat_thread_checkpoint_capture`   | `orchestrator`   | packages/contracts/src/agentSurface/entries/thread.ts             |
 | `goat_thread_checkpoint_reconcile` | `orchestrator`   | packages/contracts/src/agentSurface/entries/thread.ts             |
 | `goat_thread_checkpoint_restore`   | `orchestrator`   | packages/contracts/src/agentSurface/entries/thread.ts             |
@@ -221,6 +222,8 @@ CLI invocations in the docs that do not resolve:
 | ---------------------------------- | ------------------------------------------ | ------------------------------------------------------- |
 | `goat service install --no-start`  | `goat service install` has no `--no-start` | docs/user/background-service.md                         |
 | `goat thread read -f threadId=$id` | no subcommand `read` under `goat thread`   | docs/user/outside-agents.md                             |
+| `goat storage --dry-run`           | `goat` has no `--dry-run`                  | docs/user/project-settings.md                           |
+| `goat storage --clean`             | `goat` has no `--clean`                    | docs/user/project-settings.md                           |
 | `goat cua-lease-proxy --control`   | `goat` has no `--control`                  | structure/decisions/ADR-0022-cua-driver-computer-use.md |
 
 100 of 202 tools are never named in any Markdown doc, and 95 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_list`, `goat_environment_preferences_update`, `goat_environment_read`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_html_list`, `goat_hub_device_join`, `goat_hub_device_leave`, and 71 more. Agents learn these only from the MCP catalog.

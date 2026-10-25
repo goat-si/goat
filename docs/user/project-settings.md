@@ -269,10 +269,38 @@ Existing prompts for deleting a worktree manually remain available when this pol
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.
-Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
+Results also list folders in the worktree folder that no thread uses, with their sizes; automatic
+cleanup never removes them. **Disk usage** below can.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.
+
+## Disk usage
+
+**Settings → Storage → Disk usage** shows each machine's free space and what GOAT's own folders
+hold there: worktrees and their `node_modules` and Rust `target/` folders, leftover folders of
+removed worktrees, worktrees Git still lists after their folder was deleted, older GOAT runtimes,
+rotated logs past retention, temporary folders, and the kache build cache. **Scan again** measures
+now; a scan can take a minute on machines with many worktrees.
+
+**Clean up…** lists every path it would delete with its size. Nothing is deleted until you choose
+**Delete**. It starts with the categories that are safe to clear; tick build outputs, leftover
+folders and temporary folders yourself after checking them. A worktree qualifies only when it has
+no uncommitted changes, every commit is on a remote, and no thread on any GOAT server on that
+machine uses it. Anything that holds work shows as **Needs attention** and is never deleted. Each
+deletion is written to `storage-cleanup.ndjson` in that machine's logs folder.
+
+From a terminal, `goat storage --dry-run` lists the default selection and `goat storage --clean`
+asks you to approve exactly that list in the GOAT app; run it again with `--approval <id>` once
+you have. Agents use the same approval: they can look, and a person decides what goes.
+
+GOAT warns when a machine runs low on disk: Fleet shows an alert with **Free up space**, and you
+get one notification each time the level gets worse, following your notification settings. A disk
+is low when free space is under both 15% and 50 GiB, and almost full under both 5% and 15 GiB, so a
+large disk is not flagged with hundreds of gigabytes free and a small cloud machine is not flagged
+while half empty. Change the limits with `fleet.pressure` (`elevatedDiskFreePercent`,
+`elevatedDiskFreeGiB`, `criticalDiskFreePercent`, `criticalDiskFreeGiB`) in that machine's
+settings. Agents hear about a full disk the way they hear about load and keep new work off it.
 
 Thread history has a size budget of 2 GiB per machine, set as `storageCleanup.historyBudgetBytes`
 in the server's `settings.json`. While history is larger, GOAT trims long command output, tool

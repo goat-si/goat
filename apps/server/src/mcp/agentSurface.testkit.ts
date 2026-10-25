@@ -105,7 +105,6 @@ import { RemoteReportToolkit } from "./toolkits/remoteReport/tools.ts";
 import { SshToolkit } from "./toolkits/ssh/tools.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
-import { StorageToolkit } from "./toolkits/storage/tools.ts";
 import * as StorageReclaim from "../storage/StorageReclaim.ts";
 import * as StorageConsent from "../storage/StorageConsent.ts";
 import { ComputerUseToolkit } from "./toolkits/computerUse/tools.ts";
@@ -145,7 +144,6 @@ export const toolkits = {
   ssh: SshToolkit,
   thread: ThreadToolkit,
   worktree: WorktreeToolkit,
-  storage: StorageToolkit,
 };
 export const entries = Object.values(agentSurfaceRegistry);
 const { htmlRender, ...otherRegistrations } = McpHttpServer.catalogRegistrations;
