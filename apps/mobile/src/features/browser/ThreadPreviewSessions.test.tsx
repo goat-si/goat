@@ -356,3 +356,11 @@ it("uses the existing stream backpressure for 2 fps thumbnails and sends no late
     vi.unstubAllGlobals();
   }
 });
+
+// As on web (#1330): while a person controls a tab, other viewers' cards do not watch them.
+it("streams no picture of a tab a person has taken over", async () => {
+  using screen = setup([session({ owner: "human", status: "paused" })]);
+  await screen.click("1 agents on screen");
+  expect(h.streams.size).toBe(0);
+  expect(screen.container.textContent).toContain("A person is in control");
+});
