@@ -23,6 +23,8 @@ const bus =
         ? "(@a(so) [],)\n"
         : "([(':1.7', objectpath '/org/a11y/atspi/accessible/9')],)\n";
     if (method === "org.a11y.atspi.Accessible.GetRole") return "(uint32 " + focusedRole + ",)\n";
+    // What Collection found focused is read again at the end, still focused.
+    if (method === "org.a11y.atspi.Accessible.GetState") return "([uint32 1124077568, 0],)\n";
     throw new Error("unexpected " + method);
   };
 
@@ -414,5 +416,40 @@ describe("makeSecureFocusProbe", () => {
     expect(
       await makeSecureFocusProbe(app({ a: () => false, b: () => PLAIN, windowLists: [BOTH] }))(10),
     ).toEqual({ known: true, secure: false, windows: 2 });
+  });
+
+  it("re-reads what Collection found focused, so focus leaving it for a password field is never not private (#1607)", async () => {
+    const PLAIN = "([uint32 1124073472, 0],)\n";
+    // Two Collection windows: B's ordinary field has focus at first; after A's final query,
+    // focus moves once to A's password field.
+    let bQueries = 0;
+    let moved = false;
+    const runner: GdbusRunner = async (args) => {
+      const method = args[args.indexOf("--method") + 1];
+      const path = args[args.indexOf("--object-path") + 1] ?? "";
+      if (method === "org.a11y.Bus.GetAddress") return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+      if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 10,)\n";
+      if (method === "org.a11y.atspi.Accessible.GetChildren")
+        return args.includes("org.a11y.atspi.Registry")
+          ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
+          : "([(':1.9', objectpath '/a'), (':1.9', '/b')],)\n";
+      if (method === "org.a11y.atspi.Collection.GetMatches") {
+        if (path === "/a") {
+          // A's second query is the final one; focus moves right after it.
+          if (bQueries > 0) moved = true;
+          return "(@a(so) [],)\n";
+        }
+        bQueries++;
+        return moved ? "(@a(so) [],)\n" : "([(':1.9', objectpath '/b/field')],)\n";
+      }
+      if (method === "org.a11y.atspi.Accessible.GetState") return PLAIN;
+      if (method === "org.a11y.atspi.Accessible.GetRole") return "(uint32 61,)\n";
+      throw new Error("unexpected " + method);
+    };
+    expect(await makeSecureFocusProbe(runner)(10)).toEqual({
+      known: false,
+      secure: false,
+      windows: 0,
+    });
   });
 });

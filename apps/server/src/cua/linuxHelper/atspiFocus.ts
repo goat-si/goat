@@ -179,10 +179,10 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         if (states === null) throw new Error("AT-SPI gave no state set.");
         return states;
       };
-      // Read again once every window has been read: password fields the walks saw, and what
-      // they found focused.
+      // Read again once every window has been read: password fields the walks saw, and
+      // everything found focused, by a walk or by Collection.
       const passwords: Ref[] = [];
-      const walkedFocus: Ref[] = [];
+      const seenFocus: Ref[] = [];
       // Every object of the window, for a toolkit without Collection: its state and role. A
       // hidden container can still hold focus, so none is skipped; an unreadable answer or an
       // exhausted budget throws, so focus is unknown.
@@ -204,7 +204,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             ),
           );
         }
-        walkedFocus.push(...focused);
+        seenFocus.push(...focused);
         return focused;
       };
       const focusedByCollection = async (window: Ref) =>
@@ -236,6 +236,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         try {
           matches = await focusedByCollection(window);
           collectionWindows.push(window);
+          seenFocus.push(...matches);
         } catch (error) {
           if (!unknownMethod(error)) throw error;
           const interfaces = parseInterfaces(
@@ -259,7 +260,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       for (const window of collectionWindows)
         if (await anyPassword(await focusedByCollection(window)))
           return { known: true, secure: true, windows: windows.length };
-      for (const node of walkedFocus)
+      for (const node of seenFocus)
         if (((await readStates(node)) & STATE_FOCUSED) === 0)
           throw new Error("Focus moved while the app was read.");
       const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
