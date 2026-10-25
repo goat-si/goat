@@ -152,12 +152,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
     output: options.output,
     ownAnswers,
-    whenEnded: (id, method) =>
-      Deferred.await(ended).pipe(
-        Effect.flatMap((reason) =>
-          options.output(refusal(id, method, reason, LEASE_END_MESSAGES[reason])),
-        ),
-      ),
+    ended,
+    endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
   });
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
@@ -738,7 +734,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
       if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
     }
-    if (isRequest && outstanding.has(JSON.stringify(id)))
+    const key = isRequest ? JSON.stringify(id) : "";
+    if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))
       return yield* options.output(
         refusal(
           id,
