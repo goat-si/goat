@@ -274,7 +274,13 @@ final class WindowAXWatch: SettleWatch {
     guard isAdmitted else { return false }
     guard api.trusted() else { return false }
     guard isAdmitted else { return false }
-    guard case .element(let focused) = api.attribute(app, "AXFocusedUIElement") else { return false }
+    let focused: WindowAXElement
+    switch api.attribute(app, "AXFocusedUIElement") {
+    case .element(let element): focused = element
+    // No focused element (Calculator): nothing receives typing, so the window itself decides (#1585).
+    case .absent: return windowHasNoSecureField()
+    default: return false
+    }
     guard !focused.same(app) else { return false }
     var node = focused
     var seen: [WindowAXElement] = []
@@ -296,6 +302,39 @@ final class WindowAXWatch: SettleWatch {
       node = parent
     }
     return false
+  }
+
+  private static let treeNodeLimit = 512
+  private static let treeDepthLimit = 32
+
+  /// Reads the whole target window, within bounds, and fails closed on anything it cannot read,
+  /// a secure field, or a tree past its bounds. An AXUnknown node is allowed here, unlike on the
+  /// focus chain: it receives no typing, and a secure field still names itself by role or subrole.
+  private func windowHasNoSecureField() -> Bool {
+    guard let target else { return false }
+    var pending: [(WindowAXElement, Int)] = [(target, 0)]
+    var visited = 0
+    while let (node, depth) = pending.popLast() {
+      visited += 1
+      guard visited <= Self.treeNodeLimit, depth <= Self.treeDepthLimit, isAdmitted else { return false }
+      guard case .string(let role) = api.attribute(node, "AXRole"), !role.isEmpty,
+        role != "AXSecureTextField" else { return false }
+      guard isAdmitted else { return false }
+      switch api.attribute(node, "AXSubrole") {
+      case .string(let subrole): if subrole == "AXSecureTextField" { return false }
+      case .absent: if role == "AXTextField" { return false }
+      default: return false
+      }
+      guard isAdmitted else { return false }
+      switch api.attribute(node, "AXChildren") {
+      case .elements(let children):
+        guard visited + pending.count + children.count <= Self.treeNodeLimit else { return false }
+        pending.append(contentsOf: children.map { ($0, depth + 1) })
+      case .absent: break
+      default: return false
+      }
+    }
+    return true
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {

@@ -43,6 +43,7 @@ describe.skipIf(platform !== "darwin")("window observer with injected accessibil
     "destruction",
     "coverage",
     "privacy",
+    "no-focus",
     "sample-gate",
     "admission",
     "lifetime",

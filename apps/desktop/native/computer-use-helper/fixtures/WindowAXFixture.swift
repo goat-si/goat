@@ -63,6 +63,9 @@ private final class FakeAX: WindowAXFunctions {
   let foreignChild = WindowAXElement("foreign-child" as NSString)
   let focus = WindowAXElement("focus" as NSString)
   let unknown = WindowAXElement("unknown" as NSString)
+  let group = WindowAXElement("group" as NSString)
+  let button = WindowAXElement("button" as NSString)
+  let field = WindowAXElement("field" as NSString)
   let subscription = FakeAXSubscription()
   var receive: ((WindowAXElement, String) -> Void)?
   var queries: [String] = []
@@ -70,6 +73,11 @@ private final class FakeAX: WindowAXFunctions {
   var owner: Int32? = 42
   var privateFocus = false
   var missingFocus = false
+  // No focused element at all (AX noValue), as in Calculator; the window tree decides privacy.
+  var noFocus = false
+  var secureInTree = false
+  var unreadableTree = false
+  var hugeTree = false
   var missingSubrole = false
   var duplicateTarget = false
   var unknownMapping = false
@@ -102,9 +110,24 @@ private final class FakeAX: WindowAXFunctions {
     if cannotComplete { return .failure }
     switch name {
     case "AXWindows": return .elements(duplicateTarget ? [window, window] : [window, other])
-    case "AXFocusedUIElement": return missingFocus ? .failure : .element(focus)
-    case "AXRole": return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
-    case "AXSubrole": return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
+    case "AXFocusedUIElement": return missingFocus ? .failure : noFocus ? .absent : .element(focus)
+    case "AXRole":
+      if element.same(group) { return .string("AXGroup") }
+      if element.same(button) || key(element).hasPrefix("leaf-") { return .string("AXButton") }
+      if element.same(field) { return .string("AXTextField") }
+      return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
+    case "AXSubrole":
+      if element.same(button) || element.same(group) || key(element).hasPrefix("leaf-") { return .absent }
+      if element.same(field) { return .string(secureInTree ? "AXSecureTextField" : "AXSearchField") }
+      return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
+    case "AXChildren":
+      if element.same(window) { return .elements([group]) }
+      if element.same(group) {
+        if unreadableTree { return .failure }
+        if hugeTree { return .elements((0..<2000).map { WindowAXElement("leaf-\($0)" as NSString) }) }
+        return .elements([button, field])
+      }
+      return .absent
     case "AXParent":
       if element.same(focus) { return .element(window) }
       if element.same(child) { return .element(childParent ?? window) }
@@ -267,6 +290,32 @@ private func runObserverFixture(_ scenario: String) {
     revoked.send(revoked.api.child)
     revoked.executor.drain()
     revoked.unsupported("revoked AX trust cannot deliver changes")
+  case "no-focus":
+    // Calculator reports no focused element; a window tree without secure fields is safe (#1585).
+    let calm = WatchFixture()
+    calm.api.noFocus = true
+    calm.start()
+    check(calm.events == ["ready"], "a window with no focused element and no secure field starts: \(calm.events)")
+    check(calm.api.queries.contains("field:AXSubrole"), "the walk reads every node's subrole")
+    calm.send(calm.api.window)
+    check(calm.events == ["ready", "changed"], "changes are delivered while focus stays absent")
+    for defect in ["secure", "unreadable", "huge"] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      if defect == "secure" { f.api.secureInTree = true }
+      if defect == "unreadable" { f.api.unreadableTree = true }
+      if defect == "huge" { f.api.hugeTree = true }
+      f.start()
+      f.unsupported("no focus with a \(defect) window tree fails closed")
+      check(f.api.observerCount == 0, "the tree check precedes observation (\(defect))")
+    }
+    let appears = WatchFixture()
+    appears.api.noFocus = true
+    appears.start()
+    appears.api.secureInTree = true
+    appears.send(appears.api.window)
+    appears.unsupported("a secure field that appears later ends the wait")
+    check(!appears.events.contains("changed"), "no change is delivered once a secure field is present")
   case "sample-gate":
     let safe = WatchFixture()
     safe.start()
