@@ -1225,9 +1225,9 @@ describe("goat pre-push marketing-pages workflow guard", () => {
       }),
     ],
     [
-      "Pages permissions on the build job",
+      "contents: write on the build job",
       patched((w) => {
-        w.jobs.build.permissions = { pages: "write", "id-token": "write" };
+        w.jobs.build.permissions = { contents: "write" };
       }),
     ],
     [
@@ -1239,13 +1239,22 @@ describe("goat pre-push marketing-pages workflow guard", () => {
     [
       "an action pinned to a tag",
       patched((w) => {
-        w.jobs.deploy.steps[0].uses = "actions/deploy-pages@v5";
+        w.jobs.deploy.steps[0].uses = "actions/cache/restore@v6";
       }),
     ],
     [
       "a secret in the build",
       patched((w) => {
         w.jobs.build.steps[2].env.TOKEN = "${{ secrets.GOAT_RELEASES_TOKEN }}";
+      }),
+    ],
+    [
+      "a push to a branch other than gh-pages",
+      patched((w) => {
+        w.jobs.deploy.steps[1].run = w.jobs.deploy.steps[1].run.replace(
+          "refs/heads/gh-pages",
+          "refs/heads/dev",
+        );
       }),
     ],
     [

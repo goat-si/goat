@@ -525,12 +525,12 @@ function validateCloseOutsidePrsWorkflow(source, yaml) {
   }
 }
 
-// marketing-pages.yml deploys the marketing preview to GitHub Pages from dev. It is the only workflow
-// here that can write to Pages and mint an OIDC token, so the whole file is pinned like
+// marketing-pages.yml publishes the marketing preview to the gh-pages branch from dev. Its deploy job
+// holds contents: write, so the whole file is pinned like
 // close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
 // this hash on purpose.
 const pinnedMarketingPagesSha256 =
-  "10914ee6916def7201a8c54eb636fadd7b2b930e983a3e08d8e062529265e55e";
+  "2f331eecbcc13ca4947b3612623f47fb1093bcb29ba35b9dbcf8d59908a175f3";
 
 function validateMarketingPagesWorkflow(source, yaml) {
   const fail = (reason) => refuse(reason, marketingPagesPath);

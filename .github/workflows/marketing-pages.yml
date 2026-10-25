@@ -1,12 +1,15 @@
 name: Marketing site preview
 
-# Builds apps/marketing for the review preview at https://goat-si.github.io/goat/ on pushes to dev
-# that can change the site. The preview is noindex. The build job can only read; only the deploy
-# job can write to Pages. .vite-hooks/goat-workflow-guard.mjs pins this whole file, so any change
-# here needs a review and a new pinned hash.
+# Builds apps/marketing for the review preview at https://goat-si.github.io/goat/ and publishes it
+# to the gh-pages branch, which GitHub Pages serves. The preview is noindex. The build job can only
+# read. The deploy job, the only one that can write, runs no repository code: it restores the built
+# site and commits exactly those files to gh-pages. .vite-hooks/goat-workflow-guard.mjs pins this
+# whole file, so any change here needs a review and a new pinned hash.
 #
-# Nothing runs until the repository variable GOAT_MARKETING_PAGES is "true". Set it once Pages is
-# enabled with GitHub Actions as its source and the account has Actions storage for the artifact.
+# Nothing runs until the repository variable GOAT_MARKETING_PAGES is "true".
+#
+# The build reaches the deploy job through the Actions cache under a key unique to this run, not an
+# artifact: goat-si's artifact storage quota is full, and the cache has its own per-repository limit.
 
 on:
   push:
@@ -26,6 +29,7 @@ on:
 permissions:
   contents: read
 
+# One deploy at a time; a newer run waits instead of racing the push to gh-pages.
 concurrency:
   group: marketing-pages
   cancel-in-progress: false
@@ -63,23 +67,58 @@ jobs:
           MARKETING_NOINDEX: "1"
         run: vp run --no-cache --filter @goat/marketing build
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+      # Pages runs Jekyll unless the site root has .nojekyll, and Jekyll drops the _astro directory.
+      - name: Mark the site as prebuilt
+        run: touch apps/marketing/dist/.nojekyll
+
+      - name: Hand the site to the deploy job
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/marketing/dist
-          retention-days: 1
+          key: marketing-pages-${{ github.run_id }}-${{ github.run_attempt }}
 
   deploy:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+      - name: Restore the built site
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/marketing/dist
+          key: marketing-pages-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      # A fresh repository holds only the built files, so nothing else can reach gh-pages. The new
+      # commit's parent is the current gh-pages tip, so the push never rewrites history; the branch
+      # starts as an orphan on the first deploy.
+      - name: Publish to gh-pages
+        working-directory: apps/marketing/dist
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for file in index.html 404.html ko/index.html .nojekyll; do
+            test -f "$file" || { echo "The restored build has no $file." >&2; exit 1; }
+          done
+          remote="https://github.com/${GITHUB_REPOSITORY}.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          tree="$(git write-tree)"
+          parent=""
+          if git -c http.extraheader="$auth" ls-remote --exit-code --heads "$remote" gh-pages >/dev/null; then
+            git -c http.extraheader="$auth" fetch -q --depth 1 "$remote" gh-pages
+            parent="$(git rev-parse FETCH_HEAD)"
+            if [ "$(git rev-parse "${parent}^{tree}")" = "$tree" ]; then
+              echo "gh-pages already has this build."
+              exit 0
+            fi
+          fi
+          commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Deploy apps/marketing from ${GITHUB_SHA}")"
+          git -c http.extraheader="$auth" push -q "$remote" "${commit}:refs/heads/gh-pages"
+          echo "Published ${commit} to gh-pages."
