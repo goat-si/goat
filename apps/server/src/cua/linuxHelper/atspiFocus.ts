@@ -33,8 +33,9 @@ const ROLE_PASSWORD_TEXT = 40;
 const MAX_WINDOWS = 64;
 // AtspiStateType FOCUSED: bit 12 of the first state word.
 const STATE_FOCUSED = 1 << 12;
-// GTK4 has no Collection interface, so focus is found by walking (#1607). Each node costs a
-// gdbus call or two; past this many in one probe, focus is reported unknown, which is private.
+// GTK4 has no Collection interface, so focus is found by walking (#1607). Each object costs
+// three gdbus calls (state, role, children); past this many in one probe, focus is reported
+// unknown, which is private.
 const MAX_WALK_NODES = 256;
 const UINT32_MAX = 0xffff_ffff;
 
@@ -206,21 +207,35 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
         walkedFocus.push(...focused);
         return focused;
       };
-      for (const window of windows) {
-        let matches: ReadonlyArray<{ readonly bus: string; readonly path: string }>;
-        try {
-          matches = parseReferences(
-            await call(
-              bus,
-              window.path,
-              "org.a11y.atspi.Collection.GetMatches",
-              // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
-              "(" + FOCUSED_STATES + ", 1, @a{ss} {}, 1, @ai [], 1, @as [], 1, false)",
-              "1",
-              "4",
-              "true",
-            ),
+      const focusedByCollection = async (window: Ref) =>
+        parseReferences(
+          await call(
+            bus,
+            window.path,
+            "org.a11y.atspi.Collection.GetMatches",
+            // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
+            "(" + FOCUSED_STATES + ", 1, @a{ss} {}, 1, @ai [], 1, @as [], 1, false)",
+            "1",
+            "4",
+            "true",
+          ),
+        );
+      const anyPassword = async (refs: ReadonlyArray<Ref>) => {
+        for (const ref of refs) {
+          const role = parseUint32(
+            await call(ref.bus, ref.path, "org.a11y.atspi.Accessible.GetRole"),
           );
+          if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
+          if (role === ROLE_PASSWORD_TEXT) return true;
+        }
+        return false;
+      };
+      const collectionWindows: Ref[] = [];
+      for (const window of windows) {
+        let matches: ReadonlyArray<Ref>;
+        try {
+          matches = await focusedByCollection(window);
+          collectionWindows.push(window);
         } catch (error) {
           if (!unknownMethod(error)) throw error;
           const interfaces = parseInterfaces(
@@ -229,32 +244,28 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
           if (interfaces === null || interfaces.includes("org.a11y.atspi.Collection")) throw error;
           matches = await walkFocused(window);
         }
-        for (const match of matches) {
-          const role = parseUint32(
-            await call(match.bus, match.path, "org.a11y.atspi.Accessible.GetRole"),
-          );
-          if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
-          if (role === ROLE_PASSWORD_TEXT)
-            return { known: true, secure: true, windows: windows.length };
-        }
+        if (await anyPassword(matches))
+          return { known: true, secure: true, windows: windows.length };
       }
-      if (passwords.length > 0 || walkedFocus.length > 0) {
-        // A walk reads one object at a time, so focus can move under it, within a window or
-        // between windows. A password field focused through the whole probe is focused now;
-        // what was found focused must still be, and the app must show the same windows.
-        // Otherwise focus is unknown. A password field created and focused after its parent
-        // was read is the one change this does not see (#1607).
-        const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
-        const same = (refs: ReadonlyArray<Ref>) => refs.map((ref) => ref.bus + ref.path).join("\n");
-        if (same(now) !== same(windows))
-          throw new Error("The app's windows changed while they were read.");
-        for (const node of passwords)
-          if (((await readStates(node)) & STATE_FOCUSED) !== 0)
-            return { known: true, secure: true, windows: windows.length };
-        for (const node of walkedFocus)
-          if (((await readStates(node)) & STATE_FOCUSED) === 0)
-            throw new Error("Focus moved while the app was read.");
-      }
+      // The windows are read one after another, and a walk one object at a time, so focus can
+      // move under the probe, within a window or between windows. Everything is asked again:
+      // a password field focused through the whole probe is focused now, wherever it is; what
+      // was found focused must still be, and the app must still show the same windows, read
+      // last. Otherwise focus is unknown. A password field created and focused after its parent
+      // was walked is the one change this does not see (#1607).
+      for (const node of passwords)
+        if (((await readStates(node)) & STATE_FOCUSED) !== 0)
+          return { known: true, secure: true, windows: windows.length };
+      for (const window of collectionWindows)
+        if (await anyPassword(await focusedByCollection(window)))
+          return { known: true, secure: true, windows: windows.length };
+      for (const node of walkedFocus)
+        if (((await readStates(node)) & STATE_FOCUSED) === 0)
+          throw new Error("Focus moved while the app was read.");
+      const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
+      const same = (refs: ReadonlyArray<Ref>) => refs.map((ref) => ref.bus + ref.path).join("\n");
+      if (same(now) !== same(windows))
+        throw new Error("The app's windows changed while they were read.");
       return { known: true, secure: false, windows: windows.length };
     } catch {
       // A restarted app gets a new bus name; look it up again next time.

@@ -344,4 +344,75 @@ describe("makeSecureFocusProbe", () => {
     for (const overflow of ["([uint32 4294967296, 0],)\n", "([uint32 0, 4294967296],)\n"])
       expect(await makeSecureFocusProbe(walked(() => overflow))(10)).toEqual(UNKNOWN);
   });
+
+  it("re-asks every window at the end, so one focus move or one new window is never read as not private (#1607)", async () => {
+    const PLAIN = "([uint32 1124073472, 0],)\n";
+    // Window A answers Collection; window B (GTK4) is walked. `a` and `b` script, per read,
+    // whether A's password is focused (GetMatches) and B's password state.
+    const app = (options: {
+      readonly a: (read: number) => boolean;
+      readonly b: (read: number) => string;
+      readonly bRole?: number;
+      readonly windowLists: ReadonlyArray<string>;
+    }): GdbusRunner => {
+      let matches = 0;
+      let bReads = 0;
+      let lists = 0;
+      return async (args) => {
+        const method = args[args.indexOf("--method") + 1];
+        const path = args[args.indexOf("--object-path") + 1] ?? "";
+        if (method === "org.a11y.Bus.GetAddress")
+          return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+        if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 10,)\n";
+        if (method === "org.a11y.atspi.Accessible.GetChildren") {
+          if (path === "/org/a11y/atspi/accessible/root")
+            return args.includes("org.a11y.atspi.Registry")
+              ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
+              : (options.windowLists[Math.min(lists++, options.windowLists.length - 1)] ?? "");
+          return path === "/b" ? "([(':1.9', objectpath '/b/pw')],)\n" : "(@a(so) [],)\n";
+        }
+        if (method === "org.a11y.atspi.Collection.GetMatches") {
+          if (path !== "/a")
+            throw new Error(
+              "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
+                path,
+            );
+          return options.a(matches++) ? "([(':1.9', objectpath '/a/pw')],)\n" : "(@a(so) [],)\n";
+        }
+        if (method === "org.a11y.atspi.Accessible.GetInterfaces")
+          return "(['org.a11y.atspi.Accessible'],)\n";
+        if (method === "org.a11y.atspi.Accessible.GetState")
+          return path === "/b/pw" ? options.b(bReads++) : PLAIN;
+        if (method === "org.a11y.atspi.Accessible.GetRole")
+          return (
+            "(uint32 " +
+            (path === "/a/pw" ? 40 : path === "/b/pw" ? (options.bRole ?? 40) : 29) +
+            ",)\n"
+          );
+        throw new Error("unexpected " + method);
+      };
+    };
+    const BOTH = "([(':1.9', objectpath '/a'), (':1.9', '/b')],)\n";
+    // A is read with nothing focused; focus then moves once from B's password to A's; B is read.
+    expect(
+      await makeSecureFocusProbe(
+        app({ a: (read) => read > 0, b: () => PLAIN, windowLists: [BOTH] }),
+      )(10),
+    ).toEqual({ known: true, secure: true, windows: 2 });
+    // No password field anywhere, and a window opens while the app is read: unknown.
+    expect(
+      await makeSecureFocusProbe(
+        app({
+          a: () => false,
+          b: () => PLAIN,
+          bRole: 29,
+          windowLists: [BOTH, "([(':1.9', objectpath '/a'), (':1.9', '/b'), (':1.9', '/c')],)\n"],
+        }),
+      )(10),
+    ).toEqual({ known: false, secure: false, windows: 0 });
+    // Nothing focused, nothing changed: not private.
+    expect(
+      await makeSecureFocusProbe(app({ a: () => false, b: () => PLAIN, windowLists: [BOTH] }))(10),
+    ).toEqual({ known: true, secure: false, windows: 2 });
+  });
 });
