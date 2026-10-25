@@ -36,6 +36,8 @@ enum WindowAXAttribute {
   case string(String)
   case absent
   case unsupported
+  /// Any other AXError, kept so a refusal can name the code.
+  case error(Int32)
   case failure
 }
 
@@ -432,16 +434,24 @@ final class WindowAXWatch: SettleWatch {
 
   /// Reads the whole target window, within bounds, and fails closed on anything it cannot read or
   /// identify (AXUnknown, a container hiding its children), a secure field, or a tree past its bounds.
+  private static let maxReportedProblems = 8
+
   /// `allowing` is the one AXUnknown focused element the caller already placed inside the window.
+  /// Every distinct problem is collected (up to a cap) instead of stopping at the first, so one live
+  /// check shows all remaining blockers; any problem still refuses.
   private func windowTreeRefusal(allowing allowed: WindowAXElement? = nil) -> String? {
     guard let target else { return Self.privacy("tree_target_missing") }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
     var visited = 0
     var reachedAllowed = allowed == nil
-    while let (node, depth) = pending.popLast() {
+    var problems: [String] = []
+    func note(_ problem: String) {
+      if problems.count < Self.maxReportedProblems, !problems.contains(problem) { problems.append(problem) }
+    }
+    walk: while let (node, depth) = pending.popLast() {
       visited += 1
-      guard visited <= Self.treeNodeLimit else { return Self.privacy("tree_node_limit") }
-      guard depth <= Self.treeDepthLimit else { return Self.privacy("tree_depth_limit") }
+      guard visited <= Self.treeNodeLimit else { note("tree_node_limit"); break walk }
+      guard depth <= Self.treeDepthLimit else { note("tree_depth_limit"); continue }
       guard isAdmitted else { return Self.privacy("invalidated") }
       let isAllowed = allowed?.same(node) == true
       if isAllowed { reachedAllowed = true }
@@ -449,33 +459,38 @@ final class WindowAXWatch: SettleWatch {
       switch api.attribute(node, "AXRole") {
       case .string(let value): role = value.isEmpty && isAllowed ? "AXUnknown" : value
       case .absent where isAllowed: role = "AXUnknown"
-      default: return Self.privacy("tree_role_unreadable")
+      default: note("tree_role_unreadable"); continue
       }
+      // A refused node's subtree is skipped: its own problem already refuses the window.
       guard !role.isEmpty, role != "AXSecureTextField", role != "AXUnknown" || isAllowed else {
-        return Self.privacy("tree_role:" + Self.axName(role))
+        note("tree_role:" + Self.axName(role)); continue
       }
       switch api.attribute(node, "AXSubrole") {
       case .string(let subrole):
-        if subrole == "AXSecureTextField" { return Self.privacy("tree_subrole:" + Self.axName(role)) }
+        if subrole == "AXSecureTextField" { note("tree_subrole:" + Self.axName(role)); continue }
       case .absent, .unsupported:
-        if role == "AXTextField" { return Self.privacy("tree_subrole:" + Self.axName(role)) }
-      default: return Self.privacy("tree_subrole_unreadable:" + Self.axName(role))
+        if role == "AXTextField" { note("tree_subrole:" + Self.axName(role)); continue }
+      default: note("tree_subrole_unreadable:" + Self.axName(role)); continue
       }
       // Ask for one more than the budget allows, so an overflow is refused and never truncated.
       let budget = Self.treeNodeLimit - visited - pending.count
+      let isLeaf = Self.leafRoles.contains(role)
       switch api.children(node, max: budget + 1) {
       case .elements(let children):
-        guard children.count <= budget else { return Self.privacy("tree_node_limit") }
+        guard children.count <= budget else { note("tree_node_limit"); break walk }
         pending.append(contentsOf: children.map { ($0, depth + 1) })
       case .absent: break
-      case .unsupported:
-        if !Self.leafRoles.contains(role) { return Self.privacy("tree_children_unsupported:" + Self.axName(role)) }
-      default: return Self.privacy("tree_children_unreadable:" + Self.axName(role))
+      // A leaf role cannot hold a secure field, so an unsupported or failing child read there means
+      // no children (Calculator's buttons return an AX error, #1585). A container must list them.
+      case .unsupported: if !isLeaf { note("tree_children_unsupported:" + Self.axName(role)) }
+      case .error(let code): if !isLeaf { note("tree_children_unreadable:\(Self.axName(role)):err\(abs(Int(code)))") }
+      default: if !isLeaf { note("tree_children_unreadable:" + Self.axName(role)) }
       }
     }
     // An unknown focus the walk never reached was never judged by it (its parent and the window's
     // children disagree), so it refuses.
-    return reachedAllowed ? nil : Self.privacy("focus_not_in_tree")
+    if !reachedAllowed { note("focus_not_in_tree") }
+    return problems.isEmpty ? nil : Self.privacy(problems.joined(separator: ","))
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {
@@ -642,7 +657,8 @@ private final class SystemWindowAX: WindowAXFunctions {
     let error = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, max, &values)
     if error == .noValue { return .absent }
     if error == .attributeUnsupported { return .unsupported }
-    guard error == .success, let list = values as? [CFTypeRef] else { return .failure }
+    guard error == .success else { return .error(error.rawValue) }
+    guard let list = values as? [CFTypeRef] else { return .failure }
     guard list.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { return .failure }
     return .elements(list.map(WindowAXElement.init))
   }

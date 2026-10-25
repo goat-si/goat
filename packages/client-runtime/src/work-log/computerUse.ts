@@ -251,8 +251,14 @@ function settleReason(reason: string): string {
   const split = reason.indexOf(":");
   const head = split < 0 ? undefined : SETTLE_REASONS[reason.slice(0, split)];
   if (head === undefined) return reason.replaceAll("_", " ");
-  const [check = "", ...names] = reason.slice(split + 1).split(":");
-  const detail = [check.replaceAll("_", " "), ...names].join(": ");
+  const detail = reason
+    .slice(split + 1)
+    .split(",")
+    .map((problem) => {
+      const [check = "", ...names] = problem.split(":");
+      return [check.replaceAll("_", " "), ...names].join(": ");
+    })
+    .join("; ");
   return `${head} (${detail})`;
 }
 

@@ -149,6 +149,18 @@ describe("computerUseResult", () => {
     ).toBe(
       "Window did not settle: focus is private or unknown (tree children unsupported: AXGroup)",
     );
+    expect(
+      computerUseResult(
+        settle,
+        "succeeded",
+        structured(
+          "unsupported",
+          "private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204,tree_role:AXUnknown",
+        ),
+      ).note,
+    ).toBe(
+      "Window did not settle: focus is private or unknown (tree children unreadable: AXGroup: err25204; tree role: AXUnknown)",
+    );
     // An expanded row has only the projected output, which keeps just the outcome.
     expect(
       computerUseResult(settle, "succeeded", {

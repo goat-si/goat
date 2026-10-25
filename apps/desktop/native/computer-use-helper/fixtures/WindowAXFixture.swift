@@ -509,6 +509,30 @@ private func runObserverFixture(_ scenario: String) {
       f.executor.drain()
       check(gate == [false], "an ancestor whose role became '\(role)' during the walk refuses: \(gate)")
     }
+    // WS13's rerun: reading a Calculator button's AXChildren returns an AX error, not noValue.
+    let erring = WatchFixture()
+    calculator(erring.api)
+    for i in 0..<53 { erring.api.childrenMap["key-\(i)"] = .error(-25204) }
+    erring.start()
+    check(erring.events == ["ready"], "a leaf button whose child read errors has no children: \(erring.events)")
+    let container = WatchFixture()
+    calculator(container.api)
+    container.api.childrenMap["keypad"] = .error(-25204)
+    container.start()
+    check(container.events == ["unsupported:private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204"],
+      "a container whose child read errors refuses with the code: \(container.events)")
+    // Every distinct problem in one run, so a live check shows all remaining blockers at once.
+    let several = WatchFixture()
+    calculator(several.api)
+    several.api.childrenMap["keypad"] = .error(-25204)
+    several.api.roles["label-0"] = "AXUnknown"
+    several.api.roles["display"] = "AXTextField"; several.api.subroles["display"] = .string("AXSecureTextField")
+    several.start()
+    let reason = several.events.last ?? ""
+    for problem in ["tree_children_unreadable:AXGroup:err25204", "tree_role:AXUnknown", "tree_subrole:AXTextField"] {
+      check(reason.hasPrefix("unsupported:private_or_unknown_focus:") && reason.contains(problem),
+        "the reason lists \(problem): \(reason)")
+    }
     // A focus whose parent claims the window but which the window never lists cannot be judged.
     let hidden = WatchFixture()
     calculator(hidden.api)
