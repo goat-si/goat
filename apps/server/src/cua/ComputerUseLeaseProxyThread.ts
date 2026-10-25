@@ -24,7 +24,7 @@ import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseRes
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
-  "onTarget" | "onHumanInput" | "onAgentInput"
+  "onTarget" | "onCursor" | "onHumanInput" | "onAgentInput"
 >;
 type ThreadProxyOptions<EU, ED> = Omit<
   LeaseProxyOptions<EU, ED>,

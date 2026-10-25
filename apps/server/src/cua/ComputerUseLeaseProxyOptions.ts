@@ -5,6 +5,7 @@
  * @module ComputerUseLeaseProxyOptions
  */
 import type {
+  ComputerUseAgentCursor,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
@@ -92,6 +93,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * true when the server took it. Reported only on a change, observations included.
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
+  /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
+  readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

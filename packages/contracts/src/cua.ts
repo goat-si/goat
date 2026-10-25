@@ -16,6 +16,7 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
+import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -189,10 +190,21 @@ export const ComputerUseLeaseAgentInput = Schema.Struct({
 });
 export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
 
+/**
+ * Proxy -> server: where the agent's cursor is now, what the helper overlay draws, or null when
+ * the overlay hides it. The preview draws it over the window's live picture.
+ */
+export const ComputerUseLeaseCursor = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  cursor: Schema.NullOr(ComputerUseAgentCursor),
+});
+export type ComputerUseLeaseCursor = typeof ComputerUseLeaseCursor.Type;
+
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
+  ComputerUseLeaseCursor,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 

@@ -1,13 +1,21 @@
 import {
+  agentCursorPlacement,
   PREVIEW_SESSION_THUMBNAIL_FRAME_MS,
   PREVIEW_SESSION_THUMBNAIL_WIDTH,
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
-import { type RefObject, useState, useSyncExternalStore } from "react";
+import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
+import {
+  GlobeIcon,
+  LockIcon,
+  MonitorIcon,
+  MousePointerClickIcon,
+  MousePointerIcon,
+} from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
+import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useDesktopSessionFrame } from "~/state/previewSessions";
 
@@ -144,13 +152,17 @@ function DesktopThumbnail(props: {
   const kept = frame ?? (reason === "private" ? null : last);
   if (kept !== last) setLast(kept);
   const shown = frame ?? (props.stopped ? last : null);
+  const size = event?.type === "frame" ? { width: event.width, height: event.height } : null;
   if (shown !== null)
     return (
-      <img
-        alt=""
-        className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
-        src={shown}
-      />
+      <div className="relative size-full">
+        <img
+          alt=""
+          className={cn("size-full object-contain", props.stopped && "opacity-50 grayscale")}
+          src={shown}
+        />
+        {props.stopped || size === null ? null : <AgentCursor session={session} frame={size} />}
+      </div>
     );
   if (reason === "private") return <Placeholder icon="lock" text="Private" />;
   return (
@@ -159,6 +171,48 @@ function DesktopThumbnail(props: {
       text={props.stopped ? undefined : reason === undefined ? "No preview" : NO_PICTURE[reason]}
       className={props.stopped ? "opacity-50" : undefined}
     />
+  );
+}
+
+/**
+ * Where the agent's cursor is on the window, drawn over its live picture like the helper draws it
+ * on screen. Positioned once per frame or resize; it moves without a repeating animation.
+ */
+function AgentCursor(props: {
+  readonly session: PreviewSession;
+  readonly frame: { readonly width: number; readonly height: number };
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [measured, setMeasured] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = box.current;
+    if (element === null) return;
+    return observeResize(element, () =>
+      setMeasured({ width: element.clientWidth, height: element.clientHeight }),
+    );
+  }, []);
+  const target = props.session.target;
+  const cursor =
+    target.kind === "desktop" && target.cursor?.windowId === target.windowId
+      ? target.cursor
+      : undefined;
+  const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
+  return (
+    <div ref={box} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      {place === undefined ? null : (
+        <span
+          data-testid="agent-cursor"
+          data-phase={cursor?.phase}
+          className="absolute top-0 left-0 transition-transform duration-150 ease-out"
+          style={{ transform: `translate(${place.left}px, ${place.top}px)` }}
+        >
+          {cursor?.phase === "acting" ? (
+            <span className="absolute -top-2 -left-2 size-4 rounded-full border-2 border-primary/80" />
+          ) : null}
+          <MousePointerIcon className="size-4 text-primary drop-shadow" />
+        </span>
+      )}
+    </div>
   );
 }
 

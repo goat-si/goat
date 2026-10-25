@@ -220,6 +220,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       Effect.promise(() =>
         report(url, authorization, { controlId, pid: target.pid, windowId: target.windowId }),
       ),
+    onCursor: (cursor: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursor"]>>[0]) =>
+      Effect.promise(() => report(url, authorization, { controlId, cursor })),
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),

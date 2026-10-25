@@ -632,6 +632,59 @@ it("shows a desktop thread's live frames, drops them in private mode, and keeps 
   expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
 });
 
+it("draws the agent's cursor where it is on the window, inside a letterboxed picture", async () => {
+  setup([]);
+  const desk = desktopApp({
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+    target: {
+      kind: "desktop",
+      pid: 7,
+      windowId: 3,
+      title: "Finder",
+      cursor: { windowId: 3, point: { fx: 0.5, fy: 0.5 }, phase: "acting" },
+    },
+  });
+  // A square frame in the 16:10 card: bands left and right, and the center stays the center.
+  state.frame = { type: "frame", seq: 1, width: 10, height: 10, mime: "image/jpeg", data: "AAAA" };
+  await using screen = await render(cardView(desk).element);
+  const marker = () => screen.container.querySelector<HTMLElement>("[data-testid='agent-cursor']");
+  await vi.waitFor(() => expect(marker()).not.toBeNull());
+  const picture = screen.container.querySelector("img")!.getBoundingClientRect();
+  // Where the marker sits, in whole pixels: layout may round the measured box by a fraction.
+  const at = () =>
+    marker()!
+      .style.transform.match(/-?[\d.]+/g)!
+      .map((value) => Math.round(Number(value)));
+  await vi.waitFor(() =>
+    expect(at()).toEqual([Math.round(picture.width / 2), Math.round(picture.height / 2)]),
+  );
+  expect(marker()!.dataset.phase).toBe("acting");
+  // At the left edge of the window: the point sits past the empty band, not at the card's edge.
+  await screen.rerender(
+    cardView({
+      ...desk,
+      target: {
+        ...desk.target,
+        cursor: { windowId: 3, point: { fx: 0, fy: 0 }, phase: "resting" },
+      },
+    } as PreviewSession).element,
+  );
+  await vi.waitFor(() =>
+    expect(at()).toEqual([Math.round((picture.width - picture.height) / 2), 0]),
+  );
+  // A point for another window than the one shown is not drawn.
+  await screen.rerender(
+    cardView({
+      ...desk,
+      target: {
+        ...desk.target,
+        cursor: { windowId: 4, point: { fx: 0, fy: 0 }, phase: "resting" },
+      },
+    } as PreviewSession).element,
+  );
+  await vi.waitFor(() => expect(marker()).toBeNull());
+});
+
 it("says why a desktop thread has no picture instead of a bare No preview", async () => {
   setup([]);
   const desk = desktopApp({
