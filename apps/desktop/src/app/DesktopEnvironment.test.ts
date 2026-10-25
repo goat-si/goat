@@ -152,4 +152,26 @@ describe("DesktopEnvironment", () => {
       assert.equal(production.stateDir, "/Users/alice/.goat/desktop/userdata");
     }),
   );
+
+  it.effect(
+    "gives stable and nightly builds separate state, and an explicit GOAT_HOME still wins",
+    () =>
+      Effect.gen(function* () {
+        const stable = yield* makeEnvironment({ isPackaged: true, appVersion: "1.2.3" });
+        const nightly = yield* makeEnvironment({
+          isPackaged: true,
+          appVersion: "1.2.3-nightly.20261011.1",
+        });
+        const configuredNightly = yield* makeEnvironment(
+          { isPackaged: true, appVersion: "1.2.3-nightly.20261011.1" },
+          { GOAT_HOME: "/isolated" },
+        );
+
+        assert.equal(stable.stateDir, "/Users/alice/.goat/desktop/userdata");
+        assert.equal(nightly.baseDir, "/Users/alice/.goat/desktop-nightly");
+        assert.equal(nightly.stateDir, "/Users/alice/.goat/desktop-nightly/userdata");
+        assert.equal(nightly.logDir, "/Users/alice/.goat/desktop-nightly/userdata/logs");
+        assert.equal(configuredNightly.baseDir, "/isolated");
+      }),
+  );
 });

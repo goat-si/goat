@@ -5,8 +5,17 @@ import * as Path from "effect/Path";
 
 import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
+import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export type JoinPath = (first: string, ...segments: string[]) => string;
+
+/** Packaged stable keeps the location every earlier build used, so rollback finds it. */
+export const STABLE_DESKTOP_HOME_DIR_NAME = "desktop";
+/**
+ * Nightly (and preview) builds run beside stable with their own bundled server, so they need their
+ * own database, secrets and settings; DesktopChannelStateMigration seeds this from stable once.
+ */
+export const NIGHTLY_DESKTOP_HOME_DIR_NAME = "desktop-nightly";
 
 function normalizeConfiguredBaseDir(goatHome: Option.Option<string>): Option.Option<string> {
   if (Option.isNone(goatHome)) {
@@ -57,11 +66,20 @@ export function resolveDesktopBaseDir(input: {
   readonly joinPath: JoinPath;
   readonly goatHome: Option.Option<string>;
   readonly isDevelopment: boolean;
+  readonly appVersion: string;
   /** Lets a dev build keep a dev state left in the legacy home (see resolveGoatHome). */
   readonly pathExists?: (path: string) => boolean;
 }): string {
   return Option.getOrElse(normalizeConfiguredBaseDir(input.goatHome), () => {
-    if (!input.isDevelopment) return input.joinPath(input.homeDirectory, ".goat", "desktop");
+    if (!input.isDevelopment) {
+      return input.joinPath(
+        input.homeDirectory,
+        GOAT_HOME_DIR_NAME,
+        isNightlyDesktopVersion(input.appVersion)
+          ? NIGHTLY_DESKTOP_HOME_DIR_NAME
+          : STABLE_DESKTOP_HOME_DIR_NAME,
+      );
+    }
     // The dev runner passes its home explicitly; this is a hand-launched dev build.
     const goatHome = input.joinPath(input.homeDirectory, GOAT_HOME_DIR_NAME);
     const legacyHome = input.joinPath(input.homeDirectory, LEGACY_HOME_DIR_NAME);
