@@ -27,6 +27,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
+import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { type HelperHumanInput, overlayChannel } from "./overlayChannel.ts";
@@ -201,23 +202,20 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           Effect.gen(function* () {
             // Ownership is released only after both the process and its pipes close.
             const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
-            // The helper's input reports; only the latest few matter once one is a person's.
-            const seen = yield* Queue.sliding<{
-              readonly source: HelperHumanInput["source"];
-              readonly at: number;
-            }>(16);
+            // The helper's input reports, every one of them: a person's may be among a burst.
+            const seen = yield* makeHelperInputFeed();
             const channel = child.stdio[3];
             return {
               ...(drawsOverlay && channel instanceof NodeStream.Duplex
                 ? {
                     // Dated the moment the line is read, on the clock the server compares with.
                     overlay: overlayChannel(channel, (input) =>
-                      Queue.offerUnsafe(seen, {
+                      seen.offer({
                         source: input.source,
                         at: Date.now() - input.ageMs,
                       }),
                     ),
-                    humanInput: Stream.fromQueue(seen),
+                    humanInput: seen.events,
                   }
                 : {}),
               send: (line: string) =>

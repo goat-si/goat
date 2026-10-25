@@ -91,7 +91,7 @@ interface HelperInput {
  * last few of a burst.
  */
 export const makeHelperInputFeed = Effect.fn("agentInputReports.makeHelperInputFeed")(function* () {
-  const queue = yield* Queue.sliding<HelperInput>(16);
+  const queue = yield* Queue.unbounded<HelperInput>();
   return {
     offer: (input: HelperInput) => void Queue.offerUnsafe(queue, input),
     events: Stream.fromQueue(queue),
@@ -103,10 +103,11 @@ export const makeHelperInputFeed = Effect.fn("agentInputReports.makeHelperInputF
  * then. Every event goes, even one this agent's own call could explain: only the server sees
  * every agent's calls, and with them when a run of cover is too long. Reports are slower than
  * events, so every event that arrived while one report was out goes in the next, in time order
- * (#1488): a pointer streaming dozens of moves a second costs one report per round trip, and a
- * person's event waits behind one report at most. Merging or dropping an event could drop a
- * person's; only events older than the server still judges are dropped, since it would refuse
- * them.
+ * (#1488): a pointer streaming moves costs one report per round trip, and a person's event goes
+ * in the report after the one out when it happened, as long as what piled up fits in one
+ * (COMPUTER_USE_HUMAN_INPUT_BATCH, enough for a 1 kHz pointer behind a 2 s report). Merging or
+ * dropping an event could drop a person's; only events older than the server still judges are
+ * dropped, since it would refuse them.
  */
 export const forwardHelperInput = Effect.fn("agentInputReports.forwardHelperInput")(
   function* (options: {

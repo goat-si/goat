@@ -347,8 +347,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
   every pointer event (moves, drags, scrolls, presses) to its lease proxy with its own time, from
   a listen-only event tap that needs no grant and reads only each event's type (#1488). The proxy
-  sends whatever piled up behind its last report in one batch, so a stream of moves costs one
-  report per round trip and a person's event waits behind one report at most. Keys are sampled,
+  keeps every event and sends whatever piled up behind its last report in the next one, up to
+  4096, so a stream of moves costs one report per round trip and a person's event goes in the
+  report after the one out when it happened, even for a 1 kHz pointer behind a 2 s report. Keys are sampled,
   as the HID system state's newest key age every 25 ms, because a keyboard tap would need Input
   Monitoring, which the helper does not use; a person's key less than 25 ms before an agent's
   can still hide behind it. The driver posts some input through the same system, so the

@@ -863,9 +863,11 @@ const make = Effect.gen(function* () {
           .map((record) => record.controlId),
       );
       const now = yield* Clock.currentTimeMillis;
+      // Once for the whole batch: a batch can hold thousands of events.
+      agentInputs.prune(now);
       let judged = false;
       for (const { at, source } of [...events].sort((left, right) => left.at - right.at)) {
-        if (!(yield* nearNow(at))) continue;
+        if (Math.abs(now - at) > REPORT_SKEW_MS) continue;
         // The calls that could have covered an older event are forgotten, so it cannot be
         // judged: an agent's own late event would pass for a person's. A person still at the
         // machine makes newer ones.

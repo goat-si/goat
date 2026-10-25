@@ -120,8 +120,11 @@ const ComputerUseHumanInputEvent = Schema.Struct({
   source: ComputerUseHumanInputSource,
   at: EpochMillis,
 });
-/** The most events one report carries; a proxy sends any more in the next one. */
-export const COMPUTER_USE_HUMAN_INPUT_BATCH = 256;
+/**
+ * The most events one report carries; a proxy sends any more in the next one. Large enough that
+ * a 1 kHz pointer behind a report as slow as the proxy's 2 s timeout fits in one.
+ */
+export const COMPUTER_USE_HUMAN_INPUT_BATCH = 4096;
 export const ComputerUseLeaseHumanInput = Schema.Struct({
   controlId: TrimmedNonEmptyString,
   // One event is what a proxy from before batching sends.

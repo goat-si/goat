@@ -93,11 +93,11 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
       Effect.gen(function* () {
         const feed = yield* makeHelperInputFeed();
         // The overlay channel hands every line of a chunk over before anything else runs.
-        const lines = [
+        const lines: ReadonlyArray<"pointer" | "keyboard"> = [
           "pointer",
           "keyboard",
-          ...Array.from({ length: 38 }, () => "pointer"),
-        ] as const;
+          ...Array.from({ length: 38 }, () => "pointer" as const),
+        ];
         for (const [index, source] of lines.entries()) feed.offer({ source, at: index });
         const last = lines.length - 1;
         const kept = yield* feed.events.pipe(
