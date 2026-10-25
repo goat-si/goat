@@ -222,8 +222,19 @@ const make = Effect.gen(function* () {
       }
       // A person ending an approved computer use admission (Stop, Stop all, End computer use)
       // stopped that agent: waking it would start a turn that takes the screen again (#1521).
-      // A pending request a person cancels still wakes the agent waiting on it.
-      if (yield* handoffs.computerUseEndedByPerson(handoff)) return;
+      // Its approval's wake is withdrawn here, after any delivery this reactor had under way, and
+      // again on each reconcile until it is gone. A pending request a person cancels still wakes
+      // the agent waiting on it.
+      if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH) {
+        const current = yield* handoffs.read({ threadId, handoffId: handoff.handoffId });
+        if (yield* handoffs.computerUseEndedByPerson(current))
+          return yield* handoffs.withdrawComputerUseWake({
+            threadId,
+            handoffId: handoff.handoffId,
+          });
+        // A late event for a state this grant has left wakes nothing; its current state does.
+        if (current.state !== handoff.state) return;
+      }
       if (
         handoff.state !== "completed" ||
         !Handoffs.isProviderContinuationPath(handoff.target.path)
