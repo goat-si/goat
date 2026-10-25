@@ -27,12 +27,18 @@ export const SCREEN_SHARED =
  * Why the server would not reserve a call (#1462): another thread's window reservation, a screen
  * another thread shares, or no reservation at all.
  */
-export const reservationRefusal = (detail: string, holder: string | undefined) =>
+export const reservationRefusal = (
+  detail: string,
+  holder: string | undefined,
+  app?: string | undefined,
+) =>
   detail === "screen_shared"
     ? SCREEN_SHARED
-    : holder === undefined
-      ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-      : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+    : detail === "app_busy"
+      ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
+      : holder === undefined
+        ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+        : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
