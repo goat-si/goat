@@ -553,6 +553,27 @@ describe("redactCause", () => {
       }
     }),
   );
+
+  // redactCause keeps its first 16 reasons one by one and summarizes the rest.
+  it.each([
+    { name: "16 interrupts", extra: [] },
+    { name: "17 interrupts", extra: [Cause.makeInterruptReason(16)] },
+  ])("a cause of $name stays interrupt-only", ({ extra }) => {
+    const interrupts = Array.from({ length: 16 }, (_, index) => Cause.makeInterruptReason(index));
+    const redacted = redactCause(Cause.fromReasons([...interrupts, ...extra]));
+    expect(Cause.hasInterruptsOnly(redacted)).toBe(true);
+  });
+
+  it("keeps the kind of each omitted reason past the first 16", () => {
+    const interrupts = Array.from({ length: 16 }, (_, index) => Cause.makeInterruptReason(index));
+    const withFail = redactCause(
+      Cause.fromReasons([...interrupts, Cause.makeFailReason(`token=${"canary-omitted-fail"}`)]),
+    );
+    expect([Cause.hasFails(withFail), Cause.hasDies(withFail)]).toEqual([true, false]);
+    const withDie = redactCause(Cause.fromReasons([...interrupts, Cause.makeDieReason("boom")]));
+    expect([Cause.hasFails(withDie), Cause.hasDies(withDie)]).toEqual([false, true]);
+    expect(Cause.pretty(withFail)).not.toContain("canary-omitted-fail");
+  });
 });
 
 describe("redactedDefects", () => {

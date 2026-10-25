@@ -87,12 +87,40 @@ const MAX_STACK_CHARS = 8_000;
  * any redaction, so the frames are rendered here instead and redacted with the rest.
  */
 export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> => {
-  const { reasons, total } = reasonSnapshot(cause);
+  const { listed, reasons, total } = reasonSnapshot(cause);
   const redacted = reasons.map(redactReason);
-  if (total > reasons.length)
-    redacted.push(Cause.makeDieReason(new Error(`${total - reasons.length} more reasons omitted`)));
+  if (total > reasons.length) redacted.push(...omittedReasons(listed, reasons.length, total));
   return Cause.fromReasons(redacted);
 };
+
+/**
+ * One marker per kind among the reasons past the first few, so the redacted cause is still a
+ * failure, a defect or interrupt-only as the original was. Kinds are read through descriptors;
+ * reasons past MAX_VISITED_REASONS are counted, not read, and reported as defects.
+ */
+function omittedReasons(
+  listed: unknown,
+  from: number,
+  total: number,
+): Array<Cause.Reason<unknown>> {
+  const visited = Math.min(total, MAX_VISITED_REASONS);
+  let fails = 0;
+  let dies = 0;
+  let interrupts = 0;
+  for (let index = from; index < visited; index++) {
+    const tag = dataProperty(dataProperty(listed, index), "_tag");
+    if (tag === "Fail") fails += 1;
+    else if (tag === "Interrupt") interrupts += 1;
+    else dies += 1;
+  }
+  const markers: Array<Cause.Reason<unknown>> = [];
+  if (fails > 0) markers.push(Cause.makeFailReason(new Error(`${fails} more failures omitted`)));
+  if (dies > 0) markers.push(Cause.makeDieReason(new Error(`${dies} more defects omitted`)));
+  if (total > visited)
+    markers.push(Cause.makeDieReason(new Error(`${total - visited} more reasons not inspected`)));
+  if (interrupts > 0) markers.push(Cause.makeInterruptReason());
+  return markers;
+}
 
 /**
  * Each Die reason of a reported cause as its own redacted cause, skipping defects Effect marks as
@@ -179,6 +207,7 @@ function ignoredDefect(
  * its list can run code that shows a sink something other than what is redacted here.
  */
 function reasonSnapshot(cause: Cause.Cause<unknown>): {
+  readonly listed: unknown;
   readonly reasons: Array<unknown>;
   readonly total: number;
 } {
@@ -187,7 +216,7 @@ function reasonSnapshot(cause: Cause.Cause<unknown>): {
   const reasons: Array<unknown> = [];
   for (let index = 0; index < Math.min(total, MAX_REASONS); index++)
     reasons.push(dataProperty(listed, index));
-  return { reasons, total };
+  return { listed, reasons, total };
 }
 
 /** An own data property's value; a getter, a missing property or a throwing object give nothing. */

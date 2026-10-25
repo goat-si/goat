@@ -98,6 +98,10 @@ const traceThroughServer = (otlpTracesUrl: string | undefined) =>
         Effect.exit,
       );
       yield* Effect.interrupt.pipe(Effect.withSpan("observability-interrupt"), Effect.exit);
+      // More interrupts than redaction keeps one by one; the span must still read as interrupted.
+      yield* Effect.failCause(
+        Cause.fromReasons(Array.from({ length: 17 }, (_, id) => Cause.makeInterruptReason(id))),
+      ).pipe(Effect.withSpan("observability-interrupts"), Effect.exit);
       yield* Effect.void.pipe(Effect.withSpan("observability-success"));
       const { serverTracePath } = yield* ServerConfig.ServerConfig;
       return { failExit, dieExit, tracePath: serverTracePath };
@@ -161,6 +165,7 @@ describe("Observability.layer", () => {
         expect(recordedCause(died)).toContain("Error: worker crashed");
         expect(recordedCause(died)).toContain("Authorization: ");
         assert.equal(record("observability-interrupt").exit._tag, "Interrupted");
+        assert.equal(record("observability-interrupts").exit._tag, "Interrupted");
         assert.deepStrictEqual(record("observability-success").exit, { _tag: "Success" });
 
         if (!otlp) {
@@ -196,12 +201,14 @@ describe("Observability.layer", () => {
         assert.equal(diedExport.message, "worker crashed");
         expect(diedExport.stack).toContain("Authorization: ");
 
-        const interrupted = span("observability-interrupt");
-        assert.equal(interrupted.events.filter((event) => event.name === "exception").length, 0);
-        assert.equal(
-          attribute(interrupted.attributes, "effect.fiber.interrupted")?.boolValue,
-          true,
-        );
+        for (const name of ["observability-interrupt", "observability-interrupts"]) {
+          const interrupted = span(name);
+          assert.equal(interrupted.events.filter((event) => event.name === "exception").length, 0);
+          assert.equal(
+            attribute(interrupted.attributes, "effect.fiber.interrupted")?.boolValue,
+            true,
+          );
+        }
         const succeeded = span("observability-success");
         assert.equal(succeeded.events.filter((event) => event.name === "exception").length, 0);
         assert.equal(succeeded.status.message, undefined);
