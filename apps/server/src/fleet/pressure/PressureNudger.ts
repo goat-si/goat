@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import * as AutomationHold from "../../automationHold.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostStatusMcpService from "../../mcp/HostStatusMcpService.ts";
 import * as LaunchWatchService from "../../mcp/LaunchWatchService.ts";
@@ -186,6 +187,7 @@ const makeAdmission = Effect.gen(function* () {
 export const layerAdmission = Layer.effect(PressureAdmissionService, makeAdmission);
 
 export const make = Effect.gen(function* () {
+  const automationHold = yield* AutomationHold.AutomationHold;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const { observe, admit, pressureOf, freshEntries, sustained } = yield* PressureAdmissionService;
   const hostStatus = yield* HostStatusMcpService.HostStatusMcpService;
@@ -264,6 +266,7 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.asVoid, quietly(threadId));
 
   const tick = Effect.gen(function* () {
+    if ((yield* automationHold.current) !== null) return;
     const resolved = yield* settings;
     if (!resolved.enabled) return;
     const active = (yield* watches

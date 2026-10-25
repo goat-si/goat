@@ -24,6 +24,7 @@ import type {
 import { GitManagerError } from "@goat/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
@@ -157,7 +158,7 @@ function layerBackgroundPolicy(shouldRunScopeWork: (scope: BackgroundScope) => b
 
 describe("VcsStatusBroadcaster", () => {
   it.effect.skipIf(!symlinksSupported)(
-    "automatically pulls an enabled clean default branch when status detects it is behind",
+    "holds automatic pulls until release while continuing status reads",
     () => {
       let remoteStatus: VcsStatusRemoteResult = { ...baseRemoteStatus, behindCount: 2 };
       let pullCalls = 0;
@@ -194,6 +195,15 @@ describe("VcsStatusBroadcaster", () => {
               }),
           }),
         ),
+        Layer.provideMerge(
+          Layer.effect(
+            AutomationHold.AutomationHold,
+            AutomationHold.makeInMemory({
+              reason: "channel-copy",
+              heldAt: "2026-10-25T00:00:00.000Z",
+            }),
+          ),
+        ),
       );
 
       return Effect.gen(function* () {
@@ -209,6 +219,11 @@ describe("VcsStatusBroadcaster", () => {
         yield* fileSystem.symlink(realDir, configuredWorkspaceRoot);
 
         const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+        const hold = yield* AutomationHold.AutomationHold;
+        const heldStatus = yield* broadcaster.refreshStatus(configuredWorkspaceRoot);
+        assert.equal(pullCalls, 0);
+        assert.equal(heldStatus.behindCount, 2);
+        yield* hold.release;
         const status = yield* broadcaster.refreshStatus(configuredWorkspaceRoot);
 
         assert.equal(pullCalls, 1);

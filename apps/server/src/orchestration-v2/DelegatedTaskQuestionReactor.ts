@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { reportLabel } from "@goat/provider-core/server/notification";
 
 import { forkParked } from "../serverActivation.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
@@ -27,6 +28,7 @@ export class DelegatedTaskQuestionReactor extends Context.Service<
 >()("goat/orchestration-v2/DelegatedTaskQuestionReactor") {}
 
 const make = Effect.gen(function* () {
+  const automationHold = yield* AutomationHold.AutomationHold;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
 
@@ -62,6 +64,7 @@ const make = Effect.gen(function* () {
   // Runs for every domain event; most events return before any work is needed.
   const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = Effect.fnUntraced(
     function* (event) {
+      if ((yield* automationHold.current) !== null) return;
       if (event.type === "run.updated") {
         if (!["completed", "failed", "waiting"].includes(event.payload.status)) return;
         const parent = yield* projections.getThreadRecords(event.threadId, ["subagents"]);
@@ -170,7 +173,8 @@ const make = Effect.gen(function* () {
 
   const start: DelegatedTaskQuestionReactor["Service"]["start"] = () =>
     forkParked(
-      Stream.runForEach(engine.streamDomainEvents, handle).pipe(
+      automationHold.awaitRelease.pipe(
+        Effect.andThen(Stream.runForEach(engine.streamDomainEvents, handle)),
         Effect.catchCause((cause) =>
           Effect.logWarning("delegated task question event stream failed", { cause }),
         ),

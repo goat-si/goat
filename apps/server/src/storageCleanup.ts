@@ -35,6 +35,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
+import * as AutomationHold from "./automationHold.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -210,6 +211,7 @@ export class StorageCleanup extends Context.Service<
 >()("goat/storageCleanup") {}
 
 const make = Effect.gen(function* () {
+  const automationHold = yield* AutomationHold.AutomationHold;
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* Settings.ServerSettingsService;
   const projectStore = yield* ProjectStore.ProjectStoreV2;
@@ -1215,20 +1217,19 @@ const make = Effect.gen(function* () {
   const automaticSweepQueued = yield* Ref.make(false);
   const worker = yield* makeDrainableWorker(
     (completion: Deferred.Deferred<StorageCleanupReport, ServerSettingsError> | undefined) =>
-      (completion === undefined ? Ref.set(automaticSweepQueued, false) : Effect.void).pipe(
-        Effect.andThen(sweep(completion === undefined ? "automatic" : "manual")),
-        Effect.exit,
-        Effect.flatMap((exit) =>
-          completion === undefined
-            ? exit.pipe(
-                Effect.asVoid,
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("storage cleanup failed", { cause }),
-                ),
-              )
-            : Deferred.done(completion, exit).pipe(Effect.asVoid),
-        ),
-      ),
+      Effect.gen(function* () {
+        if (completion === undefined) {
+          yield* Ref.set(automaticSweepQueued, false);
+          if ((yield* automationHold.current) !== null) return;
+        }
+        const trigger = completion === undefined ? "automatic" : "manual";
+        const exit = yield* Effect.exit(sweep(trigger));
+        if (completion !== undefined) yield* Deferred.done(completion, exit);
+        else
+          yield* exit.pipe(
+            Effect.catchCause((cause) => Effect.logWarning("storage cleanup failed", { cause })),
+          );
+      }),
   );
   const requestSweep = Ref.getAndSet(automaticSweepQueued, true).pipe(
     Effect.flatMap((queued) => (queued ? Effect.void : worker.enqueue(undefined))),
@@ -1238,7 +1239,6 @@ const make = Effect.gen(function* () {
     yield* worker.enqueue(completion);
     return yield* Deferred.await(completion);
   });
-
   const start = Effect.fn("StorageCleanup.start")(function* () {
     const unsubscribe = yield* terminals.subscribeMetadata((event) =>
       Effect.sync(() => {

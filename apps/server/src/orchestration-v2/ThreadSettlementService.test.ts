@@ -12,7 +12,6 @@ import {
   type OrchestrationV2Command,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ShellSnapshot,
-  type OrchestrationV2ThreadShell,
   type PullRequestSummary,
   type ServerSettings as ContractServerSettings,
   type ServerSettingsError,
@@ -30,6 +29,7 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
@@ -41,65 +41,13 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
 
-const NOW_MS = Date.parse("2026-06-10T12:00:00.000Z");
-const DAY_MS = 24 * 60 * 60 * 1_000;
-
-function at(offsetMs: number): DateTime.Utc {
-  return DateTime.makeUnsafe(NOW_MS + offsetMs);
-}
-
-type SettlementShell = OrchestrationV2ThreadShell &
-  Pick<ProjectionStore.ProjectionSettlementCandidate, "latestUserAuthoredMessageAt">;
-
-function shell(overrides: Partial<SettlementShell> = {}): SettlementShell {
-  return {
-    id: ThreadId.make("thread-1"),
-    projectId: ProjectId.make("project-1"),
-    title: "Thread",
-    providerInstanceId: ProviderInstanceId.make("codex"),
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    worktreePath: null,
-    activeProviderThreadId: null,
-    lineage: {
-      rootThreadId: ThreadId.make("thread-1"),
-      parentThreadId: null,
-      relationshipToParent: null,
-    },
-    forkedFrom: null,
-    createdBy: "user",
-    creationSource: "web",
-    activeRunId: null,
-    latestVisibleMessage: null,
-    hasActionableProposedPlan: false,
-    itemCount: 0,
-    visibleItemCount: 0,
-    lastVisitedAt: null,
-    deletedAt: null,
-    branch: null,
-    linkedPullRequest: null,
-    status: "idle",
-    activityRunStatus: null,
-    pendingRuntimeRequest: null,
-    pendingBackgroundTasks: [],
-    latestRunId: null,
-    latestRunRequestedAt: null,
-    latestRunStartedAt: null,
-    latestRunCompletedAt: null,
-    latestUserMessageAt: null,
-    latestUserAuthoredMessageAt: overrides.latestUserMessageAt ?? null,
-    createdAt: at(-30 * DAY_MS),
-    updatedAt: at(-10 * DAY_MS),
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    snoozedUntil: null,
-    snoozedAt: null,
-    pinnedAt: null,
-    ...overrides,
-  };
-}
+import {
+  NOW_MS,
+  DAY_MS,
+  at,
+  shell,
+  type SettlementShell,
+} from "./ThreadSettlementService.testFixtures.ts";
 
 describe("isAutoSettlementCandidate", () => {
   it("settles a thread whose only background work is a command left running", () => {
@@ -665,6 +613,35 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementServiceV2 worker", () => {
+  it.effect("holds automatic settlement until release", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const hold = yield* AutomationHold.makeInMemory({
+          reason: "channel-copy",
+          heldAt: "2026-10-25T00:00:00.000Z",
+        });
+        const fixture = yield* makeHarness({ snapshot: makeSnapshot([makeThread("held")]) });
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+          yield* service.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* TestClock.adjust(0);
+          yield* service.drain;
+          expect(yield* Ref.get(fixture.commands)).toEqual([]);
+          yield* hold.release;
+          yield* TestClock.adjust("1 minute");
+          yield* service.drain;
+          expect((yield* Ref.get(fixture.commands)).map((command) => command.threadId)).toEqual([
+            "held",
+          ]);
+        }).pipe(
+          Effect.provide(fixture.layer),
+          Effect.provideService(AutomationHold.AutomationHold, hold),
+        );
+      }),
+    ),
+  );
   it.effect("settles a merged pull request stored only in the thread links", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -963,12 +940,16 @@ describe("ThreadSettlementServiceV2 terminals", () => {
     ),
   );
 
-  it.effect("runs the settle script in the thread's own worktree", () =>
+  it.effect("runs an explicit settle script in its worktree while automation is held", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const shared = appThread("shared-checkout-thread", "settled");
         const missing = appThread("removed-worktree-thread", "settled", "/worktrees/removed");
         const worktree = appThread("worktree-thread", "settled", "/worktrees/thread");
+        const hold = yield* AutomationHold.makeInMemory({
+          reason: "channel-copy",
+          heldAt: "2026-10-25T00:00:00.000Z",
+        });
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([]),
           currentThreads: [shared, missing, worktree],
@@ -977,7 +958,9 @@ describe("ThreadSettlementServiceV2 terminals", () => {
 
         yield* Effect.gen(function* () {
           const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
-          yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+          yield* service.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* TestClock.adjust(0);
           yield* fixture.publishEvent(settledEvent(shared));
           yield* fixture.publishEvent(settledEvent(missing));
           yield* fixture.publishEvent(settledEvent(worktree));
@@ -985,7 +968,10 @@ describe("ThreadSettlementServiceV2 terminals", () => {
           assert.strictEqual(run.threadId, worktree.id);
           assert.strictEqual(run.worktreePath, "/worktrees/thread");
           assert.strictEqual(run.trigger, "settle");
-        }).pipe(Effect.provide(fixture.layer));
+        }).pipe(
+          Effect.provide(fixture.layer),
+          Effect.provideService(AutomationHold.AutomationHold, hold),
+        );
       }),
     ),
   );
