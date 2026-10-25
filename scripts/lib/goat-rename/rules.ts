@@ -14,6 +14,8 @@ export { isTest } from "./paths.ts";
 import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
+import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
  * Files no rule touches and the residue check skips. Upstream-owned files
@@ -54,11 +56,14 @@ export const SERVER_SERVICE_KEY =
  * Code identifiers (plan wp4), applied to text and to file names. Substring
  * matches are intended: `useT3ProjectFileScripts` follows `T3ProjectFile`.
  * Not here on purpose: `t3McpApp` and `__t3McpAppReceive` (MCP-app wire format,
- * D17), `T3Connect*` (names the upstream service), `t3Home` (desktop bootstrap
+ * D17), `t3Home` (desktop bootstrap
  * key, D17), `t3CodeRange` (upstream model manifest key) and mobile native
  * modules (wp8).
  */
 const IDENTIFIERS: ReadonlyArray<readonly [from: string, to: string]> = [
+  // Local names around GOAT Connect; the relay wire values stay (relay-wire, relay-identities).
+  ["T3Connect", "GoatConnect"],
+  ["t3Connect", "goatConnect"],
   ["T3ProjectFile", "GoatProjectFile"],
   ["t3ProjectFile", "goatProjectFile"],
   ["T3Mcp", "GoatMcp"],
@@ -481,6 +486,8 @@ export const TEXT_RULES: readonly TextRule[] = [
     // Upstream tests use the old skill name as sample data; renaming them only adds merge churn.
     scope: (path) => !isTest(path),
   },
+  // Last, so they see text the env, package and identifier rules already renamed.
+  ...LEFTOVER_TEXT_RULES,
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
@@ -504,6 +511,7 @@ export const PATH_RULES: readonly PathRule[] = [
     find: /^\.agents\/skills\/test-t3-(app|mobile)\//g,
     replace: ".agents/skills/test-goat-$1/",
   },
+  ...LEFTOVER_PATH_RULES,
   {
     // Builds since v0.1.1 read goat.json first and fall back to t3.json (plan 261013 D9).
     id: "repo-project-file",
@@ -549,20 +557,6 @@ export const KEEP_RULES: readonly KeepRule[] = [
     pattern: /t3-\$\{input\.backend\}-snap-shot/g,
     scope: (path) => path === "scripts/build-desktop-artifact.ts",
     reason: "Packaging must name the existing shipped native capture binary (D16).",
-  },
-  {
-    id: "upstream-http-client-identities",
-    pattern: /(?<="user-agent": ")t3code/g,
-    scope: (path) => path.startsWith("packages/source-control-"),
-    reason:
-      "Forge operators read this HTTP client identity; coordinate an external-client identity change (D12).",
-  },
-  {
-    id: "existing-pr-clone-directory",
-    pattern: /t3code-pr-/g,
-    scope: (path) => path === "packages/source-control-bitbucket/src/client/definition.ts",
-    reason:
-      "The suggested checkout directory names existing user repositories; retain existing task/checkout paths.",
   },
   {
     id: "shared-ssh-helpers",
@@ -638,7 +632,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "provider-replay-contracts",
-    pattern: /t3\.|t3code-test@example\.com|t3-antigravity-browser-preflight/g,
+    pattern: /t3\.|t3-antigravity-browser-preflight/g,
     scope: (path) =>
       path === "packages/provider-pi/src/server/adapter.ts" ||
       path === "packages/provider-testing/src/replayWorkspace.ts" ||
@@ -687,7 +681,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   {
     id: "retained-browser-and-device-state",
     pattern:
-      /t3-\$\{(?:hash|generation)|t3-page\.localhost|t3-html-render-overflow|t3:(?="navigated)|t3-upload-|t3-pierre-(?:dark|light)|\[t3-\$\{namespace\}/g,
+      /t3-\$\{(?:hash|generation)|t3-page\.localhost|t3-html-render-overflow|t3:(?="navigated)|t3-upload-|t3-pierre-(?:dark|light)/g,
     scope: (path) =>
       path.startsWith("apps/mobile/") ||
       path === "apps/server/src/device/AgentDeviceTarget.ts" ||
@@ -705,8 +699,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "legacy-artifacts",
-    pattern:
-      /t3code@users\.noreply\.github\.com|t3 (?:snapshot|checkpoint) ref=|t3-runtime|t3-link-|t3code\/custom-io-ordered-feed|t3-agent/g,
+    pattern: /t3-link-|t3code\/custom-io-ordered-feed|t3-agent/g,
     scope: (path) =>
       /(?:GitVcsDriver|build-cli-archive|htmlRender|third-party-licenses|AgentScope)\./.test(path),
     reason:
@@ -748,7 +741,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     // entry name, and a renamed package installs beside the old one instead of upgrading it.
     id: "installed-desktop-metadata",
     pattern:
-      /t3codeCommitHash|t3codeWebAuthn|T3 Tools|LICENSE-T3CODE\.txt|t3-black-[a-z0-9-]+|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+      /t3codeCommitHash|t3codeWebAuthn|T3 Tools|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
     scope: (path) =>
       /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
         path,
@@ -866,7 +859,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
 
   {
     id: "relay-wire",
-    pattern: /x-t3-relay-[a-z-]+|x-t3-hook-outcome|t3-connect|t3_relay/g,
+    pattern: /x-t3-relay-[a-z-]+|x-t3-hook-outcome|(?<!\[)t3-connect(?!\])|t3_relay/g,
     reason: "T3 Connect relay protocol, owned by the upstream relay.",
   },
   {

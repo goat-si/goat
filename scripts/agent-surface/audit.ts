@@ -752,7 +752,7 @@ export function render(inventory: Inventory): string {
           at("packages/contracts/src/orchestratorMcpFailure.ts", /"thread_credential_required"/),
         ],
         [
-          "T3 Connect sign-in (OAuth or device code)",
+          "GOAT Connect sign-in (OAuth or device code)",
           "CLI only: " +
             code("goat connect login") +
             ", or " +
@@ -794,7 +794,7 @@ export function render(inventory: Inventory): string {
     "",
     "The CLI operates a server; it is not an agent interface. Its " +
       listedCli.length +
-      " listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and T3 Connect. " +
+      " listed commands cover serving, auth tokens, pairing, the background service, updates, themes, traces, triage, and GOAT Connect. " +
       "Nothing lists, reads, or drives threads or tasks, and projects only have " +
       code("goat project add") +
       ", " +

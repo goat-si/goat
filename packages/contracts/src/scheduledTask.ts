@@ -227,7 +227,7 @@ export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
 
 /**
  * Why a webhook task has no public URL. relay_not_linked: the environment is
- * not linked to T3 Connect. managed_tunnel_not_configured: it is linked, but
+ * not linked to GOAT Connect. managed_tunnel_not_configured: it is linked, but
  * remote access has not created its managed tunnel. managed_tunnel_unrecognized:
  * the tunnel's name does not carry the key the relay routes by.
  */

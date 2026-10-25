@@ -103,24 +103,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D7/D14: dataset selected by the upstream telemetry service.",
   ),
   keep(
-    "relay-client-copy",
-    ["apps/server/src/cli/connect.ts"],
-    /T3 relay client/g,
-    "D12/D14: downloaded client talks to the upstream relay.",
-  ),
-  keep(
-    "relay-wrapped-copy",
-    ["apps/web/src/components/clerk/T3ConnectUserProfilePage.tsx"],
-    /through T3$/g,
-    "D14: JSX wraps the upstream service name before Connect.",
-  ),
-  keep(
-    "relay-identity-comment",
-    ["apps/server/src/telemetry/Identify.ts"],
-    /`connect` is the T3$/g,
-    "D14: comment wraps the upstream account owner before Connect.",
-  ),
-  keep(
     "relay-wrapped-troubleshooting",
     ["docs/user/t3-connect-troubleshooting.md"],
     /block T3$/g,

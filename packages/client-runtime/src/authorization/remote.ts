@@ -44,7 +44,7 @@ export interface ClientOwnerParams {
 }
 
 /**
- * Tells the environment, for analytics, which T3 Connect account and device
+ * Tells the environment, for analytics, which GOAT Connect account and device
  * are connecting, so it can count the environment as theirs.
  */
 export const readClientOwnerParams = Effect.gen(function* () {

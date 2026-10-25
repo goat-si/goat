@@ -23,7 +23,7 @@ function CloudLinkSwitch({
   disabled,
   disabledReason,
   onCheckedChange,
-  ariaLabel = "Enable T3 Connect",
+  ariaLabel = "Enable GOAT Connect",
 }: {
   readonly checked: boolean;
   readonly disabled: boolean;
@@ -66,9 +66,9 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
   const [isUpdatingPreference, setIsUpdatingPreference] = useState(false);
 
   const disabledReason = !isSignedIn
-    ? "Sign in to T3 Connect to manage this environment."
+    ? "Sign in to GOAT Connect to manage this environment."
     : !canManageRelay
-      ? "Your session does not have permission to manage T3 Connect access."
+      ? "Your session does not have permission to manage GOAT Connect access."
       : null;
   const isBusy = isUpdating || isUpdatingPreference;
   const refreshLinkState = useEffectEvent(primaryCloudLinkState.refresh);
@@ -110,15 +110,15 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       toastManager.add({
         type: "success",
         title: enabled
-          ? "T3 Connect linked"
+          ? "GOAT Connect linked"
           : publishAgentActivity
-            ? "T3 Connect tunnel disabled"
-            : "T3 Connect unlinked",
+            ? "GOAT Connect tunnel disabled"
+            : "GOAT Connect unlinked",
         description: enabled
-          ? "This environment is available through T3 Connect."
+          ? "This environment is available through GOAT Connect."
           : publishAgentActivity
             ? "The managed tunnel was removed. Agent activity publishing stays on."
-            : "This environment is no longer available through T3 Connect.",
+            : "This environment is no longer available through GOAT Connect.",
       });
     }
     setIsUpdating(false);
@@ -156,7 +156,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
         type: "success",
         title: enabled ? "Webhooks held while offline" : "Webhooks no longer held",
         description: enabled
-          ? "T3 Connect keeps webhook requests for up to 24 hours while this environment is offline."
+          ? "GOAT Connect keeps webhook requests for up to 24 hours while this environment is offline."
           : "Requests to an offline environment now fail. Anything already held is still delivered.",
       });
     }
@@ -167,19 +167,19 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     <>
       {window.desktopBridge ? (
         <SettingsRow
-          title={searchableSetting("t3-connect").title}
+          title={searchableSetting("goat-connect").title}
           description={
             linkRevoked
-              ? "This environment was removed from T3 Connect. Turn it on to link it again."
+              ? "This environment was removed from GOAT Connect. Turn it on to link it again."
               : managedTunnelActive
                 ? reachability?.status === "unreachable"
-                  ? "T3 Connect is on, but other devices cannot reach this environment."
+                  ? "GOAT Connect is on, but other devices cannot reach this environment."
                   : reachability?.status === "reachable"
-                    ? "This environment is available to your other devices through T3 Connect."
-                    : "T3 Connect is on. Reachability has not been checked yet."
+                    ? "This environment is available to your other devices through GOAT Connect."
+                    : "GOAT Connect is on. Reachability has not been checked yet."
                 : managedTunnelOutOfSync
-                  ? "T3 Connect is out of sync. This environment is linked only to publish agent activity, so other devices cannot connect. Turn T3 Connect on to repair it."
-                  : "Make this environment available to your other devices through T3 Connect."
+                  ? "GOAT Connect is out of sync. This environment is linked only to publish agent activity, so other devices cannot connect. Turn GOAT Connect on to repair it."
+                  : "Make this environment available to your other devices through GOAT Connect."
           }
           status={operationError ?? primaryCloudLinkState.error ?? reachabilityStatus}
           control={
@@ -199,13 +199,13 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
         />
       ) : linkRevoked ? (
         <SettingsRow
-          title={searchableSetting("t3-connect").title}
-          description="This environment was removed from T3 Connect. Run `goat connect link` on the host to link it again."
+          title={searchableSetting("goat-connect").title}
+          description="This environment was removed from GOAT Connect. Run `goat connect link` on the host to link it again."
         />
       ) : null}
       <SettingsRow
         title={searchableSetting("publish-agent-activity").title}
-        description="Send activity to mobile notifications and Live Activities without T3 Connect."
+        description="Send activity to mobile notifications and Live Activities without GOAT Connect."
         control={
           <CloudLinkSwitch
             ariaLabel="Publish agent activity to mobile clients"
@@ -225,7 +225,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
       {managedTunnelActive ? (
         <SettingsRow
           title={searchableSetting("hold-webhooks-while-offline").title}
-          description="Keep webhook requests for up to 24 hours while this environment is offline, then deliver them. Off: T3 Connect only forwards requests and stores nothing."
+          description="Keep webhook requests for up to 24 hours while this environment is offline, then deliver them. Off: GOAT Connect only forwards requests and stores nothing."
           control={
             <CloudLinkSwitch
               ariaLabel="Hold webhook requests while this environment is offline"
@@ -252,7 +252,7 @@ export function CloudLinkRow({
   if (!canReadRelay) {
     return (
       <SettingsRow
-        title="T3 Connect"
+        title="GOAT Connect"
         description="To edit these settings, pair this connection with both View relay and Manage relay permissions."
       />
     );

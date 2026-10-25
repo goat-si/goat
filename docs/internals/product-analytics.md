@@ -20,7 +20,7 @@ with it. Who an install belongs to is a separate fact, sent as
 a rule can change and apply to all history.
 
 [Owner sources](../../apps/server/src/telemetry/Identify.ts), strongest first:
-T3 Connect, then the OpenAI and Claude person ids, then the client device. The
+GOAT Connect, then the OpenAI and Claude person ids, then the client device. The
 server reports what it can read itself: the linked Connect account and provider
 logins. A connecting client reports its signed-in Connect account and its device,
 which links every environment opened from one phone, browser, or desktop. Use the

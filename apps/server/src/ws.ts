@@ -822,7 +822,7 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
 }
 
 /**
- * Owners a connecting client reports: its hashed T3 Connect account and its
+ * Owners a connecting client reports: its hashed GOAT Connect account and its
  * hashed device id. Only hashes are accepted, so a raw id never reaches analytics.
  */
 function readClientOwners(

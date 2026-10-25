@@ -29,7 +29,7 @@ it.effect("reports missing public configuration and fails when Connect is enable
       ...log.mock.calls.flat().map(String),
       Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "",
     ].join("\n");
-    expect(reported).toContain("missing T3 Connect public configuration");
+    expect(reported).toContain("missing GOAT Connect public configuration");
     expect(reported).not.toContain(GOAT_CONNECT_CLI_COMING_SOON_MESSAGE);
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, NetService.layer))),
 );

@@ -20,10 +20,74 @@ const isCopySurface = (path: string): boolean =>
   path !== "apps/mobile/src/features/connection/pairing.ts" &&
   path !== "packages/shared/src/goatHome.ts";
 
+/**
+ * GOAT Connect replaces T3 Connect (packages/shared/src/goatConnect.ts), so its copy follows GOAT everywhere GOAT
+ * writes it, tests included. The troubleshooting guide mirrors the upstream page the help URL opens, and lines that
+ * name upstream's hosted service hold through connectServiceKeeps (rules-external.ts).
+ */
+const isConnectCopySurface = (path: string): boolean =>
+  /^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
+    path,
+  ) && path !== "docs/user/t3-connect-troubleshooting.md";
+
 // Pairing/home utilities only explain legacy readers; they contain no product copy.
 // Upstream has no GOAT legacy markers: these exclusions protect installed identities
 // and attribution before a chase merges the renamed upstream tree.
 export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
+  {
+    id: "visible-connect-account-copy",
+    category: "visible-copy",
+    find: /\bT3 (Connect|[Aa]ccount)\b/g,
+    replace: "GOAT $1",
+    scope: isConnectCopySurface,
+  },
+  {
+    id: "visible-connect-wrapped-profile",
+    category: "visible-copy",
+    find: /(?<=through )T3$/g,
+    replace: "GOAT",
+    scope: (path) =>
+      /apps\/web\/src\/components\/clerk\/(?:T3|Goat)ConnectUserProfilePage\.tsx$/.test(path),
+  },
+  {
+    id: "visible-connect-wrapped-identity",
+    category: "visible-copy",
+    find: /(?<=`connect` is the )T3$/g,
+    replace: "GOAT",
+    scope: (path) => path === "apps/server/src/telemetry/Identify.ts",
+  },
+  {
+    id: "visible-connect-relay-client",
+    category: "visible-copy",
+    find: /\bT3 relay client\b/g,
+    replace: "GOAT relay client",
+    scope: (path) => path === "apps/server/src/cli/connect.ts",
+  },
+  {
+    // The docs index labels the two retitled Connect guides; the troubleshooting mirror keeps its title.
+    id: "visible-connect-docs-index",
+    category: "visible-copy",
+    find: /(?<=\[)T3 Connect(?=(?: setup)?\]\(\.\/(?:internals\/t3-connect|operations\/connect-setup)\.md\))/g,
+    replace: "GOAT Connect",
+    scope: (path) => path === "docs/README.md",
+  },
+  {
+    // Settings describe the project file GOAT reads first; the t3.json reader and source label stay.
+    id: "visible-project-file-copy",
+    category: "visible-copy",
+    find: /(?<=(?:their|repository's) )t3\.json\b/g,
+    replace: "goat.json",
+    scope: (path) =>
+      path === "apps/web/src/components/settings/ProjectDefaultsSettings.tsx" ||
+      path === "apps/mobile/src/features/settings/SettingsServerControlsRouteScreen.tsx",
+  },
+  {
+    id: "visible-project-file-search",
+    category: "visible-copy",
+    find: /(?<=worktree )t3\.json(?= )|(?<=worktree )t3\.json(?=")/g,
+    replace: "goat.json t3.json",
+    scope: (path) => path === "apps/web/src/components/settings/settingsSearch.ts",
+  },
   {
     id: "visible-product-name",
     category: "visible-copy",

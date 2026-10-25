@@ -1143,10 +1143,10 @@ export const OrchestratorMcpScheduledTask = Schema.Struct({
   lastRunStatus: ScheduledTaskRunStatus,
   runCount: Schema.optional(NonNegativeInt),
   lastRunAt: Schema.optional(Schema.NullOr(IsoDateTime)),
-  /** For webhook tasks: the public T3 Connect URL, shown only to a caller that may start the task's runs. */
+  /** For webhook tasks: the public GOAT Connect URL, shown only to a caller that may start the task's runs. */
   webhookUrl: Schema.optional(Schema.String).annotate({
     description:
-      "Public URL to give the sender. Absent when this environment has no T3 Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
+      "Public URL to give the sender. Absent when this environment has no GOAT Connect managed tunnel or this caller may not start the task's runs; webhookUrlUnavailableReason then says why.",
   }),
   webhookUrlUnavailableReason: Schema.optional(Schema.String).annotate({
     description:

@@ -423,7 +423,7 @@ export function ConnectionsNewRouteScreen({
             ) : null}
           </View>
 
-          {hasCloudPublicConfig() ? <T3ConnectSection /> : null}
+          {hasCloudPublicConfig() ? <GoatConnectSection /> : null}
         </View>
       </ScrollView>
     </SettingsScreen>
@@ -526,7 +526,7 @@ function PairingScanCard(props: {
   );
 }
 
-function T3ConnectSection() {
+function GoatConnectSection() {
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const navigation = useNavigation();
   const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =
@@ -550,7 +550,7 @@ function T3ConnectSection() {
         />
       ) : (
         <ListRow
-          label="Sign in to T3 Connect"
+          label="Sign in to GOAT Connect"
           description="Reach your machines from anywhere, no network setup."
           disabled={!isLoaded}
           onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}

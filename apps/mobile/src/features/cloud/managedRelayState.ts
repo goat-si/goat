@@ -55,7 +55,7 @@ export function useManagedRelayEnvironments() {
   const snapshot = readManagedRelaySnapshotState(result);
   useEffect(() => {
     if (snapshot.error) {
-      console.error("[t3-cloud] Relay environment listing failed", {
+      console.error("[goat-cloud] Relay environment listing failed", {
         message: snapshot.error,
         traceId: snapshot.errorTraceId,
       });

@@ -57,8 +57,8 @@ const makeCheckpointWorkspaceEffect = Effect.fn("makeCheckpointWorkspace")(funct
   });
   yield* runGit(cwd, ["init"]);
   const gitConfig = path.join(cwd, ".git", "config");
-  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "T3 Code Test"]);
-  yield* runGit(cwd, ["config", "--file", gitConfig, "user.email", "t3code-test@example.com"]);
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "GOAT Test"]);
+  yield* runGit(cwd, ["config", "--file", gitConfig, "user.email", "goat-test@example.com"]);
   yield* fs.writeFileString(path.join(cwd, "README.md"), `# ${fixtureName}\n`);
   for (const [relativePath, contents] of Object.entries(files)) {
     const filePath = path.join(cwd, relativePath);

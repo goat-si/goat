@@ -122,7 +122,7 @@ describe("resolveThreadContextRoute", () => {
     expect(resolve(primaryId, laptopId)).toEqual({ kind: "ssh", host: "juns-macbook-pro" });
   });
 
-  it("finds an SSH route saved behind a preferred T3 Connect route", () => {
+  it("finds an SSH route saved behind a preferred GOAT Connect route", () => {
     const relayFirst: ConnectionCatalogEntry = {
       target: new RelayConnectionTarget({ environmentId: laptopId, label: "Jun's MacBook Pro" }),
       profile: Option.none(),

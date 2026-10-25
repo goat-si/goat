@@ -58,17 +58,6 @@ export const WIRE_KEEP_RULES: readonly KeepRule[] = [
       "Saved selections and older clients return this ACP empty-choice sentinel; keep its writer and reader identical (R6/N6).",
   },
   {
-    id: "wire-relay-troubleshooting",
-    pattern: /t3ConnectTroubleshootingUrl|T3ConnectTroubleshootingSection/g,
-    scope: (path) =>
-      [
-        "packages/contracts/src/environmentHttp.ts",
-        "packages/client-runtime/src/connection/diagnosis.ts",
-      ].includes(path),
-    reason:
-      "These helpers name the upstream T3 Connect relay and its public help anchors, not GOAT (R7/N7).",
-  },
-  {
     id: "wire-mobile-image-cache",
     pattern: /t3-attachment:/g,
     scope: (path) => path === "apps/mobile/src/lib/assetImageSource.ts",

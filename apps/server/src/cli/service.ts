@@ -276,7 +276,7 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     return "skipped" as const;
   }
   const platform = yield* HostProcess.Platform;
-  const reachability = isGoatConnectEnabled() ? "T3 Connect" : "your network and Tailscale";
+  const reachability = isGoatConnectEnabled() ? "GOAT Connect" : "your network and Tailscale";
   const wanted = yield* Prompt.run(
     Prompt.Confirm({
       message: installed
