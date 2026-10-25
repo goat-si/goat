@@ -747,3 +747,9 @@ history, and saved connections are kept, and you keep working through direct pai
 
 Switch **Local environment** back on in the same place to restart with your previous local
 settings.
+
+When another GOAT reaches this Mac over SSH, it starts a background server here (`goat serve` on
+your `~/.goat` data), and the desktop app lists it as **Headless server**. To keep this Mac on the
+app's own server only, switch off **Headless server on this Mac** in **Settings → Connections**.
+GOAT restarts without it; the background server keeps running for the SSH clients that use it.
+To stop it starting at all, remove this Mac from the other GOAT's SSH hosts.

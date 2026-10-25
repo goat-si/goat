@@ -1031,6 +1031,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     desktopOnly: true,
   },
   {
+    id: "headless-server",
+    title: "Headless server on this Mac",
+    to: "/settings/connections",
+    targetId: "connections-environment",
+    searchTerms: [
+      "hide show headless server ssh goat serve ~/.goat background environment restart",
+    ],
+    desktopOnly: true,
+  },
+  {
     id: "network-access",
     title: "Network access",
     to: "/settings/connections",
