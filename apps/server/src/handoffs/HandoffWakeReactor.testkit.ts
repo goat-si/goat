@@ -59,6 +59,8 @@ export interface World {
     /** Holds the next secret-store write until it completes; `stored` says it arrived. */
     storeGate: Deferred.Deferred<void> | undefined;
     stored: Deferred.Deferred<void>;
+    /** The next `removeFailing` secret-store removals fail. */
+    removeFailing: number;
     arrived: Deferred.Deferred<void>;
     readonly sent: Array<string>;
   };
@@ -114,6 +116,7 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
         slowMs: 0,
         storeGate: undefined,
         stored: yield* Deferred.make<void>(),
+        removeFailing: 0,
         arrived: yield* Deferred.make<void>(),
         sent: [],
       };
@@ -190,7 +193,18 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
                         secrets.set(name, value);
                       }),
                     create: (name, value) => Effect.sync(() => void secrets.set(name, value)),
-                    remove: (name) => Effect.sync(() => void secrets.delete(name)),
+                    remove: (name) =>
+                      outage.removeFailing > 0
+                        ? Effect.suspend(() => {
+                            outage.removeFailing -= 1;
+                            return Effect.fail(
+                              new SecretStore.SecretStoreRemoveError({
+                                resource: name,
+                                cause: "store unavailable",
+                              }),
+                            );
+                          })
+                        : Effect.sync(() => void secrets.delete(name)),
                     getOrCreateRandom: (_name, size) =>
                       Effect.succeed(new Uint8Array(size).fill(7)),
                   }),

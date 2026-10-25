@@ -3,8 +3,9 @@
  * reactor sends nothing for it while the call owns it. When the call returns an answer that came
  * in while it owned the request, it records that durably, so no later reconcile wakes the thread
  * for it; if the call then fails or is interrupted, it removes that record again and the reactor
- * delivers the wake it never sent. Ownership, answers, expiry and wake delivery all run under the
- * Handoffs lock.
+ * delivers the wake it never sent. Until that removal succeeds, the answer stays given back in
+ * memory, so a store that cannot remove the record right then does not keep the thread asleep.
+ * Ownership, answers, expiry and wake delivery all run under the Handoffs lock.
  *
  * @module computerUseContinuations
  */
@@ -47,6 +48,8 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
   }) {
     const answers = yield* PubSub.unbounded<string>();
     const owners = new Map<string, number>();
+    // Answers a failed call recorded and gave back; their record no longer stops a wake.
+    const givenBack = new Set<string>();
     const locked = deps.lock.withPermits(1);
 
     /**
@@ -71,13 +74,6 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
         if (left > 0) owners.set(input.handoffId, left);
         else owners.delete(input.handoffId);
       };
-      yield* locked(
-        Effect.gen(function* () {
-          owners.set(input.handoffId, (owners.get(input.handoffId) ?? 0) + 1);
-          held = true;
-          ownedWhilePending = isHandoffPending((yield* deps.read(input)).state);
-        }),
-      );
       const finish = Effect.fn("Handoffs.finishComputerUseAnswer")(function* (handoff: Handoff) {
         release();
         const usable = yield* settle(handoff);
@@ -90,6 +86,14 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
         return { handoff, usable } satisfies ComputerUseAnswer;
       });
       return yield* Effect.gen(function* () {
+        // Inside the exit handler, so a call stopped or failing here still gives ownership up.
+        yield* locked(
+          Effect.gen(function* () {
+            owners.set(input.handoffId, (owners.get(input.handoffId) ?? 0) + 1);
+            held = true;
+            ownedWhilePending = isHandoffPending((yield* deps.read(input)).state);
+          }),
+        );
         for (;;) {
           const step = yield* locked(
             Effect.gen(function* () {
@@ -128,10 +132,12 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
           locked(
             Effect.gen(function* () {
               release();
-              if (recorded && !Exit.isSuccess(exit))
-                yield* deps
-                  .clearConsumed(input.handoffId)
-                  .pipe(logged("a computer use answer could not be given back", input.handoffId));
+              if (!recorded || Exit.isSuccess(exit)) return;
+              givenBack.add(input.handoffId);
+              yield* deps.clearConsumed(input.handoffId).pipe(
+                Effect.tap(() => Effect.sync(() => givenBack.delete(input.handoffId))),
+                logged("a computer use answer record could not be removed", input.handoffId),
+              );
             }),
           ),
         ),
@@ -147,8 +153,12 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
         locked(
           Effect.gen(function* () {
             if (owners.has(handoff.handoffId)) return;
-            if (yield* deps.consumed(handoff.handoffId)) return;
+            const returned =
+              !givenBack.has(handoff.handoffId) && (yield* deps.consumed(handoff.handoffId));
+            if (returned) return;
             yield* dispatch;
+            // Delivered: the wake's own message now stops any further one.
+            givenBack.delete(handoff.handoffId);
           }),
         ),
       /**

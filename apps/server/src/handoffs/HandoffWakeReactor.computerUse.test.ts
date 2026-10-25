@@ -1,8 +1,9 @@
 import { expect, it } from "@effect/vitest";
-import { COMPUTER_USE_GRANT_HANDOFF_PATH } from "@goat/contracts";
+import { COMPUTER_USE_GRANT_HANDOFF_PATH, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -110,6 +111,70 @@ it.effect(
         yield* world.reactor.reconcile;
         expect(yield* wakes(world)).toHaveLength(1);
         yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toHaveLength(1);
+      }),
+    ),
+);
+
+it.effect(
+  "a call that cannot give its recorded answer back on the first try still wakes the thread once",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const now = yield* DateTime.now;
+        const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+        const waiting = yield* waitForComputerUse(
+          world,
+          summary.handoffId,
+          DateTime.add(now, { minutes: 1 }),
+        );
+        const gate = yield* Deferred.make<void>();
+        world.outage.storeGate = gate;
+        yield* world.handoffs
+          .respond({ threadId, handoffId: summary.handoffId, action: "completed" }, person)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(world.outage.stored);
+        // Stopped mid-record, and the store cannot remove that record right then.
+        world.outage.removeFailing = 1;
+        const stopping = yield* Fiber.interrupt(waiting).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        world.outage.storeGate = undefined;
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(stopping);
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toHaveLength(1);
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toHaveLength(1);
+      }),
+    ),
+);
+
+it.effect(
+  "a call that fails before it starts waiting leaves the approval's wake to the reactor",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+        // Its first read of the request fails, as an outage or a stopped turn would end it.
+        const failed = yield* world.handoffs
+          .awaitComputerUseAnswer(
+            {
+              threadId: ThreadId.make("thread:elsewhere"),
+              handoffId: summary.handoffId,
+              until: DateTime.add(yield* DateTime.now, { minutes: 1 }),
+            },
+            () => Effect.succeed(true),
+          )
+          .pipe(Effect.exit);
+        expect(Exit.isFailure(failed)).toBe(true);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: summary.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
         expect(yield* wakes(world)).toHaveLength(1);
       }),
     ),
