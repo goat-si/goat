@@ -234,6 +234,30 @@ describe("draining a host moves its idle goal attempts (#1130)", () => {
       ),
   );
 
+  it.effect("starts nothing when the host is uncordoned while the source is read last", () =>
+    scenario(({ world, fake, run }) =>
+      run(
+        Effect.gen(function* () {
+          const id = "goal_drain_uncordon_probe";
+          yield* insert(goalWith(id));
+          yield* startIdle(world, fake, id);
+          world.draining.add("A");
+          let reads = 0;
+          // The second status read is the one right before the launch.
+          world.onStatus = () => {
+            reads += 1;
+            if (reads === 2) world.draining.delete("A");
+          };
+          yield* pass(id);
+          expect(reads).toBe(2);
+          expect(world.launchCalls).toBe(0);
+          expect(yield* rescheduleClaims).toBe(0);
+          expect(yield* moveOutcome(id)).toBe("not_sent");
+        }),
+      ),
+    ),
+  );
+
   it.effect("writes nothing when the owner's authority is lost while the source is read last", () =>
     scenario(({ world, fake, run }) =>
       run(

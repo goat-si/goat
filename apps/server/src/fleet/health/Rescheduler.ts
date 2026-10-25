@@ -332,7 +332,8 @@ const make = Effect.gen(function* () {
         return "The attempt on " + where + " is on another run now, so it stays.";
       if (!isStopped(probe.status))
         return "The attempt is running on " + where + "; drain waits for its run to end.";
-      return null;
+      // Read again after the probe: an uncordon that landed while the source was read still counts.
+      return yield* notDraining(request.ref.host);
     });
 
   /**
