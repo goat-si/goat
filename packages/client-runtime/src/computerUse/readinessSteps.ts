@@ -154,6 +154,11 @@ const blockerRemedies = {
     step: "grants",
     remedy: "Restart the helper or GOAT so the permission grant takes effect.",
   },
+  accessibilityStale: {
+    step: "grants",
+    remedy:
+      "macOS shows Accessibility on for GOAT Computer Use but refuses it, usually after an update. In System Settings > Privacy & Security > Accessibility, switch GOAT Computer Use off and on again, then run the check.",
+  },
 } as const satisfies Record<Blocker, { step: StepId; remedy: string }>;
 
 // Windows has no permission prompt to walk through; what stops computer use there is the

@@ -40,8 +40,9 @@
     sizes and SHA-256, and the pnpm catalog pins `@trycua/cua-driver` 0.37.0, the newest version
     published for both halves. ADR-0023 (D15) moves the archives from upstream's official release
     to artifacts GOAT builds from its fork, `goat-si/cua-driver`, at the same 0.37.0 protocol,
-    through the same pin and verification; until #1591 lands, the pin names upstream's official
-    archives from the release's `SHA256SUMS`. Updates happen only through GOAT releases. The
+    through the same pin and verification; since #1591 the pin names the fork's
+    `cua-driver-rs-v0.37.0-goat.2` archives from that release's `SHA256SUMS`, while the SDK stays
+    on npm 0.37.0. Updates happen only through GOAT releases. The
     driver's own update check and `update --apply` are never used.
   - **MIT parts only.** GOAT ships the `cua-driver` executable and the `@trycua/cua-driver` SDK
     (MIT; the SDK's native packages add an MPL-2.0 Node runtime with its notice). Never the Cua

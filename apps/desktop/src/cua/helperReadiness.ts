@@ -1,4 +1,8 @@
-import type { ComputerUseCapabilities, ComputerUseReadiness } from "@goat/contracts";
+import {
+  CUA_STALE_ACCESSIBILITY_ADVICE,
+  type ComputerUseCapabilities,
+  type ComputerUseReadiness,
+} from "@goat/contracts";
 
 type Readiness = ComputerUseReadiness;
 type Blocker = Readiness["blockers"][number];
@@ -127,15 +131,28 @@ export const withProof = (
   details: proof.details,
 });
 
-export const toReadiness = (state: HelperReadinessState, principal: string): Readiness => {
+export const toReadiness = (
+  state: HelperReadinessState,
+  principal: string,
+  platform: NodeJS.Platform = "darwin",
+): Readiness => {
   const off = [
     ...(state.grants.accessibility === "granted" ? [] : ["Accessibility"]),
     ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
   ];
   const unproven = state.capture === "pending" && state.details.length === 0;
+  // A grant macOS reports on proves nothing by itself (AXIsProcessTrusted stays true for a switch
+  // macOS no longer honors, trycua/cua#3170); a tree read that fails under it is the tell.
+  const stale =
+    platform === "darwin" &&
+    state.confirmed &&
+    state.grants.accessibility === "granted" &&
+    state.capture !== "pending" &&
+    state.tree === "empty";
   const blockers = [
     ...new Set([
       ...state.blockers,
+      ...(stale ? (["accessibilityStale"] as const) : []),
       ...(state.desktop?.blocker === undefined ? [] : [state.desktop.blocker]),
     ]),
   ];
@@ -155,7 +172,12 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
         ? [state.desktop.detail]
         : off.length === 0
           ? []
-          : [`${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`]),
+          : [
+              `${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`,
+              ...(platform !== "darwin" || state.grants.accessibility === "granted"
+                ? []
+                : [CUA_STALE_ACCESSIBILITY_ADVICE]),
+            ]),
       ...(usable ? [] : [`${principal} has not been confirmed by a readiness check yet.`]),
       ...state.details,
       ...(unproven

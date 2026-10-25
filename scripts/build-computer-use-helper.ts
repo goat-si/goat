@@ -326,6 +326,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      path.join(sourceDir, "DriverEnvironment.swift"),
       path.join(sourceDir, "McpRelay.swift"),
       path.join(sourceDir, "McpFraming.swift"),
       path.join(sourceDir, "McpJsonSyntax.swift"),
@@ -339,12 +340,18 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "WindowAXSystem.swift"),
       // The agent cursor overlay (#1214); main.swift runs it in agent connection mode.
       path.join(sourceDir, "Overlay.swift"),
+      // Where the overlay sits relative to the target window (covered windows hide it).
+      path.join(sourceDir, "OverlayOrder.swift"),
       // A person's input while an agent connection runs (#1235); the overlay channel carries it.
       path.join(sourceDir, "HumanInput.swift"),
       // Single-window live pictures (#1370), requested with the frames method.
       path.join(sourceDir, "Frames.swift"),
       // GOAT's own windows, which the live picture never shows (#1321).
       path.join(sourceDir, "HostIdentity.swift"),
+      // Fail-closed private mode, capture refusals and off-screen targets (pure decisions).
+      path.join(sourceDir, "HelperSafety.swift"),
+      // Opens the window server connection captures need before AppKit would.
+      path.join(sourceDir, "WindowServer.swift"),
       // Grants read again for a moment before they count as missing (#1597).
       path.join(sourceDir, "PermissionSettle.swift"),
     ]);
@@ -391,7 +398,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     "-o",
     path.join(contents, "Resources", "AppIcon.icns"),
   ]);
-  // Cua Driver's MIT notices travel with every copy of the driver (#667).
+  // Cua Driver's MIT and MPL-2.0 notices travel with every copy of the driver (#1605).
   const notices = path.join(input.repoRoot, "apps/desktop/src/cua/notices");
   for (const name of yield* fs.readDirectory(notices))
     yield* fs.copyFile(path.join(notices, name), path.join(noticesDir, name));

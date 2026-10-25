@@ -229,22 +229,27 @@ describe("proxy execution ownership", () => {
       }),
   );
 
-  it.effect("ends the control if restarting after foreground expiry fails", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ restartFailure: "fixture restart failure" });
-      const update = foregroundActive();
-      yield* h.push({
-        ...update,
-        foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
-      });
-      yield* h.send(call(1, "run_script", { script: "opaque work" }));
-      yield* h.nextToDriver;
-      yield* TestClock.adjust("5 minutes");
-      yield* h.nextToProvider;
-      yield* h.send(call(2, "get_guide"));
-      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
-      assert.equal(result.structuredContent.detail, "helper_restarted");
-    }),
+  it.effect(
+    "ends the control as lost, not as a helper restart, if restarting after foreground expiry fails",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ restartFailure: "fixture restart failure" });
+        const update = foregroundActive();
+        yield* h.push({
+          ...update,
+          foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
+        });
+        yield* h.send(call(1, "run_script", { script: "opaque work" }));
+        yield* h.nextToDriver;
+        yield* TestClock.adjust("5 minutes");
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "get_guide"));
+        const result = (yield* h.nextToProvider).result as {
+          structuredContent: { detail: string };
+        };
+        // A failure in GOAT's own deadline handling is not a helper event: no "restart" advice.
+        assert.equal(result.structuredContent.detail, "lost");
+      }),
   );
   it.effect("cuts off foreground expiry on its own clock while a lease stream is silent", () =>
     Effect.gen(function* () {

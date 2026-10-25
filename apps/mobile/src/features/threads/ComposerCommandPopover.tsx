@@ -2,6 +2,7 @@ import {
   composerCapabilityDetail,
   type ComposerCapabilityItem,
 } from "@goat/client-runtime/composerCapabilityItems";
+import { Image } from "expo-image";
 import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
@@ -184,6 +185,12 @@ const CommandRow = memo(function CommandRow(props: {
     >
       {props.item.type === "path" ? (
         <PierreEntryIcon path={props.item.path} kind={props.item.kind} size={16} />
+      ) : props.item.type === "capability" && props.item.app?.icon !== undefined ? (
+        <Image
+          accessibilityIgnoresInvertColors
+          source={{ uri: props.item.app.icon }}
+          style={{ width: 16, height: 16, borderRadius: 3 }}
+        />
       ) : iconName ? (
         <SymbolView
           name={iconName}

@@ -1,4 +1,4 @@
-import type { OrchestrationV2TurnItem } from "@goat/contracts";
+import type { OrchestrationV2TurnItem, ToolActivityIcon } from "@goat/contracts";
 import {
   computerUseTypedTextLength,
   cuaDriverToolName,
@@ -24,6 +24,97 @@ export interface ComputerUseRun {
   readonly target: string | null;
   /** The call's result is a screenshot by design, so the card shows it without a click. */
   readonly observes: boolean;
+  /** How the call names its app, for the app's icon: a bundle id, an app name, or a pid. */
+  readonly app: ComputerUseAppRef | null;
+}
+
+/** What identifies a call's app well enough to find its icon in the host's app catalog. */
+export interface ComputerUseAppRef {
+  readonly bundleId?: string;
+  readonly name?: string;
+  readonly pid?: number;
+}
+
+/**
+ * The catalog entry a call's app is, matched by bundle id, then by name (case-insensitive); a pid
+ * alone matches nothing, since the catalog does not carry pids. Null when nothing matches, so
+ * the row keeps its generic icon.
+ */
+export function computerUseCatalogApp<App extends { readonly id: string; readonly name: string }>(
+  ref: ComputerUseAppRef | null,
+  catalog: ReadonlyArray<App>,
+): App | null {
+  if (ref === null) return null;
+  if (ref.bundleId !== undefined) {
+    const id = ref.bundleId.toLowerCase();
+    const byId = catalog.find((app) => app.id.toLowerCase() === id);
+    if (byId !== undefined) return byId;
+  }
+  if (ref.name !== undefined) {
+    const name = ref.name.toLowerCase();
+    return catalog.find((app) => app.name.toLowerCase() === name) ?? null;
+  }
+  return null;
+}
+
+const APP_ID_PATTERN = /^[A-Za-z0-9._-]+$/u;
+
+/**
+ * The icon a computer use row shows for its app, through the same native app icon asset the
+ * Codex tool rows use: by bundle id when the call or its observation named one, else by app name.
+ * A pid alone, or an id the asset cannot name (an executable path), keeps the generic icon.
+ */
+export function computerUseAppToolIcon(
+  ...refs: ReadonlyArray<ComputerUseAppRef | null>
+): Extract<ToolActivityIcon, { readonly _tag: "native-app" }> | undefined {
+  for (const ref of refs) {
+    const appId = ref?.bundleId;
+    if (appId !== undefined && appId.length <= 512 && APP_ID_PATTERN.test(appId))
+      return { _tag: "native-app", app: { _tag: "app-id", appId } };
+  }
+  for (const ref of refs) {
+    const displayName = ref?.name;
+    if (displayName !== undefined && !/[\\/]/u.test(displayName) && displayName.length <= 160)
+      return { _tag: "native-app", app: { _tag: "display-name", displayName } };
+  }
+  return undefined;
+}
+
+/** The app name a row's accessible label adds, from the call or its observation. */
+export function computerUseAppName(
+  ...refs: ReadonlyArray<ComputerUseAppRef | null>
+): string | null {
+  for (const ref of refs) if (ref?.name !== undefined) return ref.name;
+  for (const ref of refs) if (ref?.bundleId !== undefined) return ref.bundleId;
+  return null;
+}
+
+/** The app an observation's result names, for a row whose call named only a pid. */
+export function computerUseObservedApp(output: unknown): ComputerUseAppRef | null {
+  const structured = record(record(output)?.structuredContent) ?? record(output);
+  const fields =
+    structured?.app_name !== undefined || structured?.bundle_id !== undefined
+      ? structured
+      : jsonTextFields(output);
+  const bundleId = label(fields?.bundle_id, 255);
+  const name = label(fields?.app_name, 255);
+  if (bundleId === undefined && name === undefined) return null;
+  return {
+    ...(bundleId === undefined ? {} : { bundleId }),
+    ...(name === undefined ? {} : { name }),
+  };
+}
+
+function inputApp(input: Record<string, unknown>): ComputerUseAppRef | null {
+  const bundleId = label(input.bundle_id, 255);
+  const name = label(input.name, 255) ?? label(input.app_name, 255);
+  const pid = typeof input.pid === "number" && Number.isInteger(input.pid) ? input.pid : undefined;
+  if (bundleId === undefined && name === undefined && pid === undefined) return null;
+  return {
+    ...(bundleId === undefined ? {} : { bundleId }),
+    ...(name === undefined ? {} : { name }),
+    ...(pid === undefined ? {} : { pid }),
+  };
 }
 
 const OBSERVATION_TOOLS: ReadonlySet<string> = new Set([
@@ -151,6 +242,7 @@ export function computerUseRun(
     summary: summary(tool, input),
     target: inputTarget(input),
     observes: OBSERVATION_TOOLS.has(tool),
+    app: inputApp(input),
   };
 }
 
@@ -178,7 +270,12 @@ function jsonTextFields(output: unknown): Record<string, unknown> | undefined {
     if (typeof text !== "string" || !text.startsWith("{") || text.length > 65_536) continue;
     try {
       const parsed = record(JSON.parse(text));
-      if (parsed?.app_name !== undefined || parsed?.window_title !== undefined) return parsed;
+      if (
+        parsed?.app_name !== undefined ||
+        parsed?.window_title !== undefined ||
+        parsed?.bundle_id !== undefined
+      )
+        return parsed;
     } catch {
       // Plain text that only looks like JSON.
     }

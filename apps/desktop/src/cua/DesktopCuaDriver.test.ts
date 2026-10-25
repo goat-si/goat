@@ -48,6 +48,11 @@ describe("DesktopCuaDriver", () => {
           requestId: "apps-1",
           status: "listed",
           apps: ["C:\\Apps\\fixture.exe", "com.example.Editor", "fixture.exe"],
+          // Sorted by name; a Windows program's executable path is its id.
+          catalog: [
+            { id: "com.example.Editor", name: "Editor window" },
+            { id: "C:\\Apps\\fixture.exe", name: "fixture.exe" },
+          ],
         });
         yield* test.listApps([{ name: "New app" }]);
         yield* test.requestApps("apps-2");
@@ -57,6 +62,7 @@ describe("DesktopCuaDriver", () => {
           requestId: "apps-2",
           status: "listed",
           apps: ["New app"],
+          catalog: [],
         });
         assert.equal(test.helperAppListings.length, 2);
         yield* test.setComputerUseEnabled(false);

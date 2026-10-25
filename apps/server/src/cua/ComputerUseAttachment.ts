@@ -12,13 +12,16 @@ import {
 } from "@goat/contracts";
 import { resolveBuiltInSkills } from "@goat/provider-core/server/builtinSkills/registry";
 import type { McpProviderSessionConfig } from "@goat/provider-core/server/mcpSession";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { type SelfInvocation, selfInvocationArgs } from "@goat/shared/nodeRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { installComputerUseSkill } from "./ComputerUseGuide.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import { everyAppKind } from "./ComputerUseFullAccess.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -61,6 +64,8 @@ export type ComputerUseAttachment =
       /** The managed server replaces a `cua-driver` the user configured for the provider. */
       readonly overrideUserConfig: boolean;
       readonly skills: ReadonlyArray<BuiltInSkillName>;
+      /** The computer use SKILL.md written on this host, when it could be. */
+      readonly skillPath?: string;
       /** The X display the driver was started on; the proxy checks its windows against it. */
       readonly x11Display?: CuaDriver.CuaX11Display;
     };
@@ -191,19 +196,27 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
       }),
     ),
   );
+  const skills = resolveBuiltInSkills({
+    attached: ["computer-use"],
+    ...(input.requested === undefined ? {} : { requested: input.requested }),
+    disabled,
+  }).active;
+  // Written on the host that runs the driver; a turn without the skill gets no pointer to it.
+  const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const skillPath =
+    Option.isSome(config) && skills.includes("computer-use")
+      ? installComputerUseSkill(config.value.stateDir, HostProcess.Platform.defaultValue())
+      : undefined;
   return {
     _tag: "proxied",
     mcp: mcp.value,
+    ...(skillPath === undefined ? {} : { skillPath }),
     ...(Option.isSome(x11Display) ? { x11Display: x11Display.value } : {}),
     control: control.value,
     proxy: leases.value.proxy,
     // A user's own cua-driver would skip Stop, pauses and app approvals, so it never runs here.
     overrideUserConfig: true,
-    skills: resolveBuiltInSkills({
-      attached: ["computer-use"],
-      ...(input.requested === undefined ? {} : { requested: input.requested }),
-      disabled,
-    }).active,
+    skills,
   } as const;
 });
 
@@ -213,6 +226,7 @@ export const LEASE_PROXY_ENV = {
   url: "GOAT_CUA_LEASE_URL",
   authorization: "GOAT_CUA_LEASE_AUTHORIZATION",
   driver: "GOAT_CUA_DRIVER_MCP",
+  skill: "GOAT_CUA_SKILL_PATH",
   x11Display: "GOAT_CUA_X11_DISPLAY",
 } as const;
 
@@ -243,6 +257,9 @@ function leaseProxyDescriptor(
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
       { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
+      ...(attachment.skillPath === undefined
+        ? []
+        : [{ name: LEASE_PROXY_ENV.skill, value: attachment.skillPath }]),
       ...(attachment.x11Display === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.x11Display, value: JSON.stringify(attachment.x11Display) }]),

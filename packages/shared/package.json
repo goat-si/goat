@@ -23,6 +23,10 @@
       "types": "./src/cuaDriverRelease.ts",
       "import": "./src/cuaDriverRelease.ts"
     },
+    "./computerUseActions": {
+      "types": "./src/computerUseActions.ts",
+      "import": "./src/computerUseActions.ts"
+    },
     "./computerUseObservation": {
       "types": "./src/computerUseObservation.ts",
       "import": "./src/computerUseObservation.ts"

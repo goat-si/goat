@@ -168,6 +168,10 @@ export const desktopSession = (
       ...(control.target === undefined
         ? {}
         : { pid: control.target.pid, windowId: control.target.windowId }),
+      // Only while the agent holds the screen: a person's turn or a stop shows no agent cursor.
+      ...(control.cursor === undefined || state._tag !== "active"
+        ? {}
+        : { cursor: control.cursor }),
       title:
         scope === undefined
           ? "Computer use"

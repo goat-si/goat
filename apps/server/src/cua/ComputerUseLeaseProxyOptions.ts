@@ -5,6 +5,7 @@
  * @module ComputerUseLeaseProxyOptions
  */
 import type {
+  ComputerUseAgentCursor,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
@@ -25,6 +26,11 @@ export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
   readonly lines: Stream.Stream<string>;
   readonly kill: Effect.Effect<void>;
+  /**
+   * The child's exit code once it has exited on its own, or undefined when it is unknown. Read
+   * after its output ends, to tell a helper that refused its parent (77) from one that restarted.
+   */
+  readonly exitCode?: Effect.Effect<number | undefined>;
   /**
    * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
    * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
@@ -90,6 +96,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * true when the server took it. Reported only on a change, observations included.
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
+  /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
+  readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

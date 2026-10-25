@@ -16,6 +16,7 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
+import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
@@ -42,6 +43,28 @@ export const DesktopCuaAppsRequest = Schema.Struct({
 });
 export type DesktopCuaAppsRequest = typeof DesktopCuaAppsRequest.Type;
 
+/** At most this many icons ride on one listing; the rest show the generic app icon. */
+export const COMPUTER_USE_APP_ICON_LIMIT = 200;
+/** A 64x64 PNG data URL is a few KiB; anything larger is not an app icon. */
+const COMPUTER_USE_APP_ICON_MAX_CHARS = 64 * 1024;
+
+/**
+ * One running app a person can name in the composer (`@Finder`) or see beside an agent's call:
+ * the id the driver admits (a bundle id, or an executable path where there is none), its name
+ * and, when the desktop could read one, a small PNG icon as a data URL.
+ */
+export const ComputerUseApp = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  icon: Schema.optionalKey(
+    TrimmedNonEmptyString.check(
+      Schema.isMaxLength(COMPUTER_USE_APP_ICON_MAX_CHARS),
+      Schema.isPattern(/^data:image\/png;base64,/),
+    ),
+  ),
+});
+export type ComputerUseApp = typeof ComputerUseApp.Type;
+
 export const DesktopCuaAppsReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
@@ -49,6 +72,8 @@ export const DesktopCuaAppsReport = Schema.Union([
     requestId: TrimmedNonEmptyString,
     status: Schema.Literal("listed"),
     apps: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(1000)),
+    /** The same apps with names and icons, for people; a desktop older than #1700 omits it. */
+    catalog: Schema.optionalKey(Schema.Array(ComputerUseApp).check(Schema.isMaxLength(1000))),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -189,10 +214,51 @@ export const ComputerUseLeaseAgentInput = Schema.Struct({
 });
 export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
 
+/**
+ * Proxy -> server: where the agent's cursor is now, what the helper overlay draws, or null when
+ * the overlay hides it. The preview draws it over the window's live picture.
+ */
+export const ComputerUseLeaseCursor = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  cursor: Schema.NullOr(ComputerUseAgentCursor),
+});
+export type ComputerUseLeaseCursor = typeof ComputerUseLeaseCursor.Type;
+
+/**
+ * Why a proxy's driver child ended on its own (the lease proxy's driverExitReason): it refused
+ * the process that launched it (exit 77), cannot run on this host (64, 78, 79), or stopped or
+ * restarted.
+ */
+export const ComputerUseDriverEndReason = Schema.Literals([
+  "helper_refused",
+  "helper_unsupported",
+  "helper_restarted",
+]);
+export type ComputerUseDriverEndReason = typeof ComputerUseDriverEndReason.Type;
+
+/**
+ * Proxy -> server: the driver this connection started ended without the proxy stopping it, or
+ * answered its first handshake (`ended: false`). The server counts the host's consecutive endings
+ * so agents and Settings stop calling computer use available while every connection fails.
+ */
+export const ComputerUseLeaseDriverEnded = Schema.Struct({
+  // A fact about the host's helper, not one control: thread-mode proxies report it as well.
+  driverEnded: Schema.Union([
+    Schema.Struct({
+      reason: ComputerUseDriverEndReason,
+      exitCode: Schema.optionalKey(Schema.Int),
+    }),
+    Schema.Literal(false),
+  ]),
+});
+export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
+
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
+  ComputerUseLeaseCursor,
+  ComputerUseLeaseDriverEnded,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 
@@ -252,10 +318,19 @@ export const cuaAgentBlockTitle = (block: CuaAgentBlock): string =>
       ? "GOAT Computer Use cannot use this desktop"
       : desktopTitle[block.blocker];
 
+/**
+ * An Accessibility row can show on while macOS refuses a rebuilt or updated app (a stale grant,
+ * Apple TN3127 and DTS on developer.apple.com/forums/thread/721745); switching the row off and
+ * on records the running code again. Screen Recording has not shown this, so only Accessibility
+ * carries the advice.
+ */
+export const CUA_STALE_ACCESSIBILITY_ADVICE =
+  "If it is already on, switch it off and on again: an updated app can leave the old switch stale.";
+
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
   block.reason === "permissionsNotGranted"
-    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`
+    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security${block.missing.includes("accessibility") ? ` > Accessibility. ${CUA_STALE_ACCESSIBILITY_ADVICE}` : "."}`
     : `Computer use cannot start: ${block.detail}`;
 
 /**
@@ -345,6 +420,17 @@ export const CuaHostStatus = Schema.Struct({
   signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
   /** Decided by the server's setting and running driver, never by the helper. */
   tools: ForwardCompatibleOptional(CuaToolsAvailability),
+  /**
+   * Agent connections on this host whose driver ended before working, in a row, with the last
+   * reason; absent once one works. Older hosts omit it.
+   */
+  agentConnections: ForwardCompatibleOptional(
+    Schema.Struct({
+      failing: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+      reason: ComputerUseDriverEndReason,
+      message: Schema.String,
+    }),
+  ),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 
@@ -363,6 +449,8 @@ export type HostComputerUse = typeof HostComputerUse.Type;
 export const CuaVerificationStepId = Schema.Literals([
   "grants",
   "restart",
+  /** The helper answered an MCP handshake started from the parent agents give it. */
+  "agentRoute",
   "permissions",
   "identity",
   "capture",
@@ -521,6 +609,13 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "lost",
   /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
   "helper_restarted",
+  /**
+   * GOAT Computer Use refused the process that started it (its parent check, exit 77), so no
+   * connection from this GOAT can work until GOAT or the helper is fixed; a restart does not help.
+   */
+  "helper_refused",
+  /** GOAT Computer Use could not start its service or driver (exit 64, 78 or 79). */
+  "helper_unsupported",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
   /** It would bring a window forward or move the pointer while another thread holds apps here. */
@@ -540,6 +635,8 @@ export const computerUseRefusalReason = (
     case "app_not_approved":
       return "appNotAllowed";
     case "helper_restarted":
+    case "helper_refused":
+    case "helper_unsupported":
       return "helperUnavailable";
     default:
       return "targetRefused";

@@ -1,4 +1,5 @@
 import {
+  CUA_STALE_ACCESSIBILITY_ADVICE,
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
@@ -43,6 +44,7 @@ import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
+import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   describeDegraded,
   failedCall,
@@ -103,7 +105,7 @@ const settle = (promise: Promise<unknown>) =>
     () => undefined,
   );
 
-const VERIFICATION_STEPS = 6;
+const VERIFICATION_STEPS = 7;
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -162,7 +164,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         version: 1,
         type: "cuaReadiness",
         generation: helperGeneration,
-        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
+        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME, environment.platform),
         signals: helperSignals(helperCanWatch, helperReportsInput),
         frames: helperCanFrame,
         // handleAppsRequest below answers app listing requests on every platform.
@@ -361,7 +363,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         return undefined;
       const apps = cuaRequestableApps(listed, hosts);
       // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
-      return apps.length <= 1000 ? apps : undefined;
+      if (apps.length > 1000) return undefined;
+      // Names and icons are for people; a catalog that fails leaves the approval list intact.
+      const catalog = yield* Effect.tryPromise(() =>
+        native.appCatalog(listed, hosts, environment.platform),
+      ).pipe(Effect.option);
+      return { apps, catalog: Option.getOrUndefined(catalog) };
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (!closed)
       for (const requestId of batch.requestIds)
@@ -371,7 +378,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           requestId,
           ...(apps === undefined
             ? { status: "unavailable" as const }
-            : { status: "listed" as const, apps }),
+            : {
+                status: "listed" as const,
+                apps: apps.apps,
+                ...(apps.catalog === undefined ? {} : { catalog: apps.catalog }),
+              }),
         });
   });
 
@@ -556,6 +567,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     record("restart", undefined);
+    // Agents start the macOS helper from GOAT's own Node runtime, not from this process; only a
+    // handshake under that parent proves its parent check admits them (#1548).
+    const agentRoute =
+      selected.kind === "helper" && environment.platform === "darwin"
+        ? agentRouteFailure(
+            yield* Effect.promise(() => native.agentRoute(connection.value.mcp)),
+            COMPUTER_USE_HELPER_NAME,
+          )
+        : undefined;
+    if (!record("agentRoute", agentRoute)) return done();
 
     const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
@@ -682,7 +703,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const treeFailure =
       elements > 0
         ? undefined
-        : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
+        : (degradedDetail ??
+          `The driver could not read GOAT's window. Check Accessibility.${environment.platform === "darwin" ? " " + CUA_STALE_ACCESSIBILITY_ADVICE : ""}`);
     record("accessibility", treeFailure);
     if (!identityHolds()) return done();
     yield* noteChecked((current) =>
@@ -701,7 +723,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const early = result.steps.find(
         (step) =>
           !step.ok &&
-          (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
+          (step.id === "restart" ||
+            step.id === "agentRoute" ||
+            step.id === "permissions" ||
+            step.id === "identity"),
       );
       return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
     }),

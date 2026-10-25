@@ -164,3 +164,42 @@ describe("ComputerUseLeaseProxy screenshots on Linux (#1677)", () => {
     }),
   );
 });
+
+const inputError = JSON.stringify({
+  jsonrpc: "2.0",
+  id: 1,
+  result: { content: [{ type: "text", text: "failed PIXELS" }], isError: true },
+});
+
+describe("the driver's reply as delivered, after dev's unverified-input marking (#1683 merge)", () => {
+  it.effect(
+    "without a screenshot policy, as on macOS and Windows, the marking reaches the agent",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.reply(inputError);
+        assert.include(JSON.stringify(yield* h.nextToProvider), "unverifiable");
+      }),
+  );
+
+  it.effect("with the Linux policy, the marked reply still follows the screenshot rule", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        screenshots: {
+          ...policy((reply) => Effect.succeed(reply.line)),
+          scrub: (line) => line.replace("PIXELS", "WITHHELD"),
+        },
+      });
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(inputError);
+      const answer = JSON.stringify(yield* h.nextToProvider);
+      assert.include(answer, "unverifiable");
+      assert.include(answer, "failed WITHHELD");
+    }),
+  );
+});

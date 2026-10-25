@@ -1,4 +1,9 @@
-import { type PreviewSession, type PreviewSessionStatus, WS_METHODS } from "@goat/contracts";
+import {
+  type ComputerUseAgentCursor,
+  type PreviewSession,
+  type PreviewSessionStatus,
+  WS_METHODS,
+} from "@goat/contracts";
 import type { Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
@@ -65,4 +70,29 @@ export const previewSessionDetail = (session: PreviewSession): string => {
     }
   }
   return session.lease?.scope === undefined ? "Whole screen" : session.target.title;
+};
+
+interface Size {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Where the agent's cursor falls, in CSS pixels from the box's top left, on a frame drawn with
+ * object-fit: contain. The frame keeps its aspect ratio and is centered, so the empty bands
+ * beside or above it are left out before the window fractions are applied.
+ */
+export const agentCursorPlacement = (
+  cursor: ComputerUseAgentCursor,
+  frame: Size,
+  box: Size,
+): { readonly left: number; readonly top: number } | undefined => {
+  if (frame.width <= 0 || frame.height <= 0 || box.width <= 0 || box.height <= 0) return undefined;
+  const scale = Math.min(box.width / frame.width, box.height / frame.height);
+  const width = frame.width * scale;
+  const height = frame.height * scale;
+  return {
+    left: (box.width - width) / 2 + cursor.point.fx * width,
+    top: (box.height - height) / 2 + cursor.point.fy * height,
+  };
 };

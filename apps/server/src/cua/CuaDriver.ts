@@ -4,6 +4,7 @@ import {
   CuaAgentBlock,
   cuaAgentBlockUnder,
   CuaDriverMcpConfiguration,
+  type ComputerUseApp,
   type ComputerUseReadiness,
   type CuaDisplayCapability,
   type CuaHostStatus,
@@ -43,6 +44,7 @@ import { ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
@@ -138,6 +140,12 @@ export class CuaDriver extends Context.Service<
     readonly acquire: Effect.Effect<Option.Option<CuaDriverMcpConfiguration>>;
     readonly enabled: Effect.Effect<boolean>;
     readonly listedApps: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+    /**
+     * The same apps named for people, with icons where the desktop could read them, for the
+     * composer's @ list and the icons beside agent calls. Empty when computer use is off or the
+     * host cannot list; asking grants nothing.
+     */
+    readonly appCatalog: Effect.Effect<ReadonlyArray<ComputerUseApp>>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
     /**
      * Why an agent cannot use the computer here until a person acts, from the last failure and
@@ -229,6 +237,8 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 
 export interface CuaDriverOptions {
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  /** A desktop host's named listing; servers without one name each app by its id. */
+  readonly appCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
   /**
    * Where a server that runs the driver itself reads requestable apps when a request asks
    * (#1561): a short-lived listing on the given display environment, never the shared daemon.
@@ -477,6 +487,17 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       if (!(yield* enabled)) return Option.none();
       const apps = yield* options.listedApps ?? standaloneListing;
       return (yield* enabled) ? apps : Option.none();
+    }),
+    appCatalog: Effect.gen(function* () {
+      if (!(yield* enabled)) return [];
+      const catalog: ReadonlyArray<ComputerUseApp> =
+        options.appCatalog === undefined
+          ? Option.getOrElse(yield* standaloneListing, () => []).map((id) => ({
+              id,
+              name: catalogName(id),
+            }))
+          : Option.getOrElse(yield* options.appCatalog, () => []);
+      return (yield* enabled) ? catalog : [];
     }),
     lastFailure: Effect.sync(() => failure),
     block: (options.helperReadiness ?? Effect.succeedNone).pipe(
@@ -757,37 +778,11 @@ export const desktopHelperReadiness = Effect.map(
     }),
 );
 
-export const makeDesktopAppsListing = Effect.fn("CuaDriver.makeDesktopAppsListing")(function* () {
-  const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
-  const crypto = yield* Crypto.Crypto;
-  return Effect.gen(function* () {
-    // An older desktop ignores the request, which would hold the approval card for the whole
-    // deadline; only a desktop that says it answers is asked (#1567).
-    const readiness = yield* receiver.cuaReadiness;
-    if (Option.isNone(readiness) || readiness.value.appsListing !== true)
-      return Option.none<ReadonlyArray<string>>();
-    const requestId = yield* crypto.randomUUIDv4();
-    const ready = yield* Deferred.make<Option.Option<ReadonlyArray<string>>>();
-    // Subscribe before sending: a desktop can answer during the write itself.
-    yield* receiver.cuaApps.pipe(
-      Stream.runForEach((report) =>
-        report.requestId === requestId
-          ? Deferred.succeed(
-              ready,
-              report.status === "listed" ? Option.some(report.apps) : Option.none(),
-            )
-          : Effect.void,
-      ),
-      Effect.forkScoped({ startImmediately: true }),
-    );
-    yield* receiver.requestCuaApps(requestId);
-    return yield* Deferred.await(ready);
-  }).pipe(
-    Effect.scoped,
-    Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone }),
-    Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
-  );
-});
+/** An app's own name when its id is an executable path, so a Linux or Windows entry reads well. */
+export const catalogName = (id: string): string => {
+  const base = id.split(/[\\/]/).pop() ?? id;
+  return (base.replace(/\.(exe|app)$/i, "") || id).slice(0, 255);
+};
 
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
@@ -969,7 +964,14 @@ export const layer = Layer.effect(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
     return yield* make(factory, probe, {
-      ...(config.mode === "desktop" ? { listedApps: yield* makeDesktopAppsListing() } : {}),
+      ...(config.mode === "desktop"
+        ? yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
+            Effect.map((request) => ({
+              listedApps: request.pipe(Effect.map(Option.map((listed) => listed.apps))),
+              appCatalog: request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
+            })),
+          )
+        : {}),
       ...(install ? { install } : {}),
       ...(helperReadiness ? { helperReadiness } : {}),
       ...(binary ? { binary } : {}),

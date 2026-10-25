@@ -9,6 +9,10 @@ import {
   computerUseResult,
   computerUseRun,
   computerUseRunStatus,
+  computerUseCatalogApp,
+  computerUseAppName,
+  computerUseAppToolIcon,
+  computerUseObservedApp,
 } from "./computerUse.ts";
 import { toolCallLines } from "./itemDetail.ts";
 import { toolItemForDisplay } from "./presentation.ts";
@@ -38,6 +42,7 @@ describe("computerUseRun", () => {
         summary: "Look at a window",
         target: "Process 501, window 7",
         observes: true,
+        app: { pid: 501 },
       },
     );
     // A settled wait returns its fresh final sample's screenshot, like a window look.
@@ -48,6 +53,7 @@ describe("computerUseRun", () => {
       summary: "Wait for a window to settle",
       target: "Process 501, window 7",
       observes: true,
+      app: { pid: 501 },
     });
     expect(computerUseRun(call("cua-driver.click", { pid: 501, x: 10, y: 20 }))?.summary).toBe(
       "Click at 10, 20",
@@ -66,6 +72,7 @@ describe("computerUseRun", () => {
       summary: "Open Finder",
       target: "Finder",
       observes: false,
+      app: { name: "Finder" },
     });
   });
 
@@ -301,5 +308,62 @@ describe("computerUseDisplayInput", () => {
     expect(computerUseDisplayInput("cua-driver.type_text", lookalike)).toEqual({
       text: "14 characters",
     });
+  });
+});
+
+describe("computer use app icons", () => {
+  const catalog = [
+    { id: "com.apple.finder", name: "Finder", icon: "data:image/png;base64,AA==" },
+    { id: "com.apple.Safari", name: "Safari" },
+  ];
+
+  it("finds a call's app by bundle id, then by name, and never by a pid alone", () => {
+    expect(computerUseCatalogApp({ bundleId: "COM.APPLE.FINDER" }, catalog)?.name).toBe("Finder");
+    expect(computerUseCatalogApp({ name: "safari", pid: 42 }, catalog)?.id).toBe(
+      "com.apple.Safari",
+    );
+    expect(computerUseCatalogApp({ pid: 42 }, catalog)).toBe(null);
+    expect(computerUseCatalogApp({ bundleId: "com.example.gone" }, catalog)).toBe(null);
+    expect(computerUseCatalogApp(null, catalog)).toBe(null);
+  });
+
+  it("reads the app an observation names, from structured content or folded JSON text", () => {
+    expect(
+      computerUseObservedApp({
+        structuredContent: { app_name: "Finder", bundle_id: "com.apple.finder" },
+      }),
+    ).toEqual({ bundleId: "com.apple.finder", name: "Finder" });
+    expect(
+      computerUseObservedApp({ content: [{ type: "text", text: '{"app_name":"Safari"}' }] }),
+    ).toEqual({ name: "Safari" });
+    expect(computerUseObservedApp({ content: [{ type: "text", text: "done" }] })).toBe(null);
+  });
+});
+
+describe("computerUseAppToolIcon", () => {
+  it("names the app by bundle id first, then by name, and leaves a pid-only call generic", () => {
+    expect(
+      computerUseAppToolIcon({ name: "Finder", pid: 4 }, { bundleId: "com.apple.finder" }),
+    ).toEqual({
+      _tag: "native-app",
+      app: { _tag: "app-id", appId: "com.apple.finder" },
+    });
+    expect(computerUseAppToolIcon({ pid: 4 }, { name: "Safari" })).toEqual({
+      _tag: "native-app",
+      app: { _tag: "display-name", displayName: "Safari" },
+    });
+    expect(computerUseAppToolIcon({ pid: 4 }, null)).toBeUndefined();
+    // An executable path is not an app id or a display name the icon asset can look up.
+    expect(
+      computerUseAppToolIcon({ bundleId: "C:\\Apps\\a.exe", name: "/usr/bin/gedit" }),
+    ).toBeUndefined();
+  });
+
+  it("gives the accessible label the app's name, else its id", () => {
+    expect(computerUseAppName({ pid: 4 }, { name: "Finder", bundleId: "com.apple.finder" })).toBe(
+      "Finder",
+    );
+    expect(computerUseAppName({ bundleId: "com.apple.finder" })).toBe("com.apple.finder");
+    expect(computerUseAppName({ pid: 4 }, null)).toBeNull();
   });
 });

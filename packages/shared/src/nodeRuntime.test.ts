@@ -6,10 +6,56 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 
 import * as HostProcess from "./HostProcess.ts";
-import { resolveNodeExecutable, resolveSelfInvocation, selfInvocationArgs } from "./nodeRuntime.ts";
+import {
+  resolveNodeExecutable,
+  resolveSelfInvocation,
+  resolveSelfInvocationCommand,
+  selfInvocationArgs,
+} from "./nodeRuntime.ts";
 import { symlinksSupported } from "./testing/symlinks.ts";
 
 describe("Self invocation", () => {
+  it.effect(
+    "readiness and the lease proxy choose the same executable, so a check proves the agents' parent",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const executable = path.join(directory, "GOAT.app", "Contents", "MacOS", "GOAT");
+        const helper = path.join(
+          directory,
+          "GOAT.app",
+          "Contents",
+          "Frameworks",
+          "GOAT Helper.app",
+          "Contents",
+          "MacOS",
+          "GOAT Helper",
+        );
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(helper), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(path.dirname(path.dirname(helper)), "Info.plist"),
+          "<plist><dict><key>LSUIElement</key><true/></dict></plist>",
+        );
+        for (const platform of ["darwin", "win32", "linux"] as const) {
+          const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+            effect.pipe(
+              Effect.provideService(HostProcess.ExecutablePath, executable),
+              Effect.provideService(HostProcess.IsExecutable, false),
+              Effect.provideService(HostProcess.Platform, platform),
+              Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs"]),
+            );
+          const proxy = yield* provide(resolveSelfInvocation());
+          const readiness = yield* provide(resolveSelfInvocationCommand());
+          expect(readiness).toBe(proxy.command);
+          // Only macOS swaps in the background helper; the Windows helper accepts only GOAT.exe.
+          expect(readiness).toBe(platform === "darwin" ? helper : executable);
+        }
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("runs the entrypoint script with the current runtime", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

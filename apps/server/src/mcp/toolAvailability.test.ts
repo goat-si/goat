@@ -203,3 +203,20 @@ it("offers agents no path that turns agent device access on (#1196)", () => {
   );
   expect(granting.map((entry) => entry.path)).toEqual([]);
 });
+
+it("calls computer use unavailable, with the host's reason, while agent connections fail", () => {
+  const request = agentSurfaceRegistry["computer_use.request"];
+  const other = entries.find(
+    (entry) => entry.resource !== "computer_use" && entry.requires === "thread",
+  )!;
+  const failing = { computerUseFailure: "GOAT Computer Use refused the agent connections." };
+  expect(availability(request, callers.thread, true, undefined, failing)).toEqual({
+    now: false,
+    reason: "GOAT Computer Use refused the agent connections.",
+  });
+  expect(availability(request, callers.thread, true, undefined, {})).toEqual({ now: true });
+  // Only computer use: every other tool keeps its own answer.
+  expect(availability(other, callers.thread, true, undefined, failing)).toEqual(
+    availability(other, callers.thread, true),
+  );
+});

@@ -1,4 +1,5 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
@@ -25,7 +26,9 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
 import type { HelperEvent } from "./ComputerUseHelper.ts";
+import { makeAppCatalog } from "./appCatalog.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
+import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
 
 // The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
 export const privacyEnvironment = [
@@ -114,6 +117,8 @@ export const fixture = Effect.fn(function* (
     helperAppsFail?: boolean;
     /** The app update puts a new helper generation beside the one already running. */
     updatedHelper?: boolean;
+    /** How the helper answers when started the way agents start it (macOS). */
+    agentRoute?: AgentRouteOutcome;
     publisher?: DesktopTelemetryPublisher["Service"];
     appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
@@ -170,6 +175,8 @@ export const fixture = Effect.fn(function* (
   let clientsOpen = 0;
   let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
+  /** The helper executables started the way agents start them. */
+  const agentRouteProbes: string[] = [];
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
@@ -220,6 +227,10 @@ export const fixture = Effect.fn(function* (
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
+    },
+    agentRoute: async (mcp) => {
+      agentRouteProbes.push(mcp.command);
+      return options.agentRoute ?? { kind: "answered" };
     },
     helperBundlePath: async ({ busy }) =>
       options.helper === "unusable" || helperLost === "unusable"
@@ -305,7 +316,7 @@ export const fixture = Effect.fn(function* (
               socketPath: "",
               pid: HELPER_PID,
               generation: String(starts),
-              driverVersion: "0.37.0",
+              driverVersion: CUA_DRIVER_VERSION,
               contractVersion: "",
               mcpProtocolVersion: "",
               mcp: {
@@ -318,7 +329,7 @@ export const fixture = Effect.fn(function* (
             socketPath: "/tmp/goat-cu-x/driver.sock",
             pid: 777,
             generation: String(starts),
-            driverVersion: "0.37.0",
+            driverVersion: CUA_DRIVER_VERSION,
             contractVersion: "0.8.0",
             mcpProtocolVersion: "2025-06-18",
             mcp: {
@@ -373,6 +384,11 @@ export const fixture = Effect.fn(function* (
       return path;
     },
     listApps: async () => listedApps,
+    appCatalog: (() => {
+      const catalog = makeAppCatalog(async () => new Map());
+      return (listed: ReadonlyArray<CuaDriverListedApp>, hostBundleIds: ReadonlyArray<string>) =>
+        catalog(listed, hostBundleIds);
+    })(),
     computerUseEnabled: async () => computerUseEnabled,
     readManifest: async (path) => {
       const text = manifests.get(path);
@@ -429,8 +445,8 @@ export const fixture = Effect.fn(function* (
             socketPath: descriptor.socketPath,
             pid: 123,
             generation: String(starts),
-            driverVersion: "0.34.1",
-            contractVersion: "1",
+            driverVersion: CUA_DRIVER_VERSION,
+            contractVersion: "0.8.0",
             mcpProtocolVersion: "1",
             mcp: {
               command: descriptor.command,
@@ -587,6 +603,7 @@ export const fixture = Effect.fn(function* (
     constructors,
     launches,
     helperProbes,
+    agentRouteProbes,
     manifestListings,
     helperAppListings,
     helperLaunches,
@@ -608,6 +625,7 @@ export const fixture = Effect.fn(function* (
 export const VERIFICATION_IDS = [
   "grants",
   "restart",
+  "agentRoute",
   "permissions",
   "identity",
   "capture",

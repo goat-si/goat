@@ -320,6 +320,35 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect(
+    "tells the agent the helper refused its launcher, not that it restarted, when the driver exits 77",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ exitCode: 77 });
+        yield* h.push(active());
+        yield* h.send(call(1, "click"));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.driverExits;
+        assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "helper_refused"));
+        yield* h.send(call(2, "get_window_state"));
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_refused"));
+        assert.equal(computerUseRefusalReason("helper_refused"), "helperUnavailable");
+      }),
+  );
+
+  it.effect("still says the helper restarted when the driver exits with another code", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ exitCode: 0 });
+      yield* h.push(active());
+      yield* h.send(call(1, "get_window_state"));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.driverExits;
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "click"));
+      assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_restarted"));
+    }),
+  );
+
   it.effect("fails closed when the lease stream drops, and before any confirmation", () =>
     Effect.gen(function* () {
       const h = yield* harness();
