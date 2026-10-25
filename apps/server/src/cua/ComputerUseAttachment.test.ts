@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   type CuaDriverMcpConfiguration,
   EnvironmentId,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
@@ -196,6 +197,28 @@ describe("computerUseAttachment", () => {
       assert.equal(driver.calls.acquire, 1);
       // An interactive control is not tied to a grant, even when the thread holds one.
       assert.deepEqual(leases.minted, [Option.none()]);
+    }),
+  );
+
+  it.effect("drops the skill only for the project that switched it off", () =>
+    Effect.gen(function* () {
+      const optedOut = ProjectId.make("project-cua-off");
+      const skills = (projectId: ProjectId) =>
+        decide(fakeDriver({ enabled: true, running: true }), {
+          leases: fakeLeases({}).leases,
+          projectId,
+        }).pipe(
+          Effect.map((attached) => (attached._tag === "proxied" ? attached.skills : null)),
+          Effect.provide(
+            ServerSettings.ServerSettingsService.layerTest({
+              projectSettingsOverrides: {
+                [optedOut]: { builtInSkills: { "computer-use": { enabled: false } } },
+              },
+            }),
+          ),
+        );
+      assert.deepEqual(yield* skills(optedOut), []);
+      assert.deepEqual(yield* skills(ProjectId.make("project-cua-on")), ["computer-use"]);
     }),
   );
 

@@ -144,6 +144,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       nothing; clients hide it instead of sending a patch that goes nowhere.
    */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Server delivers the goat-discipline built-in skill to a turn that names it and honors a
+   * project's `builtInSkills` switch. Older servers would leave the mention as plain text and drop
+   * the switch, so clients list the skill and show its settings only when this is true.
+   */
+  devDisciplineSkill: Schema.optionalKey(Schema.Boolean),
   threadSnooze: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.promote. Same version-skew contract as threadSettlement. */
   threadPromotion: Schema.optionalKey(Schema.Boolean),
