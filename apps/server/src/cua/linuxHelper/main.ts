@@ -14,7 +14,8 @@ import * as NodeURL from "node:url";
 import { COMPUTER_USE_MAX_FRAME_BYTES, type ComputerUseWindowTarget } from "@goat/contracts";
 import { cuaDriverListingEnvironment, cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 
-import { gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
+import { a11yBusAddress, gdbusRunner, makeSecureFocusProbe } from "./atspiFocus.ts";
+import { openFocusEvents } from "./atspiFocusEvents.ts";
 import { startDriver } from "./CuaDriverMcp.ts";
 import { serveHelperChannel } from "./helperChannel.ts";
 import { openX11HumanInput } from "./humanInputSource.ts";
@@ -32,6 +33,8 @@ import {
 
 const SETTLE_MS = 300;
 const PARENT_CHECK_MS = 2_000;
+/** How long a dropped accessibility bus connection waits before it is opened again. */
+const FOCUS_EVENTS_RETRY_MS = 2_000;
 
 const environment = process.env;
 const session = detectLinuxSession(
@@ -67,6 +70,16 @@ const generation = NodeCrypto.randomUUID();
 // Deadlines and event spacing need a clock that never steps back when the system time changes.
 const monotonic = () => performance.now();
 const secureFocus = makeSecureFocusProbe(gdbus);
+// Focus changes as they happen, so a password field turns private mode on without waiting for
+// the next probe; only where private mode is read at all.
+const focusEvents =
+  session.unavailable === undefined && session.unsupported === undefined
+    ? openFocusEvents({
+        address: () => a11yBusAddress(gdbus),
+        uid: process.getuid?.() ?? 0,
+        retry: () => new Promise((resolve) => setTimeout(resolve, FOCUS_EVENTS_RETRY_MS).unref()),
+      })
+    : undefined;
 const capture = captureRoute({
   session,
   driverEnvironment,
@@ -78,6 +91,7 @@ const signals = makeSignalMonitor({
   secureFocus,
   windowOpen: (target) => windowOpen(target),
   input,
+  ...(focusEvents ? { focusEvents } : {}),
   // The lost-input report goes out first; then the helper ends so a restart reports it unsupported.
   inputLost: () => void setImmediate(() => end(1)),
   now: monotonic,
@@ -123,6 +137,7 @@ const end = (code: number) => {
   ending = true;
   void helper.close().finally(() => {
     input?.close();
+    focusEvents?.close();
     process.exit(code);
   });
 };
