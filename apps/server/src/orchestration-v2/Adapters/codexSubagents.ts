@@ -7,8 +7,9 @@
  *
  * @module codexSubagents
  */
-import type { OrchestrationV2Subagent } from "@goat/contracts";
+import type { OrchestrationV2ExecutionNode, OrchestrationV2Subagent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as CodexClient from "effect-codex-app-server/client";
@@ -24,6 +25,68 @@ export function detail(task: OrchestrationV2Subagent): string {
     ? header
     : `${header}\n\nResult:\n${task.result}`;
 }
+
+type Node = OrchestrationV2ExecutionNode;
+
+/** What a child's two nodes are built from: the parent turn it runs under and its own thread. */
+interface NodeSource {
+  readonly parentContext: {
+    readonly projectionThreadId: Node["threadId"];
+    readonly projectionRunId: Node["runId"];
+    readonly itemParentNodeId: Node["parentNodeId"];
+    readonly rootNodeId: Node["rootNodeId"];
+    readonly providerTurnId: Node["providerTurnId"];
+  };
+  readonly providerThread: { readonly id: Node["providerThreadId"] };
+  readonly subagentNodeId: Node["id"];
+  readonly childRootNodeId: Node["id"];
+  readonly childThreadId: Node["threadId"];
+  readonly startedAt: Node["startedAt"];
+  readonly task: { readonly nativeTaskRef: Node["nativeItemRef"] };
+}
+
+const nodeOf = (source: NodeSource, status: Node["status"], completedAt: Node["completedAt"]) => ({
+  status,
+  countsForRun: false,
+  providerThreadId: source.providerThread.id,
+  nativeItemRef: source.task.nativeTaskRef,
+  runtimeRequestId: null,
+  checkpointScopeId: null,
+  startedAt: source.startedAt,
+  completedAt,
+});
+
+/** The child's node in its parent's thread, under the parent turn it now runs for. */
+export const subagentNode = (
+  source: NodeSource,
+  status: Node["status"],
+  completedAt: Node["completedAt"],
+): Node => ({
+  ...nodeOf(source, status, completedAt),
+  id: source.subagentNodeId,
+  threadId: source.parentContext.projectionThreadId,
+  runId: source.parentContext.projectionRunId,
+  parentNodeId: source.parentContext.itemParentNodeId,
+  rootNodeId: source.parentContext.rootNodeId,
+  kind: "subagent",
+  providerTurnId: source.parentContext.providerTurnId,
+});
+
+/** The root node of the child's own thread until its first turn starts. */
+export const childRootNode = (
+  source: NodeSource,
+  status: Node["status"],
+  completedAt: Node["completedAt"],
+): Node => ({
+  ...nodeOf(source, status, completedAt),
+  id: source.childRootNodeId,
+  threadId: source.childThreadId,
+  runId: null,
+  parentNodeId: null,
+  rootNodeId: source.childRootNodeId,
+  kind: "root_turn",
+  providerTurnId: null,
+});
 
 interface TurnLike {
   readonly nativeTurnId: string;
@@ -62,19 +125,53 @@ interface Stoppable<T> {
 const stopped = <T extends TurnLike, S extends Stoppable<T>>(
   subagents: ReadonlyMap<string, S>,
   stops: (turn: T) => boolean,
-  activeTurns: ReadonlyMap<string, unknown>,
+  running: (nativeTurnId: string) => boolean,
+  idleLineage: boolean,
 ) =>
   [...subagents.values()].filter((subagent) => {
     if (subagent.task.status !== "running" && subagent.task.status !== "pending") return false;
-    if ([...subagent.nativeTurnIds].some((turnId) => activeTurns.has(turnId))) return false;
-    for (const parent of turnsUp(subagent.parentContext))
+    if ([...subagent.nativeTurnIds].some(running)) return false;
+    for (const parent of turnsUp(subagent.parentContext)) {
+      if (idleLineage && running(parent.nativeTurnId)) return false;
       if (stops(parent as T)) return (subagent.endedByStop = subagent.workStopped = true);
+    }
     return false;
   });
+
+/** How a failed Stop left its turns: ended as Codex reported, or not known to have ended. */
+export interface FailedStop {
+  readonly confirmed: ReadonlySet<string>;
+  readonly unconfirmed: ReadonlySet<string>;
+}
+
+/**
+ * Sorts a failed Stop's turns. A waiter that finished means Codex reported the turn ended, unless
+ * GOAT finalized that turn itself (forced), which proves nothing about its work. A turn forced by
+ * any Stop stays unconfirmed until Codex reports it ended.
+ */
+export const failedStop = Effect.fn("CodexAdapterV2.failedStop")(function* (
+  targets: ReadonlyArray<{
+    readonly context: { readonly nativeTurnId: string };
+    readonly completion: Deferred.Deferred<void>;
+  }>,
+  forced: ReadonlySet<string>,
+) {
+  const confirmed = new Set<string>();
+  const unconfirmed = new Set<string>();
+  for (const { context, completion } of targets)
+    (!forced.has(context.nativeTurnId) && (yield* Deferred.isDone(completion))
+      ? confirmed
+      : unconfirmed
+    ).add(context.nativeTurnId);
+  for (const turnId of forced) unconfirmed.add(turnId);
+  return { confirmed, unconfirmed } satisfies FailedStop;
+});
 
 /**
  * After Stop, ends every subagent of the stopped thread that registered but runs no known turn,
  * whichever path Stop took: a goal pause, between goal turns, after the root finished (#1645).
+ * After a Stop that failed, only a subagent under a root turn Codex confirmed ended, with no turn
+ * above it running or unconfirmed, ends (#1654).
  */
 export const endStopped = Effect.fn("CodexAdapterV2.endStoppedSubagents")(function* <
   T extends TurnLike,
@@ -85,9 +182,16 @@ export const endStopped = Effect.fn("CodexAdapterV2.endStoppedSubagents")(functi
   activeTurns: Ref.Ref<Map<string, A>>,
   providerThreadId: string,
   end: (subagent: S) => Effect.Effect<void>,
+  failed?: FailedStop,
 ) {
-  const owned = (turn: T) => turn.subagent === null && turn.providerThread.id === providerThreadId;
-  for (const subagent of stopped(yield* Ref.get(subagents), owned, yield* Ref.get(activeTurns)))
+  const owned = (turn: T) =>
+    turn.subagent === null &&
+    turn.providerThread.id === providerThreadId &&
+    (failed === undefined || failed.confirmed.has(turn.nativeTurnId));
+  const active = yield* Ref.get(activeTurns);
+  const running = (turnId: string) =>
+    active.has(turnId) || (failed?.unconfirmed.has(turnId) ?? false);
+  for (const subagent of stopped(yield* Ref.get(subagents), owned, running, failed !== undefined))
     yield* end(subagent);
 });
 

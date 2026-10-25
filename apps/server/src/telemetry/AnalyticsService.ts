@@ -1,7 +1,9 @@
 /**
- * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards
- * them to PostHog. Each event carries a uuid, so PostHog can tell a retried
- * copy from a new event.
+ * Events go to GOAT's ingest (infra/ingest at ingest.trygoat.ai), which stores
+ * allowlisted events for at most 180 days and forwards nothing. GOAT_POSTHOG_HOST
+ * and GOAT_POSTHOG_KEY point delivery at any other PostHog-compatible `/batch/`
+ * endpoint instead. Each event carries a uuid, so a retried copy can be told
+ * from a new event.
  */
 import * as HostProcess from "@goat/shared/HostProcess";
 import type { ClientOs } from "@goat/contracts";
@@ -72,11 +74,10 @@ function retryDelayMs(failures: number, random: number): number {
 }
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.String("GOAT_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
+  // A public project key, not a secret: the ingest uses it to refuse stray traffic.
+  posthogKey: Config.String("GOAT_POSTHOG_KEY").pipe(Config.withDefault("goat_public_ingest_v1")),
   posthogHost: Config.String("GOAT_POSTHOG_HOST").pipe(
-    Config.withDefault("https://ingest.t3.codes"),
+    Config.withDefault("https://ingest.trygoat.ai"),
   ),
   enabled: Config.Boolean("GOAT_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
   flushBatchSize: Config.Number("GOAT_TELEMETRY_FLUSH_BATCH_SIZE").pipe(Config.withDefault(20)),

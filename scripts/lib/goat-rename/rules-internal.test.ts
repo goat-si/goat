@@ -119,7 +119,6 @@ describe("internal remnant rules", () => {
       "scripts/build-desktop-artifact.ts",
       "  // Upstream T3 Code's MIT notice ships with every GOAT app (staged from LICENSE).",
     ],
-    ["scripts/build-desktop-artifact.ts", '      maintainer: "T3 Tools <hello@t3.codes>",'],
     [
       "scripts/dev-runner.ts",
       "    // GOAT's live data, or the legacy T3 home when GOAT has none, as migrate-dev-db picks it.",

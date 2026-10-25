@@ -15,6 +15,7 @@ import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+import { OWNER_KEEP_RULES, OWNER_TEXT_RULES } from "./rules-owner.ts";
 export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
@@ -488,6 +489,7 @@ export const TEXT_RULES: readonly TextRule[] = [
   },
   // Last, so they see text the env, package and identifier rules already renamed.
   ...LEFTOVER_TEXT_RULES,
+  ...OWNER_TEXT_RULES,
 ];
 
 export const PATH_RULES: readonly PathRule[] = [
@@ -535,6 +537,7 @@ export const DROP_RULES: readonly DropRule[] = [
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
   ...EXTERNAL_KEEP_RULES,
+  ...OWNER_KEEP_RULES,
   ...RESIDUE_KEEP_RULES,
   ...VISIBLE_KEEP_RULES,
   ...WIRE_KEEP_RULES,
@@ -741,7 +744,7 @@ export const KEEP_RULES: readonly KeepRule[] = [
     // entry name, and a renamed package installs beside the old one instead of upgrading it.
     id: "installed-desktop-metadata",
     pattern:
-      /t3codeCommitHash|t3codeWebAuthn|T3 Tools|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
+      /t3codeCommitHash|t3codeWebAuthn|LICENSE-T3CODE\.txt|t3code\.desktop|X-T3Code-Capture-Helper|\bt3code\b/g,
     scope: (path) =>
       /(?:build-desktop-artifact|DesktopAppIdentity|Passkeys|DesktopAssets|brand-assets|release-|metainfo|GnomeCaptureSetup|HyprlandSnapShot|KdeSnapShot|bootService|agentScope|mobile-native-client|build-libghostty-wasm)\./.test(
         path,
