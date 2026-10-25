@@ -21,6 +21,8 @@ export function makeCodexThreadStatuses() {
   const lastStarted = new Map<string, string>();
   // The turn a thread waits to see start; null until Codex answers turn/start.
   const pending = new Map<string, string | null>();
+  // Threads a reload unsubscribed whose resume has not succeeded since: Codex has dropped them.
+  const unloaded = new Set<string>();
   const quiet = (threadId: string) => {
     const status = statuses.get(threadId);
     return !pending.has(threadId) && status !== undefined && QUIET.has(status);
@@ -42,6 +44,27 @@ export function makeCodexThreadStatuses() {
             // pausing or clearing its goal does not stop it.
           ).pipe(Effect.map((active) => active || !threadIds.every(quiet)))
         : Effect.succeed(true),
+    /**
+     * Rebuilds a thread from these overrides: without a subscriber Codex drops the loaded thread, and
+     * the resume loads it again. A failed resume leaves it dropped until one succeeds.
+     */
+    reload: (
+      client: CodexClient.CodexAppServerClient["Service"],
+      threadId: string,
+      params: Record<string, unknown>,
+    ) =>
+      client
+        .request("thread/unsubscribe", { threadId })
+        .pipe(
+          Effect.andThen(Effect.sync(() => unloaded.add(threadId))),
+          Effect.andThen(
+            client.raw.request("thread/resume", { threadId, excludeTurns: true, ...params }),
+          ),
+          Effect.andThen(Effect.sync(() => unloaded.delete(threadId))),
+        ),
+    /** Whether a failed reload left this thread dropped, so only a resume can serve its next turn. */
+    dropped: (threadId: string) => unloaded.has(threadId),
+    resumed: (threadId: string) => void unloaded.delete(threadId),
     record: (threadId: string, status: string) => void statuses.set(threadId, status),
     turnStarted: (threadId: string, turnId: string) => {
       lastStarted.set(threadId, turnId);

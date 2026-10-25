@@ -4,6 +4,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import {
   GOAT_MEMORY_TOOLS,
   codexReloadFixture,
@@ -175,13 +176,12 @@ describe("Codex GOAT authority reload (#1569)", () => {
   const goatServer = (config: Record<string, unknown>) =>
     config["mcp_servers.goat"] as { http_headers: { Authorization: string }; disabled_tools: [] };
 
-  it.effect(
-    "reaches a held thread with a rotated credential only through a quiet reload, and retries a failed one",
-    () =>
+  it.effect.each(["rotated", "reverted"] as const)(
+    "reaches a held thread with a rotated credential only through a quiet reload, and retries a failed one (%s)",
+    (retry) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const root = "authority-rotated";
-          const f = codexReloadFixture(root);
+          const f = codexReloadFixture("authority-" + retry);
           const rotated = {
             ...f.config,
             providerSessionId: "credential-rotated",
@@ -195,30 +195,14 @@ describe("Codex GOAT authority reload (#1569)", () => {
           yield* f.turnStart(4, 2, false);
           f.turnCompleted(1);
           f.turnCompleted(2);
-          // Turn 3: the reload fails after Codex let the thread go, so the turn fails with it.
+          // Turn 3: the resume fails after Codex dropped the thread, so the turn fails with it.
+          const failure = { code: -32603, message: "rollout unavailable" };
           const params = f.threadParams(undefined, rotated);
-          f.goalGet(5, root, { result: { goal: null } });
-          f.entries.push(
-            {
-              type: "expect_outbound",
-              frame: { id: 6, method: "thread/unsubscribe", params: { threadId: root } },
-            },
-            { type: "emit_inbound", frame: { id: 6, result: { status: "unsubscribed" } } },
-            {
-              type: "expect_outbound",
-              frame: {
-                id: 7,
-                method: "thread/resume",
-                params: { threadId: root, excludeTurns: true, ...params },
-              },
-            },
-            {
-              type: "emit_inbound",
-              frame: { id: 7, error: { code: -32603, message: "rollout unavailable" } },
-            },
-          );
-          // Turn 4: the applied credential is still the old one, so the reload runs again.
-          yield* f.turnStart(f.reload(8, undefined, undefined, undefined, params), 4, false);
+          const next = f.reload(5, undefined, undefined, undefined, params, failure);
+          // Turn 4 reloads again, even when the credential is back to the one Codex last applied:
+          // the dropped thread needs a resume either way.
+          const retried = retry === "rotated" ? params : f.threadParams();
+          yield* f.turnStart(f.reload(next, undefined, undefined, undefined, retried), 4, false);
           f.turnCompleted(4);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -227,7 +211,54 @@ describe("Codex GOAT authority reload (#1569)", () => {
           yield* replay.terminal;
           yield* replay.terminal;
           assert.isTrue(Exit.isFailure(yield* replay.startTurn(3).pipe(Effect.exit)));
+          if (retry === "reverted") yield* sessions.set(f.config);
           yield* replay.startTurn(4);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((config) => goatServer(config).http_headers.Authorization),
+            [
+              "Bearer fixture-cua",
+              "Bearer rotated",
+              retry === "rotated" ? "Bearer rotated" : "Bearer fixture-cua",
+            ],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "leaves a credential that changed before a held thread's resume to the next quiet reload",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = codexReloadFixture("authority-held-resume");
+          const rotated = {
+            ...f.config,
+            providerSessionId: "credential-rotated",
+            authorizationHeader: "Bearer rotated",
+          };
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          // The session manager resumes a thread it still holds when the run's model or policy
+          // changes. Codex ignores the new credential there, so the next turn still reloads.
+          const params = f.threadParams(undefined, rotated);
+          f.resume(4, params);
+          yield* f.turnStart(f.reload(5, undefined, undefined, undefined, params), 2, false);
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(rotated);
+          yield* replay.runtime.resumeThread({
+            threadId: f.config.threadId,
+            providerThread: replay.providerThread,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+          });
+          yield* replay.startTurn(2);
           yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((config) => goatServer(config).http_headers.Authorization),

@@ -233,12 +233,28 @@ export const codexReloadFixture = (scenario: string) => {
     );
   // Codex ignores resume overrides on a thread a client holds: a reload unsubscribes first.
   // Returns the next request id.
+  // A thread/resume Codex answers with the idle thread; `error` answers it with that failure.
+  const resume = (id: number, params: Record<string, unknown>, error?: Record<string, unknown>) =>
+    entries.push(
+      {
+        type: "expect_outbound",
+        frame: {
+          id,
+          method: "thread/resume",
+          params: { threadId: nativeThreadId, excludeTurns: true, ...params },
+        },
+      },
+      error === undefined
+        ? withReplayRequestId(threadResult, id)
+        : { type: "emit_inbound", frame: { id, error } },
+    );
   const reload = (
     first: number,
     cua?: Record<string, unknown>,
     threads: ReadonlyArray<string> = [nativeThreadId],
     goalResponse: Record<string, unknown> = { result: { goal: null } },
     params = threadParams(cua),
+    error?: Record<string, unknown>,
   ) => {
     threads.forEach((threadId, index) => goalGet(first + index, threadId, goalResponse));
     const id = first + threads.length;
@@ -248,16 +264,8 @@ export const codexReloadFixture = (scenario: string) => {
         frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
       },
       { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
-      {
-        type: "expect_outbound",
-        frame: {
-          id: id + 1,
-          method: "thread/resume",
-          params: { threadId: nativeThreadId, excludeTurns: true, ...params },
-        },
-      },
-      withReplayRequestId(threadResult, id + 1),
     );
+    resume(id + 1, params, error);
     return id + 2;
   };
   const turnStart = (id: number, ordinal: number, computerUse: boolean, deferred = false) =>
@@ -336,6 +344,7 @@ export const codexReloadFixture = (scenario: string) => {
     entries,
     start,
     goalGet,
+    resume,
     reload,
     turnStart,
     turnCompleted,

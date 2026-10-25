@@ -7188,7 +7188,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const stale =
               applied !== next ||
-              (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey;
+              (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey ||
+              threadStatuses.dropped(threadId);
             const busy = stale && (yield* threadStatuses.busy(client, conversation));
             const computerUseDeferred =
               busy &&
@@ -7208,10 +7209,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       },
                     }),
               };
-              yield* client.request("thread/unsubscribe", { threadId });
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
+              yield* threadStatuses.reload(client, threadId, {
                 ...runtime.params,
                 ...(mcpSession || applied === undefined
                   ? {}
@@ -7608,6 +7606,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               );
               // The version from `initialize` decides which subagent keys this Codex accepts.
               yield* ensureInitialized;
+              const held =
+                appliedSubagentsByThread.has(nativeThreadId) &&
+                !threadStatuses.dropped(nativeThreadId);
               const resumedRuntime = yield* threadRuntimeParams({
                 mcpSession: resumedMcp,
                 modelSelection: threadInput.modelSelection,
@@ -7638,17 +7639,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
-              appliedSubagentsByThread.set(nativeThreadId, resumedRuntime.subagentKey);
-              if (resumedMcp)
-                credentialsByThread.set(
-                  nativeThreadId,
-                  attachmentKey(resumedMcp, resumedRuntime.cuaDriver),
-                );
-              else credentialsByThread.delete(nativeThreadId);
-              rememberCuaDriver(
-                nativeThreadId,
-                resumedMcp === undefined ? undefined : resumedRuntime.cuaDriver,
-              );
+              threadStatuses.resumed(nativeThreadId);
+              // A held thread keeps the config it has; the next quiet turn reloads any change (#1569).
+              if (!held) {
+                appliedSubagentsByThread.set(nativeThreadId, resumedRuntime.subagentKey);
+                if (resumedMcp)
+                  credentialsByThread.set(
+                    nativeThreadId,
+                    attachmentKey(resumedMcp, resumedRuntime.cuaDriver),
+                  );
+                else credentialsByThread.delete(nativeThreadId);
+                rememberCuaDriver(nativeThreadId, resumedMcp && resumedRuntime.cuaDriver);
+              }
               // Codex follows a resume with a goal snapshot notification; the
               // run's first turn writes it if it differs from the stored goal.
               return {
