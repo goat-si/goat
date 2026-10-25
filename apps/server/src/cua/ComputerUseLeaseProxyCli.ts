@@ -26,6 +26,7 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
+import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts";
@@ -122,6 +123,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     return;
   }
   const descriptor = driver.value;
+  // The skill's path and per-app notes ride on the driver's answers (ComputerUseGuide.ts).
+  const guide = makeAppGuide(platform, process.env[LEASE_PROXY_ENV.skill]?.trim() || undefined);
   // The X display GOAT started the driver on; every window the driver names must be there (#1358).
   const x11Display = decodeX11Display(process.env[LEASE_PROXY_ENV.x11Display] ?? "");
   const placement = Option.isSome(x11Display)
@@ -240,7 +243,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
       () => undefined,
     ).pipe(Stream.catchCause(() => Stream.empty)),
-    output: (line: string) => Effect.sync(() => void process.stdout.write(line + "\n")),
+    output: (line: string) => Effect.sync(() => void process.stdout.write(guide(line) + "\n")),
     startDriver: startDriver(drawsOverlay),
     // A handshake child never draws or watches input (#1604): on macOS the helper starts its
     // overlay and input feed only when the proxy opens their channel.

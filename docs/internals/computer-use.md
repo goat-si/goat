@@ -294,11 +294,14 @@ skill, on by default.
   attaches under exactly the gate that attaches computer use today: never in Plan, a read-only
   sandbox, a cloud task or Muse (`apps/server/src/cua/ComputerUseAttachment.ts`). It appears in the
   composer's `$` menu and in Settings → Integrations → Computer use, where a person turns it off.
-- Every adapter receives it through the runtime instructions path; an adapter whose provider
-  reads skills natively also gets it from a GOAT-managed read-only directory. It replaces the
-  one-paragraph `COMPUTER_USE_INSTRUCTIONS`
-  (`packages/provider-core/src/server/runtimeInstructions.ts`), so there is one source of
-  computer use guidance.
+- Every adapter receives its rules through the runtime instructions path, so Stop, private
+  fields and no blind retry hold even when an agent reads nothing else. The whole guide is also a
+  real skill on the driver's host, `<stateDir>/skills/computer-use/SKILL.md` with
+  `references/apps.md`, written at attach time (`apps/server/src/cua/ComputerUseGuide.ts`), and
+  agents read it on demand (progressive disclosure, agentskills.io). The lease proxy names its path
+  in the MCP initialize instructions and the first answer, and adds an app's notes to the first
+  answer about that app's window, the way Aside's `getApp` returns per-app guidance. App notes live
+  in `computerUseSkillFiles.ts`; add one when a live run shows an app needs a different route.
 
 ## Composer mentions
 
