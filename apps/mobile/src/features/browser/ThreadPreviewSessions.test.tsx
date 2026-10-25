@@ -1,4 +1,9 @@
-import { EnvironmentId, ThreadId, type PreviewSession } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ThreadId,
+  type PreviewSession,
+  type PreviewSessionFrameEvent,
+} from "@goat/contracts";
 import { act, useEffect, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -11,6 +16,8 @@ const h = vi.hoisted(() => ({
   canControl: true,
   navigate: vi.fn(),
   control: vi.fn(),
+  frame: null as PreviewSessionFrameEvent | null,
+  frameRequests: [] as Array<string | null>,
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => h.canControl }));
 vi.mock("@react-navigation/native", () => ({
@@ -20,6 +27,17 @@ vi.mock("@react-navigation/native", () => ({
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("react-native", () => ({
   View: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Image: ({
+    source,
+    style,
+  }: {
+    source: { uri: string };
+    style?: { opacity?: number } | ReadonlyArray<{ opacity?: number } | false | undefined>;
+  }) => {
+    const styles = Array.isArray(style) ? style : [style];
+    const dimmed = styles.some((item) => item && item.opacity !== undefined && item.opacity < 1);
+    return <img alt="" src={source.uri} data-dimmed={dimmed || undefined} />;
+  },
   Pressable: ({
     children,
     onPress,
@@ -102,6 +120,10 @@ vi.mock("../../components/ui/Sheet", () => ({
 vi.mock("../../state/entities", () => ({ useThreadShell: () => ({ title: "Another thread" }) }));
 vi.mock("../../state/previewSessions", () => ({
   usePreviewSessions: () => ({ data: { sessions: h.sessions }, error: null, refresh: () => {} }),
+  useDesktopSessionFrame: (_environmentId: string, sessionId: string | null) => {
+    h.frameRequests.push(sessionId);
+    return { event: sessionId === null ? null : h.frame, failed: false };
+  },
   previewSessionsEnvironment: { control: { permissionAtom: () => ({}) } },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => h.control }));
@@ -363,4 +385,69 @@ it("streams no picture of a tab a person has taken over", async () => {
   await screen.click("1 agents on screen");
   expect(h.streams.size).toBe(0);
   expect(screen.container.textContent).toContain("A person is in control");
+});
+
+const desktop = (overrides: Partial<PreviewSession> = {}): PreviewSession =>
+  session({
+    id: "desktop:control:1",
+    kind: "desktop",
+    target: { kind: "desktop", title: "fixture.exe" },
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+    ...overrides,
+  });
+const jpeg = (data: string): PreviewSessionFrameEvent => ({
+  type: "frame",
+  seq: 1,
+  width: 4,
+  height: 4,
+  mime: "image/jpeg",
+  data,
+});
+
+// #1576: the desktop card watches the session's frames through the shared subscription, as web does.
+it("shows a desktop session's live frame, nothing in private mode, and the last one dimmed once stopped", async () => {
+  h.frame = jpeg("AAAA");
+  h.frameRequests = [];
+  using screen = setup([desktop()]);
+  await screen.click("1 agents on screen");
+  const picture = () => screen.container.querySelector("img");
+  expect(h.frameRequests.at(-1)).toBe("desktop:control:1");
+  expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,AAAA");
+  h.frame = { type: "unavailable", reason: "private" };
+  screen.render();
+  expect(picture()).toBeNull();
+  expect(screen.container.textContent).toContain("Private");
+  h.frame = jpeg("BBBB");
+  screen.render();
+  // Stopped: nothing is watched any more, and the last frame stays, dimmed.
+  h.sessions = [
+    desktop({
+      status: "stopped",
+      capabilities: { ...desktop().capabilities, controls: ["stopAll"] },
+    }),
+  ];
+  screen.render();
+  expect(h.frameRequests.at(-1)).toBeNull();
+  expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
+  expect(picture()?.hasAttribute("data-dimmed")).toBe(true);
+});
+
+it("tells a turn without computer use which grant to allow, and watches no picture", async () => {
+  h.frame = jpeg("AAAA");
+  h.frameRequests = [];
+  using screen = setup([
+    desktop({
+      status: "permission-needed",
+      reason: "permissionsNotGranted",
+      target: {
+        kind: "desktop",
+        title: "Allow Screen & System Audio Recording for GOAT Computer Use",
+      },
+    }),
+  ]);
+  await screen.click("1 agents on screen");
+  expect(screen.container.textContent).toContain(
+    "No computer use yet. Allow Screen & System Audio Recording for GOAT Computer Use (System Settings > Privacy & Security).",
+  );
+  expect(h.frameRequests.filter((id) => id !== null)).toEqual([]);
 });
