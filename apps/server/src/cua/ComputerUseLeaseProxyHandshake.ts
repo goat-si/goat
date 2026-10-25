@@ -25,7 +25,7 @@ import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
 /** Requests that set up the session or describe the driver; none of them acts on the screen. */
 const HANDSHAKE = new Set(["initialize", "tools/list", "ping"]);
-/** As long as a client waits for an MCP server to start before giving up on it. */
+/** Well inside the time a client gives an MCP server to start (Codex 0.163.0 waits 30 s). */
 const ANSWER_WITHIN = "10 seconds";
 
 export const makeLeaseProxyHandshake = <E>(options: {
@@ -34,10 +34,16 @@ export const makeLeaseProxyHandshake = <E>(options: {
   readonly handshake: ReadonlyArray<string>;
   readonly ownId: (kind: string) => string;
   readonly output: (line: string) => Effect.Effect<void>;
+  /** The proxy's own requests to its current child, by id, answered as its lines are read. */
+  readonly ownAnswers: Map<string, Deferred.Deferred<Envelope | undefined>>;
+  /** Waits for the control to end, then refuses the request as ended. */
+  readonly whenEnded: (id: JsonRpcId, method: string) => Effect.Effect<void>;
 }) => {
   const answers = new Map<string, unknown>();
   /** The provider holds a tool list this module gave it, which the next child must confirm. */
   let served = false;
+  /** Handshake requests a child is answering, by request key, which the provider may cancel. */
+  const cancels = new Map<string, Deferred.Deferred<void>>();
   const reply = (id: JsonRpcId, result: unknown) =>
     options.output(JSON.stringify({ jsonrpc: "2.0", id, result }));
 
@@ -90,6 +96,28 @@ export const makeLeaseProxyHandshake = <E>(options: {
     );
   });
 
+  const respond = Effect.fn("ComputerUseLeaseProxy.respondToHandshake")(function* (
+    id: JsonRpcId,
+    method: string,
+    line: string | undefined,
+    refuse: Effect.Effect<void>,
+  ) {
+    if (method === "ping") return yield* reply(id, {});
+    if (method === "tools/list") served = true;
+    if (answers.has(method)) return yield* reply(id, answers.get(method));
+    // A request a pause cut off is asked again as the provider sent it.
+    const request =
+      line ??
+      options.handshake.find((entry) => parse(entry)?.id === id) ??
+      JSON.stringify({ jsonrpc: "2.0", id, method, params: {} });
+    const answer = yield* ask(
+      method === "initialize" ? [request] : [...options.handshake, request],
+    );
+    if (answer?.result === undefined) return yield* refuse;
+    answers.set(method, answer.result);
+    yield* reply(id, answer.result);
+  });
+
   return {
     covers: (method: string | undefined) => method !== undefined && HANDSHAKE.has(method),
     /** Keeps a child's answer to a handshake request, to answer it again while paused. */
@@ -100,7 +128,8 @@ export const makeLeaseProxyHandshake = <E>(options: {
     },
     /**
      * Answers a handshake request without the control's driver, or runs the refusal when no
-     * child could answer it in time.
+     * child could answer it in time. An end or the provider's cancellation stops the child it
+     * started, and an end answers the request as ended instead.
      */
     answer: Effect.fn("ComputerUseLeaseProxy.answerHandshake")(function* (
       id: JsonRpcId,
@@ -108,32 +137,30 @@ export const makeLeaseProxyHandshake = <E>(options: {
       line: string | undefined,
       refuse: Effect.Effect<void>,
     ) {
-      if (method === "ping") return yield* reply(id, {});
-      if (method === "tools/list") served = true;
-      if (answers.has(method)) return yield* reply(id, answers.get(method));
-      // A request a pause cut off is asked again as the provider sent it.
-      const request =
-        line ??
-        options.handshake.find((entry) => parse(entry)?.id === id) ??
-        JSON.stringify({ jsonrpc: "2.0", id, method, params: {} });
-      const answer = yield* ask(
-        method === "initialize" ? [request] : [...options.handshake, request],
-      );
-      if (answer?.result === undefined) return yield* refuse;
-      answers.set(method, answer.result);
-      yield* reply(id, answer.result);
+      const key = JSON.stringify(id);
+      const cancelled = yield* Deferred.make<void>();
+      cancels.set(key, cancelled);
+      yield* Effect.raceAll([
+        respond(id, method, line, refuse),
+        options.whenEnded(id, method),
+        Deferred.await(cancelled),
+      ]).pipe(Effect.ensuring(Effect.sync(() => cancels.delete(key))));
     }),
+    cancel: (key: string) => {
+      const cancelled = cancels.get(key);
+      if (cancelled !== undefined) Deferred.doneUnsafe(cancelled, Exit.void);
+    },
     /**
      * Asks a new child for its tools after the provider was given a remembered or borrowed list,
      * and tells the provider to list again when they differ, as after a driver update.
      */
     recheck: Effect.fn("ComputerUseLeaseProxy.recheckTools")(function* (
       send: (line: string) => Effect.Effect<void>,
-      register: (id: string) => Effect.Effect<Deferred.Deferred<Envelope | undefined>>,
     ) {
       if (!served) return;
       const id = options.ownId("tools");
-      const answered = yield* register(id);
+      const answered = yield* Deferred.make<Envelope | undefined>();
+      options.ownAnswers.set(id, answered);
       yield* send(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: {} }));
       const answer = yield* Deferred.await(answered);
       if (answer?.result === undefined) return;

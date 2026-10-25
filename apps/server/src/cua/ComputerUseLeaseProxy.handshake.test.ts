@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
@@ -120,5 +121,44 @@ describe("proxy handshake while computer use is paused (#1604)", () => {
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: init.id, result: serverInfo }));
       assert.deepEqual(yield* h.nextToProvider, { jsonrpc: "2.0", id: 1, result: serverInfo });
     }),
+  );
+
+  it.effect.each(["stop", "cancel"] as const)(
+    "a %s while a handshake child answers kills it, and its answer never reaches the provider",
+    (ending) =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "private" });
+        yield* h.applied;
+        yield* h.killed;
+        yield* h.send(initialize);
+        assert.equal(yield* handshakeChild(h), "child");
+        const init = yield* h.nextToDriver;
+        const child = h.drivers[1];
+        assert.isDefined(child);
+        if (ending === "stop") {
+          yield* h.push({ state: "ended", reason: "stopped" });
+          const answer = (yield* h.nextToProvider) as {
+            id: number;
+            error?: { data?: { detail?: string } };
+            result?: unknown;
+          };
+          assert.equal(answer.id, 1);
+          assert.isUndefined(answer.result);
+        } else
+          yield* h.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              method: "notifications/cancelled",
+              params: { requestId: 1 },
+            }),
+          );
+        yield* Deferred.await(child!.killed);
+        // A late answer from the killed child is dropped.
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: init.id, result: serverInfo }));
+        yield* h.send(request(9, "ping"));
+        const next = yield* h.nextToProvider;
+        assert.equal(next.id, 9);
+      }),
   );
 });

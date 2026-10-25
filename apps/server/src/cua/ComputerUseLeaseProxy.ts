@@ -129,12 +129,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
-  const handshakeAnswers = makeLeaseProxyHandshake({
-    startDriver: options.startHandshakeDriver ?? options.startDriver,
-    handshake,
-    ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
-    output: options.output,
-  });
   const outstanding = new Map<
     string,
     {
@@ -152,6 +146,19 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const checkReply = (message: Envelope, tool: string | undefined, unfiltered: boolean) =>
     replyPlacement(options.placement, message, tool, unfiltered);
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
+  const handshakeAnswers = makeLeaseProxyHandshake({
+    startDriver: options.startHandshakeDriver ?? options.startDriver,
+    handshake,
+    ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
+    output: options.output,
+    ownAnswers,
+    whenEnded: (id, method) =>
+      Deferred.await(ended).pipe(
+        Effect.flatMap((reason) =>
+          options.output(refusal(id, method, reason, LEASE_END_MESSAGES[reason])),
+        ),
+      ),
+  });
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
   // The control's window survives pauses: the server keeps it until the control ends.
@@ -393,13 +400,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           );
         }
         yield* readLines(current).pipe(Effect.forkIn(scope));
-        yield* handshakeAnswers
-          .recheck(current.driver.send, (id) =>
-            Deferred.make<Envelope | undefined>().pipe(
-              Effect.tap((answered) => Effect.sync(() => ownAnswers.set(id, answered))),
-            ),
-          )
-          .pipe(Effect.forkIn(current.scope));
+        yield* handshakeAnswers.recheck(current.driver.send).pipe(Effect.forkIn(current.scope));
       },
     ),
   });
@@ -732,6 +733,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return yield* options.output(reservedIdAnswer(id, OWN_ID));
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) {
+      handshakeAnswers.cancel(cancelled);
       const request = outstanding.get(cancelled);
       // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
       if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
@@ -801,15 +803,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }
-    // Paused: there is no driver until the server hands control back. The handshake is still
-    // answered, so the agent keeps its tools and hears the pause when it calls one (#1604).
+    // Paused: no driver until control comes back. The handshake is still answered (#1604), in
+    // the background so a cancel or Stop on the input reaches it; tool calls hear the pause.
     if (lifecycle.current === undefined) {
       if (!isRequest) return;
       const refuse = options.output(
         refusal(id, message.method, "waiting_for_human", PAUSE_MESSAGES[paused ?? "human_input"]),
       );
       return yield* handshakeAnswers.covers(message.method)
-        ? handshakeAnswers.answer(id, message.method, line, refuse)
+        ? handshakeAnswers.answer(id, message.method, line, refuse).pipe(Effect.forkIn(scope))
         : refuse;
     }
     // The child this line goes to. A pause, end or replacement before the send below means the
