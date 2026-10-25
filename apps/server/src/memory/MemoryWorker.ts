@@ -23,6 +23,7 @@ import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
+import * as AutomationHold from "../automationHold.ts";
 import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
@@ -81,10 +82,8 @@ export const memoryRetryDelay = (attempt: number) =>
 // Internal ownership deadline for local work rows; this is not the hub resolution lease.
 const workClaimMs = 600000;
 /**
- * Longest wait between recovery scans while nothing else asks for one. The scan reads each
- * live thread's tail, so it runs when its answer can have changed (start, a memory model
- * change, finished summary work, a full page) and otherwise only this often, which is also
- * how late a due 24-hour consolidation can start.
+ * Bounds idle recovery and overdue consolidation latency. Reading each live thread's tail is
+ * expensive, so active work and model changes request earlier scans only when answers can change.
  */
 export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
@@ -928,6 +927,7 @@ const make = Effect.gen(function* () {
   });
   const sweepDue = Effect.fn("MemoryWorker.sweepDue")(
     function* () {
+      yield* AutomationHold.awaitRelease;
       yield* sweepStage("catch-up", catchUp());
       yield* sweepStage("deferred", deferred());
       const now = yield* Clock.currentTimeMillis;

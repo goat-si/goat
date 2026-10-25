@@ -11,6 +11,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as AutomationHold from "../automationHold.ts";
 import * as Hosts from "../mcp/HostThreadsMcpService.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -26,6 +27,7 @@ export class NoteAutoDone extends Context.Service<
 >()("goat/notes/NoteAutoDone") {}
 
 const make = Effect.gen(function* () {
+  const automation = yield* AutomationHold.AutomationHold;
   const notes = yield* Notes.NotesService;
   const results = yield* Results.NoteResults;
   const hosts = yield* Hosts.HostThreadsMcpService;
@@ -54,6 +56,7 @@ const make = Effect.gen(function* () {
   const follow = (link: NoteThreadLink) =>
     Effect.gen(function* () {
       if (link.host === null) return;
+      yield* automation.awaitRelease;
       while ((yield* notes.linked(link.threadId, link.host)).some((note) => isLast(note, link))) {
         const waited = yield* remoteSlots.withPermits(1)(
           hosts
@@ -127,7 +130,10 @@ const make = Effect.gen(function* () {
       Stream.runForEach((stored) =>
         stored.event.threadId === null
           ? Effect.void
-          : refresh({ threadId: stored.event.threadId, host: null, lastResult: null }).pipe(
+          : automation.awaitRelease.pipe(
+              Effect.andThen(
+                refresh({ threadId: stored.event.threadId, host: null, lastResult: null }),
+              ),
               Effect.ignore({ log: true }),
             ),
       ),
@@ -136,7 +142,9 @@ const make = Effect.gen(function* () {
     );
   const reports = yield* results.subscribeChanges;
   yield* reports.pipe(
-    Stream.runForEach((link) => refresh(link).pipe(Effect.ignore({ log: true }))),
+    Stream.runForEach((link) =>
+      automation.awaitRelease.pipe(Effect.andThen(refresh(link)), Effect.ignore({ log: true })),
+    ),
     Effect.forkScoped,
   );
   const noteChanges = yield* notes.subscribeChanges;
@@ -145,6 +153,7 @@ const make = Effect.gen(function* () {
   for (const note of yield* notes.all) previous.set(note.path, note);
   const changed = (note: NoteSummary) =>
     Effect.gen(function* () {
+      yield* automation.awaitRelease;
       const old = previous.get(note.path);
       previous.set(note.path, note);
       const last = note.threads.at(-1);
@@ -182,7 +191,13 @@ const make = Effect.gen(function* () {
     Effect.ignore({ log: true }),
     Effect.forkScoped,
   );
-  yield* reconcile;
+  if ((yield* automation.current) === null) yield* reconcile;
+  else
+    yield* automation.awaitRelease.pipe(
+      Effect.andThen(reconcile),
+      Effect.ignore({ log: true }),
+      Effect.forkScoped,
+    );
   return NoteAutoDone.of({ reconcile, reconcileNote });
 });
 export const layer = Layer.effect(NoteAutoDone, make);
