@@ -66,6 +66,9 @@ import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
+/** Private mode is off for now (#1695): secret-field reports never pause computer use. */
+const PRIVATE_MODE_DISABLED = true;
+
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
   { cause: Schema.Defect() },
@@ -647,6 +650,7 @@ const make = Effect.gen(function* () {
         if (report.type === "cuaHumanInput") return Effect.void;
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
+          if (PRIVATE_MODE_DISABLED) return;
           if (report.active && !privateHost) {
             foreground.clear();
             interrupted("private");

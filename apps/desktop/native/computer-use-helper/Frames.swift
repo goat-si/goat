@@ -166,7 +166,8 @@ final class FrameCapture {
 
   /// A secure text field has focus in the window's app; its windows are not pictured at all.
   private func isPrivate(_ target: FrameTarget) -> Bool {
-    HelperSafety.isPrivate(focusedSecureField(), targetPid: target.pid)
+    !HelperSafety.privateModeDisabled
+      && HelperSafety.isPrivate(focusedSecureField(), targetPid: target.pid)
   }
 
   @available(macOS 14.0, *)

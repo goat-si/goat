@@ -523,6 +523,7 @@ final class PrivateModeWatch {
 
   /// The window a focus answer holds private, or nil when nothing does.
   private func privateTarget(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
+    if HelperSafety.privateModeDisabled { return nil }
     switch focus {
     case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
     case .unknown: return (pid: 0, windowId: 0)
