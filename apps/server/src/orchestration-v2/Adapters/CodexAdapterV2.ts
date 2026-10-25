@@ -1287,6 +1287,8 @@ interface CodexSubagentThreadContext {
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
   task: OrchestrationV2Subagent;
+  /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
+  endedByStop?: boolean;
 }
 
 const approvalOwnerCodexTurn = (
@@ -3181,7 +3183,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               subagent,
               status: "running",
               startedAt: turn.startedAt,
-              ...(providerTurnOrdinal > 1 ? { reopen: true, result: null } : {}),
+              // A real turn reopens a settled task, including one Stop ended before it began.
+              ...(providerTurnOrdinal > 1 || subagent.endedByStop === true
+                ? { reopen: true, result: null }
+                : {}),
             });
             const now = yield* DateTime.now;
             yield* emitProviderEvent({
@@ -6651,7 +6656,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) =>
                   new Set(current).add(input.nativeTurnId),
                 );
-              if (input.status === "interrupted" || input.status === "cancelled")
+              // Only Stop: Codex also reports a turn replaced by compaction as interrupted.
+              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId))
                 for (const subagent of CodexSubagents.stopped(
                   yield* Ref.get(subagentThreads),
                   input.context,

@@ -26,23 +26,27 @@ interface TurnLike {
   readonly subagent: { readonly parentContext: TurnLike } | null;
 }
 
-/** Registered subagents under the stopped turn that are still active but run no known turn. */
+/**
+ * Registered subagents under the stopped turn that are still active but run no known turn,
+ * marked endedByStop so that their first real turn reopens them.
+ */
 export const stopped = <
   S extends {
     readonly parentContext: TurnLike;
     readonly nativeTurnIds: ReadonlySet<string>;
     readonly task: { readonly status: string };
+    endedByStop?: boolean;
   },
 >(
   subagents: ReadonlyMap<string, S>,
-  stopped: TurnLike,
+  turn: TurnLike,
   activeTurns: ReadonlyMap<string, unknown>,
 ) =>
   [...subagents.values()].filter((subagent) => {
     if (subagent.task.status !== "running" && subagent.task.status !== "pending") return false;
     if ([...subagent.nativeTurnIds].some((turnId) => activeTurns.has(turnId))) return false;
     for (let parent: TurnLike | undefined = subagent.parentContext; parent;) {
-      if (parent === stopped) return true;
+      if (parent === turn) return (subagent.endedByStop = true);
       parent = parent.subagent?.parentContext;
     }
     return false;

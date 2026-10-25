@@ -129,13 +129,17 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   });
   const terminals = yield* Queue.unbounded<void>();
   const goalTokens = yield* Queue.unbounded<number>();
+  // Every status a subagent task was given, in order.
+  const subagentStatuses: Array<string> = [];
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
-        : event.type === "provider_thread.updated" && event.providerThread.goal
-          ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-          : Effect.void,
+        : event.type === "subagent.updated"
+          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
+          : event.type === "provider_thread.updated" && event.providerThread.goal
+            ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+            : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -156,6 +160,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
+    subagentStatuses,
     runtime,
     providerThread,
   };
