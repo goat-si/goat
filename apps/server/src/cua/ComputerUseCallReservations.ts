@@ -125,6 +125,29 @@ export const makeCallReservations = () => {
           return true;
       return false;
     },
+    /**
+     * Another control's call still running in this window call's app: the same process, or the
+     * same app id. It holds the app whatever its control's state, until it answers or its driver
+     * is closed, so a Stop cannot hand the app over before the driver is cut off (D17).
+     */
+    appTicket(threadId: ThreadId, call: Call) {
+      const resource = callResource(call);
+      if (typeof resource !== "object") return undefined;
+      for (const ticket of tickets.values()) {
+        if (ticket.threadId === threadId && ticket.call.controlId === call.controlId) continue;
+        if (typeof ticket.resource !== "object") continue;
+        const sameApp =
+          call.app !== undefined &&
+          ticket.call.app !== undefined &&
+          call.app.toLowerCase() === ticket.call.app.toLowerCase();
+        if (ticket.resource.pid === resource.pid || sameApp)
+          return {
+            holderThreadId: ticket.threadId,
+            app: ticket.call.app ?? call.app ?? `the app with pid ${resource.pid}`,
+          };
+      }
+      return undefined;
+    },
     reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))
         return { status: "refused", detail: "replaced" };

@@ -123,6 +123,11 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         // Release and close do not wait on admission: neither can resurrect a yielding validation.
         if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
           return { status: "refused", detail: "replaced" } as const;
+        // Another control's window ticket refuses below as target_busy, the narrower answer; a
+        // call of another control still running in the app holds it like a lease.
+        const inTheWay = reservations.targetBusy(threadId, call)
+          ? undefined
+          : (appBusy ?? reservations.appTicket(threadId, call));
         const detail = callAdmissionRefusal({
           call,
           state,
@@ -132,11 +137,10 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           interruptions: deps.interruptions(),
           now,
           bound: (id) => deps.bound(threadId, call.controlId, id),
-          // Another control's window ticket refuses below as target_busy, the narrower answer.
-          appBusy: reservations.targetBusy(threadId, call) ? undefined : appBusy,
+          appBusy: inTheWay,
         });
-        if (detail === "app_busy" && appBusy !== undefined)
-          return { status: "refused", detail, ...appBusy } as const;
+        if (detail === "app_busy" && inTheWay !== undefined)
+          return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
         // Confirmation retains the original ticket and its conflict coverage until cleanup.

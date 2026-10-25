@@ -350,6 +350,37 @@ describe("app leases between threads (D17)", () => {
       } as const);
     }).pipe(Effect.provide(layer)),
   );
+  it.effect("a stopped holder's call still running in the app keeps it until that call ends", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const a = yield* fullAccess("inflight-a");
+      const b = yield* fullAccess("inflight-b");
+      // A's drag is running: its ticket is held until the call answers or the driver is closed.
+      const running = yield* leases.callReservation(a.threadId, {
+        action: "reserve",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+        callId: "drag",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "drag",
+        args: { pid: 42, window_id: 7, from: [1, 1], to: [2, 2] },
+        app: TEXTEDIT,
+      });
+      assert.equal(running.status, "admitted");
+      // Stop ends A's control before its proxy has killed the driver.
+      yield* leases.stop(a.threadId);
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+      // The proxy closes the driver, which ends the call; the app is free.
+      yield* leases.callReservation(a.threadId, {
+        action: "close",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+      });
+      assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
+    }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("app lease records (D17)", () => {
