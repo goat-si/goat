@@ -44,6 +44,23 @@ A promotion rebuilds exactly the nightly's commit with the plain version `X.Y.Z`
 
 To stop stable releases, label an issue `release-blocker` (and close it to resume), or set `GOAT_STABLE_HOLD=true` for a longer freeze. A manual run with `channel=stable` applies the same rules; with `sha` set to a published nightly's commit it promotes that nightly at once, without the soak, blocker or hold rules (`gh workflow run goat-nightly.yml --ref dev -f channel=stable -f sha=<commit> -f publish=true`). A hotfix therefore merges to dev, ships as a manual nightly of its commit, and is promoted by `sha`; it carries whatever else dev holds by then.
 
+## Side-by-side desktop state
+
+A packaged nightly or preview build keeps its state in `~/.goat/desktop-nightly` and stable keeps
+`~/.goat/desktop` (`resolveDesktopBaseDir` in `apps/desktop/src/app/DesktopStatePaths.ts`). The
+bundled server derives everything from that base directory, so the split covers its database and
+secrets too. On a nightly's first launch `apps/desktop/src/app/DesktopChannelStateMigration.ts`
+copies stable's state before any layer exists: anything that touches the state directory earlier
+would create the destination and stop the copy, because a destination that exists is never
+overwritten.
+
+The copy keeps stable's environment id and secrets, since the database holds data encrypted with
+them, so two servers answer as one machine. It therefore starts with an automation hold
+(`apps/server/src/automationHold.ts`), cleared only by a person from Settings. **Code that acts on
+its own** (a Scheduler source, a timer, a recovery pass at startup, an inbound hub or webhook route)
+**must check the hold** or wait for its release; Scheduler sources skip while held unless registered
+with `whileAutomationHeld: "run"`. Work a person starts on the copy is not automation and runs.
+
 ## Version rule
 
 Every build carries exactly one version, and the desktop bundle, the server inside it, and the SSH runtime archive all report it. SSH remotes download the runtime archive named after the server's version, so a server that reports a version nobody published (#339) breaks every remote. The source manifests always hold the plain base `X.Y.Z`; a build stamps its full version into all four with `node scripts/update-release-package-versions.ts <version>` before anything is built.

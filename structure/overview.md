@@ -54,7 +54,8 @@ in [`manifest.json`](manifest.json).
   transaction commits. See [command commit](server.md#command-commit).
 - **INV-HOME-01** — An empty server base directory resolves to `~/.t3`. `GOAT_HOME` and
   `--base-dir` override it. See [state roots](settings-and-storage.md#state-roots).
-- **INV-DESKTOP-01** — A packaged desktop build stores its server state under `~/.goat/desktop`.
+- **INV-DESKTOP-01** — A packaged stable desktop build stores its server state under `~/.goat/desktop`,
+  and a packaged nightly or preview build under `~/.goat/desktop-nightly`.
   A development desktop build uses `~/.t3` unless `GOAT_HOME` is set.
 - **INV-SSH-01** — Scripts that launch GOAT on an SSH host set the remote server home to
   `$HOME/.goat` and do not use `$HOME/.t3`.
