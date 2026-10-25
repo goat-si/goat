@@ -10,7 +10,90 @@ import {
   omitToolOutputImageData,
   toolOutputImages,
   toolOutputIndicatesFailure,
+  toolOutputSettle,
 } from "./toolOutput.ts";
+
+describe("toolOutputSettle", () => {
+  const expected = { outcome: "unsupported", reason: "private_or_unknown_focus" };
+  const summary =
+    "Notification settle: unsupported (private_or_unknown_focus). Quiet does not establish task completion.";
+
+  it("reads a settle wait's outcome from every provider's result shape (#1585)", () => {
+    const shapes: ReadonlyArray<readonly [string, unknown]> = [
+      [
+        "MCP result",
+        { content: [{ type: "text", text: summary }], structuredContent: { settle: expected } },
+      ],
+      ["OpenCode plain string", summary],
+      ["Cursor text parts", { content: [{ text: { text: summary } }] }],
+      ["ACP content wrappers", [{ type: "content", content: { type: "text", text: summary } }]],
+      [
+        "structured fields folded beside a screenshot",
+        [
+          { type: "text", text: JSON.stringify({ pid: 1, settle: expected }) },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+      ],
+      ["compact wire output", { settle: expected }],
+    ];
+    for (const [name, output] of shapes) expect(toolOutputSettle(output), name).toEqual(expected);
+  });
+
+  it("finds the outcome beside a sample too large to parse", () => {
+    const pending = { outcome: "pending", reason: "deadline" };
+    const line =
+      "Notification settle: pending (deadline). Quiet does not establish task completion.";
+    const folded = JSON.stringify({ tree: "x".repeat(20_000), settle: pending });
+    // GOAT folds the structured sample in front of the content when a screenshot remains.
+    expect(
+      toolOutputSettle([
+        { type: "text", text: folded },
+        { type: "text", text: line },
+      ]),
+    ).toEqual(pending);
+    // A provider that joins the text into one string puts the folded sample first.
+    expect(toolOutputSettle(folded + "\n" + line)).toEqual(pending);
+    // A window title can contain the same words; the real line at a line start still counts.
+    const titled = JSON.stringify({
+      window_title: "Notification settle: example",
+      tree: "x".repeat(20_000),
+      settle: pending,
+    });
+    expect(toolOutputSettle(titled + "\n" + line)).toEqual(pending);
+    expect(
+      compactDynamicToolOutput({
+        content: [
+          { type: "text", text: folded },
+          { type: "text", text: line },
+        ],
+      })?.settle,
+    ).toEqual(pending);
+  });
+
+  it("reads a reason that names an AX notification", () => {
+    const reason = { outcome: "unsupported", reason: "notification_unsupported:AXMoved" };
+    const line =
+      "Notification settle: unsupported (notification_unsupported:AXMoved). Quiet does not establish task completion.";
+    expect(toolOutputSettle(line)).toEqual(reason);
+    expect(compactDynamicToolOutput(line)?.settle).toEqual(reason);
+  });
+
+  it("finds no outcome in other tools' results", () => {
+    for (const output of [
+      undefined,
+      "Done",
+      { content: [{ type: "text", text: "{}" }] },
+      { settle: "x" },
+    ])
+      expect(toolOutputSettle(output)).toBeUndefined();
+  });
+
+  it("compact wire output keeps the outcome, so a projected row can show it", () => {
+    expect(compactDynamicToolOutput({ content: [{ type: "text", text: summary }] })).toEqual({
+      settle: expected,
+    });
+  });
+});
 
 describe("compactDynamicToolOutput", () => {
   it("extracts IDs through the MCP result envelopes used by T3 summaries", () => {

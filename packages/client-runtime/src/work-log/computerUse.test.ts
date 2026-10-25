@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   computerUseDisplayInput,
+  computerUseItemResult,
+  computerUseNeedsResultDetail,
   computerUseObservedTarget,
+  computerUseResult,
   computerUseRun,
   computerUseRunStatus,
 } from "./computerUse.ts";
@@ -37,6 +40,15 @@ describe("computerUseRun", () => {
         observes: true,
       },
     );
+    // A settled wait returns its fresh final sample's screenshot, like a window look.
+    expect(
+      computerUseRun(call("cua-driver.wait_for_window_settle", { pid: 501, window_id: 7 })),
+    ).toEqual({
+      tool: "wait_for_window_settle",
+      summary: "Wait for a window to settle",
+      target: "Process 501, window 7",
+      observes: true,
+    });
     expect(computerUseRun(call("cua-driver.click", { pid: 501, x: 10, y: 20 }))?.summary).toBe(
       "Click at 10, 20",
     );
@@ -96,6 +108,118 @@ describe("computerUseRunStatus", () => {
     expect(computerUseRunStatus("declined")).toBe("denied");
     expect(computerUseRunStatus("stopped")).toBe("stopped");
     expect(computerUseRunStatus(undefined)).toBeNull();
+  });
+});
+
+describe("computerUseResult", () => {
+  const settle = computerUseRun(
+    call("cua-driver.wait_for_window_settle", { pid: 501, window_id: 7 }),
+  );
+  const structured = (outcome: string, reason: string) => ({
+    structuredContent: { pid: 501, window_id: 7, settle: { outcome, reason } },
+  });
+
+  it("a settle wait that completed without settling is not shown as done (#1585)", () => {
+    expect(
+      computerUseResult(settle, "succeeded", structured("unsupported", "private_or_unknown_focus")),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle: focus is private or unknown",
+    });
+    expect(computerUseResult(settle, "succeeded", structured("pending", "deadline"))).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
+    expect(
+      computerUseResult(settle, "succeeded", structured("destroyed", "window_destroyed")),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window closed before it settled",
+    });
+  });
+
+  it("reads the outcome from folded JSON text or the helper's own summary line", () => {
+    // An expanded row has only the projected output, which keeps just the outcome.
+    expect(
+      computerUseResult(settle, "succeeded", {
+        settle: { outcome: "pending", reason: "deadline" },
+      }),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
+    const folded = {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            settle: { outcome: "unsupported", reason: "observer_unavailable" },
+          }),
+        },
+      ],
+    };
+    expect(computerUseResult(settle, "succeeded", folded)?.note).toBe(
+      "Window did not settle: observer unavailable",
+    );
+    const summary = [
+      {
+        type: "text",
+        text: "Notification settle: pending (deadline). Quiet does not establish task completion.",
+      },
+    ];
+    expect(computerUseResult(settle, "succeeded", summary)?.status).toBe("unsettled");
+    // OpenCode keeps the summary as a plain string; an AX notification name is part of the reason.
+    expect(
+      computerUseResult(
+        settle,
+        "succeeded",
+        "Notification settle: unsupported (notification_unsupported:AXMoved). Quiet does not establish task completion.",
+      ),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle: notification unsupported:AXMoved",
+    });
+  });
+
+  it("a card keeps the wire's outcome when the fetched detail was cut short", () => {
+    const wire = { settle: { outcome: "pending", reason: "deadline" } };
+    // Detail over its byte limit arrives as a truncated string with neither the block nor the line.
+    const truncated = '{"content":[{"type":"text","text":"{\\"tree\\":\\"xxxx…';
+    expect(computerUseItemResult(settle, "succeeded", wire, truncated)).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
+    // Without a wire outcome, as from an older server, the fetched detail still counts.
+    const full = "Notification settle: unsupported (observer_unavailable).";
+    expect(computerUseItemResult(settle, "succeeded", undefined, full).status).toBe("unsettled");
+  });
+
+  it("an expanded card still fetches a settle result the wire carried no outcome for", () => {
+    // Wire output from a server that predates compact settle outcomes.
+    expect(computerUseNeedsResultDetail(settle, { isError: true })).toBe(true);
+    expect(computerUseNeedsResultDetail(settle, undefined)).toBe(true);
+    expect(
+      computerUseNeedsResultDetail(settle, { settle: { outcome: "pending", reason: "deadline" } }),
+    ).toBe(false);
+    const click = computerUseRun(call("cua-driver.click", { pid: 1, x: 1, y: 1 }));
+    expect(computerUseNeedsResultDetail(click, undefined)).toBe(false);
+  });
+
+  it("a settled wait, other tools and other lifecycles keep their status", () => {
+    expect(computerUseResult(settle, "succeeded", structured("settled", "quiet_window"))).toEqual({
+      status: "succeeded",
+      note: null,
+    });
+    expect(computerUseResult(settle, "failed", structured("unsupported", "x"))).toEqual({
+      status: "failed",
+      note: null,
+    });
+    const click = computerUseRun(call("cua-driver.click", { pid: 1, x: 1, y: 1 }));
+    expect(computerUseResult(click, "succeeded", structured("unsupported", "x"))).toEqual({
+      status: "succeeded",
+      note: null,
+    });
+    expect(computerUseResult(settle, null, undefined)).toEqual({ status: null, note: null });
   });
 });
 

@@ -43,6 +43,7 @@ const INPUT_POINTS: Readonly<Record<string, readonly [string, string] | null>> =
 /** Calls whose answer can carry pixels of the screen. */
 const CAPTURES: ReadonlySet<string> = new Set([
   "get_window_state",
+  "wait_for_window_settle",
   "get_desktop_state",
   "zoom",
   "verify_state",
@@ -172,7 +173,7 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         !(event.name === "get_window_state" && args?.include_screenshot === false);
       if (capture) {
         const snapshots =
-          event.name === "get_window_state" && window
+          (event.name === "get_window_state" || event.name === "wait_for_window_settle") && window
             ? new Map(state.snapshots).set(event.id, window.windowId)
             : state.snapshots;
         return { ...state, capturing: new Set(state.capturing).add(event.id), snapshots };
