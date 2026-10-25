@@ -15,7 +15,7 @@ const notDrawnInTime = () =>
   );
 
 /** An agent call still queued or running at its deadline; an earlier call may hold the tab. */
-export const tabBusy = () =>
+const tabBusy = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationTimeoutError",
     "This tab did not finish the call in time; an earlier call may still be running. Try again in a moment.",
