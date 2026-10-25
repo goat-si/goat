@@ -15,6 +15,26 @@ static void *flood(void *unused) {
   return NULL;
 }
 
+static void catalog(const char *line) {
+  const char *id = strstr(line, "\"id\":") + 5;
+  while (*id == ' ') id++;
+  const char *end = id;
+  if (*end == '"') {
+    end++;
+    while (*end && *end != '"') {
+      if (*end == '\\' && end[1]) end++;
+      end++;
+    }
+    if (*end) end++;
+  } else {
+    while (*end && *end != ',' && *end != '}') end++;
+  }
+  fputs("{\"jsonrpc\":\"2.0\",\"id\":", stdout);
+  fwrite(id, 1, (size_t)(end - id), stdout);
+  puts(",\"result\":{\"tools\":[{\"name\":\"health_report\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}]}}");
+  fflush(stdout);
+}
+
 int main(void) {
   char *line = NULL;
   size_t capacity = 0;
@@ -23,7 +43,9 @@ int main(void) {
   puts("{\"jsonrpc\":\"2.0\",\"method\":\"fixture/ready\"}");
   fflush(stdout);
   while ((length = getline(&line, &capacity, stdin)) >= 0) {
-    if (strstr(line, "fixture/flood")) {
+    if (strstr(line, "fixture/catalog")) {
+      catalog(line);
+    } else if (strstr(line, "fixture/flood")) {
       pthread_t writer;
       if (pthread_create(&writer, NULL, flood, NULL) != 0) return 70;
       pthread_detach(writer);

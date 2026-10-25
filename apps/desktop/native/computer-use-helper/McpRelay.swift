@@ -6,15 +6,17 @@ import Foundation
 /// All pumps remain in the session group, so Stop never waits behind a blocked pipe.
 func relayMcp(
   toDriver: FileHandle, fromDriver: FileHandle,
+  native: McpNativeSession? = nil,
   fail: @escaping (Int32, String) -> Never
 ) -> DispatchGroup {
   let outputDrained = DispatchGroup()
   outputDrained.enter()
-  func pump(_ input: FileHandle, _ output: FileHandle, tail: Bool, done: @escaping () -> Void) {
+  func pump(_ input: FileHandle, _ output: FileHandle, tail: Bool,
+            handle: ((Data) throws -> Void)?, done: @escaping () -> Void) {
     DispatchQueue.global().async {
       defer { done() }
       do {
-        try pumpMcpFrames(from: input, to: output, acceptTail: tail)
+        try pumpMcpFrames(from: input, to: output, acceptTail: tail, handle: handle)
       } catch is McpFrameError {
         fail(65, "The MCP stream must contain bounded UTF-8 JSON objects, one per line.")
       } catch {
@@ -22,8 +24,12 @@ func relayMcp(
       }
     }
   }
-  pump(FileHandle.standardInput, toDriver, tail: false) { try? toDriver.close() }
-  pump(fromDriver, FileHandle.standardOutput, tail: true) {
+  pump(FileHandle.standardInput, toDriver, tail: false, handle: native.map { owner in { try owner.fromProvider($0) } }) {
+    native?.endInput()
+    try? toDriver.close()
+  }
+  pump(fromDriver, FileHandle.standardOutput, tail: true, handle: native.map { owner in { try owner.fromDriver($0) } }) {
+    native?.endInput()
     try? fromDriver.close()
     outputDrained.leave()
   }
@@ -108,14 +114,20 @@ func runMcp() -> Never {
   try? replies.fileHandleForWriting.close()
   signal(SIGPIPE, SIG_IGN)
   let terminal = NSLock()
+  let terminate: (Int32, String) -> Never = { code, reason in
+    terminal.lock()
+    kill(child, SIGKILL)
+    mcpFail(code, reason)
+  }
+  let driverWire = McpWire(requests.fileHandleForWriting, failure: { terminate($0, $1) })
+  let providerWire = McpWire(FileHandle.standardOutput, failure: { terminate($0, $1) })
+  let native = McpNativeSession(
+    driver: driverWire, provider: providerWire,
+    manifest: readNativeManifest(arguments[flag + 1]), fail: { terminate($0, $1) })
+  registerNativeMcpSession(native)
   let outputDrained = relayMcp(
     toDriver: requests.fileHandleForWriting, fromDriver: replies.fileHandleForReading,
-    fail: { code, reason in
-      // Fatal teardown wins over the child-exit waiter awakened by this kill.
-      terminal.lock()
-      kill(child, SIGKILL)
-      mcpFail(code, reason)
-    })
+    native: native, fail: terminate)
   // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
   // service ends the driver it started. The driver is waited on without reaping below, so
   // `child` names it for as long as this process runs.

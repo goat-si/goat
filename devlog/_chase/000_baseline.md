@@ -1,18 +1,21 @@
 # 000 — 기준선
 
+> T3 축의 기준선이다. Cua Driver 축은 [20_cua_baseline](./20_cua_baseline.md).
+
 > 갱신: 2026-10-24 (사이클 261024b 랜딩, PR #1118 → dev `eb2a07db0`. reviewed-through `2c592a108`)
 
 ## 현재 기준선
 
-| 항목                          | 값                                                                                                   |
-| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                    |
-| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                 |
-| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349) |
-| 스캔한 GOAT dev               | `eb2a07db0` Merge pull request #1118 (사이클 261024b)                                                |
-| GOAT 고유 커밋                | 2073                                                                                                 |
-| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                   |
-| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                          |
+| 항목                          | 값                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                        |
+| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                     |
+| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                     |
+| 스캔한 GOAT dev               | `eb2a07db0` Merge pull request #1118 (사이클 261024b)                                                                    |
+| GOAT 고유 커밋                | 2073                                                                                                                     |
+| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                       |
+| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                              |
+| Node 고정                     | 루트 `engines.node` `26.12.1`, 서버 `^24.16.0 \|\| >=26.1.0` ([10.011](./_fin/10/10.011_t3_chase_node_pin.md), PR #1587) |
 
 `de49d637d`(2026-10-10)가 GOAT가 갈라진 fork point다. upstream 머지가 dev에 들어갈 때마다 merge-base가 그 머지의
 upstream parent로 전진하고, 그 값이 다음 reviewed-through가 된다. 이 표는 `devlog/_chase/scan.sh` 출력의 요약이며,

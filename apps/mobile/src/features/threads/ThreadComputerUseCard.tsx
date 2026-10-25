@@ -2,6 +2,8 @@ import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/cont
 import {
   COMPUTER_USE_RUN_STATUS_LABELS,
   computerUseObservedTarget,
+  computerUseItemResult,
+  computerUseNeedsResultDetail,
   type ComputerUseRun,
   type ComputerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
@@ -20,6 +22,7 @@ import { ThreadMarkdownImage } from "./ThreadMarkdownImage";
 const STATUS_CLASS = {
   running: "text-foreground-muted",
   succeeded: "text-adaptive-emerald-600-400",
+  unsettled: "text-warning-foreground",
   failed: "text-adaptive-rose-600-400",
   denied: "text-warning-foreground",
   stopped: "text-foreground-subtle",
@@ -37,8 +40,10 @@ export function ThreadComputerUseCard(props: {
   readonly showScreenshots: boolean;
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
+  const wireOutput = props.row.item.type === "dynamic_tool" ? props.row.item.output : undefined;
   const detail = useTurnItemDetail(
-    props.showScreenshots && turnItemNeedsDetailFetch(props.row.item)
+    (props.showScreenshots || computerUseNeedsResultDetail(props.run, wireOutput)) &&
+      turnItemNeedsDetailFetch(props.row.item)
       ? { environmentId: props.environmentId, row: props.row }
       : null,
   );
@@ -48,13 +53,19 @@ export function ThreadComputerUseCard(props: {
   const target =
     (item.type === "dynamic_tool" ? computerUseObservedTarget(item.output) : null) ??
     props.run.target;
-  if (props.status === null && target === null && images.length === 0) return null;
+  const { status, note } = computerUseItemResult(
+    props.run,
+    props.status,
+    wireOutput,
+    fetched?.type === "dynamic_tool" ? fetched.output : undefined,
+  );
+  if (status === null && target === null && images.length === 0) return null;
   return (
     <View className="ml-7 gap-1.5 pb-1.5">
       <View className="flex-row items-center gap-2">
-        {props.status === null ? null : (
-          <Text className={`font-goat-medium text-xs ${STATUS_CLASS[props.status]}`}>
-            {COMPUTER_USE_RUN_STATUS_LABELS[props.status]}
+        {status === null ? null : (
+          <Text className={`font-goat-medium text-xs ${STATUS_CLASS[status]}`}>
+            {COMPUTER_USE_RUN_STATUS_LABELS[status]}
           </Text>
         )}
         {target === null ? null : (
@@ -63,6 +74,7 @@ export function ThreadComputerUseCard(props: {
           </Text>
         )}
       </View>
+      {note === null ? null : <Text className="text-xs text-foreground-muted">{note}</Text>}
       {images.length === 0 ? null : (
         <FilePreviewGallery
           value={images.map((resource) => ({

@@ -439,9 +439,22 @@ jobs:
 
       - name: Build CLI single-executable
         env:
-          # Exact version; keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts.
-          VP_NODE_VERSION: "26.8.2"
-        run: node apps/server/scripts/cli.ts build-exe --verbose
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Commits before the Node 26 pin declare a Node 24 range, which cannot run
+          # --build-sea. Stable promotion rebuilds such commits, so they take the exact
+          # pin from this workflow's revision instead.
+          pin="$(node -p 'require("./package.json").engines.node')"
+          if [[ ! "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            pinned="$RUNNER_TEMP/workflow-package.json"
+            curl -fsSL --retry 3 -o "$pinned" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+              "https://api.github.com/repos/goat-si/goat/contents/package.json?ref=$GITHUB_WORKFLOW_SHA"
+            VP_NODE_VERSION="$(node -p 'require(process.argv[1]).engines.node' "$pinned")"
+            export VP_NODE_VERSION
+          fi
+          node apps/server/scripts/cli.ts build-exe --verbose
 
       - name: Build CLI archive
         env:

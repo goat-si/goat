@@ -2,10 +2,12 @@ import "vite-plus/test/config";
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
 import { defaultInclude, defineConfig } from "vite-plus";
+import type { PackUserConfig } from "vite-plus/pack";
 
 import { isDesktopRuntimeExternalDependency } from "../../scripts/lib/desktop-external-packages.ts";
 import { resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { withDevElectronLaunch } from "./scripts/dev-electron-pack.ts";
 
 const repoEnv = loadRepoEnv();
 
@@ -15,6 +17,9 @@ const repoEnv = loadRepoEnv();
 const isMainProcessExternal = (id: string) =>
   id === "electron" || id.startsWith("electron/") || isDesktopRuntimeExternalDependency(id);
 const shouldLaunchElectronAfterPack = process.env.GOAT_DESKTOP_DEV === "1";
+// `vp run dev` launches Electron once the bundles build and relaunches it when their bytes change.
+const devElectronPack = (configs: PackUserConfig[]) =>
+  shouldLaunchElectronAfterPack ? withDevElectronLaunch(import.meta.dirname, configs) : configs;
 const publicConfigDefine = {
   __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
@@ -69,7 +74,7 @@ export default defineConfig({
       },
     },
   },
-  pack: [
+  pack: devElectronPack([
     {
       format: "cjs",
       outDir: "dist-electron",
@@ -85,7 +90,6 @@ export default defineConfig({
         neverBundle: isMainProcessExternal,
         onlyBundle: false,
       },
-      ...(shouldLaunchElectronAfterPack ? { onSuccess: "node scripts/dev-electron.mjs" } : {}),
     },
     {
       format: "cjs",
@@ -174,7 +178,7 @@ export default defineConfig({
       entry: ["src/mac-permission-preload.ts"],
       ...sandboxedPreload,
     },
-  ],
+  ]),
   test: {
     include: [...defaultInclude, "../../native/kde-snap-shot/src/*.test.ts"],
     alias: [

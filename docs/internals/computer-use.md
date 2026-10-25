@@ -471,8 +471,18 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Engine patches
 
-GOAT runs upstream Cua Driver and carries only small patches it needs and upstream lacks, each a
-separate file with its source and license recorded:
+GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split of trycua/cua
+`libs/cua-driver` at 0.37.0 that keeps upstream history, released as
+`cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
+Until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 release archives
+(`packages/shared/src/cuaDriverRelease.ts`). When the driver misbehaves, GOAT does not work around
+it: the fix lands in the fork, goes upstream as a pull request, and the problem is reported
+upstream. Upstream is synced on purpose: each range is reviewed for security and behavior,
+checked with `cargo deny`, and taken only after the 0.37.0 protocol-compatibility test and one
+live check per OS. The cycle runs on the Cua axis of `devlog/_chase` (#1609).
+
+The fork carries only small changes GOAT needs and upstream lacks, each its own reviewed change
+with its source, license and upstream issue or pull request recorded:
 
 - batched accessibility attribute reads with a prefetch pool (the largest speedup for big trees);
 - input cancellation with held-input release;
@@ -500,7 +510,15 @@ notice goes into the helper's third-party notices with them.
   nothing from their binaries, keys, names or reverse-engineered sources enters the repository,
   test fixtures included (#1161). Ego Lite's public harness is MIT and is used only as a naming
   and behavior reference.
-- Research behind this design lives outside the repository (notes L1–L5 and R1–R4 for the epic,
+- Orca (`stablyai/orca` at `d058e8f026`) was compared on 2026-10-25 (#1596). Orca's own code is
+  MIT (Lovecast Inc.); the third-party material it bundles keeps its own licenses (for example the
+  Geist font under OFL-1.1 and PCRE2 under BSD-3-Clause), and GOAT used none of it. GOAT takes
+  three ideas and none of its code or text: a short settle window before a fresh helper reports a
+  permission missing (#1597), NordPass, Proton Pass and 1Password for Safari in the
+  credential-store exclusions (#1598), and skill guidance on how to report an action whose effect
+  no read confirmed (#1599). It rejects Orca's TCC reset of the helper's grants and its
+  pattern-matched process kills.
+- Research behind this design lives outside the repository (notes L1–L5 and R1–R5 for the epic,
   a static analysis of the Codex computer use build 26.1016.51333, and a live probe of the Codex
   baseline). It is cited by name only.
 
