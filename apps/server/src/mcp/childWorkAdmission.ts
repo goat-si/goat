@@ -147,13 +147,27 @@ export const releaseChildWork = (
   admission: ChannelChildAdmission | undefined,
 ) => settleChildWork(childWork, admission, (child, record) => child.markReleased(record));
 
-/** reserved -> launched, at the destination the surface computes. */
-export const launchChildWork = (
+/**
+ * reserved -> launched, at the destination the surface computes, held in flight until the
+ * enclosing scope closes; the scope must cover the launch up to its commit. A refused claim
+ * fails, and the surface launches nothing: a task stop released the reservation, or the write
+ * failed and the still-reserved record is released here.
+ */
+export const launchChildWork = Effect.fn("childWorkAdmission.launchChildWork")(function* (
   childWork: Option.Option<ChannelChildWork.ChannelChildWork["Service"]>,
   admission: ChannelChildAdmission | undefined,
   destination: ChannelChildWorkDestination,
-) =>
-  settleChildWork(childWork, admission, (child, record) => child.markLaunched(record, destination));
+) {
+  if (admission === undefined || childWork._tag === "None") return;
+  if (yield* childWork.value.claimLaunch(admission.record, destination)) return;
+  yield* childWork.value.releaseReserved(admission.record);
+  return yield* new OrchestratorMcpFailure({
+    code: "orchestration_error",
+    message:
+      "The launch could not claim its reserved slot (the work was stopped, or the record could" +
+      " not be written), so nothing was launched.",
+  });
+});
 
 /** A remote launch's destination is always the record-derived correlation id plus its host. */
 export const launchRemoteChildWork = (
@@ -161,12 +175,12 @@ export const launchRemoteChildWork = (
   admission: ChannelChildAdmission | undefined,
   host: string,
 ) =>
-  settleChildWork(childWork, admission, (child, record) =>
-    child.markLaunched(record, {
-      correlationId: childWorkCorrelationIdFor(record.childWorkId),
-      host,
-    }),
-  );
+  launchChildWork(childWork, admission, {
+    ...(admission === undefined
+      ? {}
+      : { correlationId: childWorkCorrelationIdFor(admission.record.childWorkId) }),
+    host,
+  });
 
 /** The destination accepted the work; without one, the launch-time destination stands. */
 export const bindChildWork = (

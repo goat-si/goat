@@ -337,6 +337,34 @@ describe("LinuxHelperHost (#1223)", () => {
   );
 
   it.effect(
+    "a helper that stops answering is no longer reported authenticated, nor its grants proven (#1514)",
+    () =>
+      Effect.gen(function* () {
+        let checks = 0;
+        const t = yield* hostWith([], {
+          override: (request) =>
+            request.method !== "permissions"
+              ? undefined
+              : ++checks > 1
+                ? { outcome: "refused", reason: "busy", message: "busy" }
+                : { ...READY, platform: { linux: { displayServer: "x11" } } },
+        });
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        const first = yield* Queue.take(t.safety);
+        yield* TestClock.adjust(30_000);
+        const downgraded = yield* Queue.take(t.safety);
+        const before = first.type === "cuaReadiness" ? first.readiness : undefined;
+        const after = downgraded.type === "cuaReadiness" ? downgraded.readiness : undefined;
+        assert.strictEqual(before?.helper, "authenticated");
+        assert.strictEqual(after?.helper, "unauthenticated");
+        assert.deepEqual(after?.grants, { accessibility: "unknown", screenCapture: "unknown" });
+        // What the helper last said about the session stays, so the guide can still name it.
+        assert.deepEqual(after?.platform, before?.platform);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
     "a stopped daemon stops its helper within a check, even with a request waiting (#1494 r1)",
     () =>
       Effect.gen(function* () {

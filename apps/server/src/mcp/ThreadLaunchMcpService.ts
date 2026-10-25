@@ -542,6 +542,7 @@ const make = Effect.gen(function* () {
                     ),
                   ),
             (route) =>
+              // The child-work claim holds this launch in flight until the scope closes.
               Effect.gen(function* () {
                 yield* launchChildWork(channelChildWork, admission, { threadId });
                 const admitted = yield* permissions
@@ -764,7 +765,7 @@ const make = Effect.gen(function* () {
                     ? {}
                     : { report: { correlationId: report.correlationId } }),
                 };
-              }),
+              }).pipe(Effect.scoped),
             (route) =>
               routeKept || route.webhookTarget === null
                 ? Effect.void

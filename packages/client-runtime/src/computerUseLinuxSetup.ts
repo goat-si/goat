@@ -249,17 +249,33 @@ function inputStep(readiness: ComputerUseReadiness): ComputerUseSetupStep | unde
   };
 }
 
-function helperStep(readiness: ComputerUseReadiness): ComputerUseSetupStep | undefined {
+function helperStep(
+  readiness: ComputerUseReadiness,
+  machine: string,
+): ComputerUseSetupStep | undefined {
   if (readiness.helper === "authenticated") return undefined;
+  if (readiness.helper === "incompatible")
+    return {
+      id: "helper",
+      status: "action",
+      title: "Update GOAT",
+      detail:
+        "This GOAT and its computer use helper speak different versions. Update GOAT on that machine.",
+      guidance: [],
+    };
+  // The server reports an unconfirmed helper when it stops answering, with that as the reason.
   return {
     id: "helper",
     status: "action",
-    title: readiness.helper === "incompatible" ? "Update GOAT" : "Computer use helper",
-    detail:
-      readiness.helper === "incompatible"
-        ? "This GOAT and its computer use helper speak different versions. Update GOAT on that machine."
-        : "GOAT could not confirm its computer use helper. Reinstall or update GOAT on that machine.",
-    guidance: [],
+    title: "Computer use helper",
+    detail: readiness.reasons[0] ?? "GOAT could not confirm its computer use helper.",
+    guidance: [
+      text(
+        "GOAT checks the helper again shortly. If this stays, restart GOAT on " +
+          machine +
+          "; if it still fails, reinstall or update GOAT there.",
+      ),
+    ],
   };
 }
 
@@ -277,15 +293,18 @@ export function linuxComputerUseSetup(
   machine: string,
 ): ComputerUseSetup {
   const steps: ComputerUseSetupStep[] = [];
-  const helper = helperStep(readiness);
+  // Without a confirmed helper nothing below was checked, so it is not judged.
+  const helper = helperStep(readiness, machine);
   if (helper) steps.push(helper);
-  const session = sessionStep(readiness, machine);
-  steps.push(session);
-  // Without a session there is nothing for the other steps to talk about.
-  if (session.status === "done") {
-    steps.push(accessibilityStep(readiness), captureStep(readiness));
-    const input = inputStep(readiness);
-    if (input) steps.push(input);
+  else {
+    const session = sessionStep(readiness, machine);
+    steps.push(session);
+    // Without a session there is nothing for the other steps to talk about.
+    if (session.status === "done") {
+      steps.push(accessibilityStep(readiness), captureStep(readiness));
+      const input = inputStep(readiness);
+      if (input) steps.push(input);
+    }
   }
   for (const blocker of readiness.blockers)
     steps.push({

@@ -147,8 +147,7 @@ export const reportLayer = HttpRouter.add(
       const outcome = yield* leases.humanInput(
         threadId,
         value.controlId,
-        value.humanInput.at,
-        value.humanInput.source,
+        Array.isArray(value.humanInput) ? value.humanInput : [value.humanInput],
       );
       // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
       // keeps reporting after a 202 (another agent's input) or a 409.

@@ -377,3 +377,31 @@ it("does not call input unsupported while the helper has not confirmed itself ye
   // A confirmed helper in a session without input still says so.
   expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
 });
+
+// The server's readiness after a check the Linux helper did not answer (#1514).
+const UNANSWERED_REASON =
+  "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
+const unanswered: ComputerUseReadiness = {
+  grants: { accessibility: "unknown", screenCapture: "unknown" },
+  helper: "unauthenticated",
+  capture: "unavailable",
+  tree: "unavailable",
+  input: "unavailable",
+  blockers: [],
+  reasons: [UNANSWERED_REASON],
+  platform: { linux: { displayServer: "x11" } },
+};
+
+it("a Linux helper that stopped answering names that one cause and proves no later step (#1514)", () => {
+  const result = view(unanswered, "linux", "available");
+  const [grants, helper, capture, tools] = result.steps;
+  expect(helper?.state).not.toBe("ok");
+  expect(helper?.detail).toContain(UNANSWERED_REASON);
+  expect(capture?.detail).not.toContain(UNANSWERED_REASON);
+  // Nothing was found unsupported; the helper did not answer.
+  expect(result.steps.map((step) => step.state)).not.toContain("unsupported");
+  expect(capture?.detail.join(" ")).not.toContain("Check accessibility access");
+  expect(tools?.state).not.toBe("ok");
+  expect(grants?.grants.map((row) => row.detail.join(" "))).not.toContain("Access granted.");
+  expect(result.ready).toBe(false);
+});

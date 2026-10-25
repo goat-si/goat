@@ -17,6 +17,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import type { NamedWindow } from "./x11WindowPlacement.ts";
+import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
 
@@ -74,6 +75,8 @@ export const harness = Effect.fn(function* (
     readonly acceptHuman?: () => boolean;
     /** Holds every report of a person's input until it is done, as a slow server would. */
     readonly humanGate?: Deferred.Deferred<void>;
+    /** How long each report of a person's input takes, on the TestClock, as a slow server's. */
+    readonly reportDelay?: number;
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
@@ -91,10 +94,11 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const humanBatches: Array<{ readonly at: number; readonly sources: ReadonlyArray<string> }> = [];
   const taken = yield* Queue.unbounded<string>();
   const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
-  const hidFeeds: Array<Queue.Queue<{ source: ComputerUseHumanInputSource; at: number }>> = [];
+  const hidFeeds: Array<Effect.Success<ReturnType<typeof makeHelperInputFeed>>> = [];
   const reservations: Array<ComputerUseCallReservation> = [];
   const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
@@ -129,8 +133,22 @@ export const harness = Effect.fn(function* (
         }),
     ...(options.humanInput
       ? {
-          onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
-            Queue.offer(people, input.source).pipe(
+          onHumanInput: (
+            events: ReadonlyArray<{ source: ComputerUseHumanInputSource; at: number }>,
+          ) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map(
+                (at) => void humanBatches.push({ at, sources: events.map((e) => e.source) }),
+              ),
+              Effect.andThen(
+                options.reportDelay === undefined ? Effect.void : Effect.sleep(options.reportDelay),
+              ),
+              Effect.andThen(
+                Queue.offerAll(
+                  people,
+                  events.map((event) => event.source),
+                ),
+              ),
               Effect.andThen(
                 options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
               ),
@@ -162,12 +180,11 @@ export const harness = Effect.fn(function* (
       };
       drivers.push(driver);
       yield* Queue.offer(started, driver);
-      // Bounded and sliding like the CLI's (ComputerUseLeaseProxyCli.ts): events the proxy does
-      // not take in time are lost there.
-      const hid = yield* Queue.sliding<{ source: ComputerUseHumanInputSource; at: number }>(16);
+      // The CLI's own feed (ComputerUseLeaseProxyCli.ts).
+      const hid = yield* makeHelperInputFeed();
       hidFeeds.push(hid);
       return {
-        ...(options.humanInput ? { humanInput: Stream.fromQueue(hid) } : {}),
+        ...(options.humanInput ? { humanInput: hid.events } : {}),
         send: (line: string) =>
           Effect.sync(() => {
             const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
@@ -265,11 +282,13 @@ export const harness = Effect.fn(function* (
         const feed = hidFeeds.at(-1);
         if (feed === undefined) return Effect.void;
         return Clock.currentTimeMillis.pipe(
-          Effect.flatMap((now) => Queue.offer(feed, { source, at: now - ageMs })),
+          Effect.map((now) => feed.offer({ source, at: now - ageMs })),
         );
       }),
     /** The next person's input the proxy reported to the server. */
     person: Queue.take(people),
+    /** How many events each report of a person's input carried, in order. */
+    humanBatches: Effect.sync(() => [...humanBatches]),
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
     agentCallsQueued: Queue.size(agentCalls),
