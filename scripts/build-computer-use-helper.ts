@@ -326,6 +326,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      path.join(sourceDir, "DriverEnvironment.swift"),
       path.join(sourceDir, "McpRelay.swift"),
       path.join(sourceDir, "McpFraming.swift"),
       path.join(sourceDir, "McpJsonSyntax.swift"),

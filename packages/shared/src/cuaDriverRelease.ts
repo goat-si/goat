@@ -1,6 +1,7 @@
-// The SDK and executable use a private protocol; bump the catalog pin with this manifest, and the
-// Cua Driver notice version and files in third-party-licenses.config.json with both.
-const CUA_DRIVER_VERSION = "0.37.0";
+// #1591: replace this version with 0.37.0-goat.1 and the five archive triples below together
+// after the fork release is published and verified. These are still the upstream pins; the
+// fork download URL is prepared, but these values cannot install the unpublished release.
+export const CUA_DRIVER_VERSION = "0.37.0";
 
 /** The macOS helper app that owns computer use's TCC identity (Contents/Helpers in GOAT.app). */
 export const COMPUTER_USE_HELPER_NAME = "GOAT Computer Use";
@@ -61,7 +62,7 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
     version: CUA_DRIVER_VERSION,
     ...archive,
     format: platform === "win32" ? "zip" : "tar.gz",
-    url: `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
+    url: `https://github.com/goat-si/cua-driver/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
     executable,
     requiredFiles: [
       executable,
@@ -81,13 +82,13 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
   };
 }
 
-// The embedded host clears the driver's environment and rejects names outside its allowlist, so
-// DO_NOT_TRACK and CUA_TELEMETRY cannot be forwarded. These allowlisted switches override any
-// inherited value and turn off the driver's default-on telemetry and GitHub update check.
+// Direct launches force these values over inherited tuning, including the fork's switch that
+// prevents Apple's screencapture tool from requesting audio access under the helper's identity.
 const CUA_DRIVER_PRIVACY_ENVIRONMENT = [
   { name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_TELEMETRY_ENABLED", value: "false" },
   { name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" },
+  { name: "CUA_DRIVER_DISABLE_SCREENCAPTURE", value: "1" },
 ] as const;
 
 /**
@@ -104,6 +105,8 @@ export const CUA_DRIVER_PROBED_SESSION_NAMES = ["DBUS_SESSION_BUS_ADDRESS"] as c
  * launcher that reviewed the file it just wrote.
  * `display` carries the screen a server started over SSH must reach (DISPLAY, XAUTHORITY, the
  * D-Bus session bus), all on the embedded allowlist. The privacy switches always win.
+ * npm SDK 0.37.0 rejects CUA_DRIVER_DISABLE_SCREENCAPTURE at construction, so only direct
+ * launches (including the native helper) can disable screencapture with this SDK pin.
  * `withheld` names the daemon must not inherit when `display` does not set them.
  */
 export function cuaDriverHostOptions(
@@ -132,7 +135,9 @@ export function cuaDriverHostOptions(
       ...withheld
         .filter((name) => !supplied.has(name.toUpperCase()))
         .map((name) => ({ name, value: "" })),
-      ...CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
+      ...CUA_DRIVER_PRIVACY_ENVIRONMENT.filter(
+        (variable) => variable.name !== "CUA_DRIVER_DISABLE_SCREENCAPTURE",
+      ).map((variable) => ({ ...variable })),
     ],
     inheritStderr: true,
     noOverlay: false,
