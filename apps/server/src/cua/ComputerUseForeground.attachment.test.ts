@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@goat/contracts";
+import { ProviderDriverKind, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -59,6 +59,8 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
   fullAccess: boolean,
   liveUpdates = true,
   agentInputGate?: Deferred.Deferred<void>,
+  /** A run a person started, attached in place of GOAT Bot's unattended turn. */
+  person?: RunId,
 ) {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const sql = yield* SqlClient.SqlClient;
@@ -86,7 +88,9 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     runtimeMode: fullAccess ? "full-access" : "auto",
     interactionMode: "default",
     readOnly: false,
-    origin: { _tag: "unattended", reason: "goat_bot" },
+    origin:
+      person === undefined ? { _tag: "unattended", reason: "goat_bot" } : { _tag: "interactive" },
+    ...(person === undefined ? {} : { runId: person, personStarted: true }),
     leases: Option.some({
       ...leases,
       proxy: { command: "/fixture/node", entrypoint: "/fixture/proxy" },
@@ -507,5 +511,72 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "background" }));
         assert.equal((yield* h.nextToDriver).id, 2);
       }).pipe(Effect.provide(layer(true))),
+  );
+
+  it.effect(
+    "a person's full access run brings apps forward and runs scripts without approval",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        // The host's unattended setting is off: full access alone admits a person's run.
+        const { h } = yield* attach(true, true, undefined, RunId.make("run:person"));
+        yield* h.send(call(1, "launch_app", { bundle_id: "com.apple.calculator" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        const reserved = yield* h.nextReservation;
+        assert.match(
+          reserved.action === "reserve" ? (reserved.foregroundGrantId ?? "") : "",
+          /^full-access:/,
+        );
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 1);
+        yield* h.nextReservation;
+        yield* h.send(call(2, "run_script", { script: "press 7 x 6 =" }));
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }).pipe(Effect.provide(layer(false))),
+  );
+
+  it.effect.each(["pause", "private", "stop"] as const)(
+    "a %s leaves the same run without full access foreground; the next run has it",
+    (interruption) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const first = RunId.make("run:first");
+        const { attachment, leases } = yield* attach(true, true, undefined, first);
+        const focus = (controlId: string) =>
+          leases
+            .controlState(threadId, controlId)
+            .pipe(Effect.map((state) => (state._tag === "active" ? (state.foreground ?? []) : [])));
+        assert.lengthOf(yield* focus(attachment.control.controlId), 1);
+        if (interruption === "pause") {
+          yield* leases.pause("takeover");
+          yield* leases.resume;
+        } else if (interruption === "private") {
+          yield* leases.pause("private");
+          yield* leases.resume;
+        } else yield* leases.stop(threadId);
+        // The same run attaching again, as a reattach or rotation does, does not get it back.
+        const again = yield* attach(true, true, undefined, first);
+        assert.deepEqual(yield* focus(again.attachment.control.controlId), []);
+        assert.isFalse(yield* leases.foregroundAvailable(threadId, "anything"));
+        const next = yield* attach(true, true, undefined, RunId.make("run:second"));
+        assert.lengthOf(yield* focus(next.attachment.control.controlId), 1);
+        assert.isTrue(yield* leases.foregroundAvailable(threadId, "anything"));
+      }).pipe(Effect.provide(layer(false))),
+  );
+
+  it.effect("full access foreground still yields the screen to another thread's grant", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const { h } = yield* attach(true, true, undefined, RunId.make("run:shared"));
+      yield* foregroundGrant(ThreadId.make("thread:other-app"), "handoff:other-app", {
+        foreground: false,
+        minutes: 10,
+        apps: ["com.example.Other"],
+      });
+      yield* h.send(call(1, "bring_to_front", { pid: 42, window_id: 7 }));
+      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(result.structuredContent.detail, "screen_shared");
+      assert.equal(yield* h.driverQueued, 0);
+    }).pipe(Effect.provide(layer(false))),
   );
 });

@@ -494,8 +494,8 @@ function ServerSettingsDetail(props: {
                       <>
                         <SettingsSwitchRow
                           icon="desktopcomputer"
-                          label="Full access without approval"
-                          subtitle="Threads in full access mode use every app on these computers without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them."
+                          label="Unattended work without approval"
+                          subtitle="Scheduled tasks, GOAT Bot and other unattended work in full access mode use every app on these computers without asking. Threads you direct in full access mode never ask. Stop and turning computer use off still end them."
                           value={uniform("cuaFullAccessAutoAdmit")}
                           disabled={disabledFor("cuaFullAccessAutoAdmit")}
                           onValueChange={(value) => write({ cuaFullAccessAutoAdmit: value })}

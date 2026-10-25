@@ -1,10 +1,13 @@
 import { OrchestratorMcpFailure } from "@goat/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import { requestComputerUse } from "../../../cua/ComputerUseRequests.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { ComputerUseToolkit } from "./tools.ts";
+
+const WAIT_FOR_ANSWER = Duration.minutes(10);
 
 export const layer = McpToolAccess.toLayer(ComputerUseToolkit, {
   goat_computer_use_request: McpToolAccess.actsAsCaller((input) =>
@@ -18,6 +21,8 @@ export const layer = McpToolAccess.toLayer(ComputerUseToolkit, {
         threadId: caller.thread.threadId,
         providerInstanceId: caller.thread.providerInstanceId,
         request: input,
+        // Like the other GOAT waits for a person, bounded well inside providers' tool timeouts.
+        wait: WAIT_FOR_ANSWER,
       }).pipe(
         Effect.mapError(
           (cause) =>

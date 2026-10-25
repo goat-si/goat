@@ -272,7 +272,9 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           assert.equal(after?.helper, "unauthenticated");
           assert.isTrue(
             (after?.reasons ?? []).some((reason) =>
-              how === "absent" ? /could not be found/.test(reason) : /cannot be used/.test(reason),
+              how === "absent"
+                ? (platform === "darwin" ? /does not include/ : /could not be found/).test(reason)
+                : /cannot be used/.test(reason),
             ),
           );
         }),
@@ -306,8 +308,10 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
   it.effect("a driver GOAT runs itself never counts as the helper running", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
         const test = yield* fixture({
           platform: "darwin",
+          isPackaged: false,
           helper: { granted: true },
           tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
         });
@@ -409,6 +413,35 @@ describe("DesktopCuaDriver readiness on Windows", () => {
 });
 
 describe("DesktopCuaDriver when the helper cannot be used", () => {
+  it.effect(
+    "disables packaged macOS without its helper instead of using GOAT's identity (#1202)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+          const test = yield* fixture({ platform: "darwin", isPackaged: true });
+          yield* test.request("agent");
+          const report = yield* test.next;
+          assert.equal(report.status, "unavailable");
+          assert.include(
+            report.status === "unavailable" ? (report.message ?? "") : "",
+            "This build does not include GOAT Computer Use",
+          );
+          const result = yield* test.verify;
+          assert.isFalse(result.verified);
+          assert.include(
+            result.steps[0]?.detail ?? "",
+            "This build does not include GOAT Computer Use",
+          );
+          yield* test.requestApps("apps");
+          assert.equal((yield* test.nextApps).status, "unavailable");
+          assert.isEmpty(test.constructors);
+          assert.isEmpty(test.helperLaunches);
+          assert.deepEqual(test.counts(), { starts: 0, stops: 0, destroys: 0 });
+        }),
+      ),
+  );
+
   it.effect("keeps computer use off instead of running it under GOAT's own grants", () =>
     Effect.scoped(
       Effect.gen(function* () {

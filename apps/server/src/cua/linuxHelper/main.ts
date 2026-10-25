@@ -104,6 +104,8 @@ const helper = makeLinuxHelper({
     }),
   secureFocus,
   capture,
+  // This helper's driver keeps the Hyprland instance; the agents' embedded daemon drops it.
+  agentLacksHyprland: (driverEnvironment.HYPRLAND_INSTANCE_SIGNATURE ?? "").trim() !== "",
   uinputWritable: () =>
     NodeFS.promises.access("/dev/uinput", NodeFS.constants.W_OK).then(
       () => true,

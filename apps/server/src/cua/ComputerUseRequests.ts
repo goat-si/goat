@@ -12,17 +12,22 @@ import {
   type ComputerUseRequestInput,
   type ComputerUseRequestResult,
   cuaAgentBlockMessage,
+  type Handoff,
+  handoffSummary,
   type ProviderInstanceId,
   type ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import type { ComputerUseAnswer } from "../handoffs/computerUseContinuations.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { computerUseOrigin, projectionOriginReads } from "./ComputerUseOrigin.ts";
@@ -63,6 +68,12 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
   readonly request: ComputerUseRequestInput;
+  /**
+   * How long this call waits in its turn for a person's answer. Without it, or when this turn
+   * has no cua-driver tools to go on with, the call returns at once and the answer wakes the
+   * thread instead.
+   */
+  readonly wait?: Duration.Duration;
 }) {
   const foreground = input.request.foreground === true;
   const wanted = input.request.apps;
@@ -102,6 +113,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: cuaAgentBlockMessage(block),
     } satisfies ComputerUseRequestResult;
   if (wanted !== undefined) {
+    // Credential stores stay out whether or not the host can list its apps (#1598).
+    const excluded = wanted.filter(isExcludedCuaApplication);
+    if (excluded.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        unknownApps: excluded,
+        message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
+      } satisfies ComputerUseRequestResult;
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {
       const known = new Set(listed.value.map((app) => app.toLowerCase()));
@@ -130,12 +150,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       }`,
     } satisfies ComputerUseRequestResult;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const view = yield* threads.getThreadSnapshot(input.threadId);
+  // The run this call is part of; a queued run behind it has not started.
+  const run = ThreadManagement.latestActiveRun(view.projection);
   const origin = yield* computerUseOrigin(
     projectionOriginReads({
       getThreadRecords: (id, fields, filter) => threads.getThreadRecords(id, fields, filter),
       channelOrigin: leases.channelOrigin,
     }),
-    { threadId: input.threadId },
+    { threadId: input.threadId, ...(run === undefined ? {} : { runId: run.id }) },
   );
   const detection = yield* leases.detection;
   if (origin._tag === "unattended" && !detection.privateMode)
@@ -144,6 +167,22 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       reason: "detection_unsupported",
       message:
         "This host cannot yet tell when a person types a secret, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
+    } satisfies ComputerUseRequestResult;
+  // This run's own control, while an agent can act through it.
+  const current = Option.filter(
+    yield* leases.attached(input.threadId),
+    (control) => run !== undefined && control.runId === run.id,
+  );
+  if (
+    Option.isSome(current) &&
+    current.value.everyApp &&
+    (!foreground || (yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
+  )
+    return {
+      kind: "available",
+      message: foreground
+        ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
+        : "This thread runs in full access: this turn can act on every app without approval.",
     } satisfies ComputerUseRequestResult;
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
@@ -163,8 +202,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
-  const view = yield* threads.getThreadSnapshot(input.threadId);
-  const run = view.projection.runs.at(-1);
   if (!run || run.rootNodeId === null)
     return {
       kind: "refused",
@@ -214,6 +251,42 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   });
   // A repeated request returns the pending handoff with its original expiry.
   const approvedUntil = DateTime.formatIso(handoff.expiresAt ?? expiresAt);
+  if (input.wait !== undefined && origin._tag === "interactive" && Option.isSome(current)) {
+    const controlId = current.value.controlId;
+    // Under the Handoffs lock: whether this turn can still use the answer it is given.
+    const settle = Effect.fn("ComputerUse.settleAnswer")(
+      function* (resolved: Handoff) {
+        const { runs } = yield* threads.getThreadRecords(input.threadId, ["runs"], {
+          runIds: [run.id],
+        });
+        const live = runs.find((candidate) => candidate.id === run.id);
+        if (live === undefined || !ThreadManagement.isActiveRun(live)) return false;
+        if (resolved.state !== "completed") return true;
+        const now = yield* leases.attached(input.threadId);
+        if (Option.isNone(now) || now.value.controlId !== controlId) return false;
+        if (foreground)
+          return yield* leases.foregroundAvailable(input.threadId, input.request.purpose);
+        const state = yield* leases.controlState(input.threadId, controlId);
+        if (state._tag !== "active") return false;
+        const held = state.apps;
+        if (held === undefined) return true;
+        return (
+          wanted !== undefined &&
+          wanted.every((app) => held.some((name) => name.toLowerCase() === app.toLowerCase()))
+        );
+      },
+      Effect.orElseSucceed(() => false),
+    );
+    const answer = yield* handoffs.awaitComputerUseAnswer(
+      {
+        threadId: input.threadId,
+        handoffId: handoff.handoffId,
+        until: DateTime.add(yield* DateTime.now, { milliseconds: Duration.toMillis(input.wait) }),
+      },
+      settle,
+    );
+    return answered(answer, { wanted, foreground, approvedUntil });
+  }
   return {
     kind: "needs_human",
     handoff,
@@ -222,3 +295,74 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     message: `A person must approve this in a GOAT app; a reply in a chat channel does not count. If they approve before ${approvedUntil}, your next turn in this thread has the cua-driver tools until then. End this turn now.`,
   } satisfies ComputerUseRequestResult;
 });
+
+/** What the waiting call tells the agent about the answer it got, or did not get. */
+const answered = (
+  answer: ComputerUseAnswer,
+  asked: {
+    readonly wanted: ReadonlyArray<string> | undefined;
+    readonly foreground: boolean;
+    readonly approvedUntil: string;
+  },
+): ComputerUseRequestResult => {
+  const { handoff, usable } = answer;
+  const refused = (
+    reason: "declined" | "cancelled" | "expired" | "superseded" | "interrupted",
+    message: string,
+  ) => ({ kind: "refused", reason, message }) satisfies ComputerUseRequestResult;
+  switch (handoff.state) {
+    case "completed": {
+      if (!usable)
+        return refused(
+          "interrupted",
+          "A person approved this, but this turn's computer use was stopped, paused or replaced meanwhile. Do not act on the screen in this turn; a later turn has the approval while it lasts.",
+        );
+      const until =
+        handoff.expiresAt === null ? asked.approvedUntil : DateTime.formatIso(handoff.expiresAt);
+      const scope = asked.wanted === undefined ? "the whole screen" : asked.wanted.join(", ");
+      return {
+        kind: "available",
+        message: asked.foreground
+          ? "A person approved foreground input for this purpose until " +
+            until +
+            ". Go on in this turn; tell the person first that the screen may briefly be taken and returned. Pause, Stop or the end of this turn needs a new approval."
+          : "A person approved " +
+            scope +
+            " until " +
+            until +
+            ". Go on in this turn: the cua-driver tools can act on it now.",
+      };
+    }
+    case "declined":
+      return refused(
+        "declined",
+        "A person declined this request. Do not act on these apps; tell the person what you could not do, or ask what to do instead.",
+      );
+    case "cancelled":
+      return handoff.actor.type === "agent"
+        ? refused(
+            "superseded",
+            "A newer request from this thread replaced this one; its answer is the one that counts.",
+          )
+        : refused(
+            "cancelled",
+            "A person cancelled this request without approving it. Ask again only if the person still wants it.",
+          );
+    case "expired":
+      return refused(
+        "expired",
+        "This request expired without an answer. Ask again only if the person still wants it.",
+      );
+    default:
+      return {
+        kind: "needs_human",
+        handoff: handoffSummary(handoff),
+        waitTimedOut: true,
+        next: { after: "approval", call: "goat_computer_use_request" },
+        message:
+          "No answer yet. The request stays open until " +
+          asked.approvedUntil +
+          "; call goat_computer_use_request again with the same arguments to keep waiting, or end this turn and GOAT wakes this thread when a person answers.",
+      };
+  }
+};

@@ -269,7 +269,17 @@ export function computerUseReadinessSteps({
             } as const)
           : windowsUnchecked && readiness.tree === "unavailable"
             ? ({ state: "pending", detail: WINDOWS_TREE_UNCHECKED } as const)
-            : treeCopy[readiness.tree],
+            : // On Linux the grant means AT-SPI answered; there, an unavailable tree means the
+              // driver will not show agents the app's windows (#1610). Elsewhere a granted OS
+              // permission proves no such read.
+              readiness.tree === "unavailable" &&
+                readiness.grants.accessibility === "granted" &&
+                readiness.platform?.linux !== undefined
+              ? ({
+                  state: "unsupported",
+                  detail: "Accessibility answers, but agents cannot read app controls here.",
+                } as const)
+              : treeCopy[readiness.tree],
         unconfirmed && readiness.input === "unavailable"
           ? ({
               state: "unknown",

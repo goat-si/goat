@@ -1085,14 +1085,20 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/resources/cua-driver/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
-export const MAC_FILE_EXCLUSIONS = [
+const WINDOWS_PTY_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
   "!**/node_modules/node-pty/third_party/conpty/**/*",
+] as const;
+export const MAC_FILE_EXCLUSIONS = [
+  ...WINDOWS_PTY_FILE_EXCLUSIONS,
+  // macOS uses helper stdio for both agents and readiness, never the SDK's native runtime.
+  "!**/node_modules/@trycua/cua-driver/**/*",
+  "!**/node_modules/@trycua/cua-driver-*/**/*",
 ] as const;
 // Linux builds node-pty from source, so every prebuild in the package is for
 // another platform (58 MB of it Windows debug symbols).
 export const LINUX_FILE_EXCLUSIONS = [
-  ...MAC_FILE_EXCLUSIONS,
+  ...WINDOWS_PTY_FILE_EXCLUSIONS,
   "!**/node_modules/node-pty/prebuilds/darwin-*/**/*",
 ] as const;
 
@@ -3173,12 +3179,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ? { asar: { smartUnpack: false }, asarUnpack: [WINDOWS_NATIVE_ASAR_UNPACK_GLOB] }
       : {
           asarUnpack: [
-            "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
+            ...(platform === "linux"
+              ? ["**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}"]
+              : []),
             "**/node_modules/@ubjs/node-*/**/*.node",
           ],
         }),
     extraResources: [
-      ...DESKTOP_EXTRA_RESOURCES,
+      ...DESKTOP_EXTRA_RESOURCES.filter(
+        (resource) => platform !== "mac" || resource.to !== "cua-driver",
+      ),
       ...(computerUseHelperPath
         ? [{ from: computerUseHelperPath, to: "../Helpers/GOAT Computer Use.app" }]
         : []),

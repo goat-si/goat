@@ -38,14 +38,14 @@ provider (Codex, Claude, ...)
   stdio process that owns the driver runtime and listens on nothing, so no provider and no other
   process of the user ever gets a socket path. Spawned by the helper it reports host attribution
   and the helper as its parent application, exactly as `serve --embedded` does. Agent calls reach
-  it only through the helper, which brokers them in the #1207 envelope. The first helper
-  (#1211) still starts `serve --embedded` on a host-chosen socket; signed helper builds stay blocked
-  until the broker replaces it (#1202).
+  it only through the helper, which brokers them in the #1207 envelope. Signed desktop artifacts
+  carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
-  runs it through the helper when the build has one (`apps/desktop/src/cua/DesktopCuaDriver.ts`).
+  requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
+  without it keeps computer use off. Unpackaged development can use `GOAT_CUA_DRIVER_PATH`.
   A standalone server on a Mac reports computer use unavailable, because its launch chain ends at a
   terminal or a launchd job (#1174). Windows and Linux servers launch their platform helper
   directly.
@@ -57,9 +57,6 @@ provider (Codex, Claude, ...)
   revoke do not stop a running `run_script`, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Current state, not the design: the first helper (#1211) runs one `serve --embedded` daemon that
-  every session shares, and Stop behaves as ADR-0022 describes: only a leased turn's proxy kills
-  its `cua-driver mcp` client.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the
@@ -471,8 +468,18 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Engine patches
 
-GOAT runs upstream Cua Driver and carries only small patches it needs and upstream lacks, each a
-separate file with its source and license recorded:
+GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split of trycua/cua
+`libs/cua-driver` at 0.37.0 that keeps upstream history, released as
+`cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
+Until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 release archives
+(`packages/shared/src/cuaDriverRelease.ts`). When the driver misbehaves, GOAT does not work around
+it: the fix lands in the fork, goes upstream as a pull request, and the problem is reported
+upstream. Upstream is synced on purpose: each range is reviewed for security and behavior,
+checked with `cargo deny`, and taken only after the 0.37.0 protocol-compatibility test and one
+live check per OS. The cycle runs on the Cua axis of `devlog/_chase` (#1609).
+
+The fork carries only small changes GOAT needs and upstream lacks, each its own reviewed change
+with its source, license and upstream issue or pull request recorded:
 
 - batched accessibility attribute reads with a prefetch pool (the largest speedup for big trees);
 - input cancellation with held-input release;

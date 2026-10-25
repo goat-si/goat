@@ -44,6 +44,8 @@ export interface LinuxHelperDependencies {
   readonly startDriver: () => Promise<DriverClient>;
   readonly secureFocus: (pid: number) => Promise<SecureFocus>;
   readonly capture: CaptureRoute;
+  /** See readLinuxReadiness: this helper's driver has a Hyprland instance agents' does not. */
+  readonly agentLacksHyprland?: boolean;
   readonly uinputWritable: () => Promise<boolean>;
   /** Waits for an action's effect to reach the accessibility tree before it is read back. */
   readonly settle: () => Promise<void>;
