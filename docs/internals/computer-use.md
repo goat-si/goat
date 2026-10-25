@@ -45,7 +45,8 @@ provider (Codex, Claude, ...)
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
-  runs it through the helper when the build has one (`apps/desktop/src/cua/DesktopCuaDriver.ts`).
+  requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
+  without it keeps computer use off. Unpackaged development can use `GOAT_CUA_DRIVER_PATH`.
   A standalone server on a Mac reports computer use unavailable, because its launch chain ends at a
   terminal or a launchd job (#1174). Windows and Linux servers launch their platform helper
   directly.

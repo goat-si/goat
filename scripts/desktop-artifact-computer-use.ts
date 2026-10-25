@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Hashes the Cua Driver archive while it streams.
-// The computer use payload of a desktop artifact: the Cua Driver GOAT runs in-process, and on
-// macOS the "GOAT Computer Use.app" helper embedded in GOAT.app (ADR-0023).
+// The computer use payload: an in-process Cua Driver on Windows/Linux, and only the
+// "GOAT Computer Use.app" helper on macOS (ADR-0023).
 import * as NodeCrypto from "node:crypto";
 import * as NodeURL from "node:url";
 
@@ -49,10 +49,11 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
   readonly platform: DesktopPlatform;
   readonly arch: DesktopArch;
 }) {
+  if (input.platform === "mac") return;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const release = cuaDriverRelease(
-    input.platform === "mac" ? "darwin" : input.platform === "win" ? "win32" : "linux",
+    input.platform === "win" ? "win32" : "linux",
     input.arch === "universal" ? "arm64" : input.arch,
   );
   if (!release) {
@@ -137,23 +138,18 @@ export const stageCuaDriverExecutable = Effect.fn("stageCuaDriverExecutable")(fu
       yield* fs.makeDirectory(input.stageResourcesDir, { recursive: true });
       const destination = path.join(input.stageResourcesDir, "cua-driver");
       yield* fs.remove(destination, { recursive: true, force: true });
-      if (input.platform === "mac") {
-        yield* fs.copyFile(path.join(extracted, release.executable), destination);
-        yield* fs.chmod(destination, 0o755);
-      } else {
-        yield* fs.makeDirectory(destination, { recursive: true });
-        // SDK libraries come from the app's npm dependencies, not this release.
-        const entries =
-          input.platform === "linux"
-            ? [release.executable, "cua-cursor-theme", "wayland-helper"]
-            : requiredFiles;
-        for (const entry of entries) {
-          yield* fs.copy(path.join(extracted, entry), path.join(destination, entry));
-        }
-        if (input.platform === "linux") {
-          for (const executable of [release.executable, "cua-cursor-theme"]) {
-            yield* fs.chmod(path.join(destination, executable), 0o755);
-          }
+      yield* fs.makeDirectory(destination, { recursive: true });
+      // SDK libraries come from the app's npm dependencies, not this release.
+      const entries =
+        input.platform === "linux"
+          ? [release.executable, "cua-cursor-theme", "wayland-helper"]
+          : requiredFiles;
+      for (const entry of entries) {
+        yield* fs.copy(path.join(extracted, entry), path.join(destination, entry));
+      }
+      if (input.platform === "linux") {
+        for (const executable of [release.executable, "cua-cursor-theme"]) {
+          yield* fs.chmod(path.join(destination, executable), 0o755);
         }
       }
     }),
