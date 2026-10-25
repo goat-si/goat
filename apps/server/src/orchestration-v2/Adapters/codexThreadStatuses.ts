@@ -23,8 +23,8 @@ export function makeCodexThreadStatuses() {
   };
   return {
     /**
-     * Whether a reload now could drop work: a thread is not reported quiet, or one has an active
-     * goal. An unloaded thread cannot start a turn, so only loaded ones are asked about goals.
+     * Whether a reload now could drop work: a thread is not reported quiet before and after the
+     * goal reads, or one has an active goal. An unloaded thread cannot start a turn, so only loaded ones are asked about goals.
      */
     busy: (
       client: CodexClient.CodexAppServerClient["Service"],
@@ -34,7 +34,9 @@ export function makeCodexThreadStatuses() {
         ? codexGoalsActive(
             client,
             threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
-          )
+            // A continuation admitted earlier can report active while the goals are read, and
+            // pausing or clearing its goal does not stop it.
+          ).pipe(Effect.map((active) => active || !threadIds.every(quiet)))
         : Effect.succeed(true),
     record: (threadId: string, status: string) => void statuses.set(threadId, status),
     turnStarted: (threadId: string, turnId: string) => {

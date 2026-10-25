@@ -779,6 +779,50 @@ describe("Codex computer use attachment", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  it.effect(
+    "defers the reload when a subagent reports active while its goal is read, even once the goal clears (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "cua-active-during-goal-read";
+          const { f, child, goalNotice, withCua, sessions } = yield* childGoalScenario(root);
+          goalNotice(childGoal(child, "active", 100));
+          f.status(child, "idle");
+          f.turnCompleted(1);
+          f.entries.push({
+            type: "expect_outbound",
+            frame: { id: 4, method: "thread/goal/get", params: { threadId: root } },
+          });
+          // The child's continuation, admitted before the read, reports active during it; then its
+          // goal clears, which does not stop the running turn.
+          f.status(child, "active");
+          f.entries.push({
+            type: "emit_inbound",
+            frame: {
+              method: "turn/started",
+              params: {
+                threadId: child,
+                turn: makeCodexReplayTurn({ id: "child-auto", status: "inProgress" }),
+              },
+            },
+          });
+          goalNotice(null);
+          f.entries.push({ type: "emit_inbound", frame: { id: 4, result: { goal: null } } });
+          f.goalGet(5, child, { result: { goal: null } });
+          yield* f.turnStart(6, 2, true, true);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>
     Effect.scoped(
       Effect.gen(function* () {
