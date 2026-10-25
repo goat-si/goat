@@ -262,7 +262,7 @@ describe("project query refresh", () => {
     }
   });
 
-  it("keeps t3.json and the file tree loading until the file grant arrives", () => {
+  it("keeps goat.json and the file tree loading until the file grant arrives", () => {
     authorizationMocks.sessionAtom = Atom.make(AsyncResult.initial());
     const registry = AtomRegistry.make();
     atomHooks.registry = registry;
@@ -313,7 +313,7 @@ describe("project query refresh", () => {
   });
 
   it.each(["connected", "offline"] as const)(
-    "preserves cached t3.json defaults and scripts during a granted refresh while %s",
+    "preserves cached goat.json defaults and scripts during a granted refresh while %s",
     (phase) => {
       authorizationMocks.phase = phase;
       authorizationMocks.sessionAtom = Atom.make(

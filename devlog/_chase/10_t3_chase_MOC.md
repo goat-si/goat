@@ -1,11 +1,12 @@
 # 10 — T3 chase MOC
 
 > 축: upstream `pingdotgg/t3code` `main`
-> reviewed-through: `2c592a108` · 열린 카드 011 · 갱신 2026-10-24
+> reviewed-through: `2c592a108` · 열린 카드 011, 014 · 갱신 2026-10-25
 
-| NNN | 카드                                                        | GOAT 영역  | P   | 상태              |
-| --- | ----------------------------------------------------------- | ---------- | --- | ----------------- |
-| 011 | [upstream Node 26.12.1 고정](./10.011_t3_chase_node_pin.md) | `cli-home` | P1  | ⛔ needs decision |
+| NNN | 카드                                                        | GOAT 영역   | P   | 상태                    |
+| --- | ----------------------------------------------------------- | ----------- | --- | ----------------------- |
+| 011 | [upstream Node 26.12.1 고정](./10.011_t3_chase_node_pin.md) | `cli-home`  | P1  | ⛔ needs decision       |
+| 014 | [T3 이름 잔여 정리](./10.014_t3_chase_rename_leftovers.md)  | `goat-copy` | P2  | 🟡 PR #1619, #1628 스택 |
 
 머지 순서: 사이클 PR goat-ci green → dev에 merge commit으로 랜딩 → 000 기준선 갱신, 카드 `_fin` 이동.
 

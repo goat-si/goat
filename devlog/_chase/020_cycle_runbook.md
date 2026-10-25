@@ -73,6 +73,15 @@ git reset -q --soft "$MERGED"
   반복될 이름이면 `scripts/lib/goat-rename/rules-*.ts`에 규칙을 더하고, 한 번뿐인 줄은 손으로 고친다. 남겨야 하는 이름은
   이유를 적은 KEEP 규칙이나 `goat-rename: legacy` 표시로 남긴다. 저장되거나 다른 버전이 읽는 이름(저장 키, wire id, env)은
   `packages/contracts/src/legacyT3Names.ts`에 옛 이름을 두고 둘 다 읽게 한다.
+- 규칙 위치: 보이는 문구는 `rules-visible.ts`, upstream 서비스를 가리키는 문장의 hold는 `rules-external.ts`의
+  `connectServicePhrases`, 한 곳씩 바꾸는 GOAT 이름은 `rules-leftovers.ts`, 메타와 테스트 제목은 `rules-meta.ts`다
+  ([10.014](./10.014_t3_chase_rename_leftovers.md)). hold는 줄 전체가 아니라 이름을 둘러싼 단어로 맞춘다. upstream이 같은
+  문장을 다르게 쓰면 줄 단위 hold는 빠진다.
+- 옛 이름을 일부러 확인하는 테스트(부정 단언, legacy 입력)가 `--apply`로 뒤집히지 않았는지 본다:
+  `git diff -U0 -- '*.test.*' | rg '^\+.*(not\.|legacy)'`. GOAT 전용 파일이면 그 줄에 `goat-rename: legacy`를 단다.
+- 이름 길이가 바뀌므로 `--apply` 뒤 바뀐 파일에 `vp fmt`를 돌린다.
+- `rules-meta.test.ts`의 제목 표 테스트가 실패하면 upstream이 그 테스트 제목을 바꾼 것이다. `TEST_TITLES` 행을 고친다.
+- `apps/marketing`은 GOAT 사이트 lane이 다시 쓰는 중이라 예외로 둔다. 그 lane이 랜딩하면 예외와 이 줄을 다시 본다.
 - 마이그레이션: `Migrations.ts`의 id가 중복 없이 단조 증가하고 결정 카드의 선택이 반영됐는지 본다.
 
 ## 5. 검증

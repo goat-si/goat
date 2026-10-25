@@ -999,7 +999,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
-  it.effect("a git read in flight during a T3 git action does not outlive it", () =>
+  it.effect("a git read in flight during a GOAT git action does not outlive it", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);

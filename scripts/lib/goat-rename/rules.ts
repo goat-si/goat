@@ -15,6 +15,7 @@ import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
+import { META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
@@ -27,8 +28,6 @@ export const isExempt = (path: string): boolean =>
   path === "pnpm-lock.yaml" ||
   path.startsWith("apps/marketing/") ||
   path.startsWith("infra/") ||
-  path.startsWith(".devcontainer/") ||
-  path.startsWith(".github/ISSUE_TEMPLATE/") ||
   path === ".github/TRIAGE_EXEMPTIONS.td" ||
   path.startsWith(".github/scripts/thread-transfer") ||
   path.startsWith(".repos/") ||
@@ -488,6 +487,8 @@ export const TEXT_RULES: readonly TextRule[] = [
   },
   // Last, so they see text the env, package and identifier rules already renamed.
   ...LEFTOVER_TEXT_RULES,
+  ...META_TEXT_RULES,
+  ...TITLE_TEXT_RULES,
 ];
 
 export const PATH_RULES: readonly PathRule[] = [

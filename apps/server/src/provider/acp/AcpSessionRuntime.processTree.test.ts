@@ -580,7 +580,7 @@ describe("terminatePosixOwnedProcessTree", () => {
     }),
   );
 
-  it.live("re-admits a still-owned child after PID reuse and never signals the T3 session", () =>
+  it.live("re-admits a still-owned child after PID reuse and never signals the GOAT session", () =>
     Effect.gen(function* () {
       const reused = identity(110, 100, 110, 110, "reused");
       const fixture = makeController({

@@ -193,7 +193,7 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
   );
 
   it.effect.each(releases)(
-    "publishes a complete $format release in T3 home and reuses it across installer instances",
+    "publishes a complete $format release in GOAT home and reuses it across installer instances",
     (fixture) =>
       Effect.gen(function* () {
         const h = yield* makeHarness(fixture);

@@ -36,7 +36,7 @@ if (
     !IOS_BUNDLE_IDENTIFIER_PATTERN.test(personalTeamBundleIdentifier))
 ) {
   throw new Error(
-    "GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.t3code when GOAT_IOS_PERSONAL_TEAM=1.",
+    "GOAT_IOS_PERSONAL_TEAM_BUNDLE_ID must be a reverse-DNS identifier such as com.example.goat when GOAT_IOS_PERSONAL_TEAM=1.",
   );
 }
 

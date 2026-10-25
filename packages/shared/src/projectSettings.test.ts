@@ -158,7 +158,7 @@ describe("resolveProjectSettings", () => {
   });
 });
 
-describe("resolveProjectSettings with a t3.json", () => {
+describe("resolveProjectSettings with project-file defaults", () => {
   it("walks project override, environment value, file, then built-in for file-backed keys", () => {
     const file = { defaultThreadEnvMode: "worktree" as const };
     const fromOverride = resolveProjectSettings(
@@ -246,7 +246,7 @@ describe("resolveNewThreadEnvMode", () => {
     expect(resolveNewThreadEnvMode({ ...newProject, newProjectsRoot: undefined })).toBe("worktree");
   });
 
-  it("lets a project override, or a t3.json the environment defers to, keep worktree mode", () => {
+  it("lets a project override, or project-file defaults the environment defers to, keep worktree mode", () => {
     for (const projectSettings of [
       resolveProjectSettings(
         {

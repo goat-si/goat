@@ -107,7 +107,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: `e0596e725`
 - 경로: UI·토스트·CLI 도움말 문자열 전반, `packages/provider-*/src/server`, `provider-core` 안내문, MCP 도구 설명, `docs/user`, `README.md`
-- 정책: upstream 문구 변경을 받고 앱을 가리키는 "T3 Code"/"T3"만 GOAT로 다시 쓴다. 주석과 아래 이름 규칙의 "그대로" 항목은 바꾸지 않는다.
+- 정책: upstream 문구 변경을 받고 앱을 가리키는 "T3 Code"/"T3"만 GOAT로 다시 쓴다. 주석과 아래 이름 규칙의 "그대로" 항목은 바꾸지 않는다. GOAT Connect 문구는 `rules-visible.ts`의 `isConnectCopySurface` 규칙이, upstream 서비스를 가리키는 문장은 `rules-external.ts`의 `connectServicePhrases`가 맡는다. 한 곳씩 바꾸는 GOAT 이름(provider 이름, 커밋 작성자, 비공개 빌드 이름, 브랜드 자산 파일)은 `rules-leftovers.ts`, 개발 컨테이너·이슈 양식·테스트 제목은 `rules-meta.ts`에 있다 (#1619, #1628, [10.014](./10.014_t3_chase_rename_leftovers.md)).
 
 ### `launch-watch` 띄운 스레드 완료 알림
 
@@ -209,17 +209,19 @@ upstream이 다른 이름으로 쓰면, 이미 GOAT 마이그레이션을 기록
 
 ## 이름 규칙 요약
 
-| 대상                  | upstream               | GOAT                                                                                                             |
-| --------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| MCP 도구              | `t3_*`                 | `goat_*` (`t3_*`는 표시용 legacy alias)                                                                          |
-| MCP 서버 표시 이름    | T3 Code                | GOAT                                                                                                             |
-| provider 등록 키      | `t3-code`              | `t3-code` (그대로)                                                                                               |
-| MCP env               | `T3_MCP_URL` 등        | 그대로                                                                                                           |
-| CLI 실행 파일         | `t3`                   | `goat` (npm 패키지 `t3`, bin 둘)                                                                                 |
-| SSH 호스트 홈         | `~/.t3`                | `~/.goat`                                                                                                        |
-| 런타임 디렉터리       | `runtime/.../versions` | `runtime/goat/versions`                                                                                          |
-| 보이는 앱 이름        | T3 Code, T3            | GOAT (UI, CLI 출력, 에이전트 안내문, docs/user)                                                                  |
-| upstream 클라우드     | T3 Connect, T3 account | 그대로 (`app.t3.codes` 계정과 릴레이를 그대로 쓴다)                                                              |
-| 외부에 남는 식별 이름 | T3 Code                | 그대로 (Codex `clientInfo`, ChatGPT `agent_name_hint`, Cursor API 키·세션 이름, OpenCode 세션 제목, 커밋 작성자) |
-| 설치된 시스템 통합    | T3 Code                | 그대로 (GNOME 확장, KDE 항목, systemd 유닛, AppArmor 프로필, 원격 실행 스크립트 기준선)                          |
-| 모바일 앱 정체성      | T3 Code                | 그대로 (`apps/mobile/app.config.ts` 이름·번들 id·권한 문구, `desktop-identity` 같은 결정 전)                     |
+| 대상                       | upstream               | GOAT                                                                                                                                                                           |
+| -------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| MCP 도구                   | `t3_*`                 | `goat_*` (`t3_*`는 표시용 legacy alias)                                                                                                                                        |
+| MCP 서버 표시 이름         | T3 Code                | GOAT                                                                                                                                                                           |
+| provider 등록 키           | `t3-code`              | `t3-code` (그대로)                                                                                                                                                             |
+| MCP env                    | `T3_MCP_URL` 등        | 그대로                                                                                                                                                                         |
+| CLI 실행 파일              | `t3`                   | `goat` (npm 패키지 `@goat-si/goat`, bin `goat`·`t3`)                                                                                                                           |
+| SSH 호스트 홈              | `~/.t3`                | `~/.goat`                                                                                                                                                                      |
+| 런타임 디렉터리            | `runtime/.../versions` | `runtime/goat/versions`                                                                                                                                                        |
+| 보이는 앱 이름             | T3 Code, T3            | GOAT (UI, CLI 출력, 에이전트 안내문, docs/user)                                                                                                                                |
+| upstream 클라우드          | T3 Connect, T3 account | 보이는 문구와 로컬 식별자는 GOAT Connect, GOAT account, `GoatConnect*`. 릴레이 wire·env·Clerk 값, 도움말 URL, upstream 서비스를 가리키는 문장은 그대로 (10.014)                |
+| 외부에 남는 식별 이름      | T3 Code                | 그대로 (Codex `clientInfo`, ChatGPT `agent_name_hint`, Muse `clientInfo`). Cursor API 키·에이전트 이름, OpenCode 세션 제목, 체크포인트·스택 rebase 커밋 작성자는 GOAT (10.014) |
+| 설치된 시스템 통합         | T3 Code                | 그대로 (GNOME 확장, KDE 항목, systemd 유닛, AppArmor 프로필, 원격 실행 스크립트 기준선)                                                                                        |
+| 모바일 앱 정체성           | T3 Code                | GOAT (`packages/shared/src/mobileAppIdentity.ts`: `si.goat.mobile`, `goat://`). 네이티브 모듈 이름은 ADR-0014 동결                                                             |
+| desktop 소스 `productName` | T3 Code (Beta)         | `T3 Code (Alpha)` 그대로. 비패키지 dev 프로필의 safeStorage 키 이름이다 (10.014 D8). 패키지 빌드는 GOAT                                                                        |
+| 개발 컨테이너, 이슈 양식   | T3 Code, `t3 triage`   | GOAT, `goat triage`, GOAT Ideas. 컨테이너의 `GOAT_HOME`은 기존 상태가 있는 `.t3` 그대로                                                                                        |

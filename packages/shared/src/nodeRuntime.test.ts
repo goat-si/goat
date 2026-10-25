@@ -135,7 +135,7 @@ describe("Node runtime selection", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("uses installed Node instead of the standalone T3 executable", () =>
+  it.effect("uses installed Node instead of the standalone GOAT executable", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       expect(

@@ -257,13 +257,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     ),
   ],
   [
-    "apps/server/scripts/threadTitleEvaluationCases.ts",
-    exactLines(
-      '    request: "How can we improve title generation in T3 Code?",',
-      '      { role: "user", text: "How can we improve title gen further in T3 Code?" },',
-    ),
-  ],
-  [
     "apps/server/src/cloud/bootService.ts",
     /(?:\.replace\(\/\^Description=T3 Code server\$\/m, "Description=GOAT server"\))/g,
   ],
