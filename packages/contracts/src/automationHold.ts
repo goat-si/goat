@@ -8,6 +8,12 @@ import * as Schema from "effect/Schema";
  */
 export const AUTOMATION_HOLD_FILE_NAME = "automation-hold.json";
 
+/**
+ * In a GOAT home's base directory that a nightly seeded from stable's. It stays after automation is
+ * resumed: the copy shares stable's worktrees, so its automatic cleanup stays inside its own home.
+ */
+export const CHANNEL_STATE_COPY_MARKER_FILE_NAME = "channel-state-migration.json";
+
 export const AutomationHoldReason = Schema.Literals(["channel-copy"]);
 export type AutomationHoldReason = typeof AutomationHoldReason.Type;
 
@@ -18,9 +24,10 @@ export const AutomationHold = Schema.Struct({
 export type AutomationHold = typeof AutomationHold.Type;
 
 const AutomationHoldJson = Schema.fromJsonString(AutomationHold);
+const encodeAutomationHoldJson = Schema.encodeSync(AutomationHoldJson);
 
 export const encodeAutomationHold = (hold: AutomationHold): string =>
-  `${Schema.encodeSync(AutomationHoldJson)(hold)}\n`;
+  `${encodeAutomationHoldJson(hold)}\n`;
 
 export const decodeAutomationHold = Schema.decodeUnknownSync(AutomationHoldJson);
 

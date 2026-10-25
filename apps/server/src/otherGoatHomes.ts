@@ -2,6 +2,7 @@
 import * as NodeSqlite from "node:sqlite";
 
 import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
+import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 import * as Effect from "effect/Effect";
@@ -14,7 +15,7 @@ import * as Path from "effect/Path";
  * same worktrees), the legacy home, and an explicit GOAT_HOME. PR #1632 replaces this list with
  * discovery of running servers; until then storage cleanup reads these.
  */
-export const localGoatHomes = Effect.fnUntraced(function* () {
+const localGoatHomes = Effect.fnUntraced(function* () {
   const path = yield* Path.Path;
   const home = yield* HostProcess.HomeDirectory;
   const env = yield* HostProcess.Environment;
@@ -43,6 +44,8 @@ const inside = (path: Path.Path, parent: string, child: string) => {
  * Drops worktree roots that belong to another GOAT home: a root inside another home and not inside
  * this server's own base directory. A nightly copy keeps stable's settings, so a worktree folder
  * configured there would otherwise make the nightly clean stable's worktrees.
+ * A home seeded as a copy keeps only roots inside itself, since any folder its copied settings name
+ * may hold stable's worktrees.
  */
 export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   readonly roots: ReadonlyArray<string>;
@@ -53,6 +56,9 @@ export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   const real = (value: string) =>
     fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
   const ownBase = yield* real(input.baseDir);
+  if (yield* fs.exists(path.join(ownBase, CHANNEL_STATE_COPY_MARKER_FILE_NAME))) {
+    return input.roots.filter((root) => inside(path, ownBase, root));
+  }
   const others = yield* Effect.forEach(yield* localGoatHomes(), real);
   return input.roots.filter(
     (root) =>

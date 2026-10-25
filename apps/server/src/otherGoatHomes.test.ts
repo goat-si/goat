@@ -8,6 +8,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
+
 import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
 
 const withHome = <A, E>(
@@ -96,5 +98,21 @@ describe("otherGoatHomes", () => {
         assert.deepEqual(yield* ownWorktreeRoots({ roots: [custom], baseDir: nightly }), [custom]);
       }),
     ),
+  );
+  it.effect(
+    "keeps a nightly copy's automatic cleanup inside its own home, whatever its settings name",
+    () =>
+      withHome((home) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fs = yield* FileSystem.FileSystem;
+          const nightly = path.join(home, ".goat", "desktop-nightly");
+          yield* fs.makeDirectory(nightly, { recursive: true });
+          yield* fs.writeFileString(path.join(nightly, CHANNEL_STATE_COPY_MARKER_FILE_NAME), "{}");
+          // A custom folder copied from stable's settings holds stable's worktrees too.
+          const roots = [path.join(home, "worktrees"), path.join(nightly, "worktrees")];
+          assert.deepEqual(yield* ownWorktreeRoots({ roots, baseDir: nightly }), [roots[1]]);
+        }),
+      ),
   );
 });

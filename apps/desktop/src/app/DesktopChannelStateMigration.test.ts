@@ -72,6 +72,8 @@ const migrate = (
     sourceBaseDir: stable.source,
     destinationBaseDir: stable.destination,
     appVersion: "1.2.3-nightly.20261025.1",
+    // The POSIX flush path; CI runs these on Linux and macOS.
+    platform: "linux",
     copiedAt,
     ...(ops === undefined ? {} : { ops }),
   });
@@ -264,8 +266,9 @@ describe("migrateChannelState", () => {
       }
     }));
 
-  for (const code of ["ENOSPC", "EACCES"]) {
-    it(`publishes nothing after a ${code} copy failure and copies on the next launch`, () =>
+  it.each(["ENOSPC", "EACCES"])(
+    "publishes nothing after a %s copy failure and copies on the next launch",
+    (code) =>
       withHome((home) => {
         const stable = seedStable(home);
         try {
@@ -285,8 +288,8 @@ describe("migrateChannelState", () => {
         } finally {
           stable.db.close();
         }
-      }));
-  }
+      }),
+  );
 
   it("publishes nothing when the database snapshot fails verification", () =>
     withHome((home) => {

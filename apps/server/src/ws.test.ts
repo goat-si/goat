@@ -147,9 +147,9 @@ import {
   makeMemoryImportHandlers,
   subscribeOrchestrationV2Shell,
   subscribeOrchestrationV2Thread,
-  withLateEditorConfig,
   WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
+import { withLateEditorConfig } from "./serverConfigUpdates.ts";
 
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;

@@ -683,10 +683,7 @@ export const ServerConfig = Schema.Struct({
    * Windows only, and only once the server has checked; absent means nothing to report.
    */
   worktreeCheckoutHealth: ForwardCompatibleOptional(ServerWorktreeCheckoutHealth),
-  /**
-   * Present while the server's automation is held (a nightly copy of stable's state), null once
-   * resumed. Absent from servers that predate the hold.
-   */
+  /** Set while a nightly copy's automation is held; null once resumed, absent from older servers. */
   automationHold: Schema.optionalKey(Schema.NullOr(AutomationHold)),
   /**
    * Never sent in a config snapshot: the theme stream emits the current set

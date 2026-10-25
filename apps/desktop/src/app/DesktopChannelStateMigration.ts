@@ -5,7 +5,11 @@ import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 import * as Option from "effect/Option";
 
-import { AUTOMATION_HOLD_FILE_NAME, encodeAutomationHold } from "@goat/contracts";
+import {
+  AUTOMATION_HOLD_FILE_NAME,
+  CHANNEL_STATE_COPY_MARKER_FILE_NAME,
+  encodeAutomationHold,
+} from "@goat/contracts";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 
 import {
@@ -18,7 +22,7 @@ import {
  * Written into the copy before it is published. Its presence in a published destination proves
  * the copy finished and passed verification; publishing is the rename of the whole directory.
  */
-export const CHANNEL_STATE_MIGRATION_MARKER = "channel-state-migration.json";
+export const CHANNEL_STATE_MIGRATION_MARKER = CHANNEL_STATE_COPY_MARKER_FILE_NAME;
 
 const STAGING_INFIX = ".migrating-";
 
@@ -74,6 +78,7 @@ export interface ChannelStateMigrationInput {
   readonly sourceBaseDir: string;
   readonly destinationBaseDir: string;
   readonly appVersion: string;
+  readonly platform: NodeJS.Platform;
   /** ISO timestamp of the copy, recorded in the hold and the marker. */
   readonly copiedAt: string;
   readonly ops?: Partial<ChannelStateMigrationOps>;
@@ -184,10 +189,10 @@ const defaultOps: ChannelStateMigrationOps = {
   isProcessAlive,
 };
 
-const fsyncPath = (path: string, directory: boolean) => {
+const fsyncPath = (platform: NodeJS.Platform, path: string, directory: boolean) => {
   // Windows cannot open a directory for fsync; NTFS journals the rename itself.
-  if (directory && process.platform === "win32") return;
-  if (process.platform !== "win32") {
+  if (directory && platform === "win32") return;
+  if (platform !== "win32") {
     // POSIX flushes through a read-only descriptor, so read-only files (Git objects) need no mode change.
     const fd = NodeFS.openSync(path, "r");
     try {
@@ -255,6 +260,7 @@ interface CopyTally {
 }
 
 const copyVerifiedFile = (
+  platform: NodeJS.Platform,
   source: string,
   destination: string,
   ops: ChannelStateMigrationOps,
@@ -267,7 +273,7 @@ const copyVerifiedFile = (
     if (actual !== expected) {
       throw new Error(`copied ${actual} of ${expected} bytes`);
     }
-    fsyncPath(destination, false);
+    fsyncPath(platform, destination, false);
     tally.files += 1;
     tally.bytes += actual;
   } catch (cause) {
@@ -276,6 +282,7 @@ const copyVerifiedFile = (
 };
 
 const copyDirectory = (
+  platform: NodeJS.Platform,
   source: string,
   destination: string,
   ops: ChannelStateMigrationOps,
@@ -293,11 +300,12 @@ const copyDirectory = (
   for (const entry of entries) {
     const from = NodePath.join(source, entry.name);
     const to = NodePath.join(destination, entry.name);
-    if (entry.isDirectory()) copyDirectory(from, to, ops, tally);
+    if (entry.isDirectory()) copyDirectory(platform, from, to, ops, tally);
     // Half-written temp files belong to a writer in the middle of an atomic rename.
-    else if (entry.isFile() && !entry.name.endsWith(".tmp")) copyVerifiedFile(from, to, ops, tally);
+    else if (entry.isFile() && !entry.name.endsWith(".tmp"))
+      copyVerifiedFile(platform, from, to, ops, tally);
   }
-  fsyncPath(destination, true);
+  fsyncPath(platform, destination, true);
 };
 
 /**
@@ -310,6 +318,7 @@ export function migrateChannelState(
   input: ChannelStateMigrationInput,
 ): ChannelStateMigrationResult {
   const ops: ChannelStateMigrationOps = { ...defaultOps, ...input.ops };
+  const platform = input.platform;
   const destination = input.destinationBaseDir;
   if (exists(destination)) return { _tag: "DestinationExists" };
   const sourceUserdata = NodePath.join(input.sourceBaseDir, "userdata");
@@ -336,7 +345,7 @@ export function migrateChannelState(
       try {
         ops.snapshotDatabase(from, to);
         ops.verifyDatabase(to);
-        fsyncPath(to, false);
+        fsyncPath(platform, to, false);
       } catch (cause) {
         throw new ChannelStateMigrationError("snapshot", from, cause);
       }
@@ -346,11 +355,12 @@ export function migrateChannelState(
     for (const name of USERDATA_FILES) {
       const from = NodePath.join(sourceUserdata, name);
       if (regularEntry(from) === "file") {
-        copyVerifiedFile(from, NodePath.join(stagingUserdata, name), ops, tally);
+        copyVerifiedFile(platform, from, NodePath.join(stagingUserdata, name), ops, tally);
       }
     }
     for (const name of USERDATA_DIRECTORIES) {
       copyDirectory(
+        platform,
         NodePath.join(sourceUserdata, name),
         NodePath.join(stagingUserdata, name),
         ops,
@@ -359,6 +369,7 @@ export function migrateChannelState(
     }
     for (const name of BASE_DIRECTORIES) {
       copyDirectory(
+        platform,
         NodePath.join(input.sourceBaseDir, name),
         NodePath.join(staging, name),
         ops,
@@ -368,11 +379,13 @@ export function migrateChannelState(
 
     const copiedAt = input.copiedAt;
     writeDurably(
+      platform,
       NodePath.join(stagingUserdata, AUTOMATION_HOLD_FILE_NAME),
       encodeAutomationHold({ reason: "channel-copy", heldAt: copiedAt }),
     );
-    fsyncPath(stagingUserdata, true);
+    fsyncPath(platform, stagingUserdata, true);
     writeDurably(
+      platform,
       NodePath.join(staging, CHANNEL_STATE_MIGRATION_MARKER),
       `${JSON.stringify(
         {
@@ -387,7 +400,7 @@ export function migrateChannelState(
         2,
       )}\n`,
     );
-    fsyncPath(staging, true);
+    fsyncPath(platform, staging, true);
   } catch (cause) {
     NodeFS.rmSync(staging, { recursive: true, force: true });
     throw cause instanceof ChannelStateMigrationError
@@ -407,14 +420,14 @@ export function migrateChannelState(
     throw new ChannelStateMigrationError("publish", destination, cause);
   }
   try {
-    fsyncPath(parent, true);
+    fsyncPath(platform, parent, true);
   } catch {
     // Already published: the rename stands, and the next launch finds the copy either way.
   }
   return { _tag: "Copied", files: tally.files, bytes: tally.bytes };
 }
 
-const writeDurably = (path: string, contents: string) => {
+const writeDurably = (platform: NodeJS.Platform, path: string, contents: string) => {
   NodeFS.writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
-  fsyncPath(path, false);
+  fsyncPath(platform, path, false);
 };

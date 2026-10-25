@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -123,6 +124,26 @@ const observe = Effect.gen(function* () {
 });
 
 describe("ObservedCheckService", () => {
+  it.effect("held: runs no check when a copied run completes; release: checks run again", () => {
+    const harness = makeLayer({
+      worktreePath,
+      scripts: [checkScript()],
+      outcome: { lines: ["ok"], exitCode: 0 },
+    });
+    return Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      const held = yield* observe.pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+      assert.isNull(held);
+      assert.equal(harness.runs.length, 0);
+      yield* hold.release;
+      yield* observe.pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+      assert.equal(harness.runs.length, 1);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("records a failing check with its exit code and output, once per run", () => {
     const harness = makeLayer({
       worktreePath,

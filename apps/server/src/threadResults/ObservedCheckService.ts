@@ -17,6 +17,7 @@ import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -149,6 +150,8 @@ export const make = Effect.gen(function* () {
 
   const observeRun = Effect.fn("ObservedCheckService.observeRun")(
     function* (threadId: ThreadId, runId: RunId) {
+      // A held copy's reattached runs finish here too; their checks would run scripts on its own.
+      if (yield* AutomationHold.isHeld) return;
       const noCheck = claim({ threadId, runId, status: "not_run", skipReason: null, command: "" });
       const thread = yield* projections.getThreadShell(threadId);
       // A completed run's event repeats when its delegated work changes or the

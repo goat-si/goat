@@ -135,6 +135,8 @@ const channelStateMigrationFailure = (() => {
     DesktopChannelStateMigration.migrateChannelState({
       ...plan,
       appVersion,
+      // oxlint-disable-next-line goat/no-global-process-runtime -- Runs before any Effect runtime exists.
+      platform: process.platform,
       copiedAt: DateTime.formatIso(DateTime.nowUnsafe()),
     });
     return null;
