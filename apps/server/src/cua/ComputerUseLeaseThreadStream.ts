@@ -62,19 +62,18 @@ export const threadLeaseUpdates = (input: {
           Effect.map((value) => value.enableCua),
           Effect.orElseSucceed(() => false),
         );
-        if (!enabled) {
-          yield* Queue.offer(queue, { state: "ended", reason: "disabled" });
-          return yield* Queue.end(queue);
-        }
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-        const state =
-          current === undefined
+        const value = !enabled
+          ? { _tag: "ended" as const, reason: "disabled" as const }
+          : current === undefined
             ? undefined
-            : yield* leases.controlState(input.threadId, current.controlId).pipe(Effect.option);
-        if (state !== undefined && Option.isNone(state)) {
-          yield* Queue.offer(queue, { state: "ended", reason: "revoked" });
-          return yield* Queue.end(queue);
-        }
+            : yield* leases.controlState(input.threadId, current.controlId).pipe(
+                // A failed authority read fences this control; a later control can recover.
+                Effect.orElseSucceed(() => ({
+                  _tag: "ended" as const,
+                  reason: "revoked" as const,
+                })),
+              );
         // controlState can suspend on grant reads. A revocation during that read must win.
         if ((yield* authorized) === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
@@ -86,12 +85,11 @@ export const threadLeaseUpdates = (input: {
           yield* Queue.offer(queue, {
             state: "control-ended",
             controlId: previous,
-            reason: current === undefined ? "revoked" : "replaced",
+            reason: !enabled ? "disabled" : current === undefined ? "revoked" : "replaced",
           });
           lastEnded = previous;
           previous = undefined;
         }
-        const value = state === undefined ? undefined : Option.getOrUndefined(state);
         if (current === undefined || value === undefined || value._tag === "ended") {
           if (current !== undefined && value?._tag === "ended" && current.controlId !== lastEnded) {
             yield* Queue.offer(queue, {
