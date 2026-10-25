@@ -1,43 +1,33 @@
 /**
- * Whether full access still admits a control on every app: a run a person started needs only
- * its thread in full access; other runs also need the host's unattended setting.
+ * Whether full access admits a control on every app. Any run whose thread is in full access gets
+ * one, whatever started it (ADR-0023 D16); the host setting `cuaFullAccessAutoAdmit` decides
+ * nothing. The kind keeps what still differs by origin: unattended work holds the screen alone
+ * and needs private-mode detection, and only a person's run takes the foreground without asking.
  *
  * @module ComputerUseFullAccess
  */
 import type { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import type * as SqlClient from "effect/sql/SqlClient";
 
-import type * as ServerSettings from "../serverSettings.ts";
-
-/** What admitted a control on every app: a person's run, or the host setting. */
+/** Who a full access control on every app is for: a person's run, another interactive run, or unattended work. */
 export type EveryAppKind = "person" | "interactive" | "unattended";
 
-/** The kind a turn would get, or undefined when full access admits nothing for it. */
+/** The kind a turn would get, or undefined outside full access. */
 export const everyAppKind = (input: {
   readonly runtimeMode: string | undefined;
   readonly unattended: boolean;
   readonly personStarted: boolean;
-  readonly setting: boolean;
 }): EveryAppKind | undefined => {
   if (input.runtimeMode !== "full-access") return undefined;
-  if (input.unattended) return input.setting ? "unattended" : undefined;
-  if (input.personStarted) return "person";
-  return input.setting ? "interactive" : undefined;
+  if (input.unattended) return "unattended";
+  return input.personStarted ? "person" : "interactive";
 };
 
-/** A failed read admits nothing, so a control living on full access ends. */
-export const makeFullAccessAdmitted = (
-  sql: SqlClient.SqlClient,
-  settings: Option.Option<ServerSettings.ServerSettingsService["Service"]>,
-) =>
+/** Whether the thread is still in full access. A failed read admits nothing, so the control ends. */
+export const makeFullAccessAdmitted = (sql: SqlClient.SqlClient) =>
   Effect.fn("ComputerUseLeases.fullAccessAdmitted")(
-    function* (threadId: ThreadId, kind: EveryAppKind) {
-      if (kind !== "person") {
-        if (Option.isNone(settings)) return false;
-        if (!(yield* settings.value.getSettings).cuaFullAccessAutoAdmit) return false;
-      }
+    function* (threadId: ThreadId) {
       const rows = yield* sql<{ readonly runtime_mode: string }>`
         SELECT runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
       `;

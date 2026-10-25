@@ -39,7 +39,9 @@ them do at that keyboard.
 
 ## Approving apps
 
-Threads you direct in full access mode use every app and foreground input
+Every thread in full access mode uses every app without asking, whatever
+started its turn: you, GOAT Bot, a scheduled or webhook task, Slack, or another
+channel. Threads you direct in full access mode also get foreground input
 without asking. In other modes, the agent asks before it uses an app. The
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
@@ -59,15 +61,13 @@ action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
 automatically only on its next turn.
 
-To let unattended work skip app approvals on a computer you trust, turn on
-**Unattended work without approval** under **Computer use**. Scheduled tasks,
-GOAT Bot and other unattended work in full access mode then use every app
-without asking. They still ask for foreground control. The setting starts off
-and does not affect full-access threads you direct. Threads in other modes
-still ask, and leaving full access ends automatic access at once. Unattended
-work still shares the screen one thread at a time. Stop, **Stop all** and turning
-computer use off end computer use; turning this setting off ends unattended
-work's automatic access.
+Full access skips only the app approval. Everything else on this page still
+applies to it: password managers and GOAT's own windows stay off limits, a
+secret field still pauses agents, each action stays within what its call may
+reach, and work that runs on its own still asks for foreground control, still
+needs a computer that can tell when you type a secret, and still shares the
+screen one thread at a time. **Stop**, **Stop all** and turning computer use off
+end it, and leaving full access ends automatic access at once.
 
 Once admitted, agents keep working while you use the keyboard and mouse. Use
 **Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
@@ -85,8 +85,7 @@ control** hands it to you.
 **Stop** on a tile stops that agent until you choose **Hand back**. On a tile
 for this computer, Stop also ends that thread's approval, so its apps are free
 for other threads at once. On its next turn, the thread asks again unless it is
-in full access and you direct it, or **Unattended work without approval** admits
-its unattended work. **Stop all**
+in full access. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
@@ -106,9 +105,9 @@ To keep the tools without the skill, turn off **Computer Use skill** under
 ## Work that runs on its own
 
 GOAT Bot, work started from Slack or iMessage, scheduled and webhook tasks, and
-threads any of them start need approval unless **Unattended work without
-approval** is on and the work runs in full access mode. They still need approval
-for foreground control. When such a thread needs approval, GOAT asks in that
+threads any of them start use every app without asking when they run in full
+access mode, and need approval otherwise. They still need approval for
+foreground control. When such a thread needs approval, GOAT asks in that
 thread. The request names the thread, this computer, what the agent wants to do,
 and until when. Someone allowed to change this environment's settings approves
 it in a GOAT app; a reply in a chat channel does not count.
@@ -131,7 +130,7 @@ sequence: the step already under way finishes, and nothing after it runs.
 
 If such work sends a message to a thread you are running, it does not join your
 turn; it waits and runs as that thread's next turn, without computer use unless
-that thread is approved or the unattended setting admits its full-access work.
+that thread is approved or runs in full access mode.
 
 ## macOS permissions
 

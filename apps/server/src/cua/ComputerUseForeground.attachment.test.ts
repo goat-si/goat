@@ -24,36 +24,34 @@ import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 
 const threadId = ThreadId.make("thread:attached-foreground");
-const layer = (fullAccess: boolean) =>
-  ComputerUseLeases.layer.pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        foregroundDatabase,
-        NodeServices.layer,
-        ServerSettings.ServerSettingsService.layerTest({
-          enableCua: true,
-          cuaFullAccessAutoAdmit: fullAccess,
+const layer = ComputerUseLeases.layer.pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      foregroundDatabase,
+      NodeServices.layer,
+      ServerSettings.ServerSettingsService.layerTest({
+        enableCua: true,
+      }),
+      DesktopTelemetryReceiver.layerTest({
+        cuaReadiness: Effect.succeedSome({
+          version: 1,
+          type: "cuaReadiness",
+          generation: 1,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { humanInput: "supported", privateMode: "supported" },
         }),
-        DesktopTelemetryReceiver.layerTest({
-          cuaReadiness: Effect.succeedSome({
-            version: 1,
-            type: "cuaReadiness",
-            generation: 1,
-            readiness: {
-              grants: { accessibility: "granted", screenCapture: "granted" },
-              helper: "authenticated",
-              capture: "ready",
-              tree: "ready",
-              input: "background",
-              blockers: [],
-              reasons: [],
-            },
-            signals: { humanInput: "supported", privateMode: "supported" },
-          }),
-        }),
-      ),
+      }),
     ),
-  );
+  ),
+);
 
 const attach = Effect.fn("foreground.attachFixture")(function* (
   fullAccess: boolean,
@@ -213,7 +211,7 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
         assert.equal((yield* h.nextToProvider).id, 3);
         assert.equal((yield* h.nextReservation).action, "release");
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["expiry", "cancel"] as const)(
@@ -276,7 +274,7 @@ describe("foreground through real computer-use attachment", () => {
         assert.equal((yield* h.nextReservation).action, "release");
         yield* h.send(call(4, "type_text", { pid: 42, window_id: 7, text: "approved background" }));
         assert.equal((yield* h.nextToDriver).id, 4);
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["none", "pause", "stop"] as const)(
@@ -319,7 +317,7 @@ describe("foreground through real computer-use attachment", () => {
             ? { status: "admitted" }
             : { status: "refused", detail: "foreground_not_approved" },
         );
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["existing", "first"] as const)(
@@ -431,7 +429,7 @@ describe("foreground through real computer-use attachment", () => {
         assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
         assert.equal(next.attachment.control.controlId, attachment.control.controlId);
         assert.equal(next.attachment.control.handoffId, background.handoffId);
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each([false, true])(
@@ -451,7 +449,7 @@ describe("foreground through real computer-use attachment", () => {
         );
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         assert.equal((yield* h.nextToProvider).id, 1);
-      }).pipe(Effect.provide(layer(fullAccess))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect("full-access attachment alone never supplies foreground authority", () =>
@@ -462,7 +460,7 @@ describe("foreground through real computer-use attachment", () => {
       const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
       assert.equal(result.structuredContent.detail, "foreground_not_approved");
       assert.equal(yield* h.driverQueued, 0);
-    }).pipe(Effect.provide(layer(true))),
+    }).pipe(Effect.provide(layer)),
   );
 
   it.effect("handback keeps background admission but requires a new foreground approval", () =>
@@ -486,7 +484,7 @@ describe("foreground through real computer-use attachment", () => {
       assert.equal(result.structuredContent.detail, "foreground_not_approved");
       yield* h.send(call(3, "type_text", { pid: 42, window_id: 7, text: "background" }));
       assert.equal((yield* h.nextToDriver).id, 3);
-    }).pipe(Effect.provide(layer(true))),
+    }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["expiry", "cancel"] as const)(
@@ -510,7 +508,7 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.restarted;
         yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "background" }));
         assert.equal((yield* h.nextToDriver).id, 2);
-      }).pipe(Effect.provide(layer(true))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect(
@@ -532,7 +530,7 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.nextReservation;
         yield* h.send(call(2, "run_script", { script: "press 7 x 6 =" }));
         assert.equal((yield* h.nextToDriver).id, 2);
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect.each(["pause", "private", "stop"] as const)(
@@ -561,7 +559,7 @@ describe("foreground through real computer-use attachment", () => {
         const next = yield* attach(true, true, undefined, RunId.make("run:second"));
         assert.lengthOf(yield* focus(next.attachment.control.controlId), 1);
         assert.isTrue(yield* leases.foregroundAvailable(threadId, "anything"));
-      }).pipe(Effect.provide(layer(false))),
+      }).pipe(Effect.provide(layer)),
   );
 
   it.effect("full access foreground still yields the screen to another thread's grant", () =>
@@ -577,6 +575,6 @@ describe("foreground through real computer-use attachment", () => {
       const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
       assert.equal(result.structuredContent.detail, "screen_shared");
       assert.equal(yield* h.driverQueued, 0);
-    }).pipe(Effect.provide(layer(false))),
+    }).pipe(Effect.provide(layer)),
   );
 });
