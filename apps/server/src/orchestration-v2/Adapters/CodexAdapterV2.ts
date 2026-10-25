@@ -1328,12 +1328,15 @@ type PendingCodexRuntimeRequest =
   | {
       readonly type: "approval";
       readonly requestId: RuntimeRequestId;
+      /** The turn that asked; its request outlives the turn's own records until answered. */
+      readonly owner: ActiveCodexTurnContext;
       readonly requestKind: ProviderRequestKind;
       readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
     }
   | {
       readonly type: "user_input";
       readonly requestId: RuntimeRequestId;
+      readonly owner: ActiveCodexTurnContext;
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers, never>;
     };
 
@@ -5790,6 +5793,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind: "command",
                 decision,
               });
@@ -5863,6 +5867,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind: "file-change",
                 decision,
               });
@@ -5927,6 +5932,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind,
                 decision,
               });
@@ -6010,6 +6016,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind: "mcp-elicitation",
                 decision,
               });
@@ -6075,6 +6082,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind: "command",
                 decision,
               });
@@ -6144,6 +6152,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
+                owner: context,
                 requestKind: "file-change",
                 decision,
               });
@@ -6206,6 +6215,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "user_input",
                 requestId: artifacts.request.id,
+                owner: context,
                 answers,
               });
               return updated;
@@ -7213,6 +7223,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 (subagent) =>
                   (subagent.task.status === "running" || subagent.task.status === "pending") &&
                   ownedHere(subagent.parentContext),
+              ) ||
+              Array.from((yield* Ref.get(pendingRuntimeRequests)).values()).some((request) =>
+                ownedHere(request.owner),
               ) ||
               (yield* retainedWorkHere) ||
               (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));

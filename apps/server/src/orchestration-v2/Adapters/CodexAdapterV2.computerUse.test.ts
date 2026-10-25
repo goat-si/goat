@@ -129,13 +129,16 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   });
   const terminals = yield* Queue.unbounded<void>();
   const childDone = yield* Queue.unbounded<void>();
+  const requested = yield* Queue.unbounded<void>();
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
         : event.type === "subagent.updated" && event.subagent.status === "completed"
           ? Queue.offer(childDone, undefined)
-          : Effect.void,
+          : event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending"
+            ? Queue.offer(requested, undefined)
+            : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -156,6 +159,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     startTurn,
     terminal: Queue.take(terminals),
     childDone: Queue.take(childDone),
+    requested: Queue.take(requested),
   };
 });
 
@@ -594,6 +598,105 @@ describe("Codex computer use attachment", () => {
           if (mode === "background-command") yield* replay.childDone;
           yield* sessions.set(withCua("control:b"));
           yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+  it.effect.each(["approval", "user input"] as const)(
+    "keeps the reload deferred while a settled subagent's %s request is unanswered (#1564)",
+    (kind) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = `cua-request-${kind === "approval" ? "approval" : "input"}`;
+          const child = `${root}-agent`;
+          const f = fixture(root);
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const childTurn = (status: "inProgress" | "completed") => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method: status === "inProgress" ? "turn/started" : "turn/completed",
+              params: { threadId: child, turn: makeCodexReplayTurn({ id: "child-turn", status }) },
+            },
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          yield* f.turnStart(3, 1, true);
+          f.entries.push(
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "subAgentActivity",
+                    id: "spawn-asking-child",
+                    kind: "started",
+                    agentThreadId: child,
+                    agentPath: "/root/child",
+                  },
+                  threadId: root,
+                  turnId: "turn-1",
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            childTurn("inProgress"),
+            {
+              type: "emit_inbound",
+              frame: {
+                id: 101,
+                method:
+                  kind === "approval"
+                    ? "item/commandExecution/requestApproval"
+                    : "item/tool/requestUserInput",
+                params: {
+                  threadId: child,
+                  turnId: "child-turn",
+                  itemId: "child-request",
+                  ...(kind === "approval"
+                    ? { command: "cat data", startedAtMs: 1782622441000 }
+                    : {
+                        questions: [
+                          {
+                            id: "question",
+                            header: "Choice",
+                            question: "Which option?",
+                            isOther: false,
+                            isSecret: false,
+                            options: null,
+                          },
+                        ],
+                      }),
+                },
+              },
+            },
+          );
+          f.turnCompleted(1);
+          yield* f.turnStart(4, 2, true);
+          f.entries.push(childTurn("completed"));
+          f.turnCompleted(2);
+          // The child has settled, but nobody has answered its request yet: still no reload.
+          yield* f.turnStart(5, 3, true);
+          f.turnCompleted(3);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.requested;
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          yield* replay.childDone;
+          yield* sessions.set(withCua("control:c"));
+          yield* replay.startTurn(3);
           yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
