@@ -36,6 +36,8 @@ import { parse as parseYaml } from "yaml";
 
 import * as ServerConfig from "./config.ts";
 import * as AutomationHold from "./automationHold.ts";
+import { ownWorktreeRoots, readOtherHomeBindings } from "./otherGoatHomes.ts";
+import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -172,32 +174,6 @@ function worktreeOwner<T extends Pick<OrchestrationV2ThreadShell, "id" | "lineag
     }
   }
   return owner;
-}
-
-/**
- * Whether the host's pull request proves this worktree's head was merged. A
- * squash or rebase merge leaves the head outside the default branch, so the
- * merged pull request then has to name this exact commit.
- */
-export function storageCleanupPullRequestMerged(
-  pullRequest: Pick<
-    GitManager.GitBranchPullRequest,
-    "state" | "headRef" | "baseRef" | "headSha"
-  > | null,
-  worktree: {
-    readonly branch: string;
-    readonly defaultBranch: string;
-    readonly headSha: string;
-    readonly integrated: boolean;
-  },
-): boolean {
-  return (
-    pullRequest?.state === "merged" &&
-    (worktree.integrated ||
-      (pullRequest.headRef === worktree.branch &&
-        pullRequest.baseRef === worktree.defaultBranch &&
-        pullRequest.headSha === worktree.headSha))
-  );
 }
 
 export class StorageCleanup extends Context.Service<
@@ -737,6 +713,9 @@ const make = Effect.gen(function* () {
       );
       if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
     }
+    // Another local GOAT app may hold these checkouts; see otherGoatHomes.
+    roots.splice(0, roots.length, ...(yield* ownWorktreeRoots({ roots, baseDir: config.baseDir })));
+    const otherBindings = yield* readOtherHomeBindings({ ownDatabase: config.dbPath });
     const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
           SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
           FROM orchestration_v2_projection_threads t
@@ -820,6 +799,10 @@ const make = Effect.gen(function* () {
           return keep("worktree is a symbolic link");
         if (!roots.some((root) => inside(root, realPath)))
           return keep("outside the managed worktree folder");
+        if (otherBindings.unreadable.length > 0)
+          return keep("another GOAT app's data on this machine could not be checked");
+        if (otherBindings.worktreePaths.has(realPath))
+          return keep("another GOAT app on this machine uses this worktree");
         if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects]))
           return keep("contains a project checkout");
         if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File")

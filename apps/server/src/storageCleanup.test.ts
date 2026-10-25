@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
+import * as NodeSqlite from "node:sqlite";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
@@ -41,11 +44,8 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import {
-  storageCleanupActivityAt,
-  storageCleanupPullRequestMerged,
-  storageCleanupThreadIdle,
-} from "./storageCleanup.ts";
+import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
+import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 
 import { NOW_MS, DAY_MS, at, shell } from "./storageCleanup.testFixtures.ts";
 
@@ -429,7 +429,13 @@ const runCleanupTest = <A, E>(
     | Path.Path
     | Scope.Scope
   >,
-) => effect.pipe(Effect.provide(cleanupTestLayer), Effect.scoped);
+) =>
+  effect.pipe(
+    // Never the developer's home: cleanup reads other local GOAT apps' databases from it.
+    Effect.provideService(HostProcess.HomeDirectory, "/nonexistent/goat-cleanup-test-home"),
+    Effect.provide(cleanupTestLayer),
+    Effect.scoped,
+  );
 
 const submoduleCleanupFixture = () =>
   Effect.gen(function* () {
@@ -1863,6 +1869,32 @@ it.live("keeps saved usage data when removing a settled checkout", () =>
       yield* fixture.fs.writeFileString(cachePath, savedUsage);
       expect((yield* fixture.service.runNow).counts.removed).toBe(1);
       expect(yield* fixture.fs.readFileString(cachePath)).toBe(savedUsage);
+    }),
+  ),
+);
+
+it.live("keeps a worktree that another GOAT app on this machine still uses", () =>
+  runCleanupTest(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cleanup-home-" });
+      yield* Effect.gen(function* () {
+        const fixture = yield* cleanupFixture();
+        // A nightly copy of this app's state binds the same checkout by its absolute path.
+        const nightlyState = `${home}/.goat/desktop-nightly/userdata`;
+        yield* fs.makeDirectory(nightlyState, { recursive: true });
+        const db = new NodeSqlite.DatabaseSync(`${nightlyState}/statev2.sqlite`);
+        db.exec("CREATE TABLE orchestration_v2_projection_threads (payload_json TEXT)");
+        db.prepare("INSERT INTO orchestration_v2_projection_threads VALUES (?)").run(
+          JSON.stringify({ worktreePath: fixture.worktree }),
+        );
+        db.close();
+        expect((yield* fixture.service.runNow).entries[0]).toMatchObject({
+          outcome: "kept",
+          reason: "Another GOAT app on this machine uses this worktree",
+        });
+        expect(yield* fs.exists(fixture.worktree)).toBe(true);
+      }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
     }),
   ),
 );
