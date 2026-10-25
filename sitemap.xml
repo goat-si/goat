@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://goat-si.github.io/goat/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/download/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/download/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/download/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/download/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/download/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/download/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/legal/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/legal/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/legal/" />
+  </url>
+  <url>
+    <loc>https://goat-si.github.io/goat/ko/legal/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://goat-si.github.io/goat/legal/" />
+    <xhtml:link rel="alternate" hreflang="ko" href="https://goat-si.github.io/goat/ko/legal/" />
+  </url>
+</urlset>
