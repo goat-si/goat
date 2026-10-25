@@ -162,14 +162,21 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
       awaitAnswer,
       /** Signals waiting calls that a request may have been answered. */
       answered: (handoffId: string) => PubSub.publish(answers, handoffId).pipe(Effect.asVoid),
-      /** Sends a computer use wake only when no call owns or already returned the answer. */
+      /**
+       * Sends a computer use wake only when no call owns or already returned the answer, and no
+       * person stopped it: the reactor checked for a Stop outside the lock, and one may since have
+       * landed.
+       */
       deliverWake: <E2>(handoff: Handoff, dispatch: Effect.Effect<boolean, E2>) =>
         locked(
           Effect.gen(function* () {
             if (owners.has(handoff.handoffId)) return;
-            const returned =
-              !givenBack.has(handoff.handoffId) && (yield* consumed(handoff.handoffId));
-            if (returned) return;
+            const kind = yield* deps.recordKind(handoff.handoffId);
+            if (kind === ENDED) {
+              givenBack.delete(handoff.handoffId);
+              return;
+            }
+            if (!givenBack.has(handoff.handoffId) && kind === CONSUMED.kind) return;
             // Once sent, the wake's own message stops any further one.
             if (yield* dispatch) givenBack.delete(handoff.handoffId);
           }),

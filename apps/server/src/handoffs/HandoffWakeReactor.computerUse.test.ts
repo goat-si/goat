@@ -157,6 +157,34 @@ it.effect("a person's Stop right after approving outlasts the waiting call's rec
   ),
 );
 
+it.effect("an approval wake checked before a person's Stop is not sent after it", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      // The reactor read the approval, then the person stopped it before the wake went out.
+      const approved = yield* world.handoffs.read({ threadId, handoffId: summary.handoffId });
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "cancelled" },
+        person,
+      );
+      let sent = 0;
+      yield* world.handoffs.deliverComputerUseWake(
+        approved,
+        Effect.sync(() => {
+          sent += 1;
+          return true;
+        }),
+      );
+      expect(sent).toBe(0);
+    }),
+  ),
+);
+
 it.effect("a given-back answer whose wake is waiting to retry still wakes the thread once", () =>
   withWorld((world) =>
     Effect.gen(function* () {
