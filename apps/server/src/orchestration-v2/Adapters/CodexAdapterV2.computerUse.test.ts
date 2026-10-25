@@ -929,4 +929,29 @@ describe("Codex computer use attachment", () => {
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
+
+  // Settling a run and releasing an idle session ask the adapter per thread (#1571).
+  it.effect(
+    "counts a running subagent as its thread's background work after the parent turn ends (#1571)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "background-child";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, root + "-agent");
+          f.status(root + "-agent", "active");
+          f.turnCompleted(1);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          assert.isTrue(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });
