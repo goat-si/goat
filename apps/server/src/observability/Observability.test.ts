@@ -100,7 +100,9 @@ const traceThroughServer = (otlpTracesUrl: string | undefined) =>
       yield* Effect.interrupt.pipe(Effect.withSpan("observability-interrupt"), Effect.exit);
       // More interrupts than redaction keeps one by one; the span must still read as interrupted.
       yield* Effect.failCause(
-        Cause.fromReasons(Array.from({ length: 17 }, (_, id) => Cause.makeInterruptReason(id))),
+        Cause.fromReasons<never>(
+          Array.from({ length: 17 }, (_, id) => Cause.makeInterruptReason(id)),
+        ),
       ).pipe(Effect.withSpan("observability-interrupts"), Effect.exit);
       yield* Effect.void.pipe(Effect.withSpan("observability-success"));
       const { serverTracePath } = yield* ServerConfig.ServerConfig;
