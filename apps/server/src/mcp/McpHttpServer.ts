@@ -149,6 +149,9 @@ import * as ThreadHandlers from "./toolkits/thread/handlers.ts";
 import { ThreadToolkit } from "./toolkits/thread/tools.ts";
 import * as WorktreeHandlers from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import * as StorageHandlers from "./toolkits/storage/handlers.ts";
+import { StorageToolkit } from "./toolkits/storage/tools.ts";
+import * as StorageConsent from "../storage/StorageConsent.ts";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   HttpServerRequest.toURL(request).pipe(
@@ -1215,6 +1218,7 @@ export const catalogRegistrations = {
   orchestrator: toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
   thread: toolkitRegistration(ThreadToolkit, ThreadHandlers.layer),
   worktree: toolkitRegistration(WorktreeToolkit, WorktreeHandlers.layer),
+  storage: toolkitRegistration(StorageToolkit, StorageHandlers.layer),
   previewControls: toolkitRegistration(PreviewControlsToolkit, PreviewControlsHandlers.layer),
   environment: toolkitRegistration(EnvironmentToolkit, EnvironmentHandlers.layer),
   hostStatus: toolkitRegistration(HostStatusToolkit, HostStatusHandlers.layer),
@@ -1273,6 +1277,12 @@ export const layerThreadToolkit = catalogRegistrations.thread.pipe(
 const layerWorktreeToolkitRegistration = catalogRegistrations.worktree.pipe(
   Layer.provide(WorktreeMcpService.layer),
   Layer.provide(WorktreeInventoryService.layer),
+  Layer.provide(HostThreadsMcpService.layer),
+  Layer.provide(OrchestratorMcpService.layer),
+);
+
+const layerStorageToolkitRegistration = catalogRegistrations.storage.pipe(
+  Layer.provide(StorageConsent.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
 );
@@ -1408,6 +1418,7 @@ export const layer = Layer.mergeAll(
   layerFleetResourcesToolkit,
   layerPreviewControlsRegistration,
   layerWorktreeToolkitRegistration,
+  layerStorageToolkitRegistration,
   layerPullRequestsToolkit,
   layerDeviceToolkit,
   layerHtmlToolkit,

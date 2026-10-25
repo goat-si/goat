@@ -299,6 +299,8 @@ import * as SourceControlProviderRegistry from "./sourceControl/SourceControlPro
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { featureUsage } from "./telemetry/FeatureUsage.ts";
 import type { TelemetryOwner } from "./telemetry/Identify.ts";
@@ -1462,6 +1464,8 @@ export const layerWsRpc = (
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const databaseStorage = yield* DatabaseStorage.DatabaseStorage;
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
+      const storageReclaim = yield* StorageReclaim.StorageReclaim;
+      const pressureMonitor = yield* HostPressureMonitor.HostPressureMonitor;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const requireComputerUseDisplay = Effect.serviceOption(CuaDriver.CuaDriver).pipe(
         Effect.flatMap(
@@ -2880,6 +2884,11 @@ export const layerWsRpc = (
         [WS_METHODS.serverGetDatabaseStorage]: () => databaseStorage.status,
         [WS_METHODS.serverCompactStorage]: () => databaseStorage.compactNow,
         [WS_METHODS.serverCleanUpStrayProcesses]: () => strayProcesses.cleanUp,
+        [WS_METHODS.serverGetStorageUsage]: (input) =>
+          storageReclaim.usage({ rescan: input.rescan === true }),
+        [WS_METHODS.serverCleanUpStorageItems]: (input) =>
+          storageReclaim.clean({ items: input.items, actor: "client:" + currentSessionId }),
+        [WS_METHODS.serverSubscribeDiskPressure]: () => pressureMonitor.disk,
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
         [WS_METHODS.serverUpdateSettings]:

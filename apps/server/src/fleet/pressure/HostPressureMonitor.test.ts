@@ -1,6 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../../serverSettings.ts";
@@ -12,6 +15,7 @@ const reading = (loadPerCore: number): PressureSample => ({
   cpuUtilization: 0.5,
   memoryFreeRatio: 0.5,
   diskAvailableBytes: 100 * 1024 ** 3,
+  diskTotalBytes: null,
   eventLoopDelayMs: null,
 });
 
@@ -61,4 +65,37 @@ describe("HostPressureMonitor", () => {
       expect(yield* every30s(2)).toEqual([undefined, undefined]);
     }).pipe(Effect.provide(layer([reading(9), reading(9)], false))),
   );
+
+  it.effect("streams the disk's own level once per change, not once per sample", () => {
+    const GIB = 1024 ** 3;
+    // 40 GiB free of 2 TiB stays elevated however calm the CPU is; a 0.3 GiB dip is not news.
+    const low = (freeGiB: number): PressureSample => ({
+      ...reading(0.1),
+      diskAvailableBytes: Math.round(freeGiB * GIB),
+      diskTotalBytes: 2048 * GIB,
+      diskPath: "/",
+    });
+    const samples = [...Array.from({ length: 6 }, () => low(40)), low(39.7), low(39.7)];
+    return Effect.gen(function* () {
+      const monitor = yield* HostPressureMonitor.HostPressureMonitor;
+      const subscribed = yield* Deferred.make<void>();
+      const seen = yield* monitor.disk.pipe(
+        Stream.tap(() => Deferred.succeed(subscribed, undefined)),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* Deferred.await(subscribed);
+      yield* every30s(8);
+      const values = Array.from(yield* Fiber.join(seen));
+      expect(values.map((value) => value?.level ?? null)).toEqual([null, "ok", "elevated"]);
+      expect(values[2]).toEqual({
+        level: "elevated",
+        since: "1970-01-01T00:03:00.000Z",
+        path: "/",
+        availableBytes: Math.round(39.7 * GIB),
+        totalBytes: 2048 * GIB,
+      });
+    }).pipe(Effect.provide(layer(samples)));
+  });
 });

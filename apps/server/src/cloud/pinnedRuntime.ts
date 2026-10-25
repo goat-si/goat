@@ -565,7 +565,12 @@ const runningExecutables = Effect.fn("cloud.pinned_runtime.running_executables")
     : Option.none<string>();
 });
 
-const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(function* (input: {
+/**
+ * Read-only: the completed runtimes nothing can start again, by the rules prunePinnedRuntimes
+ * documents, plus renamed leftovers of an interrupted prune. Null `unused` means the check
+ * could not decide (unreadable service state, no process list), so nothing counts as unused.
+ */
+const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(function* (input: {
   readonly baseDir: string;
   readonly keep: ReadonlyArray<string>;
   readonly references: ReadonlyArray<string>;
@@ -583,7 +588,7 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
 
   const settledBefore =
     (yield* Clock.currentTimeMillis) - Duration.toMillis(PINNED_RUNTIME_PRUNE_GRACE);
-  const completed: Array<string> = [];
+  const completed: Array<{ readonly version: string; readonly completedAt: number }> = [];
   for (const version of entries) {
     if (!isExactServiceVersion(version)) continue;
     const versionDir = path.join(versionsDir, version);
@@ -601,10 +606,11 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
       completedAt !== undefined &&
       completedAt < settledBefore
     ) {
-      completed.push(version);
+      completed.push({ version, completedAt });
     }
   }
-  if (completed.length === 0) return pruned;
+  const undecided = { versionsDir, pruned, completed, unused: null };
+  if (completed.length === 0) return { ...undecided, unused: [] as ReadonlyArray<string> };
 
   const keep = new Set(input.keep);
   const stateText = yield* fs
@@ -616,10 +622,10 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
       ),
     );
   // State this version cannot read may reference runtimes in ways it does not know.
-  if (stateText === undefined) return pruned;
+  if (stateText === undefined) return undecided;
   if (Option.isSome(stateText)) {
     const state = parseServiceState(stateText.value);
-    if (state === undefined) return pruned;
+    if (state === undefined) return undecided;
     keep.add(state.activeVersion);
     if (state.update !== undefined) {
       keep.add(state.update.fromVersion);
@@ -628,7 +634,7 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
   }
   const executables = yield* runningExecutables();
   // Without a process list, a runtime in use would look unused.
-  if (Option.isNone(executables)) return pruned;
+  if (Option.isNone(executables)) return undecided;
   const platform = yield* HostProcess.Platform;
   // Windows paths are case-insensitive, and shims and process lists need not agree on case.
   const foldCase = (value: string) => (platform === "win32" ? value.toLowerCase() : value);
@@ -642,7 +648,8 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
     .realPath(versionsDir)
     .pipe(Effect.orElseSucceed(() => versionsDir));
 
-  for (const version of completed) {
+  const unused: Array<string> = [];
+  for (const { version } of completed) {
     const versionDir = path.join(versionsDir, version);
     const prefixes = [versionDir, path.join(realVersionsDir, version)].map((dir) =>
       foldCase(dir + path.sep),
@@ -653,12 +660,37 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
     ) {
       continue;
     }
-    const target = path.join(versionsDir, `${PINNED_RUNTIME_PRUNED_PREFIX}${version}`);
-    // Renaming first means an interrupted removal never leaves a partial tree that still carries
-    // its sentinel and would pass for a complete install.
-    yield* fs.remove(target, { recursive: true, force: true }).pipe(
-      Effect.andThen(fs.rename(versionDir, target)),
-      Effect.andThen(Effect.sync(() => pruned.add(target))),
+    unused.push(version);
+  }
+  return { ...undecided, unused: unused as ReadonlyArray<string> };
+});
+
+/**
+ * Renaming first means an interrupted removal never leaves a partial tree that still carries
+ * its sentinel and would pass for a complete install.
+ */
+const renameForRemoval = Effect.fn("cloud.pinned_runtime.rename_for_removal")(function* (
+  versionsDir: string,
+  version: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const target = path.join(versionsDir, `${PINNED_RUNTIME_PRUNED_PREFIX}${version}`);
+  yield* fs.remove(target, { recursive: true, force: true });
+  yield* fs.rename(path.join(versionsDir, version), target);
+  return target;
+});
+
+const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+  readonly references: ReadonlyArray<string>;
+}) {
+  const found = yield* findUnusedRuntimes(input);
+  const pruned = new Set(found.pruned);
+  for (const version of found.unused ?? []) {
+    yield* renameForRemoval(found.versionsDir, version).pipe(
+      Effect.tap((target) => Effect.sync(() => pruned.add(target))),
       Effect.catch((cause) =>
         Effect.logWarning("Could not remove an unused GOAT runtime.", { version, cause }),
       ),
@@ -666,6 +698,60 @@ const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(fun
   }
   return pruned;
 });
+
+export interface PinnedRuntimeVersion {
+  readonly version: string;
+  readonly directory: string;
+  readonly completedAt: number;
+  /** Nothing can start it again: no service state, running process or launcher refers to it. */
+  readonly unused: boolean;
+}
+
+/**
+ * Completed runtimes in this GOAT home and whether each is unused, without changing anything.
+ * `decided` is false when the check could not tell, and then nothing is unused.
+ */
+export const listPinnedRuntimes = Effect.fn("cloud.pinned_runtime.list")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+}) {
+  const path = yield* Path.Path;
+  const found = yield* findUnusedRuntimes({ ...input, references: [] });
+  const unused = new Set(found.unused ?? []);
+  return {
+    decided: found.unused !== null,
+    runtimes: found.completed.map(({ version, completedAt }): PinnedRuntimeVersion => ({
+      version,
+      directory: path.join(found.versionsDir, version),
+      completedAt,
+      unused: unused.has(version),
+    })),
+  };
+});
+
+/**
+ * Removes one runtime a person chose, only if it is still unused under the install lock. Unlike
+ * prunePinnedRuntimes it never touches other runtimes or an earlier prune's leftovers.
+ */
+export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_one")(
+  function* (input: {
+    readonly baseDir: string;
+    readonly keep: ReadonlyArray<string>;
+    readonly version: string;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const renamed = yield* pinnedRuntimeInstallLock.withPermit(
+      Effect.gen(function* () {
+        const found = yield* findUnusedRuntimes({ ...input, references: [] });
+        if (!(found.unused ?? []).includes(input.version)) return null;
+        return yield* renameForRemoval(found.versionsDir, input.version);
+      }),
+    );
+    if (renamed === null) return false;
+    yield* fs.remove(renamed, { recursive: true, force: true });
+    return true;
+  },
+);
 
 /**
  * Every update publishes a new immutable runtime, so without pruning they pile up. Removes

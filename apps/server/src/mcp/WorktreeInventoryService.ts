@@ -54,8 +54,57 @@ export class WorktreeInventoryService extends Context.Service<
     readonly cleanup: (
       input: LocalInput<WorktreeMcpCleanupInput>,
     ) => Effect.Effect<WorktreeMcpCleanupResult, OrchestratorMcpFailure>;
+    /** Every worktree of every project repository, with its head and project overlap. */
+    readonly facts: Effect.Effect<ReadonlyArray<AbandonedWorktreeFacts>, OrchestratorMcpFailure>;
+    /**
+     * Removes a checkout no live thread uses, for the storage cleanup a person confirmed.
+     * Stricter than remove: nothing uncommitted, every commit on a remote, no bound thread that is
+     * not archived, and still the branch and commit the person reviewed. It never prunes other
+     * registrations. `verify` runs last under the leases, for checks this service cannot make.
+     */
+    readonly removeAbandoned: (input: {
+      readonly path: string;
+      readonly head: string | null;
+      readonly branch: string | null;
+      readonly verify: Effect.Effect<string | null>;
+    }) => Effect.Effect<
+      { readonly removed: true } | { readonly removed: false; readonly reason: string },
+      OrchestratorMcpFailure
+    >;
   }
 >()("goat/mcp/WorktreeInventoryService") {}
+
+export interface AbandonedWorktreeFacts {
+  readonly entry: WorktreeMcpInventoryEntry;
+  readonly head: string | null;
+  /** The folder is, or contains, a project folder of this server. */
+  readonly holdsProject: boolean;
+}
+
+/**
+ * Why the storage cleanup must keep this worktree, or null when it may go. Every unknown keeps
+ * it: a status or commit count that could not be read is never taken as clean.
+ */
+export function abandonedWorktreeBlocker(
+  facts: AbandonedWorktreeFacts,
+  expected?: { readonly head: string | null; readonly branch: string | null },
+): string | null {
+  const { entry } = facts;
+  if (entry.main) return "it is the repository's main checkout";
+  if (facts.holdsProject) return "it is, or contains, a GOAT project's folder";
+  if (!entry.managed) return "it is outside GOAT's worktrees folder";
+  if (entry.missing) return "its folder is already gone";
+  const live = entry.threads.find((thread) => !thread.archived || thread.busy);
+  if (live !== undefined) return "thread " + live.threadId + " (" + live.title + ") uses it";
+  if (entry.dirtyCount === null) return "its changes could not be checked";
+  if (entry.dirtyCount > 0)
+    return "it has " + files(entry.dirtyCount) + " with uncommitted changes";
+  if (entry.aheadCount === null) return "its commits could not be compared with the remotes";
+  if (entry.aheadCount > 0) return "it has " + commits(entry.aheadCount) + " on no remote";
+  if (expected !== undefined && (expected.head !== facts.head || expected.branch !== entry.branch))
+    return "its branch or commit changed since it was reviewed";
+  return null;
+}
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -764,7 +813,65 @@ const make = Effect.gen(function* () {
     return { dryRun, removed, kept };
   });
 
-  return WorktreeInventoryService.of({ inventory, remove, cleanup });
+  const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(
+    Effect.map((list) =>
+      list.map(({ entry, head, holdsProject }) => ({ entry, head, holdsProject })),
+    ),
+  );
+
+  const removeAbandoned: WorktreeInventoryService["Service"]["removeAbandoned"] = Effect.fn(
+    "WorktreeInventory.removeAbandoned",
+  )(function* (input) {
+    const kept = (reason: string) => ({ removed: false as const, reason });
+    const requested = path.resolve(input.path);
+    if (!(yield* fs.exists(requested).pipe(Effect.orElseSucceed(() => false))))
+      return kept("its folder is already gone");
+    const key = yield* real(requested);
+    const scanned = yield* scan(requested).pipe(Effect.result);
+    if (scanned._tag === "Failure") return kept(scanned.failure.message);
+    let target: WorktreeFacts | undefined;
+    for (const candidate of scanned.success)
+      if ((yield* real(candidate.entry.path)) === key) target = candidate;
+    if (target === undefined) return kept("it is no longer a worktree of a GOAT project");
+    // A link to a worktree would delete a checkout under a name nobody reviewed.
+    if (target.entry.path !== requested) return kept("it is an alias of " + target.entry.path);
+    const found = target;
+    return yield* withLeases(
+      found.leaseKeys,
+      Effect.gen(function* () {
+        const current = yield* reread(found.entry.repository, key);
+        if (current === null) return kept("it is no longer a worktree of a GOAT project");
+        const blocker = abandonedWorktreeBlocker(current, input);
+        if (blocker !== null) return kept(blocker);
+        const extra = yield* input.verify;
+        if (extra !== null) return kept(extra);
+        const busy = yield* busyNow(key);
+        if (busy !== undefined) return kept("thread " + busy.id + " started using it");
+        // No --force: git checks for changes once more and refuses rather than lose them.
+        const result = yield* git
+          .execute({
+            operation: "WorktreeInventory.removeAbandoned",
+            cwd: current.entry.repository,
+            args: ["worktree", "remove", current.entry.path],
+            allowNonZeroExit: true,
+            timeoutMs: 300_000,
+            maxOutputBytes: 64 * 1024,
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure("orchestration_error", "git worktree remove failed: " + error.message),
+            ),
+          );
+        if (result.exitCode !== 0)
+          return kept(
+            "git refused to remove it: " + (result.stderr.trim().split(/\r?\n/u)[0] ?? "no reason"),
+          );
+        return { removed: true as const };
+      }),
+    );
+  });
+
+  return WorktreeInventoryService.of({ inventory, remove, cleanup, facts, removeAbandoned });
 });
 
 export const layer = Layer.effect(WorktreeInventoryService, make);

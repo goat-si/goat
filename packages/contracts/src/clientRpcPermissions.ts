@@ -81,6 +81,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.serverSyncOpenCodex]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverSubscribeOpenCodexSync]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCleanUpStrayProcesses]: AuthEnvironmentMaintainScope,
+  [WS_METHODS.serverCleanUpStorageItems]: AuthEnvironmentMaintainScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,
