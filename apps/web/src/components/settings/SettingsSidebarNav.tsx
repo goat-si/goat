@@ -56,14 +56,14 @@ import {
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
 import { validateSettingsScopeSearch } from "./settingsScope";
 
-const T3ConnectSidebarSignIn = lazy(() =>
-  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
-    default: module.T3ConnectSidebarSignIn,
+const GoatConnectSidebarSignIn = lazy(() =>
+  import("../clerk/GoatConnectSidebarSignIn").then((module) => ({
+    default: module.GoatConnectSidebarSignIn,
   })),
 );
-const T3ConnectSidebarAvatar = lazy(() =>
-  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
-    default: module.T3ConnectSidebarAvatar,
+const GoatConnectSidebarAvatar = lazy(() =>
+  import("../clerk/GoatConnectSidebarSignIn").then((module) => ({
+    default: module.GoatConnectSidebarAvatar,
   })),
 );
 
@@ -324,7 +324,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
       <SidebarFooter>
         {hasCloudPublicConfig() ? (
           <Suspense fallback={null}>
-            <T3ConnectSidebarSignIn />
+            <GoatConnectSidebarSignIn />
           </Suspense>
         ) : null}
         <div className="flex items-center gap-1">
@@ -333,7 +333,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           </div>
           {hasCloudPublicConfig() ? (
             <Suspense fallback={null}>
-              <T3ConnectSidebarAvatar />
+              <GoatConnectSidebarAvatar />
             </Suspense>
           ) : null}
         </div>

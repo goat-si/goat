@@ -40,7 +40,7 @@ describe("redactGoatCredentials", () => {
   it("an environment dump in any common form never shows the MCP token", () => {
     const dumps = [
       `HOME=/Users/agent\nGOAT_ACP_MCP_AUTHORIZATION=Bearer ${TOKEN}\nPATH=/usr/bin`,
-      `declare -x T3_ACP_MCP_AUTHORIZATION="Bearer ${TOKEN}"`,
+      `declare -x T3_ACP_MCP_AUTHORIZATION="Bearer ${TOKEN}"`, // goat-rename: legacy
       `GOAT_ACP_MCP_AUTHORIZATION=Bearer\\ ${TOKEN}`,
       JSON.stringify({ GOAT_CUA_LEASE_AUTHORIZATION: `Bearer ${TOKEN}` }),
       JSON.stringify(JSON.stringify({ GOAT_ACP_MCP_AUTHORIZATION: `Bearer ${TOKEN}` })),

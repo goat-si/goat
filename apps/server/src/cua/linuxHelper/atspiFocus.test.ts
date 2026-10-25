@@ -55,6 +55,14 @@ describe("makeSecureFocusProbe", () => {
     });
   });
 
+  it("reads a role past uint32 as unknown, never as a role that is not a password field (#1621 r7)", async () => {
+    expect(await makeSecureFocusProbe(bus(4_294_967_296))(10)).toEqual({
+      known: false,
+      secure: false,
+      windows: 0,
+    });
+  });
+
   it("reports focus as unknown, never as not secure, when the process or the bus does not answer", async () => {
     expect(await makeSecureFocusProbe(bus(40))(11)).toEqual({
       known: false,

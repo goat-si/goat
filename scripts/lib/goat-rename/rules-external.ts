@@ -122,7 +122,6 @@ const serviceEndpointPaths = new Set([
   "packages/contracts/src/goatProjectFile.ts",
   "packages/shared/src/connectAuth.ts",
   "packages/shared/src/providerAuthReturnUrl.ts",
-  "packages/source-control-github/src/server/githubStackRebase.ts",
   "scripts/build-desktop-artifact.ts",
   "structure/decisions/ADR-0014-desktop-runtime-identity.md",
 ]);
@@ -132,6 +131,52 @@ const exactLines = (...lines: readonly string[]) =>
     lines.map((line) => `^${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).join("|"),
     "g",
   );
+
+/**
+ * "T3 Connect" that stays while visible-connect-account-copy (rules-visible.ts) renames the rest: sentences that
+ * contrast the disabled T3 Connect stack with GOAT Connect, and sentences about upstream's hosted relay, its deployment
+ * workflow, trace export or account. Each pattern matches the phrase around the name rather than the whole line, so it
+ * holds on upstream's wording of the same sentence during a chase as well as on GOAT's.
+ */
+const connectServicePhrases: readonly (readonly [path: string, pattern: RegExp])[] = [
+  ["packages/shared/src/goatConnect.ts", /(?<=will replace )T3 Connect/g],
+  [
+    "docs/user/remote-access.md",
+    /(?<=coming soon\. )T3 Connect(?= sign-in)|(?<=only a )T3 Connect(?= route)/g,
+  ],
+  ["apps/mobile/README.md", /(?<=coming soon\. )T3 Connect(?= is disabled)/g],
+  ["docs/internals/t3-connect.md", /(?<=\*\*Status:\*\* )T3 Connect(?= is disabled)/g],
+  ["docs/operations/connect-setup.md", /(?<=\*\*Status:\*\* )T3 Connect(?= \(Clerk)/g],
+  [
+    "docs/operations/android-notifications.md",
+    /(?<=These steps need )T3 Connect(?=, which is disabled)|T3 Connect(?='s hosted infrastructure)/g,
+  ],
+  ["docs/operations/mobile-testflight.md", /(?<=\*\*)T3 Connect(?= sign-in\*\* is off)/g],
+  [
+    "docs/operations/release.md",
+    /(?<=DMG with )T3 Connect(?= (?:public configuration|enabled))|(?<=public )T3 Connect(?= identifiers)|(?<=^## )T3 Connect(?= relay deployment$)|(?<=\*\*Deploy )T3 Connect(?= relay\*\*)/g,
+  ],
+  ["docs/operations/relay-observability.md", /(?<=export to )T3 Connect/g],
+  ["docs/operations/observability.md", /T3 Connect(?= trace export)/g],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    /(?<=deterministic )T3 Connect(?= discovery rows)/g,
+  ],
+  [
+    "docs/user/telemetry.md",
+    /(?<=your )T3 Connect(?= account)|(?<=diagnose )T3 Connect(?= connectivity)/g,
+  ],
+  ["structure/overview.md", /^T3 Connect(?= relay from)/g],
+];
+
+const connectServiceKeeps: readonly KeepRule[] = connectServicePhrases.map(([path, pattern]) => ({
+  id: `connect-service-phrases:${path}`,
+  pattern,
+  scope: (candidate) => candidate === path,
+  holdsOnApply: true,
+  reason:
+    "Names the disabled T3 Connect stack or upstream's hosted relay, workflow, trace export or account.",
+}));
 
 // Match the existing upstream phrases before other keeps strip repository URLs or legacy tokens.
 const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
@@ -229,10 +274,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     exactLines(" * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards"),
   ],
   [
-    "apps/server/src/vcs/GitVcsDriver.ts",
-    /(?:GIT_AUTHOR_NAME: "T3 Code"|GIT_COMMITTER_NAME: "T3 Code")/g,
-  ],
-  [
     "docs/operations/mobile-app-store-screenshots.md",
     exactLines(
       "2. Creates T3 Code, React, and Linux Git repositories with recognizable favicons, feature branches,",
@@ -241,32 +282,14 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     ),
   ],
   ["packages/contracts/src/relay.ts", /(?:"T3 Code Relay API")/g],
-  ["packages/provider-cursor/src/server/adapter.ts", /(?:name: `T3 Code \$\{input\.threadId\}`)/g],
-  [
-    "packages/provider-cursor/src/server/auth.ts",
-    /(?:apiKeyName: `T3 Code - \$\{options\.displayName\}`)/g,
-  ],
   [
     "packages/provider-muse/src/server/sdk.ts",
     /(?:clientInfo: \{ name: "t3_code", title: "T3 Code", version: "1" \})/g,
   ],
-  [
-    "packages/provider-opencode/src/server/textGeneration.ts",
-    /(?:title: `T3 Code \$\{input\.operation\}`)/g,
-  ],
-  [
-    "packages/provider-opencode/src/server/v2/textGeneration.ts",
-    /(?:title: `T3 Code \$\{input\.operation\}`)/g,
-  ],
-  ["packages/provider-testing/src/replayWorkspace.ts", /(?:"T3 Code Test")/g],
   ["packages/shared/src/goatHome.ts", /(?:T3 Code may be using `~\/\.t3` at the same time\.)/g],
   [
     "packages/shared/src/usageLimits.ts",
     /(?:I've reached the limit for using my ChatGPT plan in T3 Code\. Could you increase our workspace's usage limits so I can continue\?)/g,
-  ],
-  [
-    "packages/source-control-github/src/server/githubStackRebase.ts",
-    /(?:GIT_CONFIG_VALUE_1: "T3 Code")/g,
   ],
   [
     "scripts/mobile-showcase-environment.ts",
@@ -550,6 +573,7 @@ const mobileNativePaths = new Set([
 ]);
 
 export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
+  ...connectServiceKeeps,
   ...upstreamProductPhrases.map(([path, pattern]) => ({
     id: `upstream-product-identity:${path}`,
     pattern,
@@ -580,7 +604,12 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "relay-service-copy",
     pattern: /T3 Connect|T3 [Aa]ccount/g,
-    scope: (path) => relayCopyPaths.has(path),
+    scope: (path) =>
+      relayCopyPaths.has(path) &&
+      (!/^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
+        path,
+      ) ||
+        path === "docs/user/t3-connect-troubleshooting.md"),
     reason: "The hosted relay/account belongs to upstream, not GOAT (R6/D12/D14).",
   },
   {
@@ -609,8 +638,9 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "relay-identities",
     pattern:
-      /T3Connect[A-Za-z]*|T3Connect|t3-(?:env|cloud|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
-    scope: (path) => relayIdentityPaths.has(path),
+      /t3-(?:env|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3-cloud-(?:mint|health)\+jwt|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
+    // Files that move to GoatConnect* keep their relay values under either name.
+    scope: (path) => relayIdentityPaths.has(path.replaceAll("GoatConnect", "T3Connect")),
     reason:
       "T3 Connect account names, public client ids, JWT and hosted routing contracts belong to the upstream relay (D12/D14).",
   },

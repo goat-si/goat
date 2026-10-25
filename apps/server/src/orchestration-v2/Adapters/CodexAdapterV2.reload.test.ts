@@ -14,11 +14,11 @@ import {
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 import {
   GOAT_MEMORY_TOOLS,
-  codexReloadFixture,
+  fixture,
   layerAdapterTest,
-  spawnCodexChild,
+  spawnChild,
   unusedRegistry,
-} from "./CodexThreadReload.testkit.ts";
+} from "./CodexAdapterV2.attachment.testkit.ts";
 
 // The thread config Codex receives for each goatclaw subagent limit.
 const THREE_LANES = {
@@ -36,7 +36,7 @@ const lanesOf = (config: Record<string, unknown>) =>
 /** A thread started with three subagent lanes whose profile then drops to none. */
 const limitScenario = (scenario: string) =>
   Effect.gen(function* () {
-    const f = codexReloadFixture(scenario);
+    const f = fixture(scenario);
     const sessions = yield* McpProviderSessions.McpProviderSessions;
     yield* sessions.set({ ...f.config, nativeSubagentLimit: 3 });
     f.start(undefined, f.threadParams(undefined, f.config, GOAT_MEMORY_TOOLS, THREE_LANES));
@@ -86,7 +86,7 @@ describe("Codex subagent limit reload (#1572)", () => {
           const root = "lanes-child-" + child;
           const { f, dropLanes, reloadNoLanes } = yield* limitScenario(root);
           yield* f.turnStart(3, 1, false);
-          spawnCodexChild(f, root, root + "-agent");
+          spawnChild(f, root, root + "-agent");
           if (child === "running") f.status(root + "-agent", "active");
           f.turnCompleted(1);
           yield* f.turnStart(4, 2, false);
@@ -186,7 +186,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
     (retry) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const f = codexReloadFixture("authority-" + retry);
+          const f = fixture("authority-" + retry);
           const rotated = {
             ...f.config,
             providerSessionId: "credential-rotated",
@@ -240,7 +240,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const f = codexReloadFixture("authority-held-resume");
+          const f = fixture("authority-held-resume");
           const rotated = {
             ...f.config,
             providerSessionId: "credential-rotated",
@@ -282,7 +282,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const f = codexReloadFixture("authority-unload-failed");
+          const f = fixture("authority-unload-failed");
           const rotated = {
             ...f.config,
             providerSessionId: "credential-rotated",
@@ -333,7 +333,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
   it.effect("records what a rollback load applies to a thread a failed reload dropped", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const f = codexReloadFixture("authority-rollback-load");
+        const f = fixture("authority-rollback-load");
         const credential = (name: string) => ({
           ...f.config,
           providerSessionId: `credential-${name}`,
@@ -468,7 +468,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
   it.effect("defers a memory grant or revocation while the thread works, then reloads it", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const f = codexReloadFixture("authority-memory");
+        const f = fixture("authority-memory");
         const granted: McpProviderSession.McpProviderSessionConfig = {
           ...f.config,
           grantedScopes: ["memory:read", "memory:write", "orchestration:read"],

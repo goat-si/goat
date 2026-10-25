@@ -1,4 +1,4 @@
-# T3 Connect setup
+# GOAT Connect setup
 
 > **Status:** T3 Connect (Clerk sign-in, hosted relay, and managed Cloudflare
 > tunnels) is disabled in every build by `GOAT_CONNECT_ENABLED=false` in
@@ -10,7 +10,7 @@
 > Stored links are retained without tunnel restoration; previously linked servers
 > start normally.
 
-Deployment and client configuration for T3 Connect. The [architecture note](../internals/t3-connect.md)
+Deployment and client configuration for GOAT Connect. The [architecture note](../internals/t3-connect.md)
 explains the trust boundaries; the [relay README](../../infra/relay/README.md#deployment) owns relay
 provisioning instructions.
 

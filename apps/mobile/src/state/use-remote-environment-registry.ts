@@ -172,11 +172,11 @@ export function useRemoteConnections() {
       if (environment.isRelayManaged && isGoatConnectEnabled()) {
         Dialog.alert(
           "Remove from this device?",
-          `Forget ${environment.environmentLabel} and its cached threads on this device.\n\nIt stays on your T3 Connect account and keeps its host space. Deregister it under T3 Account → T3 Connect to free it.`,
+          `Forget ${environment.environmentLabel} and its cached threads on this device.\n\nIt stays on your GOAT Connect account and keeps its host space. Deregister it under GOAT Account → GOAT Connect to free it.`,
           [
             { text: "Cancel", style: "cancel" },
             {
-              text: "Open T3 Account",
+              text: "Open GOAT Account",
               onPress: () => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" }),
             },
             remove,

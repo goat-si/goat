@@ -6,11 +6,7 @@ import { TestClock } from "effect/testing";
 
 import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
-import {
-  codexReloadFixture as fixture,
-  layerAdapterTest,
-  spawnCodexChild,
-} from "./CodexThreadReload.testkit.ts";
+import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 
 describe("Codex computer use attachment", () => {
   it.effect.each(["managed", "user", "override"] as const)(
@@ -163,7 +159,7 @@ describe("Codex computer use attachment", () => {
           yield* sessions.set(withCua("control:a"));
           f.start(f.managed("control:a"));
           yield* f.turnStart(3, 1, true);
-          spawnCodexChild(f, root, child);
+          spawnChild(f, root, child);
           f.status(child, "active", flags);
           f.turnCompleted(1);
           // Turn 2 under a new control: Codex still reports the child busy, so nothing reloads.
@@ -208,7 +204,7 @@ describe("Codex computer use attachment", () => {
         yield* sessions.set(withCua("control:a"));
         f.start(f.managed("control:a"));
         yield* f.turnStart(3, 1, true);
-        spawnCodexChild(f, root, child);
+        spawnChild(f, root, child);
         f.turnCompleted(1);
         // Unknown is treated as busy: each later turn carries the note and nothing reloads.
         yield* f.turnStart(4, 2, true, true);
@@ -380,7 +376,7 @@ describe("Codex computer use attachment", () => {
       yield* sessions.set(withCua("control:a"));
       f.start(f.managed("control:a"));
       yield* f.turnStart(3, 1, true);
-      spawnCodexChild(f, root, child);
+      spawnChild(f, root, child);
       f.status(child, "active");
       return { f, child, goalNotice, withCua, sessions };
     });
@@ -506,7 +502,7 @@ describe("Codex computer use attachment", () => {
         yield* sessions.set(withCua("control:a"));
         f.start(f.managed("control:a"));
         yield* f.turnStart(3, 1, true);
-        spawnCodexChild(f, root, child);
+        spawnChild(f, root, child);
         f.status(child, "active");
         // Codex keeps a loaded child whose turn failed in systemError until it runs again.
         f.status(child, "systemError");
@@ -662,29 +658,5 @@ describe("Codex computer use attachment", () => {
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
-  );
-
-  it.effect(
-    "counts a running subagent as its thread's background work after the parent turn ends (#1571)",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const root = "background-child";
-          const f = fixture(root);
-          const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(f.config);
-          f.start();
-          yield* f.turnStart(3, 1, false);
-          spawnCodexChild(f, root, root + "-agent");
-          f.status(root + "-agent", "active");
-          f.turnCompleted(1);
-          const replay = yield* f.open;
-          yield* replay.startTurn(1);
-          yield* replay.terminal;
-          assert.isTrue(
-            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
-          );
-        }),
-      ).pipe(Effect.provide(layerAdapterTest)),
   );
 });

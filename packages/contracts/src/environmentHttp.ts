@@ -457,7 +457,7 @@ export const EnvironmentConnectReachabilityCause = Schema.Literals([
 ]);
 export type EnvironmentConnectReachabilityCause = typeof EnvironmentConnectReachabilityCause.Type;
 
-/** Whether other devices can reach this environment through its T3 Connect tunnel. */
+/** Whether other devices can reach this environment through its GOAT Connect tunnel. */
 export const EnvironmentConnectReachability = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("reachable"),
@@ -504,11 +504,11 @@ export const GOAT_CONNECT_TROUBLESHOOTING_SECTIONS = [
   "the-host-runs-an-older-t3-code",
   "t3-connect-returned-an-error",
 ] as const;
-export type T3ConnectTroubleshootingSection =
+export type GoatConnectTroubleshootingSection =
   (typeof GOAT_CONNECT_TROUBLESHOOTING_SECTIONS)[number];
 
 /** Clients, the CLI, and server logs link here as "More info". */
-export function t3ConnectTroubleshootingUrl(section: T3ConnectTroubleshootingSection): string {
+export function goatConnectTroubleshootingUrl(section: GoatConnectTroubleshootingSection): string {
   return `https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#${section}`;
 }
 
@@ -522,10 +522,10 @@ const REACHABILITY_SECTION = {
   unexpected_response: "the-tunnel-works-but-t3-code-does-not-answer",
   dns_failed: "the-t3-connect-address-does-not-resolve-or-answer",
   timeout: "the-t3-connect-address-does-not-resolve-or-answer",
-} satisfies Record<EnvironmentConnectReachabilityCause, T3ConnectTroubleshootingSection>;
+} satisfies Record<EnvironmentConnectReachabilityCause, GoatConnectTroubleshootingSection>;
 
 export function connectReachabilityHelpUrl(cause: EnvironmentConnectReachabilityCause): string {
-  return t3ConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
+  return goatConnectTroubleshootingUrl(REACHABILITY_SECTION[cause]);
 }
 
 export const EnvironmentCloudLinkStateResult = Schema.Struct({

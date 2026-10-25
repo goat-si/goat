@@ -89,6 +89,7 @@ import type {
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
+import * as CodexSubagents from "./codexSubagents.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -478,18 +479,6 @@ function codexBackgroundCommandDetail(item: {
       : output;
   const header = `Background command completed${exit}: ${command}`;
   return outputTail.length === 0 ? header : `${header}\n\nOutput tail:\n${outputTail}`;
-}
-
-// Codex spawns can omit the prompt, which registers as an empty string.
-function codexNativeSubagentLabel(task: OrchestrationV2Subagent): string | undefined {
-  return task.title?.trim() || task.prompt.trim() || undefined;
-}
-
-function codexNativeSubagentDetail(task: OrchestrationV2Subagent): string {
-  const header = `Subagent ${task.status}: ${codexNativeSubagentLabel(task) ?? task.id}`;
-  return task.result == null || task.result.length === 0
-    ? header
-    : `${header}\n\nResult:\n${task.result}`;
 }
 
 export interface CodexDynamicToolProjection extends McpToolPresentation {
@@ -1298,6 +1287,8 @@ interface CodexSubagentThreadContext {
   readonly turnItemId: OrchestrationV2TurnItem["id"];
   readonly turnItemOrdinal: number;
   task: OrchestrationV2Subagent;
+  /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
+  endedByStop?: boolean;
 }
 
 const approvalOwnerCodexTurn = (
@@ -3220,7 +3211,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               subagent,
               status: "running",
               startedAt: turn.startedAt,
-              ...(providerTurnOrdinal > 1 ? { reopen: true, result: null } : {}),
+              // A real turn reopens a settled task, including one Stop ended before it began.
+              ...(providerTurnOrdinal > 1 || subagent.endedByStop === true
+                ? { reopen: true, result: null }
+                : {}),
             });
             const now = yield* DateTime.now;
             yield* emitProviderEvent({
@@ -6685,13 +6679,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }),
                 });
               }
-              if (input.status !== "completed") {
-                yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) => {
-                  const updated = new Set(current);
-                  updated.add(input.nativeTurnId);
-                  return updated;
-                });
-              }
+              if (input.status !== "completed")
+                yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) =>
+                  new Set(current).add(input.nativeTurnId),
+                );
+              // Only Stop: Codex also reports a turn replaced by compaction as interrupted.
+              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId))
+                for (const subagent of CodexSubagents.stopped(
+                  yield* Ref.get(subagentThreads),
+                  input.context,
+                  yield* Ref.get(activeTurns),
+                ))
+                  yield* emitSubagentTaskUpdate({ subagent, status: "interrupted" });
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
@@ -6867,13 +6866,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     threadId: parent.projectionThreadId,
                     providerThreadId: parent.providerThread.id,
                     driver: CODEX_PROVIDER,
-                    detail: codexNativeSubagentDetail(task),
+                    detail: CodexSubagents.detail(task),
                     // The detail is the whole wake; Codex buffers no output for it.
                     delivery: "message_text",
                     notification: backgroundWorkNotification([
                       {
                         kind: "subagent",
-                        label: codexNativeSubagentLabel(task),
+                        label: CodexSubagents.label(task),
                         outcome: input.status,
                         childThreadId: input.context.subagent.childThreadId,
                       },

@@ -1,3 +1,4 @@
+/** The replayed Codex thread the attachment, reload and subagent tests drive. */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
 import { CodexSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
@@ -62,7 +63,7 @@ export const unusedRegistry = {
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
 /** Opens one replayed Codex session and records the thread requests the adapter sends. */
-const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
+const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
 ) {
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
@@ -127,13 +128,17 @@ const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
   });
   const terminals = yield* Queue.unbounded<void>();
   const goalTokens = yield* Queue.unbounded<number>();
+  // Every status a subagent task was given, in order.
+  const subagentStatuses: Array<string> = [];
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
-        : event.type === "provider_thread.updated" && event.providerThread.goal
-          ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-          : Effect.void,
+        : event.type === "subagent.updated"
+          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
+          : event.type === "provider_thread.updated" && event.providerThread.goal
+            ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+            : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -160,13 +165,14 @@ const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
+    subagentStatuses,
     runtime,
     providerThread,
   };
 });
 
 /** The replayed Codex thread every test drives, with the frames it expects in order. */
-export const codexReloadFixture = (scenario: string) => {
+export const fixture = (scenario: string) => {
   const nativeThreadId = scenario;
   const threadId = ThreadId.make(`thread-${scenario}`);
   const config: McpProviderSession.McpProviderSessionConfig = {
@@ -401,11 +407,7 @@ export const codexReloadFixture = (scenario: string) => {
 };
 
 // A spawned subagent is its own native thread; Codex reports each thread's status separately.
-export const spawnCodexChild = (
-  f: ReturnType<typeof codexReloadFixture>,
-  root: string,
-  child: string,
-) =>
+export const spawnChild = (f: ReturnType<typeof fixture>, root: string, child: string) =>
   f.entries.push({
     type: "emit_inbound",
     frame: {

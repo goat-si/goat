@@ -240,7 +240,7 @@ export function ConnectionEnvironmentRow(props: {
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
               {isGoatConnectEnabled()
-                ? "Managed by T3 Connect. Tunnel details update automatically."
+                ? "Managed by GOAT Connect. Tunnel details update automatically."
                 : `${GOAT_CONNECT_COMING_SOON.title} · ${GOAT_CONNECT_COMING_SOON.status}. ${GOAT_CONNECT_COMING_SOON.description}`}
             </Text>
           ) : (

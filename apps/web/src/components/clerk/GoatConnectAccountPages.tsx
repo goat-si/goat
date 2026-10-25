@@ -4,7 +4,7 @@ import { type ReactNode, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
-import { T3ConnectUserProfilePage } from "./T3ConnectUserProfilePage";
+import { GoatConnectUserProfilePage } from "./GoatConnectUserProfilePage";
 
 export const GOAT_CONNECT_ACCOUNT_PAGES = [
   {
@@ -14,10 +14,10 @@ export const GOAT_CONNECT_ACCOUNT_PAGES = [
     content: <MobileClientsUserProfilePage />,
   },
   {
-    label: "T3 Connect",
-    url: "t3-connect",
+    label: "GOAT Connect",
+    url: "goat-connect",
     icon: <ServerIcon className="size-4" />,
-    content: <T3ConnectUserProfilePage />,
+    content: <GoatConnectUserProfilePage />,
   },
 ] as const;
 
@@ -27,7 +27,7 @@ type PortalTargets = Readonly<Record<string, HTMLDivElement | undefined>>;
  * Clerk mounts custom pages into DOM nodes it owns, so the caller must keep `portals` rendered for
  * as long as the modal can be open.
  */
-export function useT3ConnectAccountPage(): {
+export function useGoatConnectAccountPage(): {
   readonly open: (() => void) | null;
   readonly portals: ReactNode;
 } {
@@ -39,7 +39,7 @@ export function useT3ConnectAccountPage(): {
     const setTarget = (key: string, element: HTMLDivElement | undefined) =>
       setTargets((current) => ({ ...current, [key]: element }));
     clerk.openUserProfile({
-      __experimental_startPath: "/t3-connect",
+      __experimental_startPath: "/goat-connect",
       customPages: GOAT_CONNECT_ACCOUNT_PAGES.map((page) => ({
         label: page.label,
         url: page.url,

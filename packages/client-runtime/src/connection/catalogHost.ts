@@ -155,7 +155,7 @@ export const handleConnectionCatalogOperation = <E>(
           return {
             type: "failure",
             reason: "refused",
-            message: "Use Settings → Connections to manage T3 Connect environments.",
+            message: "Use Settings → Connections to manage GOAT Connect environments.",
           };
         const removed = savedConnection(entry);
         yield* registry.remove(operation.environmentId);

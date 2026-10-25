@@ -73,6 +73,24 @@ function parseAddress(output: string): string | null {
   return /^\('(.+)',\)\s*$/u.exec(output.trim())?.[1] ?? null;
 }
 
+/** The accessibility bus address, asked of org.a11y.Bus on the session bus. */
+export async function a11yBusAddress(run: GdbusRunner): Promise<string> {
+  const address = parseAddress(
+    await run([
+      "call",
+      "--session",
+      "--dest",
+      "org.a11y.Bus",
+      "--object-path",
+      "/org/a11y/bus",
+      "--method",
+      "org.a11y.Bus.GetAddress",
+    ]),
+  );
+  if (address === null) throw new Error("AT-SPI gave no bus address.");
+  return address;
+}
+
 // One (bus name, object path) element of an `a(so)` as gdbus prints it.
 const REFERENCE = "\\('([^'\\\\]+)', (?:objectpath )?'(/[^'\\\\]*)'\\)";
 // A whole non-empty `(a(so))` reply: the first element carries the type, the rest do not.
@@ -100,10 +118,11 @@ function parseReferences(
   }));
 }
 
-/** The number in a `(uint32 N,)` reply: a process id or a role. */
+/** The number in a `(uint32 N,)` reply: a process id or a role. GLib never prints more than 32 bits. */
 function parseUint32(output: string): number | null {
   const match = /^\(uint32 (\d+),\)$/u.exec(output.trim());
-  return match ? Number(match[1]) : null;
+  const value = match ? Number(match[1]) : Number.NaN;
+  return value <= 0xffff_ffff ? value : null;
 }
 
 export function makeSecureFocusProbe(run: GdbusRunner) {
@@ -111,19 +130,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
   const busByPid = new Map<number, string>();
 
   const a11yAddress = async () => {
-    address ??= parseAddress(
-      await run([
-        "call",
-        "--session",
-        "--dest",
-        "org.a11y.Bus",
-        "--object-path",
-        "/org/a11y/bus",
-        "--method",
-        "org.a11y.Bus.GetAddress",
-      ]),
-    );
-    if (address === null) throw new Error("AT-SPI gave no bus address.");
+    address ??= await a11yBusAddress(run);
     return address;
   };
   const call = async (dest: string, path: string, method: string, ...args: string[]) =>

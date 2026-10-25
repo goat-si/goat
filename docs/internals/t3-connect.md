@@ -1,4 +1,4 @@
-# T3 Connect
+# GOAT Connect
 
 > **Status:** T3 Connect is disabled in every build by `GOAT_CONNECT_ENABLED=false`
 > in [`@goat/shared/goatConnect`](../../packages/shared/src/goatConnect.ts).
@@ -14,7 +14,7 @@ hidden (see [the route predicate](../../packages/client-runtime/src/connection/r
 Saved relay-only environments stay unavailable and can be forgotten; direct pairing,
 Tailscale, and SSH are unaffected.
 
-T3 Connect uses Clerk for cloud identity. The relay manages environment links,
+GOAT Connect uses Clerk for cloud identity. The relay manages environment links,
 credentials for reaching environments, and managed tunnel allocations. After
 bootstrap, clients send application traffic through the environment's tunnel
 hostname; the relay Worker does not proxy their HTTP or WebSocket sessions.
