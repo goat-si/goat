@@ -46,3 +46,42 @@ it.effect(
       assert.equal(published, 1);
     }).pipe(Effect.provide(database)),
 );
+
+it.effect(
+  "an interrupt that lands while the ended-run read is under way still revokes and publishes (#1617)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-open-work-read-interrupted");
+      const runId = RunId.make("run:read-interrupted");
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES (${runId}, ${threadId}, 1, 'codex', 'completed', '2026-01-01', '{}')`;
+      let implied: ReadonlyArray<RunId> = [runId];
+      let published = 0;
+      const fiber = yield* Effect.gen(function* () {
+        const self = yield* Effect.fiber;
+        return yield* threadOpenWork(
+          sql,
+          {
+            impliedRuns: () => {
+              // The sweep is interrupted as it starts reading which runs ended.
+              self.interruptUnsafe();
+              return implied;
+            },
+            revokeRun: (_thread, ended) => {
+              implied = implied.filter((id) => id !== ended);
+            },
+          },
+          threadId,
+          Effect.sync(() => {
+            published++;
+          }),
+        );
+      }).pipe(Effect.forkChild({ startImmediately: true }));
+      assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(fiber)));
+      assert.deepEqual(implied, []);
+      assert.equal(published, 1);
+    }).pipe(Effect.provide(database)),
+);
