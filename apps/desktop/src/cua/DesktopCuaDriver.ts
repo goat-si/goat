@@ -128,6 +128,24 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   // Whether the running helper's agent connections report a person's input.
   let helperReportsInput = false;
   let helperCanFrame = false;
+  /**
+   * What a helper said it can do when it started, read from its hello: an agent turn's start and a
+   * readiness check's both start one (#1532), and either is the build that runs next.
+   */
+  const learnHelper = (
+    session:
+      | {
+          readonly canWatch?: boolean;
+          readonly reportsInput?: boolean;
+          readonly canFrame?: boolean;
+        }
+      | undefined,
+  ) => {
+    helperCanWatch = session?.canWatch === true;
+    // Only macOS agents run through a connection helper that sees a person's input.
+    helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
+    helperCanFrame = session?.canFrame === true;
+  };
   const followers = yield* makeHelperFollowers({
     publisher,
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
@@ -474,6 +492,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     record("restart", undefined);
+    // Read when it runs: the spawn above set checkHost.
+    if (selected.kind === "helper")
+      yield* Effect.sync(() => learnHelper(checkHost?.host.session?.()));
 
     const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
@@ -704,10 +725,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       });
       const session = entry.host.session?.();
       if (entry.helper) {
-        helperCanWatch = session?.canWatch === true;
-        // Only macOS agents run through a connection helper that sees a person's input.
-        helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
-        helperCanFrame = session?.canFrame === true;
+        learnHelper(session);
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* followers.attach(session);

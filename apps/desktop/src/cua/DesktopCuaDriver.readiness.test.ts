@@ -26,6 +26,19 @@ const helperFixture = (platform: "darwin" | "win32") =>
 
 describe("DesktopCuaDriver readiness after a passing check", () => {
   it.effect.each(["darwin", "win32"] as const)(
+    "shows what the checked helper can watch right after the check, before any agent turn, on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          // The check started the helper, whose hello said it watches for a secure field (#1532).
+          assert.equal(test.readiness.at(-1)?.signals.privateMode, "supported");
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
     "drops an earlier check's proof when a later start cannot use the helper on %s",
     (platform) =>
       Effect.scoped(
