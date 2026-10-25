@@ -92,7 +92,7 @@ const readDatabase = (file: string) =>
     catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
   });
 
-export const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindings")(
+const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindings")(
   function* (input: { readonly ownDatabase: string }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -200,7 +200,7 @@ export const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServ
  * The working folder of every process of this user, or null when they cannot all be listed.
  * A shell, an agent CLI or a build of any GOAT server running inside a checkout shows here.
  */
-export const processWorkingDirectories = Effect.fn("localGoatServers.processWorkingDirectories")(
+const processWorkingDirectories = Effect.fn("localGoatServers.processWorkingDirectories")(
   function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

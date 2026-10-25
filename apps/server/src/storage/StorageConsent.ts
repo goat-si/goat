@@ -43,10 +43,7 @@ const storageFailure = () =>
 const formatGiB = (bytes: number | null) =>
   bytes === null ? "size unknown" : (bytes / 1024 ** 3).toFixed(2) + " GiB";
 
-export const storageCleanBinding = (
-  environmentId: string,
-  items: ReadonlyArray<StorageCleanItem>,
-) =>
+const storageCleanBinding = (environmentId: string, items: ReadonlyArray<StorageCleanItem>) =>
   "storage-clean:" +
   identityToken([
     1,

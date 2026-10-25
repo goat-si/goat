@@ -1093,6 +1093,31 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCleanUpStrayProcesses,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    /** What GOAT's own folders hold on that machine, from its last scan of a few minutes. */
+    storageUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:storage-usage",
+      tag: WS_METHODS.serverGetStorageUsage,
+      idleTtlMs: 0,
+      staleTimeMs: 60_000,
+    }),
+    /** Scans that machine's GOAT folders now; pass { rescan: true }. */
+    scanStorage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scan-storage",
+      tag: WS_METHODS.serverGetStorageUsage,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    /** Deletes the confirmed items that are still the ones the person reviewed. */
+    cleanUpStorageItems: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:clean-up-storage-items",
+      tag: WS_METHODS.serverCleanUpStorageItems,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    /** That machine's free disk space and its disk-only pressure level, as it changes. */
+    diskPressure: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:disk-pressure",
+      tag: WS_METHODS.serverSubscribeDiskPressure,
+      idleTtlMs: 0,
+    }),
     databaseStorage,
     databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {

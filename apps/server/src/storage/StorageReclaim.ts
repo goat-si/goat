@@ -422,7 +422,3 @@ const encodeLogLine = Schema.encodeSync(Schema.fromJsonString(StorageLogLine));
 const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 export const layer = Layer.effect(StorageReclaim, make);
-
-/** Failures that escape the service: none today, but transports map them uniformly. */
-export const toReclaimError = (cause: unknown) =>
-  new StorageReclaimError({ message: cause instanceof Error ? cause.message : String(cause) });

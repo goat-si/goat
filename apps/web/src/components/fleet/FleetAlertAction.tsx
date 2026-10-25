@@ -28,6 +28,7 @@ const LABEL: Record<FleetAlertActionKind, string> = {
   compact: "Compact",
   clean_up: "Clean up",
   memory_settings: "Memory settings",
+  storage: "Free up space",
 };
 
 const failureText = (failure: unknown) =>
@@ -63,6 +64,18 @@ export function FleetAlertAction(props: {
     );
   }
   if (props.kind === "retry") return <RetryAction {...props} />;
+  if (props.kind === "storage") {
+    return (
+      <Button
+        size="micro"
+        variant="ghost-muted"
+        aria-label={"Free up space on " + props.label}
+        render={<Link to="/settings/storage" search={{ machine: props.environmentId }} />}
+      >
+        {LABEL.storage}
+      </Button>
+    );
+  }
   return <MaintenanceAction {...props} kind={props.kind} />;
 }
 

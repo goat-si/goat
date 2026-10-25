@@ -115,7 +115,7 @@ export const diskOnlySample = (sample: PressureSample): PressureSample => ({
  * Free bytes at or below which a disk is at a level: under both the GiB limit and the share of
  * the volume, so the smaller of the two. A volume of unknown size has only the GiB limit.
  */
-export function diskThresholdBytes(totalBytes: number | null, gib: number, percent: number) {
+function diskThresholdBytes(totalBytes: number | null, gib: number, percent: number) {
   const absolute = gib * GIB;
   return totalBytes === null || totalBytes <= 0
     ? absolute
@@ -565,7 +565,7 @@ const nonNull = (text: string | null): ReadonlyArray<string> => (text === null ?
  * What to do about a full disk, added wherever pressure is announced: lanes cannot free space by
  * moving, so they are told where GOAT's own space goes on that host.
  */
-export function diskPressureHint(host: string | null, pressure: HostPressure): string | null {
+function diskPressureHint(host: string | null, pressure: HostPressure): string | null {
   if (!pressure.reasons.some((reason) => reason.signal === "disk")) return null;
   return (
     "Its disk is low: do not install dependencies or build there, and remove target/ and node_modules folders your lanes created. " +

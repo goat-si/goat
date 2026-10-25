@@ -48,7 +48,7 @@ export const overlaps = (left: string, right: string, rules: PathRules) =>
  * than a day was left by a crash. Token broker sockets (goat-token-), Windows jobs (goat-job-)
  * and the detached runtime updater (goat-runtime-update-) outlive the server and are excluded.
  */
-export const REMOVABLE_TEMP_PREFIXES = [
+const REMOVABLE_TEMP_PREFIXES = [
   "goat-probe-error-",
   "goat-antigravity-text-",
   "goat-antigravity-setup-",
