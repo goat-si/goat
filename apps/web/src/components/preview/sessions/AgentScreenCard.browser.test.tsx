@@ -659,6 +659,34 @@ it("does not give a stopped session's frame to another thread's session with the
   expect(other.container.querySelector("img")).toBeNull();
 });
 
+// Pop out swaps the stack's container within one render, so the new card mounts in the same
+// commit that removes the old one.
+it("keeps a stopped desktop frame when the card moves to another container in one render", async () => {
+  setup([]);
+  const desk = desktopApp({
+    id: "desktop-moved",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  const placed = (target: PreviewSession, floating: boolean) =>
+    floating ? (
+      <section>{cardView(target).element}</section>
+    ) : (
+      <div>{cardView(target).element}</div>
+    );
+  state.frame = { type: "frame", seq: 1, width: 4, height: 4, mime: "image/jpeg", data: "GGGG" };
+  await using screen = await render(placed(desk, false));
+  await vi.waitFor(() => expect(screen.container.querySelector("img")).not.toBeNull());
+  state.frame = null;
+  await screen.rerender(placed({ ...desk, status: "stopped" }, false));
+  await vi.waitFor(() => expect(screen.container.querySelector("img")).not.toBeNull());
+  await screen.rerender(placed({ ...desk, status: "stopped" }, true));
+  await vi.waitFor(() =>
+    expect(screen.container.querySelector("section img")?.getAttribute("src")).toBe(
+      "data:image/jpeg;base64,GGGG",
+    ),
+  );
+});
+
 it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
   setup([]);
   const desk = desktopApp({
