@@ -27,7 +27,7 @@ The \`cua-driver\` tools act on the computer the person is using right now. Use 
 - \`confirmed\`: continue. \`suspected_noop\`, \`no_drop\` or \`not_applied\`: it may have done nothing. Observe and decide; do not repeat blindly.
 - An \`effect\` always outranks a \`code\` (which may sit under \`refusal\`). Nothing was sent only when \`effect\` is \`refused\`, or there is no effect and the code is \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\` or \`permission_denied\`.
 - \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe and never resend it unchanged; a repeated keystroke can submit twice.
-- GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\` and end your turn.
+- GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\`, which waits for the person's answer in this turn.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
 - Detail \`target_busy\`: another thread, named in the answer, is acting on that window or on the whole desktop; nothing was sent. Wait for it or work elsewhere, then observe. \`control_idle\`: this thread's turn is over; leave the screen until its next turn.
 </computer_use>`;
@@ -38,7 +38,7 @@ export const COMPUTER_USE_SKILL_PEOPLE = `<computer_use_people>
 
 ## Telling and handing off
 - Before the first action on a screen, say in one sentence which app or window you will use and why.
-- Keep the default background delivery; keys go to the target app, so system-wide shortcuts do nothing. Foreground delivery and \`bring_to_front\` take the person's screen and need foreground approval; use them only after background input did not land. First tell the person the purpose and that the screen may briefly be taken and returned, then call \`computer_use.request\` with \`foreground: true\` and no \`apps\`. Pause, Stop or the end of the turn revokes it, and later foreground work needs a new approval.
+- Keep the default background delivery; keys go to the target app, so system-wide shortcuts do nothing. Foreground delivery and \`bring_to_front\` take the person's screen; use them only after background input did not land. Full-access turns a person directs already have foreground authority without asking; unattended full-access work still needs foreground approval. Tell the person the purpose and that the screen may briefly be taken and returned. When approval is needed, call \`computer_use.request\` with \`foreground: true\` and no \`apps\`; it waits for the answer in this turn. Pause, Stop or the end of the turn revokes it. After pause or Stop, full-access foreground returns automatically only next turn; respect the interruption now. Other turns need new foreground approval.
 - Never restore focus yourself. Only a native foreground action already sent under live approval may finish its own focus return.
 - Stop: the answer says \`userStoppedSession\`. Computer use is over for this turn. Say so in one line, do not reach the screen through other tools, and do not go on.
 - Keep working while the person uses their keyboard or pointer. An explicit takeover pause says \`userIntervened\`: end your turn or wait; after hand back, observe again before acting and never resend input that was cut off.
@@ -79,7 +79,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
   linux: `<computer_use_host os="Linux">
 - X11 sessions work best. On Wayland the person approves screen capture and input through the desktop portal, and fewer apps can be read or driven; while that approval is missing, say so instead of retrying.
 - The control tree comes from AT-SPI. Without it (no \`at-spi2-core\`, no session bus, or an app with accessibility off) you get screenshots, pointer, and keys only.
-- After \`background_unavailable\`, observe first; it can come after partial input. Foreground delivery is then the only route, and it needs foreground approval (see above).
+- After \`background_unavailable\`, observe first; it can come after partial input. Foreground delivery is then the only route; use existing foreground authority or request approval as above.
 - Password fields are private fields (see above).
 - \`command\` is Super and \`option\` is Alt.
 </computer_use_host>`,

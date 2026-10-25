@@ -207,12 +207,16 @@ describe("computer use skill against what agents receive today", () => {
     expect(codeSpans.filter((span) => Object.hasOwn(CUA_DRIVER_EXCLUDED_TOOLS, span))).toEqual([]);
   });
 
-  it("teaches the foreground approval the proxy enforces, never a spoken ask or a self-restore", () => {
-    // The proxy refuses foreground input (foreground_not_approved) until a person approves
-    // computer_use.request with foreground:true and no apps; release never restores focus (#1480).
+  it("teaches full-access foreground authority and same-turn approval without self-restoring", () => {
     const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
     expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
+    expect(line).toContain(
+      "Full-access turns a person directs already have foreground authority without asking",
+    );
+    expect(line).toContain("unattended full-access work still needs foreground approval");
+    expect(line).toContain("it waits for the answer in this turn");
     expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
+    expect(line).toContain("full-access foreground returns automatically only next turn");
     expect(guidance).not.toContain("ask them first");
     expect(guidance).toContain("Never restore focus yourself.");
   });
