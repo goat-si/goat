@@ -9,7 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
-import { parsePsRows, type ProcessRow } from "../diagnostics/StrayProcesses.ts";
+import { parsePsRows, serveBaseDir, type ProcessRow } from "../diagnostics/StrayProcesses.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 /**
@@ -32,11 +32,14 @@ export interface OtherServerBindings {
   readonly unverified: ReadonlyArray<string>;
 }
 
-/** A GOAT or legacy T3 server: `goat serve`, or the server entry the desktop app and dev runner start. */
+/**
+ * A GOAT server: `goat serve`, an older build StrayProcesses also recognises by its home, or the
+ * server entry the desktop app and dev runner start.
+ */
 export function looksLikeGoatServer(command: string): boolean {
-  if (!/(?:goat|t3)/iu.test(command)) return false;
   return (
-    /(?:^|\s)serve(?:\s|$)/u.test(command) ||
+    serveBaseDir(command) !== null ||
+    (/goat/iu.test(command) && /(?:^|\s)serve(?:\s|$)/u.test(command)) ||
     /[/\\]apps[/\\]server[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts)(?:\s|$)/u.test(command)
   );
 }
