@@ -44,6 +44,76 @@ interface CompactToolOutput {
   [MCP_APP_OUTPUT_KEY]?: McpAppReference;
   thread?: { threadId: string };
   threads?: Array<{ threadId?: string; status?: "rolled_back" }>;
+  settle?: ToolOutputSettle;
+}
+
+export interface ToolOutputSettle {
+  readonly outcome: string;
+  readonly reason: string;
+}
+
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([a-z0-9_:]{0,128})\)/m;
+const MAX_SETTLE_TEXTS = 32;
+
+function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
+  if (!Predicate.isObject(value) || depth > MAX_ENVELOPE_DEPTH) return undefined;
+  const settle = value.settle;
+  if (
+    Predicate.isObject(settle) &&
+    typeof settle.outcome === "string" &&
+    settle.outcome.length <= 32
+  )
+    return {
+      outcome: settle.outcome,
+      reason: typeof settle.reason === "string" ? settle.reason.slice(0, 128) : "",
+    };
+  for (const key of ["structuredContent", "result", "value"] as const) {
+    const nested = settleRecord(value[key], depth + 1);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
+/** Text a provider kept from a tool result: a plain string, MCP and Cursor parts, ACP wrappers. */
+function resultTexts(value: unknown, texts: string[], depth = 0): void {
+  if (depth > MAX_ENVELOPE_DEPTH || texts.length >= MAX_SETTLE_TEXTS) return;
+  if (typeof value === "string") {
+    if (value.length <= MAX_PARSED_BYTES) texts.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, MAX_CONTENT_BLOCKS)) resultTexts(entry, texts, depth + 1);
+    return;
+  }
+  if (!Predicate.isObject(value)) return;
+  const text = Predicate.isObject(value.text) ? value.text.text : value.text;
+  if (typeof text === "string") resultTexts(text, texts, depth + 1);
+  for (const key of ["content", "result", "value"] as const)
+    if (value[key] !== undefined) resultTexts(value[key], texts, depth + 1);
+}
+
+/**
+ * The outcome of a computer-use settle wait (#1506), which completes as a tool call whether or
+ * not the window settled. Providers keep its structured fields, fold them into a JSON text block,
+ * or keep only the helper's own "Notification settle: <outcome> (<reason>)" line.
+ */
+export function toolOutputSettle(value: unknown): ToolOutputSettle | undefined {
+  const direct = settleRecord(value);
+  if (direct !== undefined) return direct;
+  const texts: string[] = [];
+  resultTexts(value, texts);
+  for (const text of texts) {
+    const summary = SETTLE_SUMMARY.exec(text);
+    if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
+    if (!text.trimStart().startsWith("{")) continue;
+    try {
+      const folded = settleRecord(JSON.parse(text));
+      if (folded !== undefined) return folded;
+    } catch {
+      // Plain text that only looks like JSON.
+    }
+  }
+  return undefined;
 }
 
 const ENVELOPE_KEYS: ReadonlySet<PropertyKey> = new Set(["status", "value", "meta"]);
@@ -131,6 +201,8 @@ export function compactDynamicToolOutput(value: unknown): CompactToolOutput | un
   };
   const result = readResult(value, budget);
   const output: CompactToolOutput = result.failed ? { isError: true } : {};
+  const settle = toolOutputSettle(value);
+  if (settle !== undefined) output.settle = settle;
   const data = budget.exceeded ? undefined : result.data;
   if (data !== undefined) {
     for (const key of ["threadId", "messageId", "taskId", "scheduledTaskId"] as const) {

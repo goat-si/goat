@@ -10,7 +10,51 @@ import {
   omitToolOutputImageData,
   toolOutputImages,
   toolOutputIndicatesFailure,
+  toolOutputSettle,
 } from "./toolOutput.ts";
+
+describe("toolOutputSettle", () => {
+  const expected = { outcome: "unsupported", reason: "private_or_unknown_focus" };
+  const summary =
+    "Notification settle: unsupported (private_or_unknown_focus). Quiet does not establish task completion.";
+
+  it("reads a settle wait's outcome from every provider's result shape (#1585)", () => {
+    const shapes: ReadonlyArray<readonly [string, unknown]> = [
+      [
+        "MCP result",
+        { content: [{ type: "text", text: summary }], structuredContent: { settle: expected } },
+      ],
+      ["OpenCode plain string", summary],
+      ["Cursor text parts", { content: [{ text: { text: summary } }] }],
+      ["ACP content wrappers", [{ type: "content", content: { type: "text", text: summary } }]],
+      [
+        "structured fields folded beside a screenshot",
+        [
+          { type: "text", text: JSON.stringify({ pid: 1, settle: expected }) },
+          { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+        ],
+      ],
+      ["compact wire output", { settle: expected }],
+    ];
+    for (const [name, output] of shapes) expect(toolOutputSettle(output), name).toEqual(expected);
+  });
+
+  it("finds no outcome in other tools' results", () => {
+    for (const output of [
+      undefined,
+      "Done",
+      { content: [{ type: "text", text: "{}" }] },
+      { settle: "x" },
+    ])
+      expect(toolOutputSettle(output)).toBeUndefined();
+  });
+
+  it("compact wire output keeps the outcome, so a projected row can show it", () => {
+    expect(compactDynamicToolOutput({ content: [{ type: "text", text: summary }] })).toEqual({
+      settle: expected,
+    });
+  });
+});
 
 describe("compactDynamicToolOutput", () => {
   it("extracts IDs through the MCP result envelopes used by T3 summaries", () => {

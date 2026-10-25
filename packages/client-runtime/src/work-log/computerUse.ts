@@ -4,6 +4,7 @@ import {
   cuaDriverToolName,
   replaceComputerUseTypedText,
 } from "@goat/shared/toolActivity";
+import { toolOutputSettle } from "@goat/shared/toolOutput";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
@@ -220,36 +221,6 @@ const SETTLE_REASONS: Readonly<Record<string, string>> = {
   degraded_final_sample: "the final read was incomplete",
 };
 
-const SETTLE_SUMMARY = /^Notification settle: ([a-z_]+) \(([^)]*)\)/;
-
-/** The settle block from structuredContent, a folded JSON text block, or the helper's summary line. */
-function settleOutcome(output: unknown): { outcome: string; reason: string } | undefined {
-  const fromRecord = (value: unknown) => {
-    const settle = record(record(value)?.settle);
-    return typeof settle?.outcome === "string"
-      ? { outcome: settle.outcome, reason: typeof settle.reason === "string" ? settle.reason : "" }
-      : undefined;
-  };
-  const direct = fromRecord(record(output)?.structuredContent) ?? fromRecord(output);
-  if (direct !== undefined) return direct;
-  const blocks = Array.isArray(output) ? output : record(output)?.content;
-  if (!Array.isArray(blocks)) return undefined;
-  for (const block of blocks) {
-    const text = record(block)?.type === "text" ? record(block)?.text : undefined;
-    if (typeof text !== "string" || text.length > 65_536) continue;
-    const summary = SETTLE_SUMMARY.exec(text);
-    if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
-    if (!text.startsWith("{")) continue;
-    try {
-      const folded = fromRecord(JSON.parse(text));
-      if (folded !== undefined) return folded;
-    } catch {
-      // Plain text that only looks like JSON.
-    }
-  }
-  return undefined;
-}
-
 /**
  * The status a card shows for a finished call, and a note when the result contradicts it: a
  * settle wait completes as a tool call whether or not the window settled (#1585).
@@ -261,9 +232,8 @@ export function computerUseResult(
 ): { readonly status: ComputerUseRunStatus | null; readonly note: string | null } {
   if (status !== "succeeded" || run?.tool !== "wait_for_window_settle")
     return { status, note: null };
-  // A result without a readable outcome stays as the lifecycle says; an unsettled wait has no
-  // screenshot, so its output is small and never omitted from the item.
-  const settle = settleOutcome(output);
+  // The wire keeps the outcome in compact output, so a row that never fetched detail reads it too.
+  const settle = toolOutputSettle(output);
   if (settle === undefined || settle.outcome === "settled") return { status, note: null };
   const note =
     settle.outcome === "pending"

@@ -137,6 +137,15 @@ describe("computerUseResult", () => {
   });
 
   it("reads the outcome from folded JSON text or the helper's own summary line", () => {
+    // An expanded row has only the projected output, which keeps just the outcome.
+    expect(
+      computerUseResult(settle, "succeeded", {
+        settle: { outcome: "pending", reason: "deadline" },
+      }),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
     const folded = {
       content: [
         {
