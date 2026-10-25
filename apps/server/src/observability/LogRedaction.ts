@@ -95,7 +95,8 @@ export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> =
 
 /**
  * One marker per kind among the reasons past the first few, so the redacted cause is still a
- * failure, a defect or interrupt-only as the original was. Kinds are read through descriptors.
+ * failure, a defect or interrupt-only as the original was, judged by its first MAX_VISITED_REASONS
+ * reasons. Kinds are read through descriptors.
  */
 function omittedReasons(
   listed: unknown,
