@@ -248,6 +248,8 @@ const make = Effect.gen(function* () {
             // the clientRequestId for a remote send, the next attempt's launch id for a reschedule.
             // An interrupt may always repeat; stopping a stopped run is a no-op. A launch is never
             // resent: it is resolved by looking its thread up.
+            // A remote host dedupes a send only within the session it came in on, and this process
+            // has a new one: what an earlier process may have sent there is never sent again.
             Effect.flatMap((refusal) =>
               refusal !== "already_claimed"
                 ? Effect.succeed(refusal)
@@ -259,12 +261,16 @@ const make = Effect.gen(function* () {
                         .claimOf(actionId)
                         .pipe(
                           Effect.map((receipt) =>
-                            receipt !== null && receipt.settledAt === null ? null : refusal,
+                            receipt === null || receipt.settledAt !== null
+                              ? refusal
+                              : kind === "followup" && host !== null
+                                ? ("uncertain" as const)
+                                : null,
                           ),
                         ),
             ),
             Effect.tap((refusal) =>
-              refusal === null
+              refusal === null || refusal === "uncertain"
                 ? Effect.logInfo("fleet.goal.action", { goalId: goal.id, actionId, kind })
                 : Effect.sync(() => {
                     if (refusal === "budget")
@@ -603,25 +609,30 @@ const make = Effect.gen(function* () {
             case "followup": {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
-              if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
+              const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken !== null && taken !== "uncertain") return;
               const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;
-              const sent = yield* runtime
-                .followUp(
-                  current,
-                  goal,
-                  worker,
-                  action.message,
-                  action.actionId,
-                  authority.confirm("followup", authority.planned(current)),
-                  work._tag === "Hop" ? work.selection : undefined,
-                )
-                .pipe(Effect.result);
+              // Counted as sent, as if the worker had ignored it, so it is never sent twice.
+              const sent =
+                taken === "uncertain"
+                  ? ({ _tag: "Success" } as const)
+                  : yield* runtime
+                      .followUp(
+                        current,
+                        goal,
+                        worker,
+                        action.message,
+                        action.actionId,
+                        authority.confirm("followup", authority.planned(current)),
+                        work._tag === "Hop" ? work.selection : undefined,
+                      )
+                      .pipe(Effect.result);
               if (sent._tag === "Failure" && isLost(sent.failure))
                 return yield* authority.lost(action.actionId, sent.failure);
               yield* store.settle(
                 action.actionId,
-                sent._tag === "Success" ? "sent" : "failed",
+                taken === "uncertain" ? "uncertain" : sent._tag === "Success" ? "sent" : "failed",
                 nowIso,
               );
               if (sent._tag === "Failure") {
@@ -655,25 +666,29 @@ const make = Effect.gen(function* () {
             case "resume": {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
-              if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
+              const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken !== null && taken !== "uncertain") return;
               const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;
-              const sent = yield* runtime
-                .followUp(
-                  current,
-                  goal,
-                  worker,
-                  "Your usage limit has reset. Continue where you left off.",
-                  action.actionId,
-                  authority.confirm("followup", authority.planned(current)),
-                  work._tag === "Hop" ? work.selection : undefined,
-                )
-                .pipe(Effect.result);
+              const sent =
+                taken === "uncertain"
+                  ? ({ _tag: "Success" } as const)
+                  : yield* runtime
+                      .followUp(
+                        current,
+                        goal,
+                        worker,
+                        "Your usage limit has reset. Continue where you left off.",
+                        action.actionId,
+                        authority.confirm("followup", authority.planned(current)),
+                        work._tag === "Hop" ? work.selection : undefined,
+                      )
+                      .pipe(Effect.result);
               if (sent._tag === "Failure" && isLost(sent.failure))
                 return yield* authority.lost(action.actionId, sent.failure);
               yield* store.settle(
                 action.actionId,
-                sent._tag === "Success" ? "sent" : "failed",
+                taken === "uncertain" ? "uncertain" : sent._tag === "Success" ? "sent" : "failed",
                 nowIso,
               );
               if (sent._tag === "Failure") {

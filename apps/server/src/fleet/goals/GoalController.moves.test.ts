@@ -737,6 +737,47 @@ describe("goal moves across a restart (#1451)", () => {
     ),
   );
 
+  it.effect(
+    "never sends a remote follow-up again after a restart, when the earlier process may have sent it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_remote_follow";
+          const followUpId = "goal:" + id + ":s0:a1:run:9:followup";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* pass(id);
+            expect((yield* record(id)).workers[0]).toMatchObject({ host: "A" });
+            fake.reading = () => ({
+              kind: "seen",
+              terminal: true,
+              runId: RunId.make("run:9"),
+              runStatus: "completed",
+              lastActivityAt: null,
+              result: { reported: false, pullRequest: null },
+            });
+            // The process stops between the claim and the follow-up's settlement.
+            fake.crashFollowUp = true;
+            yield* pass(id).pipe(Effect.exit);
+          }).pipe(Effect.provide(server(fake, world, path)));
+          // A new process reaches A under a new session, which cannot dedupe a resend.
+          yield* Effect.gen(function* () {
+            yield* pass(id);
+            yield* pass(id);
+            expect(fake.followUps).toEqual([]);
+            const store = yield* GoalStore;
+            expect((yield* store.claimOf(followUpId))?.outcome).toBe("uncertain");
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              followedUpRunId: "run:9",
+            });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
   it.effect("moves a projectId-only goal's worker to its project's folder", () =>
     Effect.scoped(
       Effect.gen(function* () {
