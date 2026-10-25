@@ -5118,6 +5118,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("thread/goal/updated", (payload) =>
           Effect.gen(function* () {
             goalsByNativeThread.set(payload.threadId, providerGoalFromCodex(payload.goal));
+            threadStatuses.goal(payload.threadId, payload.goal.status, payload.goal.updatedAt);
             yield* emitGoalUpdate(payload.threadId);
             if (payload.goal.status !== "active") yield* releaseGoalHold(payload.threadId);
           }).pipe(turnTerminalizationPermit.withPermits(1)),
@@ -5125,6 +5126,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("thread/goal/cleared", (payload) =>
           Effect.gen(function* () {
             goalsByNativeThread.set(payload.threadId, null);
+            threadStatuses.goal(payload.threadId, null);
             yield* emitGoalUpdate(payload.threadId);
             yield* releaseGoalHold(payload.threadId);
           }).pipe(turnTerminalizationPermit.withPermits(1)),
@@ -7183,16 +7185,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             }
             // Codex ignores resume overrides on a held thread: a new driver (#1564) needs a cold
-            // reload, only while Codex reports this thread and its subagent threads quiet, and no
-            // active goal can start a continuation turn on its own.
+            // reload, only while Codex reports this thread and its subagent threads quiet, and none
+            // has an active goal that can start a continuation turn on its own.
             const ownSubagents = Array.from((yield* Ref.get(subagentThreads)).entries()).filter(
               ([, { parentContext }]) =>
                 approvalOwnerCodexTurn(parentContext).owner.providerThread.id ===
                 turnInput.providerThread.id,
             );
+            const conversation = [threadId, ...ownSubagents.map(([nativeId]) => nativeId)];
             const busy =
-              goalsByNativeThread.get(threadId)?.status === "active" ||
-              !threadStatuses.quiet([threadId, ...ownSubagents.map(([nativeId]) => nativeId)]);
+              threadStatuses.goalActive(conversation) || !threadStatuses.quiet(conversation);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(

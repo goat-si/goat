@@ -157,6 +157,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
+    runtime,
+    providerThread,
   };
 });
 
@@ -661,6 +663,57 @@ describe("Codex computer use attachment", () => {
           yield* replay.terminal;
           yield* sessions.set(withCua("control:b"));
           yield* replay.startTurn(3);
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+  it.effect(
+    "defers the reload while a subagent's goal is active, even when its status reads idle (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "cua-child-goal";
+          const child = root + "-agent";
+          const f = fixture(root);
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const notice = (method: string, params: unknown) =>
+            f.entries.push({ type: "emit_inbound", frame: { method, params } });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          yield* f.turnStart(3, 1, true);
+          spawnChild(f, root, child);
+          f.status(child, "active");
+          notice("thread/goal/updated", {
+            threadId: child,
+            turnId: null,
+            goal: {
+              threadId: child,
+              objective: "Keep working",
+              status: "active",
+              tokenBudget: null,
+              tokensUsed: 10,
+              timeUsedSeconds: 3,
+              createdAt: 1782622440,
+              updatedAt: 1782622450,
+            },
+          });
+          f.status(child, "idle");
+          f.turnCompleted(1);
+          // The child's goal has started a continuation Codex has not published yet.
+          yield* f.turnStart(4, 2, true, true);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
             [f.managed("control:a")],
