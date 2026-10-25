@@ -7188,15 +7188,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 conversation.push(nativeId);
             const applied = credentialsByThread.get(threadId);
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
-            const stale =
-              applied !== next ||
-              (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey ||
-              threadStatuses.dropped(threadId);
+            const limitChanged =
+              (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey;
+            const stale = applied !== next || limitChanged || threadStatuses.dropped(threadId);
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
-            // Other changes wait for background terminals too; a new driver does not (#1569).
+            // Other changes wait for background terminals too; a new driver alone does not
+            // (#1569), but one that comes with a new subagent limit does (#1572).
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
-              stale && (yield* threadStatuses.busy(client, conversation, !driverChanged));
+              stale &&
+              (yield* threadStatuses.busy(client, conversation, !driverChanged || limitChanged));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (stale && !busy) {
               const previousCuaDriver = managedCuaByThread.get(threadId);
