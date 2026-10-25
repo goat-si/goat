@@ -69,6 +69,9 @@ vi.mock("../../../state/environments", () => ({
 vi.mock("../../../state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
     ref === null ? null : { title: `Thread ${ref.threadId}` },
+  // The preview runtime module reads these; outside the desktop app no tab is drawn natively.
+  readEnvironmentSupportsServerBrowser: () => true,
+  useEnvironmentSupportsServerBrowser: () => true,
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
 vi.mock("../../../hooks/useThreadRouteTarget", () => ({
