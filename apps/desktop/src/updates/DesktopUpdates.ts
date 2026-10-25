@@ -1353,13 +1353,6 @@ export const make = Effect.gen(function* () {
         });
       }
 
-      if (config.mockUpdates) {
-        yield* electronUpdater.setFeedURL({
-          provider: "generic",
-          url: `http://localhost:${config.mockUpdateServerPort}`,
-        } as ElectronUpdater.ElectronUpdaterFeedUrl);
-      }
-
       let settings = yield* desktopSettings.get;
       let pendingPersistenceFailed = false;
       // Startup recovery intentionally drops lower/equal versions, including a
@@ -1399,6 +1392,15 @@ export const make = Effect.gen(function* () {
         return;
       }
       yield* Ref.set(updaterConfiguredRef, true);
+
+      // Setting a feed constructs electron-updater, which throws for an unpackaged build's
+      // non-semver version, so even the mock feed waits until updates are enabled (#1545).
+      if (config.mockUpdates) {
+        yield* electronUpdater.setFeedURL({
+          provider: "generic",
+          url: `http://localhost:${config.mockUpdateServerPort}`,
+        } as ElectronUpdater.ElectronUpdaterFeedUrl);
+      }
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);

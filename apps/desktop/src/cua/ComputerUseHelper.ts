@@ -377,14 +377,22 @@ export async function probeHelperGrants(
   process: HelperProcess,
   expectedBundleId: string,
   prompt: boolean,
-): Promise<typeof HelperGrants.Type> {
+): Promise<typeof HelperGrants.Type & { readonly features: HelperFeatures }> {
   const session = await openHelperSession(process, expectedBundleId);
   try {
-    return await session.permissions(prompt);
+    return { ...(await session.permissions(prompt)), features: helperFeatures(session) };
   } finally {
     await session.close();
   }
 }
+
+/** What a helper said in its hello it can do, beyond protocol 1's first set. */
+export type HelperFeatures = Pick<HelperSession, "canWatch" | "reportsInput" | "canFrame">;
+export const helperFeatures = (session: HelperFeatures): HelperFeatures => ({
+  canWatch: session.canWatch,
+  reportsInput: session.reportsInput,
+  canFrame: session.canFrame,
+});
 
 export interface HelperBundle {
   readonly bundlePath: string;

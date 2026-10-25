@@ -146,6 +146,13 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     yield* leases.value.blocked(input.threadId, block);
     return { ...none("not-granted", unattended), block };
   }
+  if (unattended) {
+    // Acquisition may have started another helper build than the one readiness described (an
+    // update between a check and this turn); the desktop reports the started one's signals before
+    // it reports the driver ready, so this reads the helper the agent will actually get (#1553).
+    const detection = yield* leases.value.detection;
+    if (!detection.privateMode) return none("detection-unsupported", true);
+  }
   const x11Display =
     cua.value.x11Display === undefined ? Option.none() : yield* cua.value.x11Display;
   // Names this build does not know are ignored.
@@ -158,6 +165,18 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
         .pipe(Effect.orElseSucceed(() => Option.none()))
     : Option.some(yield* leases.value.control(input.threadId, lease));
   if (Option.isNone(control)) return none("held", unattended);
+  // Sessions are also prepared outside a turn: a re-attach, a rollback, a memory policy
+  // rotation. With no run open, no turn end will settle the control this minted or reused,
+  // and the session list would show an agent acting until it expires (#1551). A turn's own
+  // run is already open here, so its control stays acting.
+  yield* leases.value.turnEnded(input.threadId).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("computer use control left acting until a turn ends", {
+        threadId: input.threadId,
+        cause,
+      }),
+    ),
+  );
   return {
     _tag: "proxied",
     mcp: mcp.value,

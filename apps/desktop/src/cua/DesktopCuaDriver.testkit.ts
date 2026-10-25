@@ -52,6 +52,8 @@ export interface HelperAnswer {
   readonly blocker?: ComputerUseReadiness["blockers"][number];
   /** Fails the read the way a helper that cannot answer does. */
   readonly fails?: Error;
+  /** Whether the probed helper's hello lists watch, when it differs from the running one's. */
+  readonly canWatch?: boolean;
 }
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
@@ -202,6 +204,12 @@ export const fixture = Effect.fn(function* (
       return {
         accessibility: granted,
         screenRecording: granted,
+        // A probe's helper says in its hello what it can do, as an agent's helper does.
+        features: {
+          canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
+          reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
+          canFrame: false,
+        },
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
@@ -261,7 +269,11 @@ export const fixture = Effect.fn(function* (
       return {
         servicePid: () => (running && !identityWithdrawn ? HELPER_PID : undefined),
         readinessPeer: () => readinessClient,
-        session: () => (running ? session : undefined),
+        // The macOS readiness check runs the helper as an MCP child, which has no session.
+        session: () =>
+          running && !(helper.verify && (options.platform ?? "linux") === "darwin")
+            ? session
+            : undefined,
         start: async () => {
           starts++;
           running = true;
