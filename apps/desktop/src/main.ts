@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Version output must flush before Electron exits, without acquiring the runtime.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -48,6 +49,7 @@ import * as DesktopHeadlessServer from "./backend/DesktopHeadlessServer.ts";
 import * as DesktopLocalEnvironmentAuth from "./backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopNetworkInterfaces from "./backend/DesktopNetworkInterfaces.ts";
 import * as DesktopEnvironment from "./app/DesktopEnvironment.ts";
+import * as DesktopChannelStateMigration from "./app/DesktopChannelStateMigration.ts";
 import * as DesktopConfig from "./app/DesktopConfig.ts";
 import * as DesktopLifecycle from "./app/DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./app/DesktopLinuxUrlHandler.ts";
@@ -115,6 +117,31 @@ Electron.app.setName(
     }).stageLabel,
   ),
 );
+
+// A nightly copies stable's state into its own home before anything here, including the pre-ready
+// Linux setup and the log writer, can create that home. A failed copy publishes nothing, so this
+// launch must not start on an empty home: the next launch retries.
+const channelStateMigrationFailure = (() => {
+  const appVersion = Electron.app.getVersion();
+  const plan = DesktopChannelStateMigration.resolveChannelStateMigration({
+    homeDirectory: NodeOS.homedir(),
+    appVersion,
+    isPackaged: Electron.app.isPackaged,
+    isDevelopment: (process.env.VITE_DEV_SERVER_URL ?? "").trim() !== "",
+    goatHome: process.env.GOAT_HOME,
+  });
+  if (plan === null) return null;
+  try {
+    DesktopChannelStateMigration.migrateChannelState({
+      ...plan,
+      appVersion,
+      copiedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+    });
+    return null;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+})();
 
 const layerDesktopEnvironment = Layer.unwrap(
   Effect.gen(function* () {
@@ -307,4 +334,12 @@ const layerDesktopRuntime = layerDesktopClerk.pipe(
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
 );
 
-DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);
+if (channelStateMigrationFailure === null) {
+  DesktopApp.program.pipe(Effect.provide(layerDesktopRuntime), NodeRuntime.runMain);
+} else {
+  Electron.dialog.showErrorBox(
+    "GOAT (Nightly) could not copy your data",
+    `GOAT (Nightly) keeps its own copy of the data GOAT uses, and copying it failed. Nothing was changed and GOAT's data is untouched. Free some disk space or fix the folder permissions, then open GOAT (Nightly) again to retry.\n\n${channelStateMigrationFailure}`,
+  );
+  Electron.app.exit(1);
+}

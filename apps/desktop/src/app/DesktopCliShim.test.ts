@@ -128,7 +128,7 @@ describe("renderCliShim", () => {
   );
 
   effectIt.effect(
-    "keeps a launcher per channel in the GOAT home Nightly and stable share (#1091)",
+    "keeps a launcher per channel, each in its channel's GOAT home (#1091, #1009)",
     () =>
       Effect.gen(function* () {
         const root = tempRoot();
@@ -159,7 +159,9 @@ describe("renderCliShim", () => {
         const home = NodePath.join(root, ".goat", "desktop");
         expect(stable).toBe(NodePath.join(home, "bin", "goat"));
         expect(nightly).not.toBe(stable);
-        expect(nightly.startsWith(`${home}${NodePath.sep}`)).toBe(true);
+        expect(
+          nightly.startsWith(NodePath.join(root, ".goat", "desktop-nightly") + NodePath.sep),
+        ).toBe(true);
         for (const [launcher, app] of [
           [stable, stableApp],
           [nightly, nightlyApp],

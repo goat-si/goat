@@ -73,7 +73,7 @@ export const make = Effect.gen(function* () {
   const windows = environment.platform === "win32";
   const launcher = DesktopCliShim.launcherPath(environment);
   const binDirectory = path.dirname(launcher);
-  // Nightly and stable share the state dir, so this records whichever channel's folder was added.
+  // Records the folder this channel added, so uninstall removes only its own PATH entry.
   const ownedPathMarker = path.join(environment.stateDir, "goat-cli-command-path-entry");
 
   const fail = (message: string) => new DesktopCliCommandError({ message });

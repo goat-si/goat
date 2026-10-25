@@ -1,0 +1,370 @@
+// @effect-diagnostics nodeBuiltinImport:off - runs synchronously before Electron is ready and before any layer exists, so no service may touch the state directory first.
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
+import * as Option from "effect/Option";
+
+import { AUTOMATION_HOLD_FILE_NAME, encodeAutomationHold } from "@goat/contracts";
+import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
+
+import {
+  NIGHTLY_DESKTOP_HOME_DIR_NAME,
+  STABLE_DESKTOP_HOME_DIR_NAME,
+  resolveDesktopBaseDir,
+} from "./DesktopStatePaths.ts";
+
+/**
+ * Written into the copy before it is published. Its presence in a published destination proves
+ * the copy finished and passed verification; publishing is the rename of the whole directory.
+ */
+export const CHANNEL_STATE_MIGRATION_MARKER = "channel-state-migration.json";
+
+const STAGING_INFIX = ".migrating-";
+
+/** Single files in userdata that carry user state. Logs, caches, locks and runtime files stay. */
+const USERDATA_FILES = [
+  "settings.json",
+  "keybindings.json",
+  "desktop-settings.json",
+  "client-settings.json",
+  "saved-environments.json",
+  "connection-catalog.json",
+  "environment-id",
+  "anonymous-id",
+  "thread-launch-watches.json",
+  "note-work-intents.json",
+  "imessage-channel-settings.json",
+  "linux-device-scale-factor",
+] as const;
+
+/** Directories whose regular files are copied recursively. */
+const USERDATA_DIRECTORIES = [
+  "secrets",
+  "attachments",
+  "themes",
+  "keybindings-migrations",
+] as const;
+const BASE_DIRECTORIES = ["notes"] as const;
+
+/** The first database that exists is snapshotted; the server copies V1 only when V2 is absent. */
+const DATABASE_FILES = ["statev2.sqlite", "state.sqlite"] as const;
+
+export interface ChannelStateMigrationOps {
+  readonly copyFile: (source: string, destination: string) => void;
+  readonly rename: (from: string, to: string) => void;
+  readonly snapshotDatabase: (source: string, destination: string) => void;
+  readonly verifyDatabase: (path: string) => void;
+  readonly isProcessAlive: (pid: number) => boolean;
+}
+
+export interface ChannelStateMigrationInput {
+  /** The stable channel's GOAT home, which is only ever read. */
+  readonly sourceBaseDir: string;
+  readonly destinationBaseDir: string;
+  readonly appVersion: string;
+  /** ISO timestamp of the copy, recorded in the hold and the marker. */
+  readonly copiedAt: string;
+  readonly ops?: Partial<ChannelStateMigrationOps>;
+}
+
+export type ChannelStateMigrationResult =
+  | { readonly _tag: "NoSource" }
+  | { readonly _tag: "DestinationExists" }
+  | { readonly _tag: "Copied"; readonly files: number; readonly bytes: number }
+  | { readonly _tag: "CopiedByAnotherLaunch" };
+
+export class ChannelStateMigrationError extends Error {
+  readonly step: string;
+  readonly path: string;
+  constructor(step: string, path: string, cause: unknown) {
+    super(`Could not copy desktop state (${step} at ${path}): ${describe(cause)}`, { cause });
+    this.name = "ChannelStateMigrationError";
+    this.step = step;
+    this.path = path;
+  }
+}
+
+const describe = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+
+/**
+ * Only a packaged nightly on the default home migrates. Stable owns the source, development
+ * builds have their own home, and an explicit GOAT_HOME is a home the person chose.
+ */
+export function resolveChannelStateMigration(input: {
+  readonly homeDirectory: string;
+  readonly appVersion: string;
+  readonly isPackaged: boolean;
+  readonly isDevelopment: boolean;
+  readonly goatHome: string | undefined;
+}): { readonly sourceBaseDir: string; readonly destinationBaseDir: string } | null {
+  if (!input.isPackaged || input.isDevelopment || (input.goatHome?.trim() ?? "") !== "") {
+    return null;
+  }
+  const destinationBaseDir = resolveDesktopBaseDir({
+    homeDirectory: input.homeDirectory,
+    joinPath: NodePath.join,
+    goatHome: Option.none(),
+    isDevelopment: false,
+    appVersion: input.appVersion,
+  });
+  if (NodePath.basename(destinationBaseDir) !== NIGHTLY_DESKTOP_HOME_DIR_NAME) return null;
+  return {
+    sourceBaseDir: NodePath.join(
+      input.homeDirectory,
+      GOAT_HOME_DIR_NAME,
+      STABLE_DESKTOP_HOME_DIR_NAME,
+    ),
+    destinationBaseDir,
+  };
+}
+
+const errorCode = (cause: unknown) =>
+  typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
+
+const exists = (path: string) => {
+  try {
+    NodeFS.lstatSync(path);
+    return true;
+  } catch (cause) {
+    if (errorCode(cause) === "ENOENT") return false;
+    throw cause;
+  }
+};
+
+const isProcessAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    // EPERM means the process exists under another user.
+    return errorCode(cause) === "EPERM";
+  }
+};
+
+// A read-only connection never checkpoints into the source, and VACUUM INTO reads one
+// transaction, so the snapshot is consistent while the stable server keeps writing.
+const snapshotDatabase = (source: string, destination: string) => {
+  const db = new NodeSqlite.DatabaseSync(source, { readOnly: true, timeout: 10_000 });
+  try {
+    db.prepare("VACUUM INTO ?").run(destination);
+  } finally {
+    db.close();
+  }
+};
+
+const verifyDatabase = (path: string) => {
+  const db = new NodeSqlite.DatabaseSync(path, { readOnly: true });
+  try {
+    const rows = db.prepare("PRAGMA quick_check").all();
+    const result = rows.map((row) => Object.values(row)[0]).join("; ");
+    if (result !== "ok") throw new Error(`quick_check reported: ${result}`);
+  } finally {
+    db.close();
+  }
+};
+
+const defaultOps: ChannelStateMigrationOps = {
+  copyFile: (source, destination) =>
+    NodeFS.copyFileSync(source, destination, NodeFS.constants.COPYFILE_EXCL),
+  rename: NodeFS.renameSync,
+  snapshotDatabase,
+  verifyDatabase,
+  isProcessAlive,
+};
+
+const fsyncPath = (path: string, directory: boolean) => {
+  // Windows cannot open a directory for fsync; NTFS journals the rename itself.
+  if (directory && process.platform === "win32") return;
+  const fd = NodeFS.openSync(path, directory ? "r" : "r+");
+  try {
+    NodeFS.fsyncSync(fd);
+  } finally {
+    NodeFS.closeSync(fd);
+  }
+};
+
+const stagingPrefix = (destinationBaseDir: string) =>
+  `${NodePath.basename(destinationBaseDir)}${STAGING_INFIX}`;
+
+/** Removes staging directories left by launches that died mid-copy. Live ones are racing us. */
+const removeAbandonedStaging = (destinationBaseDir: string, ops: ChannelStateMigrationOps) => {
+  const parent = NodePath.dirname(destinationBaseDir);
+  const prefix = stagingPrefix(destinationBaseDir);
+  let entries: string[];
+  try {
+    entries = NodeFS.readdirSync(parent);
+  } catch (cause) {
+    if (errorCode(cause) === "ENOENT") return;
+    throw cause;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue;
+    const pid = Number.parseInt(entry.slice(prefix.length).split("-")[0] ?? "", 10);
+    if (Number.isSafeInteger(pid) && pid > 0 && ops.isProcessAlive(pid)) {
+      continue;
+    }
+    NodeFS.rmSync(NodePath.join(parent, entry), { recursive: true, force: true });
+  }
+};
+
+interface CopyTally {
+  files: number;
+  bytes: number;
+}
+
+const copyVerifiedFile = (
+  source: string,
+  destination: string,
+  ops: ChannelStateMigrationOps,
+  tally: CopyTally,
+) => {
+  try {
+    ops.copyFile(source, destination);
+    const expected = NodeFS.statSync(source).size;
+    const actual = NodeFS.statSync(destination).size;
+    if (actual !== expected) {
+      throw new Error(`copied ${actual} of ${expected} bytes`);
+    }
+    fsyncPath(destination, false);
+    tally.files += 1;
+    tally.bytes += actual;
+  } catch (cause) {
+    throw new ChannelStateMigrationError("copy", source, cause);
+  }
+};
+
+const copyDirectory = (
+  source: string,
+  destination: string,
+  ops: ChannelStateMigrationOps,
+  tally: CopyTally,
+) => {
+  let entries: NodeFS.Dirent[];
+  try {
+    entries = NodeFS.readdirSync(source, { withFileTypes: true });
+  } catch (cause) {
+    if (errorCode(cause) === "ENOENT") return;
+    throw new ChannelStateMigrationError("read", source, cause);
+  }
+  NodeFS.mkdirSync(destination, { recursive: true, mode: 0o700 });
+  for (const entry of entries) {
+    const from = NodePath.join(source, entry.name);
+    const to = NodePath.join(destination, entry.name);
+    if (entry.isDirectory()) copyDirectory(from, to, ops, tally);
+    // Half-written temp files belong to a writer in the middle of an atomic rename.
+    else if (entry.isFile() && !entry.name.endsWith(".tmp")) copyVerifiedFile(from, to, ops, tally);
+  }
+  fsyncPath(destination, true);
+};
+
+/**
+ * Seeds a channel's empty GOAT home from the stable channel's home, once. The source is only read.
+ * Everything is copied into a sibling staging directory, verified, marked, and published by one
+ * rename, so the destination either does not exist or holds a complete copy. Any failure removes
+ * the staging copy and throws; the caller must not start, so the next launch retries.
+ */
+export function migrateChannelState(
+  input: ChannelStateMigrationInput,
+): ChannelStateMigrationResult {
+  const ops: ChannelStateMigrationOps = { ...defaultOps, ...input.ops };
+  const destination = input.destinationBaseDir;
+  if (exists(destination)) return { _tag: "DestinationExists" };
+  const sourceUserdata = NodePath.join(input.sourceBaseDir, "userdata");
+  if (!exists(sourceUserdata)) return { _tag: "NoSource" };
+
+  const parent = NodePath.dirname(destination);
+  NodeFS.mkdirSync(parent, { recursive: true, mode: 0o700 });
+  removeAbandonedStaging(destination, ops);
+  const staging = NodePath.join(
+    parent,
+    `${stagingPrefix(destination)}${process.pid}-${NodeCrypto.randomUUID().slice(0, 8)}`,
+  );
+  const stagingUserdata = NodePath.join(staging, "userdata");
+  const tally: CopyTally = { files: 0, bytes: 0 };
+  try {
+    NodeFS.mkdirSync(stagingUserdata, { recursive: true, mode: 0o700 });
+
+    const database = DATABASE_FILES.find((name) => exists(NodePath.join(sourceUserdata, name)));
+    if (database !== undefined) {
+      const from = NodePath.join(sourceUserdata, database);
+      const to = NodePath.join(stagingUserdata, database);
+      try {
+        ops.snapshotDatabase(from, to);
+        ops.verifyDatabase(to);
+        fsyncPath(to, false);
+      } catch (cause) {
+        throw new ChannelStateMigrationError("snapshot", from, cause);
+      }
+      tally.files += 1;
+      tally.bytes += NodeFS.statSync(to).size;
+    }
+    for (const name of USERDATA_FILES) {
+      const from = NodePath.join(sourceUserdata, name);
+      if (exists(from)) copyVerifiedFile(from, NodePath.join(stagingUserdata, name), ops, tally);
+    }
+    for (const name of USERDATA_DIRECTORIES) {
+      copyDirectory(
+        NodePath.join(sourceUserdata, name),
+        NodePath.join(stagingUserdata, name),
+        ops,
+        tally,
+      );
+    }
+    for (const name of BASE_DIRECTORIES) {
+      copyDirectory(
+        NodePath.join(input.sourceBaseDir, name),
+        NodePath.join(staging, name),
+        ops,
+        tally,
+      );
+    }
+
+    const copiedAt = input.copiedAt;
+    writeDurably(
+      NodePath.join(stagingUserdata, AUTOMATION_HOLD_FILE_NAME),
+      encodeAutomationHold({ reason: "channel-copy", heldAt: copiedAt }),
+    );
+    fsyncPath(stagingUserdata, true);
+    writeDurably(
+      NodePath.join(staging, CHANNEL_STATE_MIGRATION_MARKER),
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: input.sourceBaseDir,
+          copiedAt,
+          appVersion: input.appVersion,
+          files: tally.files,
+          bytes: tally.bytes,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    fsyncPath(staging, true);
+  } catch (cause) {
+    NodeFS.rmSync(staging, { recursive: true, force: true });
+    throw cause instanceof ChannelStateMigrationError
+      ? cause
+      : new ChannelStateMigrationError("stage", staging, cause);
+  }
+
+  try {
+    ops.rename(staging, destination);
+  } catch (cause) {
+    NodeFS.rmSync(staging, { recursive: true, force: true });
+    // Another first launch published its verified copy first; use it.
+    if (exists(NodePath.join(destination, CHANNEL_STATE_MIGRATION_MARKER))) {
+      return { _tag: "CopiedByAnotherLaunch" };
+    }
+    if (exists(destination)) return { _tag: "DestinationExists" };
+    throw new ChannelStateMigrationError("publish", destination, cause);
+  }
+  fsyncPath(parent, true);
+  return { _tag: "Copied", files: tally.files, bytes: tally.bytes };
+}
+
+const writeDurably = (path: string, contents: string) => {
+  NodeFS.writeFileSync(path, contents, { flag: "wx", mode: 0o600 });
+  fsyncPath(path, false);
+};
