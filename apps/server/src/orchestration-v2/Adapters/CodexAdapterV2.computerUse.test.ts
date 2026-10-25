@@ -248,8 +248,18 @@ const fixture = (scenario: string) => {
           result: { turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }) },
         },
       });
-      // Codex answers turn/start before its task reports the thread active.
+      // Codex answers turn/start before its task reports the thread active and the turn started.
       status(nativeThreadId, "active");
+      entries.push({
+        type: "emit_inbound",
+        frame: {
+          method: "turn/started",
+          params: {
+            threadId: nativeThreadId,
+            turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+          },
+        },
+      });
     });
   // Codex reports a thread's status as it changes: active for a turn, idle once it ends.
   const status = (threadId: string, type: "active" | "idle", flags: ReadonlyArray<string> = []) =>
@@ -532,5 +542,49 @@ describe("Codex computer use attachment", () => {
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
+  );
+  it.effect(
+    "keeps a just-started turn busy when the previous turn's idle arrives late (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("cua-late-idle");
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          yield* f.turnStart(3, 1, true);
+          // Codex admits turn 2 before publishing turn 1's idle; turn 2's own notifications come later.
+          yield* f.turnStart(4, 2, true);
+          const turnTwoStarted = f.entries.splice(-2);
+          f.turnCompleted(1);
+          // Turn 3 under a new control must not reload: turn 2 is running.
+          yield* f.turnStart(5, 3, true, true);
+          f.entries.push(...turnTwoStarted);
+          f.turnCompleted(2);
+          f.turnCompleted(3);
+          f.reload(6, f.managed("control:b"));
+          yield* f.turnStart(8, 4, true);
+          f.turnCompleted(4);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(3);
+          yield* replay.terminal;
+          yield* replay.terminal;
+          yield* replay.startTurn(4);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a"), f.managed("control:b")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 });

@@ -5772,6 +5772,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("thread/status/changed", (payload) =>
           Effect.sync(() => threadStatuses.record(payload.threadId, payload.status.type)),
         );
+        yield* client.handleServerNotification("turn/started", (payload) =>
+          Effect.sync(() => threadStatuses.turnStarted(payload.threadId, payload.turn.id)),
+        );
         yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -7179,9 +7182,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 managedCuaByThread.delete(threadId);
               }
             }
-            // Codex ignores resume overrides on a held thread, so a changed computer use driver (a
-            // new control after Stop, #1564) needs a cold reload. It runs only while Codex reports
-            // this thread and every subagent thread under it idle; an unreported thread defers it.
+            // Codex ignores resume overrides on a held thread: a new driver (#1564) needs a cold
+            // reload, only while Codex reports this thread and its subagent threads quiet.
             const subagents = Array.from((yield* Ref.get(subagentThreads)).entries());
             const busy = !threadStatuses.quiet([
               threadId,
@@ -7277,10 +7279,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return next;
             });
             if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
-            const undoStarting = threadStatuses.starting(threadId);
+            const start = threadStatuses.starting(threadId);
             const started = yield* client
               .request("turn/start", turnStartParams)
-              .pipe(Effect.tapError(() => Effect.sync(undoStarting)));
+              .pipe(Effect.tapError(() => Effect.sync(start.failed)));
+            start.answered(started.turn.id);
             // Codex folds input into a turn that is still running. If that turn
             // belongs to another attempt, adopting it would leave this run
             // waiting on events routed to that attempt forever (#489).
