@@ -39,6 +39,30 @@ describe("toolOutputSettle", () => {
     for (const [name, output] of shapes) expect(toolOutputSettle(output), name).toEqual(expected);
   });
 
+  it("finds the outcome beside a sample too large to parse", () => {
+    const pending = { outcome: "pending", reason: "deadline" };
+    const line =
+      "Notification settle: pending (deadline). Quiet does not establish task completion.";
+    const folded = JSON.stringify({ tree: "x".repeat(20_000), settle: pending });
+    // GOAT folds the structured sample in front of the content when a screenshot remains.
+    expect(
+      toolOutputSettle([
+        { type: "text", text: folded },
+        { type: "text", text: line },
+      ]),
+    ).toEqual(pending);
+    // A provider that joins the text into one string puts the folded sample first.
+    expect(toolOutputSettle(folded + "\n" + line)).toEqual(pending);
+    expect(
+      compactDynamicToolOutput({
+        content: [
+          { type: "text", text: folded },
+          { type: "text", text: line },
+        ],
+      })?.settle,
+    ).toEqual(pending);
+  });
+
   it("finds no outcome in other tools' results", () => {
     for (const output of [
       undefined,

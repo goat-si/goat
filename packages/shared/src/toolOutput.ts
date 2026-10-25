@@ -52,7 +52,8 @@ export interface ToolOutputSettle {
   readonly reason: string;
 }
 
-const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([a-z0-9_:]{0,128})\)/m;
+const SETTLE_PREFIX = "Notification settle: ";
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([a-z0-9_:]{0,128})\)/;
 const MAX_SETTLE_TEXTS = 32;
 
 function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
@@ -78,7 +79,7 @@ function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
 function resultTexts(value: unknown, texts: string[], depth = 0): void {
   if (depth > MAX_ENVELOPE_DEPTH || texts.length >= MAX_SETTLE_TEXTS) return;
   if (typeof value === "string") {
-    if (value.length <= MAX_PARSED_BYTES) texts.push(value);
+    texts.push(value);
     return;
   }
   if (Array.isArray(value)) {
@@ -103,9 +104,14 @@ export function toolOutputSettle(value: unknown): ToolOutputSettle | undefined {
   const texts: string[] = [];
   resultTexts(value, texts);
   for (const text of texts) {
-    const summary = SETTLE_SUMMARY.exec(text);
-    if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
-    if (!text.trimStart().startsWith("{")) continue;
+    // A provider may join the summary after a folded sample far larger than the parse budget, so
+    // the line is found by search, and only small text is parsed as JSON.
+    const at = text.indexOf(SETTLE_PREFIX);
+    if (at >= 0 && (at === 0 || text[at - 1] === "\n")) {
+      const summary = SETTLE_SUMMARY.exec(text.slice(at, at + 256));
+      if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
+    }
+    if (text.length > MAX_PARSED_BYTES || !text.trimStart().startsWith("{")) continue;
     try {
       const folded = settleRecord(JSON.parse(text));
       if (folded !== undefined) return folded;

@@ -128,8 +128,9 @@ func settleToolResult(
   }
   if !completion.invalidated.isEmpty { structured["invalidated_snapshot_ids"] = completion.invalidated }
   result["structuredContent"] = structured
-  if result["content"] == nil {
-    result["content"] = [["type": "text", "text": "Notification settle: \(completion.outcome) (\(completion.reason)). Quiet does not establish task completion."]]
-  }
+  // First, beside any sample content: providers that drop or fold structuredContent keep only
+  // this line to tell pending or unsupported from settled.
+  let summary: [String: Any] = ["type": "text", "text": "Notification settle: \(completion.outcome) (\(completion.reason)). Quiet does not establish task completion."]
+  result["content"] = [summary] + (result["content"] as? [Any] ?? [])
   return result
 }

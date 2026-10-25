@@ -312,6 +312,12 @@ private func deadline() throws {
   try h.clock.advance(100)
   try h.expectOutcome("pending", unavailable: false)
   try require(try h.detail()["snapshot_id"] as? String == "latest", "Completed post-subscription sample may accompany pending")
+  // The sample's own content must not displace the summary: providers that drop or fold the
+  // structured fields have only this line to tell a pending result from a settled one (#1585).
+  let content = try h.result()["content"] as? [[String: Any]] ?? []
+  try require((content.first?["text"] as? String)?.hasPrefix("Notification settle: pending (deadline).") == true,
+    "A pending result with sample content still leads with its settle summary: \(content)")
+  try require(content.contains { $0["type"] as? String == "image" }, "The sample's screenshot stays in the content")
 }
 
 private let metadataTools = ["health_report", "check_permissions", "get_guide", "list_apps", "list_windows"]
