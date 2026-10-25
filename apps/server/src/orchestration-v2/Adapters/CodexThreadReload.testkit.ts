@@ -15,7 +15,6 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { TestClock } from "effect/testing";
 
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
@@ -63,7 +62,7 @@ export const unusedRegistry = {
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
 /** Opens one replayed Codex session and records the thread requests the adapter sends. */
-export const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
+const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
   transcript: CodexReplay.CodexAppServerReplayTranscript,
 ) {
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
@@ -215,8 +214,9 @@ export const codexReloadFixture = (scenario: string) => {
     nativeTurnId: "unused",
     prompt: "unused",
   });
-  const threadResult = preamble[4]!;
-  const entries: CodexReplay.CodexAppServerReplayEntry[] = [...preamble.slice(0, 3)];
+  const threadResult = preamble[4];
+  if (threadResult === undefined) throw new Error("The replay preamble answers thread/start.");
+  const entries: CodexReplay.CodexAppServerReplayEntry[] = preamble.slice(0, 3);
   const start = (cua?: Record<string, unknown>, params = threadParams(cua)) =>
     entries.push(
       {
