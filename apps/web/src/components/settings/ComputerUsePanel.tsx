@@ -29,11 +29,15 @@ import {
 
 export const COMPUTER_USE_ADVANCED_STORAGE_KEY = "goat:settings:computer-use-advanced-open";
 // Settings search jumps that land on a row inside Advanced.
-const ADVANCED_TARGETS: ReadonlySet<string> = new Set(["computer-use-skill"]);
+const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
+  "computer-use-skill",
+  "computer-use-move-pointer",
+]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  readonly cuaMovePointer?: "never" | "allowed";
 }
 
 interface StatusLine {
@@ -173,6 +177,7 @@ export function ComputerUsePanel({
   localMac,
   localCheck,
   disabledSkills,
+  movePointer,
   save,
   bridge,
 }: {
@@ -187,6 +192,7 @@ export function ComputerUsePanel({
   /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
+  movePointer: "never" | "allowed";
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -306,6 +312,15 @@ export function ComputerUsePanel({
                 ) : null}
               </div>
             ) : null}
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-move-pointer")}
+              settingKey="cuaMovePointer"
+              description="Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks."
+              label="Let agents move my pointer"
+              checked={movePointer === "allowed"}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
+            />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
               canConfigure={canConfigure}
@@ -421,7 +436,7 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills";
+  settingKey: "disabledBuiltInSkills" | "cuaMovePointer";
   description: string;
   label: string;
   checked: boolean;

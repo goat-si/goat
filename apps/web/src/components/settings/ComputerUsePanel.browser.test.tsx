@@ -81,6 +81,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     localCheck: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
+    movePointer: "never" as "never" | "allowed",
     save: vi.fn(
       async (patch: { enableCua?: boolean; disabledBuiltInSkills?: ReadonlyArray<string> }) => {
         f.calls.push(`save:${JSON.stringify(patch)}`);
@@ -127,6 +128,7 @@ function Harness({ f }: { f: Fixture }) {
       localMac={f.localMac}
       localCheck={f.localCheck}
       disabledSkills={f.disabledSkills}
+      movePointer={f.movePointer}
       save={f.save}
       bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
     />
@@ -396,6 +398,15 @@ it("a settings search for the Computer Use skill opens Advanced without remember
   expect(localStorage.getItem(COMPUTER_USE_ADVANCED_STORAGE_KEY)).toBeNull();
   await clickSwitch(name);
   expect(f.save).toHaveBeenLastCalledWith({ disabledBuiltInSkills: ["computer-use"] });
+});
+it("the pointer switch is off by default and saves the host's pointer choice", async () => {
+  const name = "Let agents move my pointer";
+  const f = setup({ enabled: true });
+  state.searchTargetId = "computer-use-move-pointer";
+  await using screen = await render(panel(f));
+  await expect.element(screen.getByRole("switch", { name })).not.toBeChecked();
+  await clickSwitch(name);
+  expect(f.save).toHaveBeenLastCalledWith({ cuaMovePointer: "allowed" });
 });
 it("On again while an earlier check still runs waits for it, then checks for the new run", async () => {
   const f = setup();

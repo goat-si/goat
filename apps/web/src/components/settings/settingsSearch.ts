@@ -845,6 +845,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "computer-use-move-pointer",
+    title: "Let agents move my pointer",
+    to: "/settings/integrations",
+    searchTerms: [
+      "computer use pointer mouse cursor move foreground background click steal focus advanced",
+    ],
+  },
+  {
     id: "computer-use-skill",
     title: "Computer Use skill",
     to: "/settings/integrations",

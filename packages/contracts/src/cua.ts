@@ -625,6 +625,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
    * not tried: foreground takes the person's cursor, so tokens and the keyboard come first.
    */
   "token_first",
+  /** It would move the person's hardware pointer, which this host keeps still (cuaMovePointer). */
+  "pointer_locked",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

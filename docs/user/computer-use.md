@@ -56,6 +56,13 @@ one. An agent waits up to ten minutes for your answer, or until the request
 expires if sooner. If it stops waiting, answering later wakes the thread so it
 can continue.
 
+Your pointer stays where you put it. By default agents never move it: they
+click through an element's accessibility action, the keyboard, or a background
+click that shows only their own cursor, and a call that would move your pointer
+does not run. If an app ignores background clicks, the agent tells you. To let
+full access agents move your pointer for such apps, turn on **Let agents move my
+pointer** under **Settings > Integrations > Computer use > Advanced**.
+
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
