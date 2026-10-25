@@ -2,6 +2,7 @@ import {
   type FleetOwnerKey,
   type ModelSelection,
   type PermissionProfile,
+  type RunId,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
@@ -88,6 +89,10 @@ export interface RescheduleRequest {
    * session ceiling to stop it under; authorize, at runtimeMode, when absent.
    */
   readonly authorizeSource?: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  /** The run this move may stop: an attempt found on another run (a person resumed it) stays. */
+  readonly stopRunId?: RunId;
+  /** Runs before the attempt's interrupt is sent, so the caller can record the stop as its own. */
+  readonly beforeStop?: Effect.Effect<void, RescheduleNotAllowed>;
 }
 
 export type RescheduleRefusal =
@@ -325,6 +330,15 @@ const make = Effect.gen(function* () {
           "The attempt is still active on this machine; stop it first.",
         );
       }
+      const runId = status.run?.runId ?? null;
+      if (request.stopRunId !== undefined && runId !== request.stopRunId) {
+        return refused(
+          "host_still_answers",
+          "The attempt on " + host + " is on another run now, so it stays.",
+        );
+      }
+      const recorded = yield* (request.beforeStop ?? Effect.void).pipe(Effect.result);
+      if (recorded._tag === "Failure") return refused("not_allowed", recorded.failure.message);
       // The attempt runs under its own mode, which a lowered replacement mode may not cover.
       const interrupted = yield* dispatch
         .callHostTool(
@@ -333,6 +347,8 @@ const make = Effect.gen(function* () {
             tool: "goat_thread_interrupt",
             arguments: {
               threadId: request.ref.threadId,
+              // Only the run just read: a run started since then is someone else's.
+              ...(runId === null ? {} : { runId }),
               reason: "GOAT is moving this work to another host.",
               clientRequestId: request.clientRequestId + ":interrupt",
             },
@@ -353,10 +369,13 @@ const make = Effect.gen(function* () {
           host,
           reason: error.reason,
         });
-        return refused(
-          "host_still_answers",
-          "Could not interrupt the attempt on " + host + ": " + clip(error.message),
-        );
+        // The interrupt may have landed with only its answer lost: the move counts as stopping it.
+        return {
+          _tag: "Refused",
+          reason: "host_still_answers",
+          message: "Could not confirm the interrupt on " + host + ": " + clip(error.message),
+          stopping: true,
+        } satisfies RescheduleResult;
       }
       return {
         _tag: "Refused",

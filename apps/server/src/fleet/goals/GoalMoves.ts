@@ -15,7 +15,12 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-import type { Rescheduler, RescheduleReason, RescheduleResult } from "../health/Rescheduler.ts";
+import {
+  RescheduleNotAllowed,
+  type Rescheduler,
+  type RescheduleReason,
+  type RescheduleResult,
+} from "../health/Rescheduler.ts";
 import type { actionAuthority } from "./GoalAuthority.ts";
 import { renderPrompt } from "./goalPrompt.ts";
 import type { ActionIssue } from "./goalPlan.ts";
@@ -108,12 +113,36 @@ export const makeGoalMoves = (deps: {
     );
   });
 
+  /**
+   * Recorded before the move's interrupt is sent, so a stop whose answer is lost, or a restart
+   * right after it, still reads as the goal's own: the move goes on instead of asking a person.
+   */
+  const recordStop = Effect.fn("GoalMoves.recordStop")(
+    function* (worker: WorkerRecord, actionId: string) {
+      const stopId = moveStopId(actionId);
+      const refused = yield* deps.claim(stopId, "interrupt", worker, worker.host);
+      if (refused !== null)
+        return yield* new RescheduleNotAllowed({
+          message: "The goal changed before its run could be stopped (" + refused + ").",
+        });
+      yield* store.settle(stopId, "stop_requested", nowIso);
+    },
+    // Not recorded, not sent: a stop the goal cannot later recognise would read as a person's.
+    Effect.mapError((error) =>
+      error instanceof RescheduleNotAllowed
+        ? error
+        : new RescheduleNotAllowed({ message: "Could not record the stop: " + error.message }),
+    ),
+  );
+
   /** What the Rescheduler made of one move of worker off its host, under the owner's authority now. */
   const send = Effect.fn("GoalMoves.send")(function* (
     worker: WorkerRecord & { readonly host: string; readonly threadId: ThreadId },
+    actionId: string,
     current: OwnerAccess,
     reason: Exclude<RescheduleReason, "drain" | "manual">,
     selection: ModelSelection,
+    stopRunId: RunId | null,
   ) {
     const allowed = yield* runtime
       .moveAuthority(
@@ -155,6 +184,8 @@ export const makeGoalMoves = (deps: {
       holdUnconfirmed: true,
       authorize: may.authorize,
       authorizeSource: may.authorizeSource,
+      beforeStop: recordStop(worker, actionId),
+      ...(stopRunId === null ? {} : { stopRunId }),
       ...(may.allowedHosts === undefined ? {} : { allowedHosts: may.allowedHosts }),
       ...(may.excludeHosts === undefined ? {} : { excludeHosts: may.excludeHosts }),
       ...(may.permissionProfileCeiling === undefined
@@ -183,20 +214,12 @@ export const makeGoalMoves = (deps: {
 
   /**
    * The move had to interrupt its attempt first. Its receipt stays open, so the slot keeps waiting
-   * for it (resolve_move); this record says the stop was the goal's, so the move goes on once the
-   * run has stopped instead of being read as a person's stop.
+   * for it (resolve_move), which goes on once the run has stopped.
    */
-  const stopped = Effect.fn("GoalMoves.stopped")(function* (
-    worker: WorkerRecord,
-    actionId: string,
-    message: string,
-  ) {
-    const stopId = moveStopId(actionId);
-    if ((yield* deps.claim(stopId, "interrupt", worker, worker.host)) === null)
-      yield* store.settle(stopId, "interrupted", nowIso);
+  const stopped = (worker: WorkerRecord, actionId: string, message: string) => {
     deps.setWorker({ ...worker, note: message });
     deps.note("Normal", "MoveStopping", "Slot " + worker.slot + ": " + message, worker, actionId);
-  });
+  };
 
   /** Moves a stopped or lost worker; `handled` is the worker once this run counts as recovered. */
   const move = Effect.fn("GoalMoves.move")(function* (input: {
@@ -220,9 +243,11 @@ export const makeGoalMoves = (deps: {
     if (current === null) return;
     const result = yield* send(
       { ...worker, host, threadId },
+      actionId,
       current,
       input.reason,
       input.selection,
+      input.runId,
     );
     switch (result._tag) {
       case "Rescheduled":
@@ -237,7 +262,7 @@ export const makeGoalMoves = (deps: {
         // The receipt stays open: the slot waits for resolve_move to find the thread.
         return unconfirmed(worker, actionId, result.message);
       case "Refused":
-        if (result.stopping === true) return yield* stopped(worker, actionId, result.message);
+        if (result.stopping === true) return stopped(worker, actionId, result.message);
         // Nothing was sent, or nothing launched: transient refusals may be asked again later.
         yield* store.settle(actionId, TRANSIENT.has(result.reason) ? NOT_SENT : "refused", nowIso);
         return refusal(
@@ -251,12 +276,17 @@ export const makeGoalMoves = (deps: {
 
   /**
    * Settles or carries on an open move, from what its destination shows. A move that never
-   * launched is released unless it stopped its attempt to take it over: then it goes on, outside
-   * the turn budget it already spent, and never while the goal is being deleted.
+   * launched is released unless it stopped its attempt to take it over and may still proceed:
+   * then it goes on, outside the turn budget it already spent.
    */
   const resolve = Effect.fn("GoalMoves.resolve")(function* (
     worker: WorkerRecord,
-    action: { readonly actionId: string; readonly clientRequestId: string },
+    action: {
+      readonly actionId: string;
+      readonly clientRequestId: string;
+      readonly stopRunId: RunId | null;
+      readonly proceed: boolean;
+    },
     current: OwnerAccess,
   ) {
     const found = yield* rescheduler.findMove({ clientRequestId: action.clientRequestId, owner });
@@ -270,14 +300,15 @@ export const makeGoalMoves = (deps: {
     if (found._tag === "Unknown") return unconfirmed(worker, action.actionId, found.message);
     const { host, threadId } = worker;
     const ours = (yield* store.claimOf(moveStopId(action.actionId))) !== null;
-    if (!ours || goal.deletionRequestedAt !== null || host === null || threadId === null) {
-      // Nothing was sent, so nothing holds the slot; moving again is new work, budget and all.
+    if (!ours || !action.proceed || host === null || threadId === null) {
+      // Nothing launched, so nothing holds the slot; moving again is new work, budget and all.
       yield* store.settle(action.actionId, NOT_SENT, nowIso);
-      deps.setWorker({ ...worker, note: "Its move never started." });
+      const why = ours ? "Its move was called off before it started." : "Its move never started.";
+      deps.setWorker({ ...worker, note: why });
       deps.note(
         "Warning",
         "MoveNotStarted",
-        "Slot " + worker.slot + ": its move never started.",
+        "Slot " + worker.slot + ": " + why,
         worker,
         action.actionId,
       );
@@ -285,9 +316,11 @@ export const makeGoalMoves = (deps: {
     }
     const result = yield* send(
       { ...worker, host, threadId },
+      action.actionId,
       current,
       "stalled",
       worker.modelSelection,
+      action.stopRunId,
     );
     switch (result._tag) {
       case "Rescheduled":
@@ -300,8 +333,7 @@ export const makeGoalMoves = (deps: {
       case "Unconfirmed":
         return unconfirmed(worker, action.actionId, result.message);
       case "Refused":
-        if (result.stopping === true)
-          return yield* stopped(worker, action.actionId, result.message);
+        if (result.stopping === true) return stopped(worker, action.actionId, result.message);
         // The receipt stays open on a transient refusal, so the stop stays the goal's.
         if (!TRANSIENT.has(result.reason)) yield* store.settle(action.actionId, "refused", nowIso);
         return refusal(worker, action.actionId, "stalled", result.message);

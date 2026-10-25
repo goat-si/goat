@@ -618,7 +618,15 @@ describe("moves to another host (#1451)", () => {
   });
   const onA = running(goal, 0, { host: "A", threadId: ThreadId.make("thread:a") });
   const pending = new Map([
-    [0, { actionId: moveId, attempt: 1, clientRequestId: "goal:goal_mv:s0:a2:launch" }],
+    [
+      0,
+      {
+        actionId: moveId,
+        attempt: 1,
+        clientRequestId: "goal:goal_mv:s0:a2:launch",
+        runId: RunId.make("run:5"),
+      },
+    ],
   ]);
 
   it("never turns an unsettled move into an orphan, and restores a recorded successor after a lost write", () => {
@@ -665,13 +673,15 @@ describe("moves to another host (#1451)", () => {
       attempt: 1,
       actionId: moveId,
       clientRequestId: "goal:goal_mv:s0:a2:launch",
+      stopRunId: "run:5",
+      proceed: true,
     };
     expect(planGoal(goal, [onA], failed).actions).toEqual([resolve]);
     expect(planGoal(goal, [onA], { ...failed, turns: 2 }).actions).toEqual([resolve]);
     expect(
       planGoal({ ...goal, deletionRequestedAt: "2026-10-20T00:59:00.000Z" }, [onA], failed),
     ).toMatchObject({
-      actions: [resolve],
+      actions: [{ ...resolve, proceed: false }],
       status: { phase: "deleting" },
     });
     // Without the hold, a spent budget refuses the move itself.

@@ -51,6 +51,8 @@ interface World {
   loseNextLaunchResponse: boolean;
   /** Hosts whose GOAT cannot bind a goatclaw ceiling to a launched thread. */
   readonly noCeilingHosts: Set<string>;
+  /** Interrupts land, but their answer is lost. */
+  loseInterruptAnswers: boolean;
 }
 
 export const newWorld = (): World => ({
@@ -63,6 +65,7 @@ export const newWorld = (): World => ({
   failing: new Set(),
   loseNextLaunchResponse: false,
   noCeilingHosts: new Set(),
+  loseInterruptAnswers: false,
 });
 
 const unavailable = (host: string) =>
@@ -192,6 +195,11 @@ const fakeDispatch = (world: World) =>
             if (!world.appliedInterrupts.has(id) && thread !== undefined)
               thread.phase = "interrupted";
             world.appliedInterrupts.add(id);
+            if (world.loseInterruptAnswers)
+              return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+                reason: "host_unavailable",
+                message: "the connection dropped before the answer",
+              });
             return {
               threadId: call.arguments.threadId,
               runId: null,

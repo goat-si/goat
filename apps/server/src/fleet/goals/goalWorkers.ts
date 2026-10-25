@@ -3,8 +3,9 @@
  * slot, attempt and run, so a repeated or restarted pass names the same action. repairWorkers
  * rebuilds slot records from the launch records, which outlive any status write.
  */
-import type { FleetGoal, FleetGoalTarget } from "@goat/contracts";
+import { type FleetGoal, type FleetGoalTarget, RunId } from "@goat/contracts";
 
+import type { RescheduleReason } from "../health/reschedulePolicy.ts";
 import { type LaunchClaim, NOT_SENT, type WorkerRecord } from "./GoalStore.ts";
 
 export const launchActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
@@ -39,16 +40,28 @@ export const rescheduleActionId = (
  * A move receipt's slot and attempt, read back from its id. The successor is the slot's next
  * attempt, so its launch id is the Rescheduler's clientRequestId and its branch is that attempt's.
  */
+const REASONS: ReadonlySet<string> = new Set<RescheduleReason>([
+  "stalled",
+  "host_unreachable",
+  "failed",
+  "drain",
+  "fallback_relaunch",
+  "manual",
+]);
+
 const moveOf = (goal: Pick<FleetGoal, "id" | "spec">, actionId: string) => {
   const prefix = "goal:" + goal.id + ":s";
   if (!actionId.startsWith(prefix) || !actionId.endsWith(":reschedule")) return null;
-  const parsed = /^(\d+):a(\d+):/.exec(actionId.slice(prefix.length));
+  const parsed = /^(\d+):a(\d+):(.+):reschedule$/.exec(actionId.slice(prefix.length));
   if (parsed === null) return null;
   const slot = Number(parsed[1]);
   const attempt = Number(parsed[2]);
+  const runOrReason = parsed[3] ?? "";
   return {
     slot,
     attempt,
+    /** The run the move was taken for; null when it was taken for a reason alone. */
+    runId: REASONS.has(runOrReason) ? null : RunId.make(runOrReason),
     successorAttempt: attempt + 1,
     successorLaunchId: launchActionId(goal, slot, attempt + 1),
     branch: branchFor(goal, slot, attempt + 1),
@@ -62,7 +75,12 @@ export const pendingMoves = (
 ) => {
   const pending = new Map<
     number,
-    { readonly actionId: string; readonly attempt: number; readonly clientRequestId: string }
+    {
+      readonly actionId: string;
+      readonly attempt: number;
+      readonly clientRequestId: string;
+      readonly runId: RunId | null;
+    }
   >();
   for (const launch of launches) {
     const move = moveOf(goal, launch.actionId);
@@ -71,6 +89,7 @@ export const pendingMoves = (
       actionId: launch.actionId,
       attempt: move.attempt,
       clientRequestId: move.successorLaunchId,
+      runId: move.runId,
     });
   }
   return pending;

@@ -3,6 +3,7 @@ import {
   BUILTIN_PERMISSION_PROFILES,
   FleetOwnerKey,
   type HostStatusEntry,
+  RunId,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
@@ -626,6 +627,62 @@ describe("Rescheduler", () => {
         expect(
           world.calls.some((call) => call.host === "A" && call.tool === "goat_thread_send"),
         ).toBe(false);
+      }),
+  );
+
+  testScoped(
+    "regression #1451: a move stops only the run it was taken for, after recording the stop",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        const interrupts = () =>
+          world.calls.filter((call) => call.tool === "goat_thread_interrupt");
+        // A person resumed the attempt: the move's run is no longer the one running there.
+        let recorded = 0;
+        const beforeStop = Effect.sync(() => {
+          recorded += 1;
+        });
+        const stale = yield* rescheduler.reschedule(
+          request({ reason: "stalled", stopRunId: RunId.make("run:0"), beforeStop }),
+        );
+        expect(stale).toMatchObject({ _tag: "Refused", reason: "host_still_answers" });
+        expect(stale).not.toHaveProperty("stopping");
+        expect(interrupts()).toEqual([]);
+        expect(recorded).toBe(0);
+        // A stop the caller cannot record is never sent.
+        const unrecorded = yield* rescheduler.reschedule(
+          request({
+            reason: "stalled",
+            stopRunId: RunId.make("run:1"),
+            beforeStop: Effect.fail(
+              new Rescheduler.RescheduleNotAllowed({ message: "The goal was deleted." }),
+            ),
+          }),
+        );
+        expect(unrecorded).toMatchObject({ reason: "not_allowed" });
+        expect(interrupts()).toEqual([]);
+        // The run it was taken for: recorded first, then interrupted by its run id.
+        expect(
+          yield* rescheduler.reschedule(
+            request({ reason: "stalled", stopRunId: RunId.make("run:1"), beforeStop }),
+          ),
+        ).toMatchObject({ stopping: true });
+        expect(recorded).toBe(1);
+        expect(interrupts().map((call) => call.args.runId)).toEqual(["run:1"]);
+      }),
+  );
+
+  testScoped(
+    "regression #1451: an interrupt whose answer is lost still counts as stopping the attempt",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        world.loseInterruptAnswers = true;
+        expect(yield* rescheduler.reschedule(request({ reason: "stalled" }))).toMatchObject({
+          _tag: "Refused",
+          stopping: true,
+        });
+        expect(world.threads[0]?.phase).toBe("interrupted");
       }),
   );
 });

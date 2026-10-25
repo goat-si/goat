@@ -34,6 +34,7 @@ import {
   pass,
   record,
   running,
+  setCount,
   runtimeFor,
 } from "./GoalController.testkit.ts";
 import { LAUNCH_GRACE_MS } from "./goalPlan.ts";
@@ -59,6 +60,10 @@ interface World {
   health: (threadId: string) => ThreadHealth;
   /** The first worker's run on A, as its host reports it; an interrupt stops it. */
   sourceRun: "running" | "failed" | "interrupted";
+  /** The run the first worker is on; a person resuming it starts a new one. */
+  sourceRunId: string;
+  /** The next interrupt stops the run, then its answer is lost. */
+  loseNextInterruptAnswer: boolean;
 }
 
 const newWorld = (): World => ({
@@ -70,6 +75,8 @@ const newWorld = (): World => ({
   refuseNextLaunch: false,
   health: () => ({ _tag: "healthy" }),
   sourceRun: "failed",
+  sourceRunId: "run:5",
+  loseNextInterruptAnswer: false,
 });
 
 const unavailable = (host: string) =>
@@ -98,7 +105,7 @@ const dispatchOf = (world: World) =>
               phase: world.sourceRun,
               terminal: world.sourceRun !== "running",
               run: {
-                runId: "run:5",
+                runId: world.sourceRunId,
                 status: world.sourceRun,
                 requestedAt: now,
                 startedAt: now,
@@ -113,10 +120,17 @@ const dispatchOf = (world: World) =>
             };
           }
           case "goat_thread_interrupt":
+            // The destination stops only the run it is told to.
+            if (call.arguments.runId !== undefined && call.arguments.runId !== world.sourceRunId)
+              return { threadId: call.arguments.threadId, runId: null, status: "not_running" };
             world.sourceRun = "interrupted";
+            if (world.loseNextInterruptAnswer) {
+              world.loseNextInterruptAnswer = false;
+              return yield* unavailable(call.host);
+            }
             return {
               threadId: call.arguments.threadId,
-              runId: "run:5",
+              runId: world.sourceRunId,
               status: "interrupt_requested",
             };
           case "goat_thread_list":
@@ -292,7 +306,7 @@ const stallThenStop = (world: World, fake: Fake, id: string) =>
         ? {
             kind: "seen",
             terminal: world.sourceRun !== "running",
-            runId: RunId.make("run:5"),
+            runId: RunId.make(world.sourceRunId),
             runStatus: world.sourceRun,
             lastActivityAt: null,
             result: null,
@@ -603,6 +617,84 @@ describe("goal moves across a restart (#1451)", () => {
           }).pipe(Effect.provide(server(fake, world, path)));
         }),
       ),
+  );
+
+  it.effect(
+    "calls off a stopped worker's move once a person resumes its run, and leaves that run alone",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled_resumed";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* stallThenStop(world, fake, id);
+            world.sourceRunId = "run:6";
+            world.sourceRun = "running";
+            world.health = () => ({ _tag: "healthy" });
+            for (let round = 0; round < 3; round += 1) yield* pass(id);
+            expect(world.sourceRun).toBe("running");
+            expect(world.launches).toEqual([]);
+            expect(yield* moveOutcome(id)).toBe("not_sent");
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              attempt: 1,
+              host: "A",
+              state: "running",
+            });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "goes on with a move whose interrupt lost its answer, after a restart, without asking a person",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled_lost_stop";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            world.loseNextInterruptAnswer = true;
+            yield* stallThenStop(world, fake, id);
+          }).pipe(Effect.provide(server(fake, world, path)));
+          yield* Effect.gen(function* () {
+            yield* pass(id);
+            expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              attempt: 2,
+              host: "B",
+              state: "running",
+            });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect("calls off a stopped worker's move when the goal no longer wants its slot", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const world = newWorld();
+        const fake = makeFake();
+        const path = yield* databaseFile;
+        const id = "goal_stalled_shrunk";
+        yield* Effect.gen(function* () {
+          yield* insert(goalWith(id));
+          yield* stallThenStop(world, fake, id);
+          world.reachable.B = false;
+          yield* pass(id);
+          yield* setCount(id, 0);
+          world.reachable.B = true;
+          for (let round = 0; round < 3; round += 1) yield* pass(id);
+          expect(world.launches).toEqual([]);
+          expect(yield* moveOutcome(id)).toBe("not_sent");
+        }).pipe(Effect.provide(server(fake, world, path)));
+      }),
+    ),
   );
 
   it.effect("moves a projectId-only goal's worker to its project's folder", () =>

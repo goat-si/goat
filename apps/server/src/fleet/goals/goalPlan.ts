@@ -103,7 +103,12 @@ export interface GoalObservation {
   /** Moves claimed and not settled, by slot; each holds its slot until it is resolved. */
   readonly pendingMoves: ReadonlyMap<
     number,
-    { readonly actionId: string; readonly attempt: number; readonly clientRequestId: string }
+    {
+      readonly actionId: string;
+      readonly attempt: number;
+      readonly clientRequestId: string;
+      readonly runId: RunId | null;
+    }
   >;
   /** Fallbacks and hub hops that continued their run in its own thread, by action id. */
   readonly switchedFallbacks: ReadonlySet<string>;
@@ -166,6 +171,13 @@ export type GoalAction =
       readonly attempt: number;
       readonly actionId: string;
       readonly clientRequestId: string;
+      /** The run the move may stop; null when it was taken for a reason alone. */
+      readonly stopRunId: RunId | null;
+      /**
+       * Whether a move that never launched may still go on: the goal stays, still wants the
+       * slot, and the attempt is on the run the move was for (a person may have resumed it).
+       */
+      readonly proceed: boolean;
     }
   | { readonly type: "delete_row" };
 
@@ -475,12 +487,19 @@ export function planGoal(
   function hold(worker: WorkerRecord): WorkerRecord {
     const move = observation.pendingMoves.get(worker.slot);
     if (move === undefined) return worker;
+    const seen = observation.workers.get(worker.slot);
+    const runNow = seen?.kind === "seen" ? seen.runId : null;
     actions.push({
       type: "resolve_move",
       slot: worker.slot,
       attempt: worker.attempt,
       actionId: move.actionId,
       clientRequestId: move.clientRequestId,
+      stopRunId: move.runId,
+      proceed:
+        !deleting &&
+        worker.slot < desired.length &&
+        (move.runId === null || runNow === null || runNow === move.runId),
     });
     return {
       ...observeOnly(worker),
