@@ -228,16 +228,17 @@ export class ComputerUseLeases extends Context.Service<
       target: { readonly pid: number; readonly windowId: number },
     ) => Effect.Effect<boolean>;
     /**
-     * A keyboard or pointer event at "at" that a control's proxy saw through its helper, outside
-     * its own input calls (#1235). Unless another agent's input of the same kind covers that
-     * moment, every agent on the host pauses, as for the desktop's report. Refused when the
-     * control is not the thread's live one, so an old proxy cannot pause anyone.
+     * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
+     * one in time order (#1488). An event another agent's input of the same kind covers is
+     * dropped, and so is one too old or too far from now to judge; the first that is left pauses
+     * every agent on the host, as for the desktop's report. "agents" when none paused anyone.
+     * Refused when the control is not the thread's live one, so an old proxy cannot pause anyone,
+     * and when not one event could be judged.
      */
     readonly humanInput: (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) => Effect.Effect<"paused" | "agents" | "refused">;
     /**
      * One of a control's calls that can post input started or ended (#1235). A person's input
@@ -851,15 +852,9 @@ const make = Effect.gen(function* () {
     humanInput: Effect.fn("ComputerUseLeases.humanInput")(function* (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) {
       if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
-      if (!(yield* nearNow(at))) return "refused" as const;
-      // The calls that could have covered an older event are forgotten, so it cannot be judged:
-      // an agent's own late event would pass for a person's. A person still at the machine makes
-      // newer ones.
-      if (!agentInputs.remembers(at, yield* Clock.currentTimeMillis)) return "refused" as const;
       // Another agent's input on this host shows up in every helper; only a live control's
       // calls count.
       const live = new Set(
@@ -867,10 +862,23 @@ const make = Effect.gen(function* () {
           .filter((record) => record.ended === undefined)
           .map((record) => record.controlId),
       );
-      if (agentInputs.isAgents(at, source, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
-        return "agents" as const;
-      yield* pause("human_input");
-      return "paused" as const;
+      const now = yield* Clock.currentTimeMillis;
+      let judged = false;
+      for (const { at, source } of [...events].sort((left, right) => left.at - right.at)) {
+        if (!(yield* nearNow(at))) continue;
+        // The calls that could have covered an older event are forgotten, so it cannot be
+        // judged: an agent's own late event would pass for a person's. A person still at the
+        // machine makes newer ones.
+        if (!agentInputs.remembers(at, now)) continue;
+        judged = true;
+        if (
+          agentInputs.isAgents(at, source, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY))))
+        )
+          continue;
+        yield* pause("human_input");
+        return "paused" as const;
+      }
+      return judged ? ("agents" as const) : ("refused" as const);
     }),
     agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
       threadId: ThreadId,

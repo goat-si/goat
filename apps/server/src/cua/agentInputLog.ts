@@ -93,7 +93,7 @@ const BOTH: ReadonlyArray<InputKind> = ["keyboard", "pointer"];
 const BEFORE_MS = 50;
 /**
  * Events the driver posted can surface this long after its answer: the window server delivers
- * them after the call returns, and the helper polls every 250 ms.
+ * them after the call returns, and the helper polls keys every 25 ms.
  */
 const AFTER_MS = 500;
 /**

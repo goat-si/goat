@@ -12,7 +12,10 @@ import Foundation
 enum PointerTap {
   /// The event types the tap receives. Keyboard events are never among them (D7: the helper does
   /// not use Input Monitoring); keyboard input is polled.
-  static let types: [CGEventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+  static let types: [CGEventType] = [
+    .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+  ]
 
   /// The time to report for a tapped event of `type` that arrived at `at`, or nil.
   static func report(_ type: CGEventType, at: Double) -> Double? {
@@ -25,7 +28,7 @@ enum PointerTap {
 /// one interval show as the later one. The interval is short so that hardly happens between a
 /// person's key and an agent's next one: the driver types about one key every 38 ms.
 struct PolledKind {
-  static let interval = 0.25
+  static let interval = 0.025
   private var latest: Double
 
   /// Whatever happened before this connection is no one's concern here.

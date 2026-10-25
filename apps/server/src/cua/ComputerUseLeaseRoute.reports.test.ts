@@ -32,13 +32,14 @@ describe("ComputerUseLeaseRoute reports", () => {
           } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]),
         );
         const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
-        const post = (controlId: string, token = "good") =>
+        const one = { source: "keyboard", at: 0 };
+        const post = (controlId: string, token = "good", humanInput: unknown = one) =>
           Effect.promise(async () => {
             const response = await handler(
               new Request("http://127.0.0.1" + COMPUTER_USE_LEASE_ROUTE, {
                 method: "POST",
                 headers: { authorization: "Bearer " + token },
-                body: JSON.stringify({ controlId, humanInput: { source: "keyboard", at: 0 } }),
+                body: JSON.stringify({ controlId, humanInput }),
               }),
               services,
             );
@@ -49,6 +50,10 @@ describe("ComputerUseLeaseRoute reports", () => {
           assert.equal(yield* post("control:agents"), 202);
           assert.equal(yield* post("control:old"), 409);
           assert.equal(yield* post("control:paused", "stolen"), 401);
+          // A batch of what piled up behind the last report (#1488), up to its limit.
+          assert.equal(yield* post("control:paused", "good", [one, one]), 204);
+          assert.equal(yield* post("control:paused", "good", []), 400);
+          assert.equal(yield* post("control:paused", "good", Array(257).fill(one)), 400);
         }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
       }),
   );

@@ -9,7 +9,7 @@
  *
  * @module agentInputReports
  */
-import type { ComputerUseHumanInputSource } from "@goat/contracts";
+import { COMPUTER_USE_HUMAN_INPUT_BATCH, type ComputerUseHumanInputSource } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -89,15 +89,17 @@ interface HelperInput {
  * Sends a helper's keyboard and pointer events to the server until it takes one, and returns
  * then. Every event goes, even one this agent's own call could explain: only the server sees
  * every agent's calls, and with them when a run of cover is too long. Reports are slower than
- * events, so events wait in order until the server has judged each: merging or dropping one
- * could drop a person's. Only events older than the server still judges are dropped, since it
- * would refuse them.
+ * events, so every event that arrived while one report was out goes in the next, in time order
+ * (#1488): a pointer streaming dozens of moves a second costs one report per round trip, and a
+ * person's event waits behind one report at most. Merging or dropping an event could drop a
+ * person's; only events older than the server still judges are dropped, since it would refuse
+ * them.
  */
 export const forwardHelperInput = Effect.fn("agentInputReports.forwardHelperInput")(
   function* (options: {
     readonly events: Stream.Stream<HelperInput>;
-    /** True when the server took the event. */
-    readonly report: (input: HelperInput) => Effect.Effect<boolean>;
+    /** True when the server took one of the events. */
+    readonly report: (events: ReadonlyArray<HelperInput>) => Effect.Effect<boolean>;
     /** False once the child the events come from is paused, ended or replaced. */
     readonly current: () => boolean;
   }) {
@@ -117,11 +119,12 @@ export const forwardHelperInput = Effect.fn("agentInputReports.forwardHelperInpu
       yield* Queue.take(wake);
       while (unsent.length > 0) {
         if (!options.current()) return;
+        const now = yield* Clock.currentTimeMillis;
         unsent.sort((left, right) => left.at - right.at);
-        const next = unsent.shift();
-        if (next === undefined) break;
-        if ((yield* Clock.currentTimeMillis) - next.at >= KEEP_MS) continue;
-        if (yield* options.report(next)) return;
+        const batch = unsent
+          .splice(0, COMPUTER_USE_HUMAN_INPUT_BATCH)
+          .filter((event) => now - event.at < KEEP_MS);
+        if (batch.length > 0 && (yield* options.report(batch))) return;
       }
     }
   },

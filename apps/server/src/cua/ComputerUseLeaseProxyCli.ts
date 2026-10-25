@@ -166,8 +166,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
             windowId: target.windowId,
           }),
         ),
-      onHumanInput: (humanInput) =>
-        Effect.promise(() => report(url, authorization, { controlId, humanInput })),
+      onHumanInput: (events) =>
+        Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
       onAgentInput: (agentInput) =>
         Effect.promise(() => report(url, authorization, { controlId, agentInput })),
       leaseUpdates: leaseUpdateLines(
