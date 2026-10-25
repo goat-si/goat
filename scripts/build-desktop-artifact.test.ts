@@ -2045,6 +2045,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("names GOAT as the maintainer of the Linux packages", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const linux = config.linux as Record<string, unknown>;
+      assert.equal(linux.maintainer, "GOAT <jun@lidgeai.com>");
+    }),
+  );
+
   it.effect("configures only an opted-in canonical nightly feed and keeps previews off", () =>
     Effect.gen(function* () {
       const feed = yield* createBuildConfig(
