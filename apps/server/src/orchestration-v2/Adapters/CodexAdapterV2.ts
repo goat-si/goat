@@ -88,6 +88,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
+import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -756,9 +757,6 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
       };
   }
 }
-
-const CUA_DEFERRED_NOTE =
-  "Computer use was stopped and its new connection starts once this conversation and its subagents are idle. Until then its tools refuse with userStoppedSession. Tell the person to send their next message after this turn ends, or to start a new thread, to use the computer again.";
 
 export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTurnStartParams")(
   function* (input: {
@@ -5770,10 +5768,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
-        // What Codex last reported for each native thread; the computer use reload reads it.
-        const threadStatuses = new Map<string, string>();
+        const threadStatuses = makeCodexThreadStatuses();
         yield* client.handleServerNotification("thread/status/changed", (payload) =>
-          Effect.sync(() => threadStatuses.set(payload.threadId, payload.status.type)),
+          Effect.sync(() => threadStatuses.record(payload.threadId, payload.status.type)),
         );
         yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
           Effect.gen(function* () {
@@ -7186,7 +7183,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // new control after Stop, #1564) needs a cold reload. It runs only while Codex reports
             // this thread and every subagent thread under it idle; an unreported thread defers it.
             const subagents = Array.from((yield* Ref.get(subagentThreads)).entries());
-            const busy = [
+            const busy = !threadStatuses.quiet([
               threadId,
               ...subagents
                 .filter(
@@ -7195,10 +7192,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     turnInput.providerThread.id,
                 )
                 .map(([nativeId]) => nativeId),
-            ].some((nativeId) => {
-              const status = threadStatuses.get(nativeId);
-              return status !== "idle" && status !== "notLoaded";
-            });
+            ]);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(
@@ -7283,7 +7277,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return next;
             });
             if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
-            const started = yield* client.request("turn/start", turnStartParams);
+            const undoStarting = threadStatuses.starting(threadId);
+            const started = yield* client
+              .request("turn/start", turnStartParams)
+              .pipe(Effect.tapError(() => Effect.sync(undoStarting)));
             // Codex folds input into a turn that is still running. If that turn
             // belongs to another attempt, adopting it would leave this run
             // waiting on events routed to that attempt forever (#489).
@@ -7576,7 +7573,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       Effect.tap((response) =>
                         Effect.sync(() => {
                           appliedSubagentsByThread.set(response.thread.id, runtime.subagentKey);
-                          threadStatuses.set(response.thread.id, response.thread.status.type);
+                          threadStatuses.record(response.thread.id, response.thread.status.type);
                           if (!mcpSession) return;
                           credentialsByThread.set(
                             response.thread.id,

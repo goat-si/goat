@@ -241,8 +241,6 @@ const fixture = (scenario: string) => {
         computerUseDeferred: deferred,
       });
       entries.push({ type: "expect_outbound", frame: { id, method: "turn/start", params } });
-      // Codex reports the thread active as the turn starts, before its answer arrives here.
-      status(nativeThreadId, "active");
       entries.push({
         type: "emit_inbound",
         frame: {
@@ -250,6 +248,8 @@ const fixture = (scenario: string) => {
           result: { turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }) },
         },
       });
+      // Codex answers turn/start before its task reports the thread active.
+      status(nativeThreadId, "active");
     });
   // Codex reports a thread's status as it changes: active for a turn, idle once it ends.
   const status = (threadId: string, type: "active" | "idle", flags: ReadonlyArray<string> = []) =>
