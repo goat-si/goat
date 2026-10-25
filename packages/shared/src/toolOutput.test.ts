@@ -53,6 +53,13 @@ describe("toolOutputSettle", () => {
     ).toEqual(pending);
     // A provider that joins the text into one string puts the folded sample first.
     expect(toolOutputSettle(folded + "\n" + line)).toEqual(pending);
+    // A window title can contain the same words; the real line at a line start still counts.
+    const titled = JSON.stringify({
+      window_title: "Notification settle: example",
+      tree: "x".repeat(20_000),
+      settle: pending,
+    });
+    expect(toolOutputSettle(titled + "\n" + line)).toEqual(pending);
     expect(
       compactDynamicToolOutput({
         content: [

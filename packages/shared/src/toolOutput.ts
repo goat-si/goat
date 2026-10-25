@@ -106,8 +106,9 @@ export function toolOutputSettle(value: unknown): ToolOutputSettle | undefined {
   for (const text of texts) {
     // A provider may join the summary after a folded sample far larger than the parse budget, so
     // the line is found by search, and only small text is parsed as JSON.
-    const at = text.indexOf(SETTLE_PREFIX);
-    if (at >= 0 && (at === 0 || text[at - 1] === "\n")) {
+    for (let at = text.indexOf(SETTLE_PREFIX); at >= 0; at = text.indexOf(SETTLE_PREFIX, at + 1)) {
+      // The same words inside a sample (a window title) are not the helper's line.
+      if (at > 0 && text[at - 1] !== "\n") continue;
       const summary = SETTLE_SUMMARY.exec(text.slice(at, at + 256));
       if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
     }
