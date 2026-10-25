@@ -827,7 +827,12 @@ const make = Effect.gen(function* () {
 
   const facts: WorktreeInventoryService["Service"]["facts"] = scan(undefined).pipe(
     Effect.map((list) =>
-      list.map(({ entry, head, holdsProject }) => ({ entry, head, holdsProject })),
+      list.map(({ entry, head, holdsProject, leaseKeys }) => ({
+        entry,
+        head,
+        holdsProject,
+        leaseKeys,
+      })),
     ),
   );
 
