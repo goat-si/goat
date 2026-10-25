@@ -1,8 +1,7 @@
 /**
- * The control stream a computer use proxy holds open: the current state of the control it was
- * started with, then a new line whenever that may have changed, ending with the line that ends
- * it. It authenticates with the thread's own GOAT MCP credential, so a proxy only ever learns
- * about its own thread. A POST to the same route reports, for that thread's live control only,
+ * A proxy can follow one control until it ends, or follow its thread across controls, waiting
+ * between them. Both streams authenticate with the thread's own GOAT MCP credential, so a
+ * proxy only ever learns about its own thread. A POST reports, for that thread's live control only,
  * the window the proxy's latest admitted call named, its own input calls, or a person's input
  * its helper saw.
  *
@@ -12,6 +11,7 @@ import {
   COMPUTER_USE_LEASE_ROUTE,
   ComputerUseLeaseReport,
   ComputerUseLeaseUpdate,
+  ComputerUseLeaseThreadUpdate,
   ComputerUseCallReservation,
   ComputerUseCallAdmission,
 } from "@goat/contracts";
@@ -29,8 +29,10 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { threadLeaseUpdates } from "./ComputerUseLeaseThreadStream.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
+const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
 const encodeAdmission = Schema.encodeSync(Schema.fromJsonString(ComputerUseCallAdmission));
 const decodeReservation = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUseCallReservation),
@@ -113,15 +115,15 @@ export const leaseUpdates = (input: {
     }),
   );
 
+const bearer = (authorization: string | undefined) =>
+  authorization?.startsWith("Bearer ") === true ? authorization.slice("Bearer ".length).trim() : "";
+
 /** The thread a proxy's MCP credential belongs to, or undefined. */
 const threadOf = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const registry = yield* McpSessionRegistry.McpSessionRegistry;
   const authorization = request.headers.authorization;
-  const token =
-    authorization?.startsWith("Bearer ") === true
-      ? authorization.slice("Bearer ".length).trim()
-      : "";
+  const token = bearer(authorization);
   const invocation = token.length === 0 ? undefined : yield* registry.resolve(token);
   return invocation?.thread?.threadId;
 });
@@ -170,7 +172,29 @@ const streamLayer = HttpRouter.add(
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
     const threadId = yield* threadOf;
-    const controlId = new URL(request.url, "http://local").searchParams.get("control");
+    const params = new URL(request.url, "http://local").searchParams;
+    const controlId = params.get("control");
+    if (params.has("thread")) {
+      if (threadId === undefined || params.get("thread") !== threadId)
+        return HttpServerResponse.text(
+          encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",
+          { status: 401, contentType: "application/x-ndjson" },
+        );
+      if (params.size !== 1) return HttpServerResponse.empty({ status: 400 });
+      const context = yield* Effect.context<
+        | ComputerUseLeases.ComputerUseLeases
+        | ServerSettings.ServerSettingsService
+        | McpSessionRegistry.McpSessionRegistry
+      >();
+      return HttpServerResponse.stream(
+        threadLeaseUpdates({ threadId, token: bearer(request.headers.authorization) }).pipe(
+          Stream.map((update) => encodeThreadUpdate(update) + "\n"),
+          Stream.encodeText,
+          Stream.provideContext(context),
+        ),
+        { contentType: "application/x-ndjson", headers: { "cache-control": "no-store" } },
+      );
+    }
     if (threadId === undefined || !controlId)
       return HttpServerResponse.text(
         encodeUpdate({ state: "ended", reason: "unauthorized" }) + "\n",

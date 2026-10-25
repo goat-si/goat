@@ -59,6 +59,8 @@ export const unusedRegistry = {
   revokeProviderSession: () => Effect.void,
   revokeThread: () => Effect.void,
   revokeAll: Effect.void,
+  subscribeChanges: Effect.die("unused"),
+  inspect: () => Effect.undefined,
   currentMemoryPolicy: () => Effect.succeed(undefined),
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
