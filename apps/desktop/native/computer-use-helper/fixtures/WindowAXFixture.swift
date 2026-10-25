@@ -303,6 +303,13 @@ private func runObserverFixture(_ scenario: String) {
       f.start()
       f.unsupported("privacy gate \(defect)")
       check(f.api.observerCount == 0, "privacy gate precedes observation")
+      // The reason names the failed check and at most a role, never a value (#1585 diagnostics).
+      let expected = ["private": "focus_subrole:AXTextField", "unknown": "focus_unreadable",
+        "subrole": "focus_subrole:AXTextField"][defect]
+      if let expected {
+        check(f.events.last == "unsupported:private_or_unknown_focus:" + expected,
+          "privacy gate \(defect) names its check: \(f.events)")
+      }
     }
     let f = WatchFixture()
     f.start()
@@ -340,6 +347,11 @@ private func runObserverFixture(_ scenario: String) {
       f.start()
       f.unsupported("no focus with a \(defect) window tree fails closed")
       check(f.api.observerCount == 0, "the tree check precedes observation (\(defect))")
+      let expected = ["secure": "tree_subrole:AXTextField", "unreadable": "tree_children_unreadable:AXGroup",
+        "huge": "tree_node_limit", "unsupported-focus": "focus_unsupported", "unknown": "tree_role:AXUnknown",
+        "opaque-web": "tree_children_unsupported:AXWebArea"][defect] ?? ""
+      check(f.events.last == "unsupported:private_or_unknown_focus:" + expected,
+        "no focus with a \(defect) window tree names its check: \(f.events)")
     }
     let appears = WatchFixture()
     appears.api.noFocus = true
@@ -360,7 +372,7 @@ private func runObserverFixture(_ scenario: String) {
       f.api.noFocus = true
       f.api.leafCount = leaves
       f.start()
-      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus"]),
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus:tree_node_limit"]),
         "\(leaves + 2) nodes: \(ok ? "within" : "past") the 512-node bound: \(f.events)")
     }
     for (links, ok) in [(31, true), (32, false)] {
@@ -368,7 +380,7 @@ private func runObserverFixture(_ scenario: String) {
       f.api.noFocus = true
       f.api.chainLength = links
       f.start()
-      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus"]),
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus:tree_depth_limit"]),
         "depth \(links + 1): \(ok ? "within" : "past") the depth-32 bound: \(f.events)")
     }
     // Focus can move while the window is read; the sample gate's verdict holds only if focus is

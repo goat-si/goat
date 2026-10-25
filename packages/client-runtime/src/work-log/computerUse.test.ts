@@ -139,6 +139,16 @@ describe("computerUseResult", () => {
   });
 
   it("reads the outcome from folded JSON text or the helper's own summary line", () => {
+    // A privacy refusal names the check that failed after the known reason.
+    expect(
+      computerUseResult(
+        settle,
+        "succeeded",
+        structured("unsupported", "private_or_unknown_focus:tree_children_unsupported:AXGroup"),
+      ).note,
+    ).toBe(
+      "Window did not settle: focus is private or unknown (tree children unsupported: AXGroup)",
+    );
     // An expanded row has only the projected output, which keeps just the outcome.
     expect(
       computerUseResult(settle, "succeeded", {

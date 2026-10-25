@@ -176,7 +176,7 @@ final class WindowAXWatch: SettleWatch {
     guard api.windowID(target) == windowID else { return "window_identity_changed" }
     guard isAdmitted else { return "invalidated" }
     guard api.pid(target) == pid else { return "window_pid_mismatch" }
-    guard privacyIsKnownSafe(app) else { return "private_or_unknown_focus" }
+    if let refusal = privacyRefusal(app) { return refusal }
     return isAdmitted ? nil : "invalidated"
   }
 
@@ -247,7 +247,7 @@ final class WindowAXWatch: SettleWatch {
     guard case .string("AXWindow") = api.attribute(target, "AXRole") else {
       return refuse("window_role_unknown")
     }
-    guard privacyIsKnownSafe(app) else { if isActive { refuse("private_or_unknown_focus") }; return }
+    if let refusal = privacyRefusal(app) { if isActive { refuse(refusal) }; return }
     guard isAdmitted else { return }
     guard let observer = api.observer(pid, { [weak self] element, name in self?.receive(element, name) }) else {
       return refuse("observer_unavailable")
@@ -268,53 +268,74 @@ final class WindowAXWatch: SettleWatch {
     guard api.ownerPID(windowID) == pid else { return refuse("window_owner_changed") }
     guard isAdmitted else { return }
     guard api.windowID(target) == windowID else { return refuse("window_identity_changed") }
-    guard privacyIsKnownSafe(app) else { if isActive { refuse("private_or_unknown_focus") }; return }
+    if let refusal = privacyRefusal(app) { if isActive { refuse(refusal) }; return }
     subscribed = true
     deliver(.ready(Self.required))
   }
 
-  private func privacyIsKnownSafe(_ app: WindowAXElement) -> Bool {
-    guard isAdmitted else { return false }
-    guard api.trusted() else { return false }
-    guard isAdmitted else { return false }
+  /// Nil when the app's focus and the target window are known safe; otherwise the refusal reason,
+  /// naming the failed check and at most an AX role or subrole name, never a value (#1585).
+  private func privacyRefusal(_ app: WindowAXElement) -> String? {
+    guard isAdmitted else { return Self.privacy("invalidated") }
+    guard api.trusted() else { return Self.privacy("accessibility_untrusted") }
+    guard isAdmitted else { return Self.privacy("invalidated") }
     switch api.attribute(app, "AXFocusedUIElement") {
-    case .element(let focused): return focusChainIsSafe(focused, app: app)
+    case .element(let focused): return focusChainRefusal(focused, app: app)
     // Only noValue says there is no focused element (Calculator); unsupported leaves the app's
-    // focus unknown, so it still refuses (#1585).
+    // focus unknown, so it still refuses.
     case .absent:
-      guard windowHasNoSecureField(), isAdmitted else { return false }
+      if let refusal = windowTreeRefusal() { return refusal }
+      guard isAdmitted else { return Self.privacy("invalidated") }
       // Focus may have moved into a secure field elsewhere while the window was read.
       switch api.attribute(app, "AXFocusedUIElement") {
-      case .absent: return true
-      case .element(let focused): return focusChainIsSafe(focused, app: app)
-      default: return false
+      case .absent: return nil
+      case .element(let focused): return focusChainRefusal(focused, app: app)
+      case .unsupported: return Self.privacy("focus_unsupported")
+      default: return Self.privacy("focus_unreadable")
       }
-    default: return false
+    case .unsupported: return Self.privacy("focus_unsupported")
+    default: return Self.privacy("focus_unreadable")
     }
   }
 
-  private func focusChainIsSafe(_ focused: WindowAXElement, app: WindowAXElement) -> Bool {
-    guard !focused.same(app) else { return false }
+  private static func privacy(_ detail: String) -> String { "private_or_unknown_focus:" + detail }
+
+  /// An app-supplied AX name reduced to letters and digits, so a reason can carry it safely.
+  private static func axName(_ name: String) -> String {
+    let kept = name.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) && $0.isASCII }
+    return kept.isEmpty ? "none" : String(String.UnicodeScalarView(kept.prefix(32)))
+  }
+
+  private func focusChainRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
+    guard !focused.same(app) else { return Self.privacy("focus_is_application") }
     var node = focused
     var seen: [WindowAXElement] = []
     for _ in 0..<128 {
-      guard isAdmitted else { return false }
-      if node.same(app) { return true }
-      guard !seen.contains(where: { $0.same(node) }) else { return false }
+      guard isAdmitted else { return Self.privacy("invalidated") }
+      if node.same(app) { return nil }
+      guard !seen.contains(where: { $0.same(node) }) else { return Self.privacy("focus_chain_cycle") }
       seen.append(node)
-      guard case .string(let role) = api.attribute(node, "AXRole"), !role.isEmpty,
-        role != "AXSecureTextField", role != "AXUnknown" else { return false }
-      guard isAdmitted else { return false }
-      switch api.attribute(node, "AXSubrole") {
-      case .string(let subrole): if subrole == "AXSecureTextField" { return false }
-      case .absent, .unsupported: if role == "AXTextField" { return false }
-      default: return false
+      guard case .string(let role) = api.attribute(node, "AXRole") else {
+        return Self.privacy("focus_role_unreadable")
       }
-      guard isAdmitted else { return false }
-      guard case .element(let parent) = api.attribute(node, "AXParent") else { return false }
+      guard !role.isEmpty, role != "AXSecureTextField", role != "AXUnknown" else {
+        return Self.privacy("focus_role:" + Self.axName(role))
+      }
+      guard isAdmitted else { return Self.privacy("invalidated") }
+      switch api.attribute(node, "AXSubrole") {
+      case .string(let subrole):
+        if subrole == "AXSecureTextField" { return Self.privacy("focus_subrole:" + Self.axName(role)) }
+      case .absent, .unsupported:
+        if role == "AXTextField" { return Self.privacy("focus_subrole:" + Self.axName(role)) }
+      default: return Self.privacy("focus_subrole_unreadable:" + Self.axName(role))
+      }
+      guard isAdmitted else { return Self.privacy("invalidated") }
+      guard case .element(let parent) = api.attribute(node, "AXParent") else {
+        return Self.privacy("focus_parent_unreadable:" + Self.axName(role))
+      }
       node = parent
     }
-    return false
+    return Self.privacy("focus_chain_limit")
   }
 
   private static let treeNodeLimit = 512
@@ -328,32 +349,41 @@ final class WindowAXWatch: SettleWatch {
 
   /// Reads the whole target window, within bounds, and fails closed on anything it cannot read or
   /// identify (AXUnknown, a container hiding its children), a secure field, or a tree past its bounds.
-  private func windowHasNoSecureField() -> Bool {
-    guard let target else { return false }
+  private func windowTreeRefusal() -> String? {
+    guard let target else { return Self.privacy("tree_target_missing") }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
     var visited = 0
     while let (node, depth) = pending.popLast() {
       visited += 1
-      guard visited <= Self.treeNodeLimit, depth <= Self.treeDepthLimit, isAdmitted else { return false }
-      guard case .string(let role) = api.attribute(node, "AXRole"), !role.isEmpty,
-        role != "AXSecureTextField", role != "AXUnknown" else { return false }
+      guard visited <= Self.treeNodeLimit else { return Self.privacy("tree_node_limit") }
+      guard depth <= Self.treeDepthLimit else { return Self.privacy("tree_depth_limit") }
+      guard isAdmitted else { return Self.privacy("invalidated") }
+      guard case .string(let role) = api.attribute(node, "AXRole") else {
+        return Self.privacy("tree_role_unreadable")
+      }
+      guard !role.isEmpty, role != "AXSecureTextField", role != "AXUnknown" else {
+        return Self.privacy("tree_role:" + Self.axName(role))
+      }
       switch api.attribute(node, "AXSubrole") {
-      case .string(let subrole): if subrole == "AXSecureTextField" { return false }
-      case .absent, .unsupported: if role == "AXTextField" { return false }
-      default: return false
+      case .string(let subrole):
+        if subrole == "AXSecureTextField" { return Self.privacy("tree_subrole:" + Self.axName(role)) }
+      case .absent, .unsupported:
+        if role == "AXTextField" { return Self.privacy("tree_subrole:" + Self.axName(role)) }
+      default: return Self.privacy("tree_subrole_unreadable:" + Self.axName(role))
       }
       // Ask for one more than the budget allows, so an overflow is refused and never truncated.
       let budget = Self.treeNodeLimit - visited - pending.count
       switch api.children(node, max: budget + 1) {
       case .elements(let children):
-        guard children.count <= budget else { return false }
+        guard children.count <= budget else { return Self.privacy("tree_node_limit") }
         pending.append(contentsOf: children.map { ($0, depth + 1) })
       case .absent: break
-      case .unsupported: if !Self.leafRoles.contains(role) { return false }
-      default: return false
+      case .unsupported:
+        if !Self.leafRoles.contains(role) { return Self.privacy("tree_children_unsupported:" + Self.axName(role)) }
+      default: return Self.privacy("tree_children_unreadable:" + Self.axName(role))
       }
     }
-    return true
+    return nil
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {
@@ -371,7 +401,7 @@ final class WindowAXWatch: SettleWatch {
     // non-terminal path resolves this receipt as changed or ignored.
     deliver(.received, admit: false)
     guard isAdmitted else { return }
-    guard privacyIsKnownSafe(app) else { if isActive { refuse("private_or_unknown_focus") }; return }
+    if let refusal = privacyRefusal(app) { if isActive { refuse(refusal) }; return }
     var node = element
     var seen: [WindowAXElement] = []
     for _ in 0..<128 {
