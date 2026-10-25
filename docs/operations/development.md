@@ -212,6 +212,26 @@ export check's workspace selectors as more workspaces become clean. Review calle
 deleting code; production mode can also report development scripts and test fixtures.
 Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](../../knip.jsonc).
 
+## Build cache
+
+Rust, C and C++ builds go through kache, a content-addressed build cache shared by every
+checkout on the machine. Without it, each worktree compiles the native crates under `native/`
+into its own `target/`, and a handful of lanes fill the disk.
+
+```sh
+kache init     # once per machine: sets rustc-wrapper in ~/.cargo/config.toml and C/C++ shims
+kache doctor   # before native builds; report a failure instead of building without the cache
+kache clean    # after heavy Rust work: removes old target/ folders (preview with --dry-run)
+```
+
+The build scripts (`build:resource-monitor`, `test:resource-monitor`, the desktop artifact and
+dev runtime builds) start `cargo` with the caller's environment, so Cargo's `rustc-wrapper` or
+an exported `RUSTC_WRAPPER=kache` applies to them. Nothing in the repository names kache, and a
+machine without it builds normally.
+
+Remove the large outputs you created when you finish: `target/` folders, `node_modules` of
+temporary worktrees, captures. `goat storage` lists what GOAT's own folders hold.
+
 ## Desktop artifacts
 
 Local artifact builds are unsigned by default and write to `release/`:
