@@ -175,6 +175,22 @@ describe("handoffExpiryLabel", () => {
   it("names the zone when clocks fall back and the same wall time comes twice", () => {
     expect(label("2026-11-01T05:30:45Z", "en-US", "America/New_York")).toBe("Expires 1:30 AM EDT");
     expect(label("2026-11-01T06:30:45Z", "en-US", "America/New_York")).toBe("Expires 1:30 AM EST");
-    expect(label("2026-11-01T08:30:45Z", "en-US", "America/New_York")).toBe("Expires 3:30 AM");
+    expect(label("2026-11-01T12:30:45Z", "en-US", "America/New_York")).toBe("Expires 7:30 AM");
+  });
+
+  it("names the zone for clock changes that are not an hour", () => {
+    // Lord Howe falls back 30 minutes, Troll two hours: each wall time below comes twice.
+    const lordHowe = [
+      label("2026-04-04T14:45:45Z", "en-US", "Australia/Lord_Howe"),
+      label("2026-04-04T15:15:45Z", "en-US", "Australia/Lord_Howe"),
+    ];
+    expect(lordHowe[0]).not.toBe(lordHowe[1]);
+    expect(lordHowe.every((text) => text.startsWith("Expires 1:45 AM "))).toBe(true);
+    const troll = [
+      label("2026-10-25T00:30:45Z", "en-US", "Antarctica/Troll"),
+      label("2026-10-25T02:30:45Z", "en-US", "Antarctica/Troll"),
+    ];
+    expect(troll[0]).not.toBe(troll[1]);
+    expect(troll.every((text) => text.startsWith("Expires 2:30 AM "))).toBe(true);
   });
 });

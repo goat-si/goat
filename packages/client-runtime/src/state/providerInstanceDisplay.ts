@@ -156,27 +156,28 @@ const isHandoffError = Schema.is(HandoffError);
  * conflict the server explained, such as another thread holding an app, says what is in the way.
  */
 /**
- * When a pending handoff expires, in the reader's own time to the minute. A wall time that also
- * comes an hour earlier or later, as when clocks fall back, names its zone, so the hour is clear.
- * Locale and zone default to the reader's; tests pin them.
+ * When a pending handoff expires, in the reader's own time to the minute. Near a change of the
+ * zone's UTC offset (any size: clocks fall back 30 minutes on Lord Howe, two hours at Troll) the
+ * same wall time can mean two instants, so the label then names the zone. Locale and zone default
+ * to the reader's; tests pin them.
  */
 export function handoffExpiryLabel(
   expiresAt: DateTime.Utc,
   options: { readonly locale?: string; readonly timeZone?: string } = {},
 ): string {
   const at = DateTime.toEpochMillis(expiresAt);
-  const clock = (zone: boolean) =>
-    new Intl.DateTimeFormat(options.locale, {
-      hour: "numeric",
-      minute: "2-digit",
-      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
-      ...(zone ? { timeZoneName: "short" } : {}),
-    });
-  const text = clock(false).format(at);
-  const repeats = [at - 3_600_000, at + 3_600_000].some(
-    (other) => clock(false).format(other) === text,
-  );
-  return `Expires ${repeats ? clock(true).format(at) : text}`;
+  const zone = options.timeZone === undefined ? {} : { timeZone: options.timeZone };
+  const offsets = new Intl.DateTimeFormat("en-US", { ...zone, timeZoneName: "longOffset" });
+  const offset = (ms: number) =>
+    offsets.formatToParts(ms).find((part) => part.type === "timeZoneName")?.value;
+  const changes = [at - 3 * 3_600_000, at + 3 * 3_600_000].some((ms) => offset(ms) !== offset(at));
+  const clock = new Intl.DateTimeFormat(options.locale, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...zone,
+    ...(changes ? { timeZoneName: "short" } : {}),
+  });
+  return `Expires ${clock.format(at)}`;
 }
 
 export function handoffRespondErrorMessage(error: unknown): string {
