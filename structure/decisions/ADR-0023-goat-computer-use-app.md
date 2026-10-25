@@ -88,7 +88,7 @@
     session that owns the driver runtime and listens on no socket, inherits the helper's grants and
     passes the driver's identity check unpatched (D3 amendment, #1210). Each agent connection's
     proxy starts its own helper with `--mcp` for that driver, and Stop ends the pair (D3 amendment
-    2); only the desktop's readiness check still runs `serve --embedded` on a private socket. Direct mode has no driver cursor overlay, so the helper draws
+    2); the desktop's readiness check starts its own helper with `--mcp` the same way. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
     driver changes in the fork with recorded provenance, never in a rewritten driver.
   - **Driver fork (D15).** `goat-si/cua-driver` is a `git subtree split` of trycua/cua

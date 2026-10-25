@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@goat/contracts";
+import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -201,6 +201,44 @@ it.effect(
         }),
       );
       assert.isTrue(Option.isNone(yield* Fiber.join(claiming)));
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "keeps a person-directed full access control without the host's unattended setting, but not unattended work",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const directed = ThreadId.make("thread-directed-no-setting");
+      const scheduled = ThreadId.make("thread-scheduled-no-setting");
+      yield* threadIn(directed, "full-access");
+      yield* threadIn(scheduled, "full-access");
+      const person = Option.getOrThrow(
+        yield* leases.everyAppControl(directed, false, {
+          person: true,
+          runId: RunId.make("run:directed"),
+        }),
+      );
+      const unattendedWork = Option.getOrThrow(yield* leases.everyAppControl(scheduled, true));
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
+      const state = yield* leases.controlState(directed, person.controlId);
+      assert.equal(state._tag, "active");
+      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+      // The setting only decides unattended work.
+      assert.deepEqual(yield* leases.controlState(scheduled, unattendedWork.controlId), {
+        _tag: "ended",
+        reason: "revoked",
+      });
+      // Leaving full access still ends a person-directed control at once.
+      yield* threadIn(directed, "approval-required");
+      assert.deepEqual(yield* leases.controlState(directed, person.controlId), {
+        _tag: "ended",
+        reason: "revoked",
+      });
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
 );

@@ -248,19 +248,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
   const driverPath = () =>
     environment.isPackaged
-      ? environment.platform === "darwin"
-        ? environment.path.join(environment.resourcesPath, "cua-driver")
-        : environment.path.join(
-            environment.resourcesPath,
-            "cua-driver",
-            environment.platform === "win32" ? "cua-driver.exe" : "cua-driver",
-          )
+      ? environment.path.join(
+          environment.resourcesPath,
+          "cua-driver",
+          environment.platform === "win32" ? "cua-driver.exe" : "cua-driver",
+        )
       : process.env.GOAT_CUA_DRIVER_PATH?.trim();
 
   /**
-   * A Mac or Windows build that ships the helper always uses it. Only a build without one runs
-   * the driver in-process under GOAT's own identity; a helper that is there and unusable is a
-   * reason string, and computer use stays off.
+   * Packaged macOS must keep computer use under the helper's TCC identity (ADR-0023), even when
+   * the helper is missing. Development and Windows can still use the in-process driver.
    */
   const engine = Effect.fn("desktop.cua.engine")(function* () {
     if (environment.platform === "darwin" || environment.platform === "win32") {
@@ -295,6 +292,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               : helperBundle(found.path, bundleId),
         } satisfies Engine;
       }
+      if (environment.isPackaged && environment.platform === "darwin")
+        return `This build does not include ${COMPUTER_USE_HELPER_NAME}. Computer use is unavailable.`;
     }
     const path = driverPath();
     return path ? ({ kind: "embedded", driverPath: path } satisfies Engine) : undefined;

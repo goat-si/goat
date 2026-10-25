@@ -11,6 +11,7 @@ import {
   type OriginReads,
   type OriginRun,
   type OriginThread,
+  personStarted,
 } from "./ComputerUseOrigin.ts";
 
 const at = (minute: number) => DateTime.makeUnsafe(minute * 60_000);
@@ -291,6 +292,149 @@ describe("gateUnattendedSteering", () => {
         yield* gate("channel-worker:9c", "w1", { senderThreadId: "bot" }),
         kept("channel-worker:9c", "w1"),
       );
+    }),
+  );
+});
+
+describe("personStarted", () => {
+  const person = (minute: number): OriginMessage => ({
+    createdAt: at(minute),
+    createdBy: "user",
+    creationSource: "web",
+  });
+  const wake = (minute: number): OriginMessage => ({
+    createdAt: at(minute),
+    createdBy: "agent",
+    creationSource: "server",
+  });
+  const wakeId = (handoff: string) => "message:handoff-wake:" + handoff + ":completed";
+  const decide = (
+    world: World,
+    grants: Record<string, { readonly thread: string; readonly run: string }>,
+    runId: string,
+  ) =>
+    personStarted(
+      {
+        ...reads(world),
+        grantRun: (threadId, handoffId) =>
+          Effect.succeed(
+            grants[handoffId]?.thread === threadId ? RunId.make(grants[handoffId].run) : undefined,
+          ),
+      },
+      { threadId: ThreadId.make("mine"), runId: RunId.make(runId) },
+    );
+
+  it.effect("counts only messages a person's client sent, never server re-dispatches", () =>
+    Effect.gen(function* () {
+      const world: World = {
+        threads: { mine: {} },
+        runs: { mine: [run("typed", "m1", 1, 2), run("recovered", "m2", 3)] },
+        messages: {
+          m1: person(1),
+          // Usage-limit recovery and fleet fallback write createdBy "user" from the server.
+          m2: { createdAt: at(3), createdBy: "user", creationSource: "server" },
+        },
+      };
+      assert.isTrue(yield* decide(world, {}, "typed"));
+      assert.isFalse(yield* decide(world, {}, "recovered"));
+    }),
+  );
+
+  it.effect("follows an approval wake to the run that asked, not to the run before it", () =>
+    Effect.gen(function* () {
+      const scheduledAsked: World = {
+        threads: { mine: {} },
+        runs: {
+          mine: [
+            run("cron", "m1", 1, 2),
+            run("typed", "m2", 3, 4),
+            run("woken", wakeId("handoff:cron"), 5),
+          ],
+        },
+        messages: {
+          m1: { createdAt: at(1), scheduledTaskId: "task-1" },
+          m2: person(3),
+          [wakeId("handoff:cron")]: wake(5),
+        },
+      };
+      assert.isFalse(
+        yield* decide(scheduledAsked, { "handoff:cron": { thread: "mine", run: "cron" } }, "woken"),
+      );
+      const personAsked: World = {
+        threads: { mine: {} },
+        runs: {
+          mine: [
+            run("typed", "m1", 1, 2),
+            run("cron", "m2", 3, 4),
+            run("woken", wakeId("handoff:typed"), 5),
+          ],
+        },
+        messages: {
+          m1: person(1),
+          m2: { createdAt: at(3), scheduledTaskId: "task-1" },
+          [wakeId("handoff:typed")]: wake(5),
+        },
+      };
+      assert.isTrue(
+        yield* decide(personAsked, { "handoff:typed": { thread: "mine", run: "typed" } }, "woken"),
+      );
+    }),
+  );
+
+  it.effect("ignores wake-shaped ids a client or an agent chose, and other threads' grants", () =>
+    Effect.gen(function* () {
+      const grants = { "handoff:typed": { thread: "mine", run: "typed" } };
+      const forged: World = {
+        threads: { mine: {} },
+        runs: {
+          mine: [
+            run("typed", "m1", 1, 2),
+            run("client", wakeId("handoff:typed"), 3, 4),
+            run("mcp", wakeId("handoff:typed") + ":x", 5),
+          ],
+        },
+        messages: {
+          m1: person(1),
+          // A client's message is judged as a client message: here a server-sourced one.
+          [wakeId("handoff:typed")]: {
+            createdAt: at(3),
+            createdBy: "user",
+            creationSource: "server",
+          },
+          [wakeId("handoff:typed") + ":x"]: {
+            createdAt: at(5),
+            createdBy: "agent",
+            creationSource: "mcp",
+          },
+        },
+      };
+      assert.isFalse(yield* decide(forged, grants, "client"));
+      assert.isFalse(yield* decide(forged, grants, "mcp"));
+      const elsewhere: World = {
+        threads: { mine: {} },
+        runs: { mine: [run("woken", wakeId("handoff:other"), 1)] },
+        messages: { [wakeId("handoff:other")]: wake(1) },
+      };
+      assert.isFalse(
+        yield* decide(elsewhere, { "handoff:other": { thread: "theirs", run: "r" } }, "woken"),
+      );
+    }),
+  );
+
+  it.effect("gives up on a chain of approval wakes longer than lineage allows", () =>
+    Effect.gen(function* () {
+      const runs: Array<OriginRun> = [run("r0", "m0", 0, 1)];
+      const messages: Record<string, OriginMessage> = { m0: person(0) };
+      const grants: Record<string, { readonly thread: string; readonly run: string }> = {};
+      for (let index = 1; index <= 10; index++) {
+        const id = wakeId("handoff:" + (index - 1));
+        runs.push(run("r" + index, id, index * 2, index * 2 + 1));
+        messages[id] = wake(index * 2);
+        grants["handoff:" + (index - 1)] = { thread: "mine", run: "r" + (index - 1) };
+      }
+      const world: World = { threads: { mine: {} }, runs: { mine: runs }, messages };
+      assert.isTrue(yield* decide(world, grants, "r3"));
+      assert.isFalse(yield* decide(world, grants, "r10"));
     }),
   );
 });

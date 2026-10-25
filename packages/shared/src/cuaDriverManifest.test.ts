@@ -121,6 +121,48 @@ describe("cuaDriverManifest", () => {
     ).toEqual(["com.apple.TextEdit", "com.apple.finder"]);
   });
 
+  // #1598: NordPass, Proton Pass and 1Password for Safari are credential stores too.
+  it("never admits or offers NordPass, Proton Pass or 1Password for Safari on any platform", () => {
+    const listed = [
+      // macOS, by bundle id with an unhelpful name, and by name.
+      { bundle_id: "com.nordsec.nordpass", name: "Vault" },
+      { bundle_id: "me.proton.pass.electron", name: "Vault" },
+      { bundle_id: "me.proton.pass.catalyst", name: "Vault" },
+      { bundle_id: "com.1password.safari", name: "Vault" },
+      { bundle_id: "org.example.np", name: "NordPass" },
+      { bundle_id: "org.example.pp", name: "Proton Pass" },
+      // Windows, by executable path.
+      {
+        bundle_id: null,
+        name: "NordPass.exe",
+        executable: "C:\\Users\\me\\AppData\\Local\\Programs\\nordpass\\NordPass.exe",
+      },
+      {
+        bundle_id: null,
+        name: "Proton Pass.exe",
+        executable: "C:\\Users\\me\\AppData\\Local\\Programs\\Proton Pass\\ProtonPass.exe",
+      },
+      // Linux, by executable with no desktop entry.
+      { bundle_id: null, name: "proton-pass", executable: "/opt/proton-pass/proton-pass" },
+      { bundle_id: null, name: "nordpass", executable: "/snap/nordpass/current/nordpass" },
+      // Snap desktop ids and Windows AUMIDs join words with "_", with an unhelpful name.
+      { bundle_id: "nordpass_nordpass", name: "Vault" },
+      { bundle_id: "proton-pass_proton-pass", name: "Vault" },
+      { bundle_id: "ProtonPass_6qsfpqg5m1w4e!App", name: "Vault" },
+      // Neighbours that are not credential stores stay admitted.
+      { bundle_id: "ch.protonmail.desktop", name: "Proton Mail" },
+      { bundle_id: "com.example.compass", name: "Compass" },
+    ];
+    expect(admittedCuaApplications(listed, [])).toEqual([
+      "ch.protonmail.desktop",
+      "com.example.compass",
+    ]);
+    expect(cuaRequestableApps(listed, [])).toEqual([
+      "ch.protonmail.desktop",
+      "com.example.compass",
+    ]);
+  });
+
   it("admits a running Windows program with no bundle id by its executable, never GOAT's own (#1368)", () => {
     const goat = "C:\\Program Files\\GOAT\\GOAT.exe";
     expect(

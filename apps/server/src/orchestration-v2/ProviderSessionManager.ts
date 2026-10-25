@@ -442,18 +442,16 @@ export const layerWithOptions = (
           );
           return limit === undefined ? rest : { ...rest, nativeSubagentLimit: limit };
         });
+      const originReads = ComputerUseOrigin.projectionOriginReads({
+        getThreadRecords: (id, fields, filter) =>
+          projectionStore.getThreadRecords(id, fields, filter),
+        channelOrigin: (id) =>
+          Option.isSome(computerUseLeases)
+            ? computerUseLeases.value.channelOrigin(id)
+            : Effect.succeed(undefined),
+      });
       const computerUseOriginOf = (threadId: ThreadId, runId: RunId | undefined) =>
-        ComputerUseOrigin.computerUseOrigin(
-          ComputerUseOrigin.projectionOriginReads({
-            getThreadRecords: (id, fields, filter) =>
-              projectionStore.getThreadRecords(id, fields, filter),
-            channelOrigin: (id) =>
-              Option.isSome(computerUseLeases)
-                ? computerUseLeases.value.channelOrigin(id)
-                : Effect.succeed(undefined),
-          }),
-          { threadId, runId },
-        );
+        ComputerUseOrigin.computerUseOrigin(originReads, { threadId, runId });
       const memoryPolicy = yield* Effect.serviceOption(
         ServerSettings.MemoryProviderCommittedPolicy,
       );
@@ -751,6 +749,13 @@ export const layerWithOptions = (
                   ),
                   interactionMode: preparedInput.interactionMode,
                   ...(usableThread ? { runtimeMode: thread.value.runtimeMode } : {}),
+                  runId: preparedInput.runId,
+                  personStarted:
+                    preparedInput.runId !== undefined &&
+                    (yield* ComputerUseOrigin.personStarted(originReads, {
+                      threadId,
+                      runId: preparedInput.runId,
+                    })),
                   readOnly,
                   origin: computerUseOrigin,
                   leases: computerUseLeases,

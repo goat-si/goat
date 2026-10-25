@@ -386,7 +386,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  it.effect.each(["mac", "linux", "win"] as const)(
+  it.effect("mac staging omits the in-process Cua executable (#1202)", () =>
+    Effect.gen(function* () {
+      const h = yield* makeCuaStageFixture("mac");
+      const resources = yield* h.stage("release");
+      assert.isFalse(yield* h.fs.exists(h.path.join(resources, "cua-driver")));
+      assert.equal(h.requests(), 0);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["linux", "win"] as const)(
     "stages the Cua %s compressed release at the desktop host path",
     (platform) =>
       Effect.gen(function* () {
@@ -395,98 +404,36 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const resources = yield* h.stage("release");
         const destination = h.path.join(resources, "cua-driver");
         assert.equal(h.requests(), 0);
-        if (platform === "mac") {
-          assert.equal(yield* h.fs.readFileString(destination), "cua-driver");
-          assert.deepStrictEqual(yield* h.fs.readDirectory(resources), ["cua-driver"]);
-        } else {
-          const companions =
-            platform === "win"
-              ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
-              : [
-                  "cua-driver",
-                  "cua-cursor-theme",
-                  "wayland-helper/README.md",
-                  "wayland-helper/install.sh",
-                  "wayland-helper/winrects@cua/metadata.json",
-                  "wayland-helper/winrects@cua/extension.js",
-                ];
-          assert.deepStrictEqual(
-            (yield* h.fs.readDirectory(destination)).sort(),
-            platform === "win"
-              ? [...companions].sort()
-              : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
-          );
-          for (const member of companions) {
-            assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
-          }
+        const companions =
+          platform === "win"
+            ? ["cua-driver.exe", "cua-driver-uia.exe", "cua-cursor-theme.exe"]
+            : [
+                "cua-driver",
+                "cua-cursor-theme",
+                "wayland-helper/README.md",
+                "wayland-helper/install.sh",
+                "wayland-helper/winrects@cua/metadata.json",
+                "wayland-helper/winrects@cua/extension.js",
+              ];
+        assert.deepStrictEqual(
+          (yield* h.fs.readDirectory(destination)).sort(),
+          platform === "win"
+            ? [...companions].sort()
+            : ["cua-cursor-theme", "cua-driver", "wayland-helper"],
+        );
+        for (const member of companions) {
+          assert.equal(yield* h.fs.readFileString(h.path.join(destination, member)), member);
         }
         if ((yield* HostProcess.Platform) !== "win32" && platform !== "win") {
-          const executables =
-            platform === "mac"
-              ? [destination]
-              : [
-                  h.path.join(destination, "cua-driver"),
-                  h.path.join(destination, "cua-cursor-theme"),
-                ];
+          const executables = [
+            h.path.join(destination, "cua-driver"),
+            h.path.join(destination, "cua-cursor-theme"),
+          ];
           for (const executable of executables) {
             assert.equal((yield* h.fs.stat(executable)).mode & 0o777, 0o755);
           }
         }
       }).pipe(Effect.scoped),
-  );
-
-  it.effect("Cua SDK native libraries unpack beside the ASAR while JavaScript stays archived", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-asar-" });
-      for (const [platform, nativePackage, library] of [
-        ["mac", "darwin-arm64", "libcua_driver_sdk.dylib"],
-        ["linux", "linux-x64-gnu", "libcua_driver_sdk.so"],
-        ["win", "win32-x64-msvc", "cua_driver_sdk.dll"],
-      ] as const) {
-        const sourceDir = path.join(root, platform);
-        const natives = [
-          `node_modules/@trycua/cua-driver-${nativePackage}/${library}`,
-          `node_modules/@trycua/cua-driver-${nativePackage}/cua_driver_node_runtime.node`,
-          `node_modules/@ubjs/node-${nativePackage}/uniffi-runtime-napi.${nativePackage}.node`,
-        ];
-        const javascript = [
-          "node_modules/@trycua/cua-driver/dist/embedded.js",
-          "node_modules/@ubjs/node/typescript/dist/resolve-lib.js",
-        ];
-        for (const file of [...natives, ...javascript]) {
-          yield* fs.makeDirectory(path.dirname(path.join(sourceDir, file)), { recursive: true });
-          yield* fs.writeFileString(path.join(sourceDir, file), file);
-        }
-        const config = yield* createBuildConfig(
-          platform,
-          "dir",
-          "1.2.3",
-          false,
-          false,
-          undefined,
-          undefined,
-        );
-        const globs = config.asarUnpack as string[];
-        assert.isArray(globs, `${platform} needs explicit native unpack rules`);
-        const asarPath = path.join(root, `${platform}.asar`);
-        yield* Effect.promise(() =>
-          createPackageWithOptions(sourceDir, asarPath, {
-            unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
-          }),
-        );
-        for (const file of natives) {
-          assert.equal(yield* fs.readFileString(path.join(`${asarPath}.unpacked`, file)), file);
-          assert.isTrue(statFile(asarPath, path.normalize(file)).unpacked);
-        }
-        for (const file of javascript) {
-          assert.equal(extractFile(asarPath, path.normalize(file)).toString(), file);
-          assert.isNotTrue(statFile(asarPath, path.normalize(file)).unpacked);
-          assert.isFalse(yield* fs.exists(path.join(`${asarPath}.unpacked`, file)));
-        }
-      }
-    }).pipe(Effect.scoped),
   );
 
   it.effect("Cua Windows SDK and driver fit the packaged 80 loose-file budget", () =>
@@ -2258,18 +2205,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.notProperty(mac, "asar");
       assert.notProperty(linux, "asar");
-      // Only the Cua SDK's native libraries leave the archive on macOS and Linux.
+      // macOS keeps only the helper's driver; Linux still uses the native SDK.
       const cuaNativeUnpack = [
         "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
         "**/node_modules/@ubjs/node-*/**/*.node",
       ];
-      assert.deepStrictEqual(mac.asarUnpack, cuaNativeUnpack);
+      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/@ubjs/node-*/**/*.node"]);
       assert.deepStrictEqual(linux.asarUnpack, cuaNativeUnpack);
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
       assert.deepStrictEqual(winWithoutWslRuntime.asar, win.asar);
       assert.deepStrictEqual(winWithoutWslRuntime.asarUnpack, win.asarUnpack);
-      assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
+      assert.deepStrictEqual(
+        mac.extraResources,
+        DESKTOP_EXTRA_RESOURCES.filter((resource) => resource.to !== "cua-driver"),
+      );
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
         ...LINUX_CAPTURE_EXTRA_RESOURCES,
@@ -2330,6 +2280,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "toolsets");
       assert.notProperty(win, "toolsets");
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      for (const file of [
+        "node_modules/@trycua/cua-driver-darwin-arm64/libcua_driver_sdk.dylib",
+        "node_modules/@trycua/cua-driver-darwin-x64/cua_driver_node_runtime.node",
+        "node_modules/@trycua/cua-driver-linux-x64-gnu/libcua_driver_sdk.so",
+        "node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll",
+        "node_modules/@trycua/cua-driver/dist/embedded.js",
+      ]) {
+        const excluded = (config: Record<string, unknown>) =>
+          (config.files as string[]).some((glob) => NodePath.matchesGlob(file, glob.slice(1)));
+        assert.isTrue(excluded(mac), file);
+        assert.isFalse(excluded(linux), file);
+        assert.isFalse(excluded(win), file);
+      }
       assert.deepStrictEqual(linux.files, [...DESKTOP_FILE_EXCLUSIONS, ...LINUX_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);
       assert.deepStrictEqual(winWithoutWslRuntime.files, win.files);

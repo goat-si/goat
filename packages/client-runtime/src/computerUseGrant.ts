@@ -2,7 +2,7 @@ import type { Handoff } from "@goat/contracts";
 
 /** What a computer use request card says once a person has answered it. */
 export function computerUseGrantLabel(
-  handoff: Pick<Handoff, "state" | "resolvedBy" | "computerUseForeground">,
+  handoff: Pick<Handoff, "state" | "resolvedBy" | "computerUseForeground" | "actor">,
   liveUntil: Date | null,
 ): string {
   const by = handoff.resolvedBy ? ` by ${handoff.resolvedBy}` : "";
@@ -14,6 +14,8 @@ export function computerUseGrantLabel(
     return `Allowed until ${liveUntil.toLocaleTimeString()}${by}. ${delivery}`;
   }
   if (handoff.state === "completed") return "Ended at its time limit";
+  if (handoff.state === "cancelled" && handoff.actor.type === "agent")
+    return "Replaced by a newer request";
   if (handoff.state === "cancelled") return `Ended${by}`;
   if (handoff.state === "declined") return `Declined${by}`;
   return "Expired";

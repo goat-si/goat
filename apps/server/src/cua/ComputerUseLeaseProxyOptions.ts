@@ -56,6 +56,11 @@ export interface LeaseProxyOptions<EU, ED> {
   /** Starts one driver child; run again after a pause, each time in its own scope. */
   readonly startDriver: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
   /**
+   * Starts a child that only answers the MCP handshake while the control is paused (#1604): it
+   * gets no overlay channel or input feed. Defaults to startDriver.
+   */
+  readonly startHandshakeDriver?: Effect.Effect<LeaseProxyDriver, ED, Scope.Scope>;
+  /**
    * Identifies the driver's capability manifest file as it is now (#1416), where the driver
    * reads one from a known path; absent elsewhere. A change starts a fresh driver child. It is
    * synchronous on purpose: with no wait between reading it and acting on it, no pause, end or
