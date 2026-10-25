@@ -46,10 +46,26 @@ export const resolveSelfInvocation = Effect.fn("nodeRuntime.resolveSelfInvocatio
   if (yield* HostProcess.IsExecutable)
     return { command, entrypoint: undefined } satisfies SelfInvocation;
   const path = yield* Path.Path;
+  let invocationCommand = command;
+  if ((yield* HostProcess.Platform) === "darwin" && command.includes("/Contents/MacOS/")) {
+    // Electron's background helper carries LSUIElement; launching the app executable as Node
+    // otherwise registers each provider child as another app in the Dock's recent items.
+    const prefix = command.slice(0, command.indexOf("/Contents/MacOS/"));
+    const executableName = path.basename(command);
+    const fs = yield* FileSystem.FileSystem;
+    for (const name of new Set([executableName, "Electron"])) {
+      const helper = `${prefix}/Contents/Frameworks/${name} Helper.app/Contents`;
+      const info = yield* fs.readFileString(`${helper}/Info.plist`).pipe(Effect.option);
+      if (Option.isSome(info) && /<key>LSUIElement<\/key>\s*<true\/>/.test(info.value)) {
+        invocationCommand = `${helper}/MacOS/${name} Helper`;
+        break;
+      }
+    }
+  }
   const entry = (yield* HostProcess.Arguments)[1];
   // Children spawn from their own working directory, so the script path must be absolute.
   return {
-    command,
+    command: invocationCommand,
     entrypoint: entry === undefined ? undefined : path.resolve(entry),
   } satisfies SelfInvocation;
 });
