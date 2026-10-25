@@ -1,7 +1,7 @@
 # Product analytics
 
 The server owns analytics delivery, opt-out, and identity for every connected client.
-Clients do not load the PostHog browser SDK. Client-use events require an
+Clients do not load an analytics SDK. Client-use events require an
 authenticated connection, so visiting the hosted app without connecting does not
 count as product use.
 
@@ -9,8 +9,8 @@ count as product use.
 
 `distinct_id` keeps the rule every build has used: the hashed Codex workspace,
 else the Claude machine id, else the install's anonymous id. It can change when
-someone logs in, and a Codex Team shares one, but keeping it means PostHog charts
-and history never break. Do not change it; add a field instead.
+someone logs in, and a Codex Team shares one, but keeping it keeps history
+comparable across builds. Do not change it; add a field instead.
 
 Every event also carries `installId` when the server can save its state: the hash
 of a random id in the state directory, which never changes for the install. If
@@ -84,17 +84,29 @@ which is also why tool events carry no per-thread sequence.
 
 ## Delivery
 
-The server sends batches to the ingest endpoint at `ingest.t3.codes`, which archives
-every event and forwards some of them to PostHog. A send can fail after the endpoint
-has stored the batch, so every retry is a copy.
+The server sends PostHog-format batches to GOAT's ingest Worker at `ingest.trygoat.ai`
+([infra/ingest](../../infra/ingest/README.md)), which stores them in GOAT's Cloudflare D1
+and forwards nothing. Builds before it sent to the upstream project's `ingest.t3.codes`, and keep
+doing so until they update. A send can fail after the ingest has stored the batch, so
+every retry is a copy; the ingest stores an identical retry once per UTC day, and the
+event uuid identifies copies across days.
 [Delivery](../../apps/server/src/telemetry/AnalyticsService.ts) gives each event a
 uuid when it is recorded (the endpoint rejects events without one), backs off after
 a failed send, and drops a batch after a few tries. Without these limits, one stuck
-batch was sent every second for days.
+batch was sent every second for days. The ingest answers 400, 401 and 413 only for a
+batch it can never accept, which the server drops, and 429 or 503 when it is busy or
+full, which the server retries.
 
 ## Collection boundary
 
 Keep analytics payloads to product metadata and normalized measurements. Do not
 send prompts, authentication material, raw provider payloads, user-assigned device
 names, or conversation identifiers. Client metadata is best effort; invalid values
-must not reject a connection. PostHog person profiles remain disabled.
+must not reject a connection.
+
+The ingest enforces this boundary a second time: it stores only the events and
+properties in [the allowlist](../../packages/shared/src/analyticsAllowlist.ts), as flat
+booleans, numbers, and short strings, and drops everything else. A new event or
+property reaches storage only after it is reviewed into that list and the Worker is
+redeployed. The server also sends PostHog's `$process_person_profile: false` for anyone
+who points `GOAT_POSTHOG_HOST` at PostHog; GOAT's ingest drops it.

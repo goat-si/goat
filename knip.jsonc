@@ -145,6 +145,10 @@
     "infra/relay": {
       "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
     },
+    "infra/ingest": {
+      // Wrangler loads the Worker's default export by path (wrangler.jsonc "main").
+      "entry": ["src/worker.ts!"],
+    },
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,

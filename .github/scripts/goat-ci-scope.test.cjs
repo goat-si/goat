@@ -123,7 +123,7 @@ describe("selectTasks", () => {
   it("runs every dependent task for contracts", () => {
     assert.deepEqual(
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
-      TASKS.filter((task) => task !== "test-memory-growth"),
+      TASKS.filter((task) => task !== "test-memory-growth" && task !== "test-ingest"),
     );
   });
 
@@ -176,6 +176,18 @@ describe("selectTasks", () => {
     assert.deepEqual(tasksFor("infra/relay/src/index.ts"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
+  });
+
+  it("runs the ingest suite for its SQL and config and for the shared allowlist", () => {
+    for (const file of [
+      "infra/ingest/migrations/0001_batches.sql",
+      "infra/ingest/wrangler.jsonc",
+      "infra/ingest/src/store.ts",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-ingest"], file);
+    }
+    assert.ok(tasksFor("packages/shared/src/analyticsAllowlist.ts").includes("test-ingest"));
+    assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-ingest"));
   });
 
   it("always includes check", () => {
@@ -357,8 +369,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists fifteen jobs for a full run: eleven tasks and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 15);
+  it("lists sixteen jobs for a full run: twelve tasks and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 16);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
