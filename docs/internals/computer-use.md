@@ -471,8 +471,18 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Engine patches
 
-GOAT runs upstream Cua Driver and carries only small patches it needs and upstream lacks, each a
-separate file with its source and license recorded:
+GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split of trycua/cua
+`libs/cua-driver` at 0.37.0 that keeps upstream history, released as
+`cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
+Until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 release archives
+(`packages/shared/src/cuaDriverRelease.ts`). When the driver misbehaves, GOAT does not work around
+it: the fix lands in the fork, goes upstream as a pull request, and the problem is reported
+upstream. Upstream is synced on purpose: each range is reviewed for security and behavior,
+checked with `cargo deny`, and taken only after the 0.37.0 protocol-compatibility test and one
+live check per OS. The cycle runs on the Cua axis of `devlog/_chase` (#1609).
+
+The fork carries only small changes GOAT needs and upstream lacks, each its own reviewed change
+with its source, license and upstream issue or pull request recorded:
 
 - batched accessibility attribute reads with a prefetch pool (the largest speedup for big trees);
 - input cancellation with held-input release;

@@ -8,6 +8,8 @@
   "include": [
     "src",
     "vite.config.ts",
+    "scripts/dev-electron-pack.ts",
+    "scripts/dev-electron-restart.ts",
     "../../scripts/lib",
     "../../packages/ssh/src/auth.ts",
     "../../packages/ssh/src/command.ts",

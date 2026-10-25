@@ -37,11 +37,28 @@ function parseAddress(output: string): string | null {
   return /^\('(.+)',\)\s*$/u.exec(output.trim())?.[1] ?? null;
 }
 
-/** The (bus name, object path) references in a GetChildren or GetMatches reply. */
+// One (bus name, object path) element of an `a(so)` as gdbus prints it.
+const REFERENCE = "\\('([^'\\\\]+)', (?:objectpath )?'(/[^'\\\\]*)'\\)";
+// A whole non-empty `(a(so))` reply: the first element carries the type, the rest do not.
+const REFERENCE_LIST = new RegExp(
+  "^\\(\\[\\('[^'\\\\]+', objectpath '/[^'\\\\]*'\\)(?:, " + REFERENCE + ")*\\],\\)$",
+  "u",
+);
+
+/**
+ * The (bus name, object path) references in a GetChildren or GetMatches reply, an `(a(so))`.
+ * gdbus names the `objectpath` type only on an array's first element, so the rest have none
+ * (#1606). Any other reply is not an answer: it throws, and the probe reports focus unknown,
+ * which is private, instead of reading a malformed reply as "nothing focused".
+ */
 function parseReferences(
   output: string,
 ): ReadonlyArray<{ readonly bus: string; readonly path: string }> {
-  return [...output.matchAll(/\('([^']+)', objectpath '([^']+)'\)/gu)].map(([, bus, path]) => ({
+  const reply = output.trim();
+  if (/^\(@a\(so\) \[\],\)$/u.test(reply)) return [];
+  if (!REFERENCE_LIST.test(reply))
+    throw new Error("AT-SPI gave a reply that is not a list of objects.");
+  return [...reply.matchAll(new RegExp(REFERENCE, "gu"))].map(([, bus, path]) => ({
     bus: bus ?? "",
     path: path ?? "",
   }));
@@ -49,7 +66,7 @@ function parseReferences(
 
 /** The number in a `(uint32 N,)` reply: a process id or a role. */
 function parseUint32(output: string): number | null {
-  const match = /\(uint32 (\d+),\)/u.exec(output);
+  const match = /^\(uint32 (\d+),\)$/u.exec(output.trim());
   return match ? Number(match[1]) : null;
 }
 
@@ -134,6 +151,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
           const role = parseUint32(
             await call(match.bus, match.path, "org.a11y.atspi.Accessible.GetRole"),
           );
+          if (role === null) throw new Error("AT-SPI gave no role for the focused object.");
           if (role === ROLE_PASSWORD_TEXT)
             return { known: true, secure: true, windows: windows.length };
         }
