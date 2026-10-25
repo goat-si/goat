@@ -1,12 +1,10 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import * as Inbox from "../goatclaw/DecisionInbox.ts";
 import * as HubMembership from "./HubMembership.ts";
 import {
   OTHER,
   PINNED,
-  asking,
   owner,
   scope,
   setup,
@@ -681,7 +679,7 @@ it.effect("GOAT joining a cloud machine that is already linked changes nothing",
   }),
 );
 
-it.effect("GOAT never joins a host a person added without asking, even with a matching pin", () =>
+it.effect("GOAT never joins a host a person added without even with a matching pin", () =>
   Effect.gen(function* () {
     const hub = yield* setup({ pin: PINNED });
     const refused = yield* hub.membership

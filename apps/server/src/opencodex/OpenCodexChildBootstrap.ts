@@ -308,16 +308,19 @@ const make = Effect.gen(function* () {
    * An SSH job keeps the alias generation and grant it started with: a Forget, or consent given
    * again, ends its permission even before the files or the session change.
    */
-  const sshAdmission = (alias: string, generation: number, grantId: string) =>
-    Effect.gen(function* () {
-      if (!(yield* hubEnabled) || (yield* ssh.aliasGeneration(alias)) !== generation)
-        return { state: "withdrawn" } as const;
-      const consent = yield* consents.check(alias);
-      if (consent.state === "revoked") return consent;
-      if (consent.state === "none" || consent.grant.grantId !== grantId)
-        return { state: "withdrawn" } as const;
-      return { state: "allowed", person: consent.person } as const;
-    });
+  const sshAdmission = Effect.fn("OpenCodexChildBootstrap.sshAdmission")(function* (
+    alias: string,
+    generation: number,
+    grantId: string,
+  ) {
+    if (!(yield* hubEnabled) || (yield* ssh.aliasGeneration(alias)) !== generation)
+      return { state: "withdrawn" } as const;
+    const consent = yield* consents.check(alias);
+    if (consent.state === "revoked") return consent;
+    if (consent.state === "none" || consent.grant.grantId !== grantId)
+      return { state: "withdrawn" } as const;
+    return { state: "allowed", person: consent.person } as const;
+  });
   const sshGate = (alias: string, generation: number, grantId: string): Gate => ({
     admission: sshAdmission(alias, generation, grantId),
     join: (scope) =>

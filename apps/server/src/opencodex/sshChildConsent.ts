@@ -62,12 +62,13 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
   );
   const grants = yield* Ref.make<Readonly<Record<string, SshChildGrant>>>(stored);
   const writing = yield* Semaphore.make(1);
-  const persist = (next: Readonly<Record<string, SshChildGrant>>) =>
-    Effect.gen(function* () {
-      yield* fs.makeDirectory(options.directory, { recursive: true });
-      yield* fs.writeFileString(`${options.file}.tmp`, encodeGrants(next));
-      yield* fs.rename(`${options.file}.tmp`, options.file);
-    }).pipe(Effect.mapError(storageFailure));
+  const persist = Effect.fn("SshChildConsent.persist")(function* (
+    next: Readonly<Record<string, SshChildGrant>>,
+  ) {
+    yield* fs.makeDirectory(options.directory, { recursive: true });
+    yield* fs.writeFileString(`${options.file}.tmp`, encodeGrants(next));
+    yield* fs.rename(`${options.file}.tmp`, options.file);
+  }, Effect.mapError(storageFailure));
 
   /**
    * Removes the grant, in memory before on disk so this process stops using it at once. With a

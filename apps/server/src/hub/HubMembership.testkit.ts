@@ -114,7 +114,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
       if (fixture.addExit) return Effect.succeed({ stdout: "", ...fixture.addExit });
       if (fixture.addFails)
         return Effect.succeed({ code: 1, stdout: "", phase: "child_relay_failed" });
-      links.set(alias!, "lnk_fedcba9876543210");
+      links.set(alias ?? "", "lnk_fedcba9876543210");
       return Effect.succeed(json({ linkId: "lnk_fedcba9876543210" }));
     }
     if (command === "revoke") {
@@ -125,12 +125,12 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
   };
   const device = (alias: string, args: ReadonlyArray<string>) => {
     calls.push(`device ${alias} ${args.join(" ")}`);
-    if (fixture.deviceDown?.includes(args[0]!))
+    if (fixture.deviceDown?.includes(args[0] ?? ""))
       return Effect.fail(new HubOcxError({ reason: "unreachable", message: `${alias} is down.` }));
     if (args[0] === "connect" && args[1] === "status")
       return Effect.succeed(json(fixture.connection ?? { state: "disconnected" }));
     return Effect.succeed({
-      code: fixture.deviceExit?.[args[0]!] ?? 0,
+      code: fixture.deviceExit?.[args[0] ?? ""] ?? 0,
       stdout: "opencodex 2.83.0",
     });
   };
@@ -233,7 +233,7 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
               Effect.sync(() => {
                 calls.push(`handoff ${alias}`);
                 return (fixture.inviteExit ?? 0) !== 0
-                  ? { minted: false as const, exit: fixture.inviteExit! }
+                  ? { minted: false as const, exit: fixture.inviteExit ?? 0 }
                   : {
                       minted: true as const,
                       dataUrl: "https://hub.tailnet-example.ts.net:8443",
@@ -265,7 +265,9 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
           verify: (alias) =>
             Effect.sync(() => {
               calls.push(`verify ${alias}`);
-              return verdicts.length > 1 ? verdicts.shift()! : (verdicts[0] ?? verdict());
+              return (
+                (verdicts.length > 1 ? verdicts.shift() : undefined) ?? verdicts[0] ?? verdict()
+              );
             }),
         }),
       ),
@@ -300,7 +302,8 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
     /** A person answers a handoff in a GOAT client. */
     answer: (id: string, state: Handoff["state"] = "completed") =>
       Effect.sync(() => {
-        const entry = handoffs.get(id)!;
+        const entry = handoffs.get(id);
+        if (entry === undefined) throw new Error(`No handoff ${id}`);
         entry.record = {
           ...entry.record,
           state,
