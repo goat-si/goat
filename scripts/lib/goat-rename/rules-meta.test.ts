@@ -69,7 +69,7 @@ describe("GOAT meta", () => {
       [
         "`<home>/userdata/logs/server.trace.ndjson` (so `~/.goat/userdata/...` by default, `~/.t3/userdata/...` while only that legacy home holds state, or",
         "Only an implicit dev run outside a linked worktree uses the shared dev directory (`~/.t3/dev` while only that one exists):",
-        'TRACE_FILE="$HOME/.goat/dev/logs/server.trace.ndjson"',
+        'STATE_HOME="$HOME/.goat"; [ -d "$STATE_HOME/dev" ] || [ ! -d "$HOME/.t3"/dev ] || STATE_HOME="$HOME/.t3"; TRACE_FILE="$STATE_HOME/dev/logs/server.trace.ndjson"',
       ].join("\n"),
     );
     expect(apply(path, renamed)).toBe(renamed);

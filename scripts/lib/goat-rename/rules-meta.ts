@@ -134,6 +134,20 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     /^A dev server started from a linked worktree defaults to that worktree's local home:$/g,
     "A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` if the worktree was created before the GOAT rename):",
   ),
+  // The worktree and implicit dev commands pick the home as resolveGoatHome does: .goat when it holds the state,
+  // otherwise a .t3 that does. The quoted "$X/.t3" stays outside observability-home-paths.
+  rule(
+    "observability-worktree-command",
+    at("docs/operations/observability.md"),
+    /^TRACE_FILE="\$WORKTREE\/\.goat\/userdata\/logs\/server\.trace\.ndjson"$/g,
+    'STATE_HOME="$WORKTREE/.goat"; [ -d "$STATE_HOME/userdata" ] || [ ! -d "$WORKTREE/.t3"/userdata ] || STATE_HOME="$WORKTREE/.t3"; TRACE_FILE="$STATE_HOME/userdata/logs/server.trace.ndjson"',
+  ),
+  rule(
+    "observability-dev-command",
+    at("docs/operations/observability.md"),
+    /^TRACE_FILE="\$HOME\/\.goat\/dev\/logs\/server\.trace\.ndjson"$/g,
+    'STATE_HOME="$HOME/.goat"; [ -d "$STATE_HOME/dev" ] || [ ! -d "$HOME/.t3"/dev ] || STATE_HOME="$HOME/.t3"; TRACE_FILE="$STATE_HOME/dev/logs/server.trace.ndjson"',
+  ),
   rule(
     "observability-dev-fallback",
     at("docs/operations/observability.md"),

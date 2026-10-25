@@ -270,13 +270,13 @@ TRACE_FILE="${GOAT_HOME:-$HOME/.goat}/userdata/logs/server.trace.ndjson"
 A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` if the worktree was created before the GOAT rename):
 
 ```bash
-TRACE_FILE="$WORKTREE/.goat/userdata/logs/server.trace.ndjson"
+STATE_HOME="$WORKTREE/.goat"; [ -d "$STATE_HOME/userdata" ] || [ ! -d "$WORKTREE/.t3"/userdata ] || STATE_HOME="$WORKTREE/.t3"; TRACE_FILE="$STATE_HOME/userdata/logs/server.trace.ndjson"
 ```
 
 Only an implicit dev run outside a linked worktree uses the shared dev directory (`~/.t3/dev` while only that one exists):
 
 ```bash
-TRACE_FILE="$HOME/.goat/dev/logs/server.trace.ndjson"
+STATE_HOME="$HOME/.goat"; [ -d "$STATE_HOME/dev" ] || [ ! -d "$HOME/.t3"/dev ] || STATE_HOME="$HOME/.t3"; TRACE_FILE="$STATE_HOME/dev/logs/server.trace.ndjson"
 ```
 
 Tail the selected file:
