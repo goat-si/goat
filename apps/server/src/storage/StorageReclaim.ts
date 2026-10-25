@@ -37,7 +37,7 @@ import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps } from "./buildOutputs.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
-import { type FileIdentity, lstatOf, sameIdentity } from "./fileState.ts";
+import { type FileIdentity, holdsGitCheckout, lstatOf, sameIdentity } from "./fileState.ts";
 import {
   otherServerReason,
   processInside,
@@ -284,7 +284,10 @@ const make = Effect.gen(function* () {
         if (target.worktree === null) {
           if (item.kind !== "orphan_folder")
             return yield* removeChecked(target.root, item.path, target.identity);
-          // Binding a thread here takes the same lease, so it cannot slip in after these checks.
+          // Everything on this server that writes into a folder (turn startup, terminals, git
+          // workflows, rollback) takes this lease, so no write lands between these checks and
+          // removal. Recording a binding writes nothing here, so one recorded in that moment
+          // leaves its thread pointing at a folder whose reviewed, unchanged contents are gone.
           return yield* withWorkspaceLease(
             path.resolve(item.path),
             Effect.gen(function* () {
@@ -309,6 +312,11 @@ const make = Effect.gen(function* () {
             if (reason !== null) return reason;
             const keeps = yield* buildOutputKeeps(worktree, item.path);
             if (keeps !== null) return keeps;
+            const nested = yield* holdsGitCheckout(item.path);
+            if (nested !== false)
+              return nested === null
+                ? "it could not be searched for git checkouts"
+                : "it holds a git checkout, whose work its worktree's git cannot see";
             return yield* removeChecked(target.root, item.path, target.identity);
           }),
         );

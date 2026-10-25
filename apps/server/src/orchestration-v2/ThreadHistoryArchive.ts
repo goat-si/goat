@@ -96,6 +96,12 @@ export class ThreadHistoryArchive extends Context.Service<
       needles: ReadonlyArray<string>,
       maxRawBytes: number,
     ) => Effect.Effect<ReadonlySet<string> | null>;
+    /**
+     * Changes whenever an archive is written, finished, restored or deleted. A check that reads
+     * archives and then the database compares it before and after: a thread archived in between
+     * would otherwise be in neither. Null when it cannot be read.
+     */
+    readonly snapshotKey: Effect.Effect<string | null>;
     /** Every archive, restore and hard delete, as it commits. */
     readonly changes: Stream.Stream<ThreadHistoryArchiveChange>;
   }
@@ -659,6 +665,15 @@ const make = Effect.gen(function* () {
     restore,
     stats,
     mentions,
+    snapshotKey: sql<{ readonly key: string | null }>`
+      SELECT group_concat(entry, '|') AS key FROM (
+        SELECT thread_id || ':' || state || ':' || rows_deleted || ':' || sha256 AS entry
+        FROM orchestration_v2_thread_history_archives ORDER BY thread_id
+      )
+    `.pipe(
+      Effect.map((rows) => rows[0]?.key ?? ""),
+      Effect.orElseSucceed(() => null),
+    ),
     changes: Stream.fromPubSub(changes),
   });
 });

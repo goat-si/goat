@@ -36,6 +36,8 @@ const machine = {
   facts: [] as ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts>,
   /** What archived history of surviving threads mentions; null when it cannot be read. */
   archived: new Set<string>() as ReadonlySet<string> | null,
+  /** Archive snapshot keys handed out in turn; the last one repeats. */
+  archiveKeys: ["archives"] as Array<string | null>,
   /** Runs on the listing of running processes after this many listings, once. */
   onProcessListing: null as { after: number; run: Effect.Effect<unknown, SqlError> } | null,
 };
@@ -67,6 +69,11 @@ const layer = (tempRoot: string) =>
                 ? null
                 : new Set(needles.filter((needle) => machine.archived?.has(needle))),
             ),
+          snapshotKey: Effect.sync(() =>
+            machine.archiveKeys.length > 1
+              ? (machine.archiveKeys.shift() ?? null)
+              : (machine.archiveKeys[0] ?? null),
+          ),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           isLive: () => Effect.succeed(false),
@@ -96,6 +103,7 @@ const setup = Effect.gen(function* () {
   machine.cwds = [];
   machine.facts = [];
   machine.archived = new Set();
+  machine.archiveKeys = ["archives"];
   machine.onProcessListing = null;
   const worktrees = yield* fs
     .realPath(config.worktreesDir)
@@ -404,6 +412,38 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live("keeps any folder that holds a git checkout of its own, wherever it sits", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, leftover, reclaim, find } = yield* setup;
+      // A package installed from git, its history and local commits inside: its own repository.
+      const { output, uses } = yield* buildOutputWorktree(worktrees);
+      machine.facts = uses(true);
+      const offered = find((yield* reclaim.usage({ rescan: true })).items, output)!;
+      expect(offered.state).toBe("removable");
+      yield* fs.makeDirectory(path.join(output, "pkg", ".git"));
+      const late = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(late.results[0]).toMatchObject({
+        outcome: "skipped",
+        reason: "It holds a git checkout, whose work its worktree's git cannot see",
+      });
+      expect(yield* fs.exists(path.join(output, "pkg", ".git"))).toBe(true);
+
+      // A linked worktree's .git file deep in a leftover folder.
+      yield* fs.writeFileString(
+        path.join(leftover, "node_modules", "pkg", ".git"),
+        "gitdir: /elsewhere/.git/worktrees/pkg\n",
+      );
+      yield* backdate(leftover);
+      expect(find((yield* reclaim.usage({ rescan: true })).items, leftover)).toMatchObject({
+        state: "needs_attention",
+        reason: "It holds a git checkout; check it for work before deleting it yourself",
+      });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("removes files of deleted threads only while nothing surviving mentions them", () =>
     Effect.gen(function* () {
       const { fs, path, config, reclaim } = yield* setup;
@@ -456,6 +496,14 @@ describe("StorageReclaim", () => {
         ).toMatchObject([{ state: "report_only" }]);
       }
       machine.archived = new Set();
+
+      // A thread archived while the check ran could hide a reference from both reads.
+      machine.archiveKeys = ["before", "after"];
+      expect(
+        (yield* reclaim.usage({ rescan: true })).items.filter(
+          (item) => item.kind === "attachments",
+        ),
+      ).toMatchObject([{ state: "report_only" }]);
 
       const offered = (yield* reclaim.usage({ rescan: true })).items.filter(
         (item) => item.kind === "attachments",

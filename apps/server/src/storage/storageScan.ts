@@ -213,6 +213,14 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
         decision: state("needs_attention", "Something inside it changed recently"),
         token: [],
       };
+    if (stamp.holdsGit)
+      return {
+        decision: state(
+          "needs_attention",
+          "It holds a git checkout; check it for work before deleting it yourself",
+        ),
+        token: [],
+      };
     return { decision, token: [stamp.entries, stamp.newestChangeNs] };
   });
 

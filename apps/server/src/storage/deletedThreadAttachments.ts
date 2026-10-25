@@ -110,16 +110,23 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
         left.reduce((sum, file) => sum + file.size, 0),
     );
     const needlesOf = (segment: string) => new Set([segment, ...(deleted.get(segment) ?? [])]);
+    const archives = yield* ThreadHistoryArchive;
+    // Archiving moves history out of the database: one that lands between reading the archives
+    // and reading the database hides a reference from both, so the archives must not change.
+    const before = largestFirst.length === 0 ? "" : yield* archives.snapshotKey;
     // Archived history of surviving threads, read once for every thread checked this scan.
     const archived =
-      largestFirst.length === 0
-        ? new Set<string>()
-        : yield* (yield* ThreadHistoryArchive).mentions(
+      largestFirst.length === 0 || before === null
+        ? largestFirst.length === 0
+          ? new Set<string>()
+          : null
+        : yield* archives.mentions(
             largestFirst
               .slice(0, THREADS_CHECKED_PER_SCAN)
               .flatMap(([segment]) => [...needlesOf(segment)]),
             ARCHIVE_BYTES_READ_PER_SCAN,
           );
+    const unmentioned: Array<ReadonlyArray<AttachmentFile>> = [];
     for (const [index, [segment, files]] of largestFirst.entries()) {
       let mentioned: boolean | null =
         index >= THREADS_CHECKED_PER_SCAN || archived === null
@@ -129,7 +136,15 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
         if (mentioned !== false) break;
         mentioned = yield* mentionedBySurvivors(needle);
       }
-      if (mentioned === false) removable.push(...files);
+      if (mentioned === false) unmentioned.push(files);
+      else {
+        kept.count += files.length;
+        kept.bytes += files.reduce((sum, file) => sum + file.size, 0);
+      }
+    }
+    const stable = largestFirst.length === 0 || (yield* archives.snapshotKey) === before;
+    for (const files of unmentioned) {
+      if (stable) removable.push(...files);
       else {
         kept.count += files.length;
         kept.bytes += files.reduce((sum, file) => sum + file.size, 0);

@@ -271,7 +271,10 @@ it.effect("finds text only archived history holds, for threads that are not dele
     const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
     const sql = yield* SqlClient.SqlClient;
     yield* seed;
+    const before = yield* archive.snapshotKey;
     yield* archive.runPass(policy);
+    // Archiving moved history out of the database; a check spanning it can tell.
+    assert.notEqual(yield* archive.snapshotKey, before);
     assert.deepEqual(yield* rows("old").pipe(Effect.map((old) => old.items.length)), 0);
     const needles = ["old:item-7", "nowhere-at-all"];
     assert.deepEqual([...((yield* archive.mentions(needles, 1024 ** 3)) ?? [])], ["old:item-7"]);
