@@ -199,6 +199,12 @@ export const fixture = Effect.fn(function* (
       return {
         accessibility: granted,
         screenRecording: granted,
+        // A probe's helper says in its hello what it can do, as an agent's helper does.
+        features: {
+          canWatch: options.helperWithoutWatch !== true,
+          reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
+          canFrame: false,
+        },
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
@@ -255,7 +261,11 @@ export const fixture = Effect.fn(function* (
       return {
         servicePid: () => (running && !identityWithdrawn ? HELPER_PID : undefined),
         readinessPeer: () => readinessClient,
-        session: () => (running ? session : undefined),
+        // The macOS readiness check runs the helper as an MCP child, which has no session.
+        session: () =>
+          running && !(helper.verify && (options.platform ?? "linux") === "darwin")
+            ? session
+            : undefined,
         start: async () => {
           starts++;
           running = true;

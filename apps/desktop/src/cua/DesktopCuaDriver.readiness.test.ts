@@ -39,6 +39,23 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
   );
 
   it.effect.each(["darwin", "win32"] as const)(
+    "stops claiming what a helper can watch once a later start cannot use it, on %s",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* helperFixture(platform);
+          assert.isTrue((yield* test.verify).verified);
+          assert.equal(test.readiness.at(-1)?.signals.privateMode, "supported");
+          // Unattended admission reads this signal; a helper nobody can start watches nothing.
+          yield* test.answerAsHelper({ granted: true, fails: new Error("bundle_mismatch") });
+          yield* test.request("mismatch");
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal(test.readiness.at(-1)?.signals.privateMode, "unsupported");
+        }),
+      ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
     "drops an earlier check's proof when a later start cannot use the helper on %s",
     (platform) =>
       Effect.scoped(

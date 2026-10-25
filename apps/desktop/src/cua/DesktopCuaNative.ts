@@ -11,6 +11,7 @@ import {
   spawnHelperProcess,
   type DaemonMetadata,
   type HelperBundle,
+  type HelperFeatures,
   type HelperHostOptions,
   type HelperSession,
 } from "./ComputerUseHelper.ts";
@@ -70,6 +71,8 @@ export type Grants = {
   screenRecording: boolean;
   readonly detail?: string;
   readonly blocker?: ComputerUseReadiness["blockers"][number];
+  /** What the probed helper said in its hello it can do (#1532); absent for GOAT's own grants. */
+  readonly features?: HelperFeatures;
 };
 
 export interface DesktopCuaDriverDependencies {

@@ -176,10 +176,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    * now, and nothing runs as it.
    */
   const forgetHelper = (chosen: Engine | string | undefined) =>
-    noteHelper((state) =>
-      withoutProof(
-        withRunning(state, false),
-        typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+    Effect.sync(() => learnHelper(undefined)).pipe(
+      Effect.andThen(
+        noteHelper((state) =>
+          withoutProof(
+            withRunning(state, false),
+            typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+          ),
+        ),
       ),
     );
   const forgetCrash = (entry: OwnedHost) =>
@@ -443,6 +447,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ).pipe(Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })));
     if (selected?.kind === "helper") {
       helperSeen = true;
+      // The probe's own helper said what this build can do (#1532), on every platform; the
+      // check's own helper may not (the macOS readiness check runs it as an MCP child).
+      learnHelper(grants.features);
       // A check stands on its own reads: until it proves capture and the tree again, they are not.
       yield* noteHelper((state) => withoutProof(withGrants(state, grants, false)));
     }
@@ -492,9 +499,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     record("restart", undefined);
-    // Read when it runs: the spawn above set checkHost.
-    if (selected.kind === "helper")
-      yield* Effect.sync(() => learnHelper(checkHost?.host.session?.()));
 
     const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
@@ -684,6 +688,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
     yield* Effect.gen(function* () {
       if (!owned) {
+        // A new helper starts: until its hello is read below, nothing it can do is known.
+        if (selected.kind === "helper") learnHelper(undefined);
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
           const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
