@@ -299,3 +299,43 @@ it.live("a recording start that outlives its caller's deadline can still be stop
     }),
   ).pipe(Effect.provide(layer)),
 );
+it.live("a short call waiting behind a long one on the same tab answers on its own deadline", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
+      const cdp = contexts.at(-1)!.sessions[0]!;
+      const answer = cdp.send.getMockImplementation()!;
+      const drawn = Promise.withResolvers<Record<string, unknown>>();
+      const capturing = Promise.withResolvers<void>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+      cdp.send.mockImplementation((method, input) => {
+        if (method !== "Page.captureScreenshot") return answer(method, input);
+        capturing.resolve();
+        return drawn.promise;
+      });
+      // The long snapshot holds the tab's agent queue for its whole 5 s budget.
+      yield* broker
+        .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 5_000 })
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Effect.promise(() => capturing.promise);
+      const short = yield* broker
+        .invoke<void>({
+          scope,
+          tabId,
+          operation: "evaluate",
+          input: { expression: "1" },
+          timeoutMs: 200,
+        })
+        .pipe(Effect.flip);
+      // Answered by the server browser, before the broker cut off the host with the long call.
+      expect(short).toMatchObject({ remoteTag: "PreviewAutomationTimeoutError", timeoutMs: 200 });
+    }),
+  ).pipe(Effect.provide(layer)),
+);

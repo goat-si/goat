@@ -14,6 +14,13 @@ const notDrawnInTime = () =>
     "The browser did not draw the page for a capture in time. Try again in a moment.",
   );
 
+/** An agent call still queued or running at its deadline; an earlier call may hold the tab. */
+export const tabBusy = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationTimeoutError",
+    "This tab did not finish the call in time; an earlier call may still be running. Try again in a moment.",
+  );
+
 /**
  * Answers the caller by its deadline while the work itself goes on; onExpire runs when the
  * deadline wins.
@@ -22,13 +29,14 @@ export const answerBy = <A>(
   work: Promise<A>,
   deadlineMs: number,
   onExpire: () => void = constVoid,
+  timeout: () => Error = notDrawnInTime,
 ): Promise<A> => {
   if (deadlineMs === Number.POSITIVE_INFINITY) return work;
   return new Promise<A>((resolve, reject) => {
     const timer = setTimeout(
       () => {
         onExpire();
-        reject(notDrawnInTime());
+        reject(timeout());
       },
       Math.max(0, deadlineMs - performance.now()),
     );
@@ -69,3 +77,12 @@ export const withCaptureLock = <A>(
   operation: () => Promise<A>,
   deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<A> => queueCaptureBy(deadlineMs)(tab, operation).answer;
+/**
+ * Runs one agent call against its deadline. Calls queue per tab, so one still waiting then is
+ * answered here, before the broker gives up on the whole host; half a second lets the call's own
+ * timeout answer first.
+ */
+export const answerCall = <A>(timeoutMs: number, call: (deadlineMs: number) => Promise<A>) => {
+  const deadlineMs = performance.now() + timeoutMs;
+  return answerBy(call(deadlineMs), deadlineMs + 500, constVoid, tabBusy);
+};

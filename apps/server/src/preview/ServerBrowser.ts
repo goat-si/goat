@@ -88,7 +88,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { answerBy, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
+import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1827,11 +1827,10 @@ const make = Effect.gen(function* () {
             "No recording is active for this thread.",
           );
         }
-        // A stop cannot act twice (a retry finds no recording);
-        // dropping a late one would leave capture running.
-        // Only the answers are bounded, the queue wait included; the stop itself still runs late.
+        // A stop cannot act twice (a retry finds no recording), and dropping a late one would
+        // leave capture running: only its answer is bounded, so the queue moves on.
         const stop = () => answerBy(stopRecording(tab), deadlineMs);
-        return answerBy(tab.control.agent(request.agentSessionId ?? "", stop), deadlineMs);
+        return tab.control.agent(request.agentSessionId ?? "", stop);
       }
     }
     const tab = await requireTab(request);
@@ -2051,8 +2050,8 @@ const make = Effect.gen(function* () {
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
       try: () =>
-        runOperation(request, performance.now() + request.timeoutMs).finally(() =>
-          markUsed(request),
+        answerCall(request.timeoutMs, (deadlineMs) =>
+          runOperation(request, deadlineMs).finally(() => markUsed(request)),
         ),
       catch: ServerBrowserPage.toOperationError,
     }).pipe(
