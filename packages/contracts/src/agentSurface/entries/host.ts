@@ -75,7 +75,7 @@ export const hostEntries = {
     toolkit: "fleetHealth",
     summary: "Cordon a host and mark it Draining",
     description:
-      "Persistently cordon a host and mark it Draining, excluding it from new placements. Goal workers run only on this machine for now, so goal attempts are not moved. Use goat_host_uncordon to clear both flags.",
+      "Persistently cordon a host and mark it Draining, excluding it from new placements. Draining does not move goal attempts yet. Use goat_host_uncordon to clear both flags.",
     guide:
       "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. goat_thread_reschedule moves another thread by hand; a goal keeps following the original thread, not the moved one.",
     effect: "write",
