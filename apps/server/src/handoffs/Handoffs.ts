@@ -12,6 +12,7 @@ import {
   Handoff,
   HandoffError,
   HandoffHuman,
+  MessageId,
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
@@ -105,6 +106,8 @@ const PrivatePayload = Schema.fromJsonString(
       human: HandoffHuman,
       args: Schema.Record(Schema.String, Schema.Unknown),
     }),
+    // A person ended this computer use grant after approving it; the sweep drops it with the rest.
+    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
   ]),
 );
 const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
@@ -223,6 +226,8 @@ export class Handoffs extends Context.Service<
     readonly providerApplyState: (
       input: HandoffReadInput,
     ) => Effect.Effect<{ readonly applying: boolean; readonly progress?: unknown }, HandoffError>;
+    /** Whether a person ended this computer use grant after approving it, which stopped its agent. */
+    readonly computerUseEndedByPerson: (handoff: Handoff) => Effect.Effect<boolean, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -320,6 +325,7 @@ const make = Effect.gen(function* () {
     input: HandoffReadInput,
     state: Handoff["state"],
     actor: Handoff["actor"],
+    keepPrivate = false,
   ) {
     yield* threads
       .dispatch({
@@ -337,12 +343,40 @@ const make = Effect.gen(function* () {
     const handoff = yield* read(input);
     // Completed payloads retain continuation arguments until the next rollout consumes them.
     if (
+      !keepPrivate &&
       !isHandoffPending(handoff.state) &&
       handoff.state !== "completed" &&
       !handoff.target.path.startsWith("ssh.")
     )
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     return handoff;
+  });
+  /**
+   * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
+   * stops that agent (#1521). Recorded before the transition commits, so the wake reactor never
+   * sees the end without it, and a restart keeps it. The grant's approval wake, if it still waits
+   * behind the thread's running turn, is withdrawn: it would start a turn that takes the screen
+   * again.
+   */
+  const withdrawApprovalWake = Effect.fn("Handoffs.withdrawApprovalWake")(function* (
+    input: HandoffReadInput,
+  ) {
+    const records = yield* threads
+      .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
+      .pipe(Effect.mapError(unavailable));
+    const wake = MessageId.make(`message:handoff-wake:${input.handoffId}:completed`);
+    const queued = records.runs.find(
+      (run) => run.status === "queued" && run.userMessageId === wake,
+    );
+    if (queued === undefined) return;
+    yield* threads
+      .dispatch({
+        type: "queued-run.cancel",
+        commandId: CommandId.make(`handoff:${input.handoffId}:withdraw-wake`),
+        threadId: input.threadId,
+        runId: queued.id,
+      })
+      .pipe(Effect.mapError(unavailable));
   });
   const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
     input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
@@ -429,7 +463,26 @@ const make = Effect.gen(function* () {
           true,
         );
       }
-      const result = yield* transition(input, input.action, { type: "client", label });
+      const endsApproved =
+        isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
+      if (endsApproved)
+        yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      const result = yield* transition(
+        input,
+        input.action,
+        { type: "client", label },
+        endsApproved,
+      );
+      if (endsApproved && result.state === "cancelled")
+        yield* withdrawApprovalWake(input).pipe(
+          // The grant has ended either way; a wake left queued is reported, not hidden.
+          Effect.catchCause((cause) =>
+            Effect.logWarning("could not withdraw a stopped agent's approval wake", {
+              handoffId: input.handoffId,
+              cause,
+            }),
+          ),
+        );
       if (isComputerUseGrant && Option.isSome(computerUseLeases))
         yield* computerUseLeases.value.changed;
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
@@ -857,6 +910,12 @@ const make = Effect.gen(function* () {
     finishSshContinuation,
     bindSshContinuation,
     readSshProgressBinding,
+    computerUseEndedByPerson: (handoff) =>
+      handoff.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH || handoff.state !== "cancelled"
+        ? Effect.succeed(false)
+        : loadPrivate(handoff.handoffId).pipe(
+            Effect.map((payload) => payload?.kind === "computer_use_ended"),
+          ),
   });
 });
 export const layer = Layer.effect(Handoffs, make);

@@ -222,15 +222,8 @@ const make = Effect.gen(function* () {
       }
       // A person ending an approved computer use admission (Stop, Stop all, End computer use)
       // stopped that agent: waking it would start a turn that takes the screen again (#1521).
-      // Its approval's own wake marks it approved, so a restart reaches the same answer. A
-      // pending request a person cancels still wakes the agent waiting on it.
-      if (
-        handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-        handoff.state === "cancelled" &&
-        handoff.actor.type === "client" &&
-        (yield* delivered(`message:handoff-wake:${handoff.handoffId}:completed`))
-      )
-        return;
+      // A pending request a person cancels still wakes the agent waiting on it.
+      if (yield* handoffs.computerUseEndedByPerson(handoff)) return;
       if (
         handoff.state !== "completed" ||
         !Handoffs.isProviderContinuationPath(handoff.target.path)
