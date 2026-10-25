@@ -13,7 +13,8 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
 
 /**
  * The guarantee of the server's log redaction (#1388), in every sink serverLogger installs (console,
- * tracer span events, OTLP log records) and in DefectReporter's output:
+ * tracer span events, OTLP log records), in DefectReporter's output, and in the cause of a failed
+ * span, which the server tracer records and exports only through redactCause (Observability.ts):
  * - Masked whole: GOAT MCP credentials; bare JWT and JWE tokens; Authorization header values
  *   (Bearer, Basic or any scheme); Cookie and Set-Cookie headers; and the values of JSON fields,
  *   structured log fields and key=value assignments whose name is in the fixed CREDENTIAL_KEY list
@@ -28,8 +29,8 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
  * Secrets of any other shape are outside it. Memory text is redacted separately, before its
  * operation digest (memory/MemorySecretScanner.ts).
  * Also outside it, tracked in #1529: field names in JSON escaped more than once, URL userinfo split
- * across lines, the cause of a failed span exported to traces (packages/shared observability.ts),
- * direct console writes, and memories stored or received signed before a shape was recognized.
+ * across lines, direct console writes, and memories stored or received signed before a shape was
+ * recognized.
  */
 
 const DEFECT_SUMMARY_MAX_CHARS = 2_000;
@@ -306,8 +307,21 @@ function inspectError(
       `\n${stack}`;
   // Redacted in one pass with its header, so a header value folded onto the next line stays hidden.
   const stackText = afterHeader.trim().length === 0 ? header : `${header}${afterHeader}`;
-  error.stack = bounded(`${redactLogText(stackText)}${frames}`, MAX_STACK_CHARS);
+  const redactedStack = withoutEffectInternals(redactLogText(stackText), `${name}: ${message}`);
+  error.stack = bounded(`${redactedStack}${frames}`, MAX_STACK_CHARS);
   return error;
+}
+
+// Effect stops printing a stack at its first internal frame (cleanErrorStack in effect's
+// internal/effect.ts), so span frames appended after one would never be shown.
+const EFFECT_INTERNAL_FRAME = /Generator\.next|~effect\/(?:Effect|Utils)/;
+
+/** A redacted stack cut where Effect's renderer would cut it; the header is never cut. */
+function withoutEffectInternals(stack: string, header: string): string {
+  const headerLength = stack.startsWith(header) ? header.length : 0;
+  const lines = stack.slice(headerLength).split("\n");
+  const end = lines.findIndex((line, index) => index > 0 && EFFECT_INTERNAL_FRAME.test(line));
+  return end === -1 ? stack : `${stack.slice(0, headerLength)}${lines.slice(0, end).join("\n")}`;
 }
 
 const MAX_FRAMES = 10;

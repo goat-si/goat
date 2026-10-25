@@ -8,6 +8,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
@@ -136,6 +137,7 @@ describe("observability", () => {
         for (const sampled of [true, false]) {
           const delegates: Array<Tracer.Span> = [];
           const records: Array<EffectTraceRecord> = [];
+          let redactions = 0;
           const tracer = yield* makeLocalFileTracer({
             filePath: "unused",
             maxBytes: 1024,
@@ -156,6 +158,10 @@ describe("observability", () => {
                 return span;
               },
             }),
+            redactCause: (cause) => {
+              redactions += 1;
+              return cause;
+            },
           });
           const payload = { turnItems: [{ output: [{ text: "synthetic-result" }] }] };
           let span: Tracer.Span | undefined;
@@ -178,6 +184,7 @@ describe("observability", () => {
             records.map((record) => record.exit),
             sampled ? [{ _tag: "Success" }] : [],
           );
+          assert.equal(redactions, 0);
         }
       }).pipe(Effect.provide(NodeServices.layer)),
   );
@@ -488,4 +495,144 @@ describe("OtlpHeadersFromString", () => {
   ])("$name", ({ input }) => {
     expect(() => decode(input)).toThrow();
   });
+});
+
+// Synthetic canary; not a real credential.
+const SPAN_CANARY = "canary-span-exit-secret";
+
+class CanaryError extends Error {
+  override readonly name = "CanaryError";
+}
+
+/** A local file tracer over an in-memory sink and a fake delegate that keeps the spans it made. */
+const tracerWithDelegate = (redactCause?: (cause: Cause.Cause<unknown>) => Cause.Cause<unknown>) =>
+  Effect.gen(function* () {
+    const records: Array<EffectTraceRecord> = [];
+    const delegates: Array<Tracer.NativeSpan> = [];
+    const tracer = yield* makeLocalFileTracer({
+      filePath: "unused",
+      maxBytes: 1024 * 1024,
+      maxFiles: 1,
+      batchWindowMs: 10_000,
+      sink: {
+        filePath: "unused",
+        push: (record) => {
+          if (record.type === "effect-span") records.push(record);
+        },
+        flush: Effect.void,
+        close: () => Effect.void,
+      },
+      delegate: Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          delegates.push(span);
+          return span;
+        },
+      }),
+      ...(redactCause ? { redactCause } : {}),
+    });
+    return { tracer, records, delegates };
+  }).pipe(Effect.provide(NodeServices.layer));
+
+const delegatedExit = (span: Tracer.NativeSpan | undefined) => {
+  assert.equal(span?.status._tag, "Ended");
+  if (span?.status._tag !== "Ended") throw new Error("delegate span did not end");
+  return span.status.exit;
+};
+
+describe("failed span exits", () => {
+  it.effect(
+    "the trace record and the delegate tracer get one redacted copy, and the program keeps its own failure",
+    () =>
+      Effect.gen(function* () {
+        let redactions = 0;
+        const { tracer, records, delegates } = yield* tracerWithDelegate((cause) => {
+          redactions += 1;
+          return Cause.fromReasons(
+            cause.reasons.map((reason) => {
+              if (!Cause.isFailReason(reason) || !(reason.error instanceof Error)) return reason;
+              const masked = new Error(reason.error.message.replaceAll(SPAN_CANARY, "[MASKED]"));
+              masked.name = reason.error.name;
+              masked.stack = `${masked.name}: ${masked.message}\n    at failing-span`;
+              return Cause.makeFailReason(masked);
+            }),
+          );
+        });
+        const error = new CanaryError(`upstream rejected token=${SPAN_CANARY}`);
+
+        const exit = yield* Effect.fail(error).pipe(
+          Effect.withSpan("failing-span"),
+          Effect.provideService(Tracer.Tracer, tracer),
+          Effect.exit,
+        );
+
+        assert.isTrue(Exit.isFailure(exit));
+        assert.strictEqual(Option.getOrUndefined(Exit.findErrorOption(exit)), error);
+        assert.equal(error.message, `upstream rejected token=${SPAN_CANARY}`);
+        assert.equal(redactions, 1);
+
+        const recorded = records[0]?.exit;
+        assert.equal(recorded?._tag, "Failure");
+        const recordedCause = recorded?._tag === "Failure" ? recorded.cause : "";
+        expect(recordedCause).toContain("CanaryError: upstream rejected token=[MASKED]");
+        expect(recordedCause).not.toContain(SPAN_CANARY);
+
+        const [rendered, ...rest] = Cause.prettyErrors(
+          Exit.isFailure(delegatedExit(delegates[0]))
+            ? delegatedExit(delegates[0]).cause
+            : Cause.empty,
+          { includeCauseInStack: true },
+        );
+        assert.equal(rest.length, 0);
+        assert.equal(rendered?.name, "CanaryError");
+        assert.equal(rendered?.message, "upstream rejected token=[MASKED]");
+        expect(rendered?.stack ?? "").not.toContain(SPAN_CANARY);
+      }),
+  );
+
+  it.effect("without a redactor, the delegate receives the failure and the record renders it", () =>
+    Effect.gen(function* () {
+      const { tracer, records, delegates } = yield* tracerWithDelegate();
+      const error = new CanaryError("upstream rejected the request");
+
+      yield* Effect.fail(error).pipe(
+        Effect.withSpan("failing-span"),
+        Effect.provideService(Tracer.Tracer, tracer),
+        Effect.exit,
+      );
+
+      assert.strictEqual(
+        Option.getOrUndefined(Exit.findErrorOption(delegatedExit(delegates[0]))),
+        error,
+      );
+      const recorded = records[0]?.exit;
+      assert.equal(recorded?._tag, "Failure");
+      expect(recorded?._tag === "Failure" ? recorded.cause : "").toContain(
+        "CanaryError: upstream rejected the request",
+      );
+    }),
+  );
+
+  it.effect("a redactor that throws leaves only a marker in the record and the delegate", () =>
+    Effect.gen(function* () {
+      const { tracer, records, delegates } = yield* tracerWithDelegate(() => {
+        throw new Error("redactor broke");
+      });
+
+      yield* Effect.fail(new CanaryError(`token=${SPAN_CANARY}`)).pipe(
+        Effect.withSpan("failing-span"),
+        Effect.provideService(Tracer.Tracer, tracer),
+        Effect.exit,
+      );
+
+      const recorded = records[0]?.exit;
+      assert.equal(recorded?._tag, "Failure");
+      expect(recorded?._tag === "Failure" ? recorded.cause : "").not.toContain(SPAN_CANARY);
+      const delegated = delegatedExit(delegates[0]);
+      const [rendered] = Cause.prettyErrors(
+        Exit.isFailure(delegated) ? delegated.cause : Cause.empty,
+      );
+      assert.equal(rendered?.message, "span cause could not be redacted");
+    }),
+  );
 });

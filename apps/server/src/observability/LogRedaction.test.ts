@@ -534,7 +534,10 @@ describe("redactCause", () => {
       const interrupted = Effect.fn("call with token=canary-interrupt-0123456789")(function* () {
         return yield* Effect.interrupt;
       });
-      for (const program of [dies(), interrupted()]) {
+      for (const [program, framed] of [
+        [dies(), true],
+        [interrupted(), false],
+      ] as const) {
         const exit = yield* Effect.exit(program);
         assert.isTrue(Exit.isFailure(exit));
         if (!Exit.isFailure(exit)) continue;
@@ -542,6 +545,9 @@ describe("redactCause", () => {
         expect(Cause.pretty(exit.cause)).toContain("canary");
         const redacted = redactCause(exit.cause);
         expect(Cause.pretty(redacted)).not.toContain("canary");
+        // The error was made inside Effect, so its stack runs through Effect's internal frames;
+        // the redacted span frame must still be printed after them.
+        if (framed) expect(Cause.pretty(redacted)).toContain("at call with token=***");
         const exported = Cause.prettyErrors(redacted, { includeCauseInStack: true });
         expect(exported.map((e) => e.stack).join("\n")).not.toContain("canary");
       }
