@@ -39,7 +39,14 @@ import { tryWithWorkspaceSubtree, withWorkspaceLease } from "../workspace/worksp
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
-import { type FileIdentity, holdsGitCheckout, lstatOf, sameIdentity } from "./fileState.ts";
+import {
+  type ContentStamp,
+  contentStamp,
+  type FileIdentity,
+  holdsGitCheckout,
+  lstatOf,
+  sameIdentity,
+} from "./fileState.ts";
 import {
   otherServerReason,
   processInside,
@@ -226,6 +233,23 @@ const make = Effect.gen(function* () {
   }, Effect.provideContext(context));
 
   /**
+   * Why a reviewed leftover or temp folder must stay because its contents differ from what the
+   * person approved, read again right before removal: entries, newest change, or a checkout inside.
+   */
+  const changedSinceReview = Effect.fn("StorageReclaim.changedSinceReview")(function* (
+    folder: string,
+    reviewed: ContentStamp | null,
+  ) {
+    if (reviewed === null) return "it was not checked for changes";
+    const current = yield* contentStamp(folder);
+    if (current === null) return "it could not be read again";
+    if (current.holdsGit) return "it holds a git checkout now";
+    if (current.entries !== reviewed.entries || current.newestChangeNs !== reviewed.newestChangeNs)
+      return "it changed since it was reviewed";
+    return null;
+  });
+
+  /**
    * Runs a removal holding the folder whole, so no lease on it or inside it goes to anyone else
    * meanwhile; skipped when something on this server already works inside it.
    */
@@ -311,8 +335,11 @@ const make = Effect.gen(function* () {
       }
       case "path": {
         if (target.worktree === null) {
-          if (item.kind !== "orphan_folder")
+          if (item.kind !== "orphan_folder") {
+            const changed = yield* changedSinceReview(item.path, target.stamp);
+            if (changed !== null) return changed;
             return yield* removeChecked(target.root, item.path, target.identity);
+          }
           // Everything on this server that writes into a folder (turn startup, terminals, git
           // workflows, rollback) takes a lease on it or a folder inside it, which the hold turns
           // away, so no write lands between these checks and removal. Recording a binding writes
@@ -325,6 +352,9 @@ const make = Effect.gen(function* () {
               if (reason !== null) return reason;
               const own = yield* ownReference(item.path);
               if (own !== null) return own;
+              // A batch removes items one after another; this one may have changed meanwhile.
+              const changed = yield* changedSinceReview(item.path, target.stamp);
+              if (changed !== null) return changed;
               return yield* removeChecked(target.root, item.path, target.identity);
             }),
           );

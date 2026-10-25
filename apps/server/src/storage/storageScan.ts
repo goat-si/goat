@@ -20,7 +20,13 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import { buildOutputKeeps, findBuildOutputs } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
-import { contentStamp, type FileIdentity, type Lstat, lstatOf } from "./fileState.ts";
+import {
+  type ContentStamp,
+  contentStamp,
+  type FileIdentity,
+  type Lstat,
+  lstatOf,
+} from "./fileState.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import { measureFolder } from "./measureFolder.ts";
 import {
@@ -53,6 +59,8 @@ export type StorageTarget =
       readonly identity: FileIdentity;
       /** Build outputs: the worktree whose lease and liveness guard them. */
       readonly worktree: string | null;
+      /** What a reviewed leftover or temp folder held; removal re-reads it and skips on change. */
+      readonly stamp: ContentStamp | null;
     }
   | { readonly kind: "stale"; readonly repository: string; readonly missing: ReadonlyArray<string> }
   | { readonly kind: "runtime"; readonly version: string }
@@ -198,7 +206,11 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     decision: ReturnType<typeof state>,
   ) {
     if (decision.state !== "removable" || (options.stampOnly && !options.stampOnly.has(id)))
-      return { decision, token: [] as ReadonlyArray<string | number | bigint> };
+      return {
+        decision,
+        token: [] as ReadonlyArray<string | number | bigint>,
+        stamp: null as ContentStamp | null,
+      };
     const stamp = yield* contentStamp(folder);
     if (stamp === null)
       return {
@@ -207,11 +219,13 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           "It holds too many files, or files GOAT cannot read, to confirm nothing in it changed",
         ),
         token: [],
+        stamp: null,
       };
     if (now - stamp.newestModifiedMs < minAgeMs)
       return {
         decision: state("needs_attention", "Something inside it changed recently"),
         token: [],
+        stamp: null,
       };
     if (stamp.holdsGit)
       return {
@@ -220,8 +234,9 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           "It holds a git checkout; check it for work before deleting it yourself",
         ),
         token: [],
+        stamp: null,
       };
-    return { decision, token: [stamp.entries, stamp.newestChangeNs] };
+    return { decision, token: [stamp.entries, stamp.newestChangeNs], stamp };
   });
 
   const other = yield* resolveOtherServerPaths(config.dbPath);
@@ -374,7 +389,13 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
             (entry.branch ?? path.basename(entry.path)),
           ...outputDecision,
         },
-        { kind: "path", root: entry.path, identity: stat.identity, worktree: entry.path },
+        {
+          kind: "path",
+          root: entry.path,
+          identity: stat.identity,
+          worktree: entry.path,
+          stamp: null,
+        },
         [stat.identity.dev, stat.identity.ino],
       );
       measureLater("build_output:" + output, output, outputDecision.state === "removable" ? 1 : 3);
@@ -444,7 +465,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                     "removable",
                     "Not a git checkout, and no thread on this machine references it; check it holds nothing you need",
                   );
-          const { decision, token } = yield* stamped(
+          const { decision, token, stamp } = yield* stamped(
             "orphan_folder:" + candidate.path,
             candidate.path,
             ORPHAN_MIN_AGE_MS,
@@ -457,7 +478,13 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
               label: path.relative(managedRoot, candidate.path),
               ...decision,
             },
-            { kind: "path", root: managedRoot, identity: candidate.stat.identity, worktree: null },
+            {
+              kind: "path",
+              root: managedRoot,
+              identity: candidate.stat.identity,
+              worktree: null,
+              stamp,
+            },
             [candidate.stat.identity.dev, candidate.stat.identity.ino, ...token],
           );
           measureLater(
@@ -562,7 +589,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
-    const { decision, token } = yield* stamped(
+    const { decision, token, stamp } = yield* stamped(
       "temp:" + target,
       target,
       TEMP_MIN_AGE_MS,
@@ -575,7 +602,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
         label: name,
         ...decision,
       },
-      { kind: "path", root: tempRoot, identity: stat.identity, worktree: null },
+      { kind: "path", root: tempRoot, identity: stat.identity, worktree: null, stamp },
       [stat.identity.dev, stat.identity.ino, ...token],
     );
     measureLater("temp:" + target, target, 2);

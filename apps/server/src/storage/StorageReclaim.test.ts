@@ -672,6 +672,40 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live(
+    "keeps the next leftover of a batch when it changed while an earlier one was removed",
+    () =>
+      Effect.gen(function* () {
+        const { fs, path, leftover, reclaim, find } = yield* setup;
+        const second = path.join(path.dirname(leftover), "older-branch");
+        yield* fs.makeDirectory(path.join(second, "src"), { recursive: true });
+        yield* fs.writeFileString(path.join(second, "src", "notes.txt"), "kept\n");
+        yield* backdate(second);
+        const items = (yield* reclaim.usage({ rescan: true })).items;
+        const first = find(items, leftover)!;
+        const next = find(items, second)!;
+        expect([first.state, next.state]).toEqual(["removable", "removable"]);
+        // While the first folder's final checks run, someone starts work in the second one.
+        machine.onProcessListing = {
+          after: 1,
+          run: fs
+            .makeDirectory(path.join(second, ".git"))
+            .pipe(
+              Effect.andThen(
+                fs.writeFileString(path.join(second, "src", "draft.ts"), "new work\n"),
+              ),
+              Effect.orDie,
+            ),
+        };
+        const result = yield* reclaim.clean({
+          items: [first, next].map(({ id, token }) => ({ id, token })),
+          actor: "test",
+        });
+        expect(result.results.map((outcome) => outcome.outcome)).toEqual(["removed", "skipped"]);
+        expect(yield* fs.readFileString(path.join(second, "src", "draft.ts"))).toBe("new work\n");
+      }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("no thread can start inside a leftover folder while it is removed", () =>
     Effect.gen(function* () {
       const { path, leftover, reclaim, find } = yield* setup;
