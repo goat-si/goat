@@ -1,5 +1,7 @@
 # 020 — 사이클 절차
 
+> T3 축의 절차다. Cua Driver 축은 [20_cua_cycle_runbook](./20_cua_cycle_runbook.md).
+
 한 사이클은 스캔, 분류, 머지, 해결, 검증, 랜딩, 기록 순서로 돈다. 사이클 이름은 스캔한 날짜의
 `YYMMDD`이고, 카드 `10.NNN_t3_chase_cycle_<YYMMDD>.md` 하나가 그 사이클을 대표한다.
 
