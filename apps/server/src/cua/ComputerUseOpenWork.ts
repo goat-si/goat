@@ -55,8 +55,9 @@ const endedRuns = Effect.fn("ComputerUseLeases.endedRuns")(function* (
 
 /**
  * Whether the thread still has work open. First a run that ended loses the foreground it held
- * without an approval, even while another run of the thread is queued or running (#1617);
- * `revoked` says so, because proxies must hear of it to stop a script already under way.
+ * without an approval, even while another run of the thread is queued or running (#1617).
+ * `revoked` runs before the open-work read, so proxies hear of it and stop a script already
+ * under way even when that read fails; a retry would find nothing left to revoke.
  */
 export const threadOpenWork = Effect.fn("ComputerUseLeases.threadOpenWork")(function* (
   sql: SqlClient.SqlClient,
@@ -65,8 +66,10 @@ export const threadOpenWork = Effect.fn("ComputerUseLeases.threadOpenWork")(func
     readonly revokeRun: (threadId: ThreadId, runId: RunId) => void;
   },
   threadId: ThreadId,
+  revoked: Effect.Effect<void>,
 ) {
   const ended = yield* endedRuns(sql, foreground.impliedRuns(threadId));
   for (const runId of ended) foreground.revokeRun(threadId, runId);
-  return { open: yield* openRuns(sql, threadId), revoked: ended.length > 0 };
+  if (ended.length > 0) yield* revoked;
+  return yield* openRuns(sql, threadId);
 });

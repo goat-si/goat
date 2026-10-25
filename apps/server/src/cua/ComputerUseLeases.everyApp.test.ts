@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -268,6 +269,34 @@ it.effect(
       const state = yield* leases.controlState(threadId, control.controlId);
       assert.equal(state._tag, "active");
       assert.isUndefined(state._tag === "active" ? state.foreground : "not active");
+      yield* leases.stopAll;
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "a run's end tells proxies its implied foreground is gone even when reading the thread's open work fails (#1617)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-person-run-ends-read-fails");
+      yield* threadIn(threadId, "full-access");
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('run:R2', ${threadId}, 1, 'codex', 'running', '2026-01-01', '{}')`;
+      yield* leases.everyAppControl(threadId, false, { person: true, runId: RunId.make("run:R2") });
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run:R2'`;
+      const signals = yield* leases.subscribe;
+      if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
+      // The open-work read fails after the ended run was found; the revocation must still publish.
+      yield* sql`ALTER TABLE orchestration_v2_projection_subagents RENAME TO subagents_unavailable`;
+      const failed = yield* Effect.exit(leases.turnEnded(threadId));
+      yield* sql`ALTER TABLE subagents_unavailable RENAME TO orchestration_v2_projection_subagents`;
+      assert.isTrue(Exit.isFailure(failed));
+      assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
       yield* leases.stopAll;
     }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );
