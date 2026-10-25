@@ -18,8 +18,8 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import * as StorageReclaim from "./StorageReclaim.ts";
 
-const HOUR_AGO = new Date(Date.now() - 2 * 60 * 60_000);
-const DAYS_AGO = new Date(Date.now() - 3 * 24 * 60 * 60_000);
+/** Seconds since the epoch: older than any age the scan waits for. */
+const LONG_AGO = 0;
 
 /** What other GOAT servers and running processes look like to the cleanup, per test. */
 const machine = {
@@ -82,7 +82,7 @@ const setup = Effect.gen(function* () {
     path.join(leftover, "node_modules", "pkg", "index.js"),
     "x".repeat(4096),
   );
-  yield* fs.utimes(leftover, HOUR_AGO, HOUR_AGO);
+  yield* fs.utimes(leftover, LONG_AGO, LONG_AGO);
   const outside = yield* fs.realPath(
     yield* fs.makeTempDirectoryScoped({ prefix: "storage-outside-" }),
   );
@@ -193,7 +193,7 @@ describe("StorageReclaim", () => {
         path.join(leftover, ".git"),
         "gitdir: /gone/.git/worktrees/old-branch\n",
       );
-      yield* fs.utimes(leftover, HOUR_AGO, HOUR_AGO);
+      yield* fs.utimes(leftover, LONG_AGO, LONG_AGO);
       const item = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
       expect(item.state).toBe("needs_attention");
       const result = yield* reclaim.clean({
@@ -222,7 +222,7 @@ describe("StorageReclaim", () => {
         ];
         for (const name of names) yield* fs.makeDirectory(path.join(tempRoot, name));
         for (const name of names.filter((name) => name.endsWith("-old")))
-          yield* fs.utimes(path.join(tempRoot, name), DAYS_AGO, DAYS_AGO);
+          yield* fs.utimes(path.join(tempRoot, name), LONG_AGO, LONG_AGO);
         const temp = (yield* reclaim.usage({ rescan: true })).items.filter(
           (item) => item.kind === "temp",
         );

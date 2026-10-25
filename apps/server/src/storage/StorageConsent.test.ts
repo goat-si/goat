@@ -1,11 +1,12 @@
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, type StorageItem } from "@goat/contracts";
+import { EnvironmentId, type HandoffSummary, type StorageItem } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import type * as Handoffs from "../handoffs/Handoffs.ts";
 import {
   instanceId,
   person,
@@ -45,9 +46,9 @@ const withConsent = <A, E>(
   body: (input: {
     readonly consent: Effect.Success<typeof makeStorageConsent>;
     readonly respond: (
-      handoffId: string,
+      handoffId: HandoffSummary["handoffId"],
       action: "completed" | "declined",
-    ) => Effect.Effect<unknown, unknown>;
+    ) => ReturnType<Handoffs.Handoffs["Service"]["respond"]>;
   }) => Effect.Effect<A, E>,
 ) =>
   withApprovals(({ handoffs }) =>

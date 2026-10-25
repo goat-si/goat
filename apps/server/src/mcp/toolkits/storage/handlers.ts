@@ -60,26 +60,24 @@ const handlers = {
             : report.items.filter((item) =>
                 requested.some((entry) => entry.id === item.id && entry.token === item.token),
               );
-        if (input.dryRun !== false)
+        if (input.dryRun !== false || chosen.length === 0)
           return {
             kind: "preview",
             items: chosen,
             bytes: chosen.reduce((sum, item) => sum + (item.bytes ?? 0), 0),
           };
-        if (requested === undefined)
-          return yield* invalid(
-            "dryRun:false needs items: pass {id, token} for each item a dry run listed.",
-          );
-        if (chosen.length !== requested.length)
+        if (requested !== undefined && chosen.length !== requested.length)
           return yield* invalid(
             "Some items are not in the latest scan as given; they changed or are gone. " +
               goatCallText("storage.usage") +
               " lists them again.",
           );
+        // Without items, the approval binds the default selection exactly as it is now.
+        const items = requested ?? chosen.map(({ id, token }) => ({ id, token }));
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const consent = yield* StorageConsent.StorageConsent;
         if (input.approvalId === undefined) {
-          const asked = yield* consent.ask(scope, requested, chosen);
+          const asked = yield* consent.ask(scope, items, chosen);
           if (asked.kind === "handoff")
             return {
               kind: "needs_human",
@@ -96,13 +94,13 @@ const handlers = {
               ".",
           });
         }
-        yield* consent.admit(scope, input.approvalId, requested);
+        yield* consent.admit(scope, input.approvalId, items);
         const actor =
           scope.thread !== undefined
             ? "thread:" + scope.thread.threadId
             : "mcp-client:" + (scope.client?.sessionId ?? "unknown");
         const result = yield* reclaim
-          .clean({ items: requested, actor: actor + " approval:" + input.approvalId })
+          .clean({ items, actor: actor + " approval:" + input.approvalId })
           .pipe(Effect.mapError(failed));
         return { kind: "cleaned", ...result };
       }),
