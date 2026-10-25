@@ -37,29 +37,10 @@ describe("recurrence gate", () => {
   it.each([
     ["apps/server/src/provider/CodexProvider.ts", 'const CODEX_CLIENT_NAME = "T3 Code";'],
     ["apps/server/src/provider/CodexChatGptAuth.ts", 'agent_name_hint: "T3 Code"'],
-    ["apps/server/src/vcs/GitVcsDriver.ts", 'GIT_AUTHOR_NAME: "T3 Code"'],
-    ["apps/server/src/vcs/GitVcsDriver.ts", 'GIT_COMMITTER_NAME: "T3 Code"'],
-    [
-      "packages/source-control-github/src/server/githubStackRebase.ts",
-      'GIT_CONFIG_VALUE_1: "T3 Code"',
-    ],
     ["apps/desktop/package.json", '"productName": "T3 Code (Alpha)"'],
-    ["packages/provider-cursor/src/server/adapter.ts", "name: `T3 Code ${input.threadId}`"],
-    [
-      "packages/provider-cursor/src/server/auth.ts",
-      "apiKeyName: `T3 Code - ${options.displayName}`",
-    ],
     [
       "packages/provider-muse/src/server/sdk.ts",
       'clientInfo: { name: "t3_code", title: "T3 Code", version: "1" }',
-    ],
-    [
-      "packages/provider-opencode/src/server/textGeneration.ts",
-      "title: `T3 Code ${input.operation}`",
-    ],
-    [
-      "packages/provider-opencode/src/server/v2/textGeneration.ts",
-      "title: `T3 Code ${input.operation}`",
     ],
     ["packages/contracts/src/relay.ts", '"T3 Code Relay API"'],
     [

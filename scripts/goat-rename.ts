@@ -25,6 +25,7 @@ import {
 import {
   DROP_RULES,
   isExempt,
+  isMovableAsset,
   KEEP_RULES,
   PATH_RULES,
   TEXT_RULES,
@@ -93,7 +94,8 @@ const apply = () => {
     for (const [id, count] of result.hits) totals.set(id, (totals.get(id) ?? 0) + count);
   }
   let moved = 0;
-  for (const path of trackedFiles()) {
+  // Exempt binaries keep their bytes, but listed brand assets still move so their references stay valid.
+  for (const path of allTrackedFiles().filter((path) => !isExempt(path) || isMovableAsset(path))) {
     const target = applyPathRules(path, pathRules);
     if (target === path) continue;
     NodeFS.mkdirSync(NodePath.dirname(NodePath.join(root, target)), { recursive: true });

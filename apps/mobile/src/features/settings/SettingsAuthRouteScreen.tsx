@@ -9,14 +9,14 @@ import { useEffect, useLayoutEffect, useState } from "react";
 import { View } from "react-native";
 
 import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { T3ConnectProfilePage } from "../cloud/T3ConnectProfilePage";
+import { GoatConnectProfilePage } from "../cloud/GoatConnectProfilePage";
 
 const USER_PROFILE_CUSTOM_PAGES = [
   {
-    path: "t3-connect",
+    path: "goat-connect",
     label: "GOAT Connect",
     icon: "globe",
-    content: <T3ConnectProfilePage />,
+    content: <GoatConnectProfilePage />,
   },
 ] satisfies UserProfileCustomPage[];
 

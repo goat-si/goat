@@ -38,7 +38,7 @@ function endpointLabel(environment: RelayClientEnvironmentRecord): string {
     : "Activity publishing only";
 }
 
-function T3ConnectEnvironmentRow(props: {
+function GoatConnectEnvironmentRow(props: {
   readonly environment: RelayClientEnvironmentRecord;
   readonly confirmationOpen: boolean;
   readonly mutationPending: boolean;
@@ -110,7 +110,7 @@ function T3ConnectEnvironmentRow(props: {
   );
 }
 
-export function T3ConnectUserProfilePage() {
+export function GoatConnectUserProfilePage() {
   const environmentsState = useManagedRelayEnvironments();
   const deregisterEnvironment = useAtomCommand(deregisterManagedRelayEnvironmentCommand, {
     reportFailure: false,
@@ -159,7 +159,7 @@ export function T3ConnectUserProfilePage() {
     const cause = squashAtomCommandFailure(result);
     const message = cause instanceof Error ? cause.message : "Could not deregister the server.";
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not deregister environment", {
+    console.error("[goat-connect] Could not deregister environment", {
       environmentId: environment.environmentId,
       message,
       traceId,
@@ -220,7 +220,7 @@ export function T3ConnectUserProfilePage() {
         ) : environments.length > 0 ? (
           <ul className="border-t">
             {environments.map((environment) => (
-              <T3ConnectEnvironmentRow
+              <GoatConnectEnvironmentRow
                 key={environment.environmentId}
                 environment={environment}
                 confirmationOpen={confirmingEnvironmentId === environment.environmentId}

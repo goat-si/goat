@@ -129,7 +129,7 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "~/versionSkew";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
-import { RemoveT3ConnectEnvironmentDialog } from "../clerk/RemoveT3ConnectEnvironmentDialog";
+import { RemoveGoatConnectEnvironmentDialog } from "../clerk/RemoveGoatConnectEnvironmentDialog";
 import { environmentCatalog } from "~/connection/catalog";
 import {
   connectPairing as connectPairingAtom,
@@ -1322,11 +1322,11 @@ export function ConnectionEnvironmentsSection({
   // device. Switching off is the reversible path, so removal always confirms.
   // GOAT Connect environments get their own dialog: removing one here leaves its
   // account registration, so it points to where that can be deregistered.
-  const [pendingT3ConnectRemoval, setPendingT3ConnectRemoval] =
+  const [pendingGoatConnectRemoval, setPendingGoatConnectRemoval] =
     useState<EnvironmentPresentation | null>(null);
   const handleRemoveSavedBackend = async (environment: EnvironmentPresentation) => {
     if (environment.relayManaged && hasCloudPublicConfig()) {
-      setPendingT3ConnectRemoval(environment);
+      setPendingGoatConnectRemoval(environment);
       return;
     }
     // Fail closed: no mounted confirm host means no removal.
@@ -1859,13 +1859,13 @@ export function ConnectionEnvironmentsSection({
         />
       </SettingsSection>
       {hasCloudPublicConfig() ? (
-        <RemoveT3ConnectEnvironmentDialog
-          environmentLabel={pendingT3ConnectRemoval?.label ?? null}
-          onCancel={() => setPendingT3ConnectRemoval(null)}
+        <RemoveGoatConnectEnvironmentDialog
+          environmentLabel={pendingGoatConnectRemoval?.label ?? null}
+          onCancel={() => setPendingGoatConnectRemoval(null)}
           onConfirm={() => {
-            if (!pendingT3ConnectRemoval) return;
-            setPendingT3ConnectRemoval(null);
-            void removeSavedBackend(pendingT3ConnectRemoval);
+            if (!pendingGoatConnectRemoval) return;
+            setPendingGoatConnectRemoval(null);
+            void removeSavedBackend(pendingGoatConnectRemoval);
           }}
         />
       ) : null}

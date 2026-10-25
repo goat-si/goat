@@ -956,10 +956,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const commitEnv: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_INDEX_FILE: tempIndexPath,
-      GIT_AUTHOR_NAME: "T3 Code",
-      GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
-      GIT_COMMITTER_NAME: "T3 Code",
-      GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+      GIT_AUTHOR_NAME: "GOAT",
+      GIT_AUTHOR_EMAIL: "checkpoint@goat.invalid",
+      GIT_COMMITTER_NAME: "GOAT",
+      GIT_COMMITTER_EMAIL: "checkpoint@goat.invalid",
     };
 
     // Forced process termination can leave Git's private index lock behind.
@@ -1365,8 +1365,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         !treeEntries.stdoutTruncated &&
         !/(?:^|\0)160000 /u.test(treeEntries.stdout);
       const message = input.strict
-        ? `t3 snapshot ref=${input.ref}`
-        : `t3 checkpoint ref=${input.ref}`;
+        ? `goat snapshot ref=${input.ref}`
+        : `goat checkpoint ref=${input.ref}`;
       // HEAD is the parent so listAuthoredPaths can see how HEAD moved between checkpoints.
       const commitTreeResult = yield* execute({
         operation,

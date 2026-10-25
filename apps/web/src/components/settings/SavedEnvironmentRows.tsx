@@ -167,7 +167,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
     <>
       {window.desktopBridge ? (
         <SettingsRow
-          title={searchableSetting("t3-connect").title}
+          title={searchableSetting("goat-connect").title}
           description={
             linkRevoked
               ? "This environment was removed from GOAT Connect. Turn it on to link it again."
@@ -199,7 +199,7 @@ function ConfiguredCloudLinkRow({ canManageRelay }: { readonly canManageRelay: b
         />
       ) : linkRevoked ? (
         <SettingsRow
-          title={searchableSetting("t3-connect").title}
+          title={searchableSetting("goat-connect").title}
           description="This environment was removed from GOAT Connect. Run `goat connect link` on the host to link it again."
         />
       ) : null}

@@ -3,22 +3,22 @@ import { LogInIcon } from "~/components/solar";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { GOAT_CONNECT_ACCOUNT_PAGES } from "./T3ConnectAccountPages";
-import { useT3ConnectAuthPrompt } from "./useT3ConnectAuthPrompt";
+import { GOAT_CONNECT_ACCOUNT_PAGES } from "./GoatConnectAccountPages";
+import { useGoatConnectAuthPrompt } from "./useGoatConnectAuthPrompt";
 
-export function T3ConnectSidebarSignIn() {
+export function GoatConnectSidebarSignIn() {
   if (!hasCloudPublicConfig()) return null;
 
-  return <ConfiguredT3ConnectSidebarSignIn />;
+  return <ConfiguredGoatConnectSidebarSignIn />;
 }
 
-export function T3ConnectSidebarAvatar() {
+export function GoatConnectSidebarAvatar() {
   if (!hasCloudPublicConfig()) return null;
 
-  return <ConfiguredT3ConnectSidebarAvatar />;
+  return <ConfiguredGoatConnectSidebarAvatar />;
 }
 
-function ConfiguredT3ConnectSidebarAvatar() {
+function ConfiguredGoatConnectSidebarAvatar() {
   const { isLoaded, isSignedIn } = useAuth();
 
   if (!isLoaded || !isSignedIn) return null;
@@ -46,9 +46,9 @@ function ConfiguredT3ConnectSidebarAvatar() {
   );
 }
 
-function ConfiguredT3ConnectSidebarSignIn() {
+function ConfiguredGoatConnectSidebarSignIn() {
   const { isLoaded, isSignedIn } = useAuth();
-  const { authPrompt, openAuthPrompt } = useT3ConnectAuthPrompt();
+  const { authPrompt, openAuthPrompt } = useGoatConnectAuthPrompt();
 
   if (!isLoaded || isSignedIn) return null;
 

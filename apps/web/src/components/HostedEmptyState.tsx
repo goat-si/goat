@@ -10,7 +10,7 @@ import { isElectron } from "../env";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { useRelayEnvironmentDiscovery } from "../state/environments";
 import { CommandBlock } from "./CommandBlock";
-import { useT3ConnectAuthPrompt } from "./clerk/useT3ConnectAuthPrompt";
+import { useGoatConnectAuthPrompt } from "./clerk/useGoatConnectAuthPrompt";
 import { CloudEnvironmentConnectRows } from "./cloud/CloudEnvironmentConnectList";
 import { Button } from "./ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
@@ -53,7 +53,7 @@ export function HostedEmptyState() {
               </Button>
             ) : (
               <ol className="w-full space-y-4 text-left">
-                {cloudEnabled ? <T3ConnectSteps /> : <PairingSteps />}
+                {cloudEnabled ? <GoatConnectSteps /> : <PairingSteps />}
               </ol>
             )}
           </EmptyContent>
@@ -63,9 +63,9 @@ export function HostedEmptyState() {
   );
 }
 
-function T3ConnectSteps() {
+function GoatConnectSteps() {
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const { openAuthPrompt } = useT3ConnectAuthPrompt();
+  const { openAuthPrompt } = useGoatConnectAuthPrompt();
   // Adding the first computer unmounts this screen. Wait for all health checks
   // so every compatible registration is queued before that happens.
   const [autoAddedComputers] = useState(() => new Set<EnvironmentId>());

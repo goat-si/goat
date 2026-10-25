@@ -1,4 +1,7 @@
-import { t3ConnectTroubleshootingUrl, type T3ConnectTroubleshootingSection } from "@goat/contracts";
+import {
+  goatConnectTroubleshootingUrl,
+  type GoatConnectTroubleshootingSection,
+} from "@goat/contracts";
 import type { RelayEnvironmentStatusResponse } from "@goat/contracts/relay";
 import * as DateTime from "effect/DateTime";
 
@@ -209,7 +212,7 @@ function steps(host: string, located: Located, failure: ConnectionAttemptError |
 function helpSection(
   located: Located,
   failure: ConnectionAttemptError | null,
-): T3ConnectTroubleshootingSection {
+): GoatConnectTroubleshootingSection {
   switch (located.cause) {
     case "offline":
       return "this-device-cant-reach-t3-connect";
@@ -326,7 +329,7 @@ export function presentConnectionDiagnosis(
     hops,
     steps: steps(host, located, failure),
     facts,
-    moreInfoUrl: relayPath ? t3ConnectTroubleshootingUrl(helpSection(located, failure)) : null,
+    moreInfoUrl: relayPath ? goatConnectTroubleshootingUrl(helpSection(located, failure)) : null,
   };
 }
 

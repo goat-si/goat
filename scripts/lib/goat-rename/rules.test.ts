@@ -496,8 +496,6 @@ const keptVisibleCopy = [
     "apps/server/src/telemetry/AnalyticsService.ts",
     " * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards",
   ],
-  ["apps/server/src/vcs/GitVcsDriver.ts", '      GIT_AUTHOR_NAME: "T3 Code",'],
-  ["apps/server/src/vcs/GitVcsDriver.ts", '      GIT_COMMITTER_NAME: "T3 Code",'],
   ["docs/internals/overview.md", "## Upstream T3 Code"],
   [
     "docs/internals/remote-updates.md",
@@ -528,35 +526,14 @@ const keptVisibleCopy = [
     "and data under `~/.goat`, apart from any T3 Code install in `~/.t3`. A fresh host",
   ],
   ["packages/contracts/src/relay.ts", '  .annotate(OpenApi.Title, "T3 Code Relay API")'],
-  ["packages/provider-cursor/src/server/adapter.ts", "    name: `T3 Code ${input.threadId}`,"],
-  [
-    "packages/provider-cursor/src/server/auth.ts",
-    "            apiKeyName: `T3 Code - ${options.displayName}`,",
-  ],
   [
     "packages/provider-muse/src/server/sdk.ts",
     '    clientInfo: { name: "t3_code", title: "T3 Code", version: "1" },',
-  ],
-  [
-    "packages/provider-opencode/src/server/textGeneration.ts",
-    "                  title: `T3 Code ${input.operation}`,",
-  ],
-  [
-    "packages/provider-opencode/src/server/v2/textGeneration.ts",
-    "    title: `T3 Code ${input.operation}`,",
-  ],
-  [
-    "packages/provider-testing/src/replayWorkspace.ts",
-    '  yield* runGit(cwd, ["config", "--file", gitConfig, "user.name", "T3 Code Test"]);',
   ],
   ["packages/shared/src/goatHome.ts", " * T3 Code may be using `~/.t3` at the same time."],
   [
     "packages/shared/src/usageLimits.ts",
     "  \"I've reached the limit for using my ChatGPT plan in T3 Code. Could you increase our workspace's usage limits so I can continue?\\n\\nGo to admin.openai.com → Workspace → Usage limits. Thank you!\";",
-  ],
-  [
-    "packages/source-control-github/src/server/githubStackRebase.ts",
-    '    GIT_CONFIG_VALUE_1: "T3 Code",',
   ],
   [
     "README.md",
@@ -684,7 +661,7 @@ describe("visible GOAT copy", () => {
     const source =
       "T3 Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`";
     expect(server(source)).toBe(
-      "GOAT Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`",
+      "GOAT Connect: goatConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`",
     );
   });
 });
@@ -737,11 +714,6 @@ describe("wire rename boundaries", () => {
 
   it("keeps relay help, ACP sentinels and cached attachment keys with precise reasons", () => {
     for (const [path, text] of [
-      ["packages/client-runtime/src/connection/diagnosis.ts", "t3ConnectTroubleshootingUrl"],
-      [
-        "packages/contracts/src/environmentHttp.ts",
-        "t3ConnectTroubleshootingUrl T3ConnectTroubleshootingSection",
-      ],
       ["packages/provider-acp/src/server/sessionConfig.ts", '"_t3/empty" "_t3/session-mode"'],
       ["packages/shared/src/htmlRender.ts", '"t3-theme"'],
       ["apps/mobile/src/lib/assetImageSource.ts", '"t3-attachment:"'],
