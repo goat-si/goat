@@ -150,9 +150,10 @@ export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 /**
  * Why the desktop would not give agents a driver, in a form every surface can act on: the
  * preview tile, Settings and onboarding, the agent's own computer_use request, and the trace
- * (#1399). Only a grant the helper lacks so far; other refusals keep their message.
+ * (#1399). A grant macOS has not given (permissionsNotGranted), or a Windows desktop the helper
+ * cannot use (desktopUnavailable, #1516); other refusals keep their message.
  */
-export const CuaAgentBlock = Schema.Struct({
+export const CuaAgentPermissionsBlock = Schema.Struct({
   reason: Schema.Literal("permissionsNotGranted"),
   /** The grants macOS has not given the app that holds them, GOAT Computer Use or GOAT. */
   missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording"])).check(
@@ -160,30 +161,69 @@ export const CuaAgentBlock = Schema.Struct({
   ),
   holder: Schema.Literals(["helper", "app"]),
 });
+export type CuaAgentPermissionsBlock = typeof CuaAgentPermissionsBlock.Type;
+
+/**
+ * The Windows helper cannot use this desktop: no interactive desktop (a service, SSH or Session
+ * 0), the lock screen or a security prompt (UAC) holding input, another user at the console, or
+ * the helper itself not starting or answering (no blocker). detail is the helper's own sentence.
+ */
+export const CuaAgentDesktopBlock = Schema.Struct({
+  reason: Schema.Literal("desktopUnavailable"),
+  blocker: Schema.optionalKey(
+    Schema.Literals(["noInteractiveDesktop", "screenLocked", "otherUserAtConsole"]),
+  ),
+  detail: TrimmedNonEmptyString,
+});
+export type CuaAgentDesktopBlock = typeof CuaAgentDesktopBlock.Type;
+
+export const CuaAgentBlock = Schema.Union([CuaAgentPermissionsBlock, CuaAgentDesktopBlock]);
 export type CuaAgentBlock = typeof CuaAgentBlock.Type;
 
 /** The System Settings lists a block names, as macOS titles them. */
-export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
+export const cuaAgentBlockLists = (block: CuaAgentPermissionsBlock): string =>
   block.missing
     .map((grant) =>
       grant === "accessibility" ? "Accessibility" : "Screen & System Audio Recording",
     )
     .join(" and ");
 
+/** A Windows desktop block's short title, by its cause; the helper's detail says the rest. */
+const desktopTitle = {
+  noInteractiveDesktop: "Start GOAT from the signed-in Windows desktop",
+  screenLocked: "Unlock the screen or answer the Windows security prompt",
+  otherUserAtConsole: "Another user is signed in at this computer's screen",
+} as const;
+
+/** A short title for a block, such as a session card's: what is missing, not the whole sentence. */
+export const cuaAgentBlockTitle = (block: CuaAgentBlock): string =>
+  block.reason === "permissionsNotGranted"
+    ? `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`
+    : block.blocker === undefined
+      ? "GOAT Computer Use cannot use this desktop"
+      : desktopTitle[block.blocker];
+
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
-  `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
+  block.reason === "permissionsNotGranted"
+    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`
+    : `Computer use cannot start: ${block.detail}`;
 
 /**
  * What of a block newer readiness still bears out: only the grants it does not report granted,
  * and nothing once every one is back, so no surface keeps naming a grant the person gave.
  * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
- * itself stays as it was.
+ * itself stays as it was. A Windows desktop block ends once the helper reports an authenticated
+ * helper with nothing blocking.
  */
 export const cuaAgentBlockUnder = (
   block: CuaAgentBlock,
   readiness: typeof ComputerUseReadiness.Type,
 ): CuaAgentBlock | undefined => {
+  if (block.reason === "desktopUnavailable")
+    return readiness.helper === "authenticated" && readiness.blockers.length === 0
+      ? undefined
+      : block;
   if (block.holder !== "helper") return block;
   const missing = block.missing.filter(
     (grant) =>
@@ -555,7 +595,10 @@ export const ComputerUseRequestResult = Schema.Union([
       "not_unattended",
       /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
       "detection_unsupported",
-      /** macOS has not granted what computer use needs; a person allows it in System Settings. */
+      /**
+       * The host cannot run computer use until a person acts: macOS has not granted what it
+       * needs, or the Windows helper cannot use the desktop (block says which).
+       */
       "not_granted",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
