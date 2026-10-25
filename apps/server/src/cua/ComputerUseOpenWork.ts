@@ -3,7 +3,7 @@
  *
  * @module ComputerUseOpenWork
  */
-import type { ThreadId } from "@goat/contracts";
+import type { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 
@@ -12,7 +12,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
  * work through the parent's provider session, and so its control, on their own child threads;
  * one can outlive a failed parent run. Delegated tasks hold controls of their own.
  */
-export const openRuns = Effect.fn("ComputerUseLeases.openWork")(function* (
+const openRuns = Effect.fn("ComputerUseLeases.openWork")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
 ) {
@@ -37,4 +37,35 @@ export const openRuns = Effect.fn("ComputerUseLeases.openWork")(function* (
     LIMIT 1
   `;
   return open.length > 0;
+});
+
+/** Which of these runs the projection shows ended, so their implied foreground ends (#1617). */
+const endedRuns = Effect.fn("ComputerUseLeases.endedRuns")(function* (
+  sql: SqlClient.SqlClient,
+  runIds: ReadonlyArray<RunId>,
+) {
+  if (runIds.length === 0) return [];
+  const ended = yield* sql<{ readonly run_id: string }>`
+    SELECT run_id FROM orchestration_v2_projection_runs
+    WHERE run_id IN ${sql.in(runIds)}
+      AND status NOT IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+  `;
+  return runIds.filter((runId) => ended.some((row) => row.run_id === runId));
+});
+
+/**
+ * Whether the thread still has work open. First a run that ended loses the foreground it held
+ * without an approval, even while another run of the thread is queued or running (#1617).
+ */
+export const threadOpenWork = Effect.fn("ComputerUseLeases.threadOpenWork")(function* (
+  sql: SqlClient.SqlClient,
+  foreground: {
+    readonly impliedRuns: (threadId: ThreadId) => ReadonlyArray<RunId>;
+    readonly revokeRun: (threadId: ThreadId, runId: RunId) => void;
+  },
+  threadId: ThreadId,
+) {
+  for (const runId of yield* endedRuns(sql, foreground.impliedRuns(threadId)))
+    foreground.revokeRun(threadId, runId);
+  return yield* openRuns(sql, threadId);
 });

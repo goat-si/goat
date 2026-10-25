@@ -122,6 +122,14 @@ export const makeForegroundApprovals = () => {
       for (const [id, binding] of bindings)
         if (binding.threadId === threadId && binding.controlId === controlId) bindings.delete(id);
     },
+    /** The runs holding implied foreground on this thread. */
+    impliedRuns: (threadId: ThreadId) =>
+      [...implied.values()].filter((entry) => entry.threadId === threadId).map((e) => e.runId),
+    /** A run that ended loses its implied foreground, whatever else the thread still runs. */
+    revokeRun(threadId: ThreadId, runId: RunId) {
+      revision++;
+      dropImplied((entry) => entry.threadId !== threadId || entry.runId !== runId);
+    },
     revokeThread(threadId: ThreadId) {
       revision++;
       dropImplied((entry) => entry.threadId !== threadId);

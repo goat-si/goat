@@ -242,3 +242,37 @@ it.effect(
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
 );
+
+it.effect(
+  "a person's full access run loses its implied foreground when it ends, though a queued run keeps the control (#1617)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-person-run-ends");
+      yield* threadIn(threadId, "full-access");
+      const run = (id: string, status: string, ordinal: number) =>
+        sql`INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+          VALUES (${id}, ${threadId}, ${ordinal}, 'codex', ${status}, '2026-01-01', '{}')
+          ON CONFLICT (run_id) DO UPDATE SET status = excluded.status`;
+      yield* run("run:R", "running", 1);
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(threadId, false, {
+          person: true,
+          runId: RunId.make("run:R"),
+        }),
+      );
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      // R ends while Q waits in the queue: the control stays for Q, R's foreground does not.
+      yield* run("run:Q", "queued", 2);
+      yield* run("run:R", "completed", 1);
+      assert.isFalse(yield* leases.turnEnded(threadId));
+      assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      const state = yield* leases.controlState(threadId, control.controlId);
+      assert.equal(state._tag, "active");
+      assert.isUndefined(state._tag === "active" ? state.foreground : "not active");
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(everyAppLayer)),
+);

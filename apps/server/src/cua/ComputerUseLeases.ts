@@ -57,7 +57,7 @@ import type {
 import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
-import { openRuns } from "./ComputerUseOpenWork.ts";
+import { threadOpenWork } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
@@ -728,7 +728,9 @@ const make = Effect.gen(function* () {
 
   /** Whether the thread still has work open; see ComputerUseOpenWork. */
   const openWork = (threadId: ThreadId) =>
-    openRuns(sql, threadId).pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
+    threadOpenWork(sql, foreground, threadId).pipe(
+      Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
+    );
 
   const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
     const before = controls.get(threadId);
