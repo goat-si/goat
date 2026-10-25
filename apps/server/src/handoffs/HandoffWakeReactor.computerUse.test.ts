@@ -116,6 +116,42 @@ it.effect(
     ),
 );
 
+it.effect("a given-back answer whose wake is waiting to retry still wakes the thread once", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const now = yield* DateTime.now;
+      const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+      const waiting = yield* waitForComputerUse(
+        world,
+        summary.handoffId,
+        DateTime.add(now, { minutes: 1 }),
+      );
+      const gate = yield* Deferred.make<void>();
+      world.outage.storeGate = gate;
+      yield* world.handoffs
+        .respond({ threadId, handoffId: summary.handoffId, action: "completed" }, person)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(world.outage.stored);
+      world.outage.removeFailing = 1;
+      const stopping = yield* Fiber.interrupt(waiting).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      world.outage.storeGate = undefined;
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(stopping);
+      // The first wake fails, and the next reconcile comes before its retry is due.
+      world.outage.failing = 1;
+      yield* world.reactor.reconcile;
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toHaveLength(0);
+      yield* TestClock.adjust("3 seconds");
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toHaveLength(1);
+    }),
+  ),
+);
+
 it.effect(
   "a call that cannot give its recorded answer back on the first try still wakes the thread once",
   () =>

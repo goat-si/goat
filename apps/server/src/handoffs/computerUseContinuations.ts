@@ -149,18 +149,19 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
       /** Signals waiting calls that a request may have been answered. */
       answered: (handoffId: string) => PubSub.publish(answers, handoffId).pipe(Effect.asVoid),
       /** Sends a computer use wake only when no call owns or already returned the answer. */
-      deliverWake: <A, E2>(handoff: Handoff, dispatch: Effect.Effect<A, E2>) =>
+      deliverWake: <E2>(handoff: Handoff, dispatch: Effect.Effect<boolean, E2>) =>
         locked(
           Effect.gen(function* () {
             if (owners.has(handoff.handoffId)) return;
             const returned =
               !givenBack.has(handoff.handoffId) && (yield* deps.consumed(handoff.handoffId));
             if (returned) return;
-            yield* dispatch;
-            // Delivered: the wake's own message now stops any further one.
-            givenBack.delete(handoff.handoffId);
+            // Once sent, the wake's own message stops any further one.
+            if (yield* dispatch) givenBack.delete(handoff.handoffId);
           }),
         ),
+      /** A person ended the request; its given-back answer no longer needs a wake. */
+      forget: (handoffId: string) => Effect.sync(() => void givenBack.delete(handoffId)),
       /**
        * A newer, different request replaces the thread's other pending ones, ended by the agent so
        * nothing wakes; their waiting calls report it. Runs inside create, under the lock.

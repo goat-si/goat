@@ -391,6 +391,7 @@ const make = Effect.gen(function* () {
   const withdrawComputerUseWake = Effect.fn("Handoffs.withdrawComputerUseWake")(function* (
     input: HandoffReadInput,
   ) {
+    yield* continuations.forget(input.handoffId);
     const records = yield* threads
       .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
       .pipe(Effect.mapError(unavailable));
