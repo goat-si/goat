@@ -58,6 +58,8 @@ function runRemoteUpdatesTest(
         changes: Stream.empty,
         encoded: Stream.empty,
         encodedForSource: () => Stream.empty,
+        cuaAppsRequests: Stream.empty,
+        publishCuaApps: () => Effect.void,
         cuaRequests: Stream.empty,
         cuaWatch: Stream.empty,
         cuaWatchApps: Stream.empty,

@@ -2,6 +2,8 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
+  DesktopCuaAppsReport,
+  DesktopCuaAppsRequest,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
   DesktopCuaPrivateModeReport,
@@ -113,6 +115,9 @@ export const fixture = Effect.fn(function* (
     updatedHelper?: boolean;
   } = {},
 ) {
+  const appRequests = yield* Queue.unbounded<DesktopCuaAppsRequest>();
+  const appReports = yield* Queue.unbounded<DesktopCuaAppsReport>();
+  let computerUseEnabled = true;
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
   const readiness: DesktopCuaReadinessReport[] = [];
@@ -353,6 +358,8 @@ export const fixture = Effect.fn(function* (
       );
       return path;
     },
+    listApps: async () => listedApps,
+    computerUseEnabled: async () => computerUseEnabled,
     readManifest: async (path) => {
       const text = manifests.get(path);
       if (text === undefined) throw new Error("missing manifest");
@@ -449,6 +456,8 @@ export const fixture = Effect.fn(function* (
     updateCommits: Stream.empty,
     updateCancellations: Stream.empty,
     publishUpdateReport: () => Effect.void,
+    cuaAppsRequests: Stream.fromQueue(appRequests),
+    publishCuaApps: (report) => Queue.offer(appReports, report).pipe(Effect.asVoid),
     cuaRequests: Stream.fromQueue(requests),
     cuaWatch: Stream.fromQueue(watching),
     cuaWatchApps: Stream.fromQueue(approvals).pipe(
@@ -495,6 +504,13 @@ export const fixture = Effect.fn(function* (
   );
   yield* driver.listen;
   return {
+    requestApps: (requestId: string) =>
+      Queue.offer(appRequests, { version: 1, type: "cuaAppsRequest", requestId }),
+    nextApps: Queue.take(appReports),
+    setComputerUseEnabled: (enabled: boolean) =>
+      Effect.sync(() => {
+        computerUseEnabled = enabled;
+      }),
     manifest: () => manifests.get(launches.at(-1)?.manifestPath ?? "") ?? "",
     failAppListing: Effect.sync(() => {
       appListingFails = true;

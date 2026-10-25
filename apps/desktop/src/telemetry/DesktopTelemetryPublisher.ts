@@ -1,6 +1,8 @@
 import {
   DesktopHostTelemetryMessage,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  type DesktopCuaAppsRequest,
+  type DesktopCuaAppsReport,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
   type DesktopCuaFrame,
@@ -73,6 +75,8 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
     readonly encoded: Stream.Stream<Uint8Array>;
     readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
+    readonly cuaAppsRequests: Stream.Stream<DesktopCuaAppsRequest>;
+    readonly publishCuaApps: (report: DesktopCuaAppsReport) => Effect.Effect<void>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
     /**
      * Whether agents control this host, as this host's own server last said: the current value,
@@ -213,6 +217,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
+  const cuaAppsRequestQueue = yield* Queue.unbounded<DesktopCuaAppsRequest>();
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   // Readiness is state: a connection that falls behind needs only the newest report.
@@ -222,7 +227,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport
   >();
   interface CuaSource {
-    readonly reports: PubSub.PubSub<DesktopCuaDriverReport>;
+    readonly reports: PubSub.PubSub<DesktopCuaDriverReport | DesktopCuaAppsReport>;
+    readonly appRequestIds: Set<string>;
     requestId?: string;
     /** The newest cuaWatch seq from this connection; an older one arrived late. */
     watchSeq?: number;
@@ -425,6 +431,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     message,
   ) => {
     switch (message.type) {
+      case "cuaAppsRequest":
+        return Effect.suspend(() => {
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
+          cuaSource.appRequestIds.add(message.requestId);
+          return Queue.offer(cuaAppsRequestQueue, message).pipe(Effect.asVoid);
+        });
       case "cuaDriverRequest":
         return Effect.suspend(() => {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
@@ -549,8 +561,8 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID) return encoded;
     return Stream.unwrap(
       Effect.gen(function* () {
-        const reports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
-        const source: CuaSource = { reports };
+        const reports = yield* PubSub.unbounded<DesktopCuaDriverReport | DesktopCuaAppsReport>();
+        const source: CuaSource = { reports, appRequestIds: new Set() };
         yield* Effect.acquireRelease(
           Effect.gen(function* () {
             if (cuaSource) yield* detachCuaSource(cuaSource);
@@ -596,6 +608,13 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     changes: Stream.fromPubSub(changes),
     encoded,
     encodedForSource,
+    cuaAppsRequests: Stream.fromQueue(cuaAppsRequestQueue),
+    publishCuaApps: (report) =>
+      Effect.suspend(() =>
+        cuaSource?.appRequestIds.delete(report.requestId)
+          ? PubSub.publish(cuaSource.reports, report).pipe(Effect.asVoid)
+          : Effect.void,
+      ),
     cuaRequests: Stream.fromQueue(cuaRequestQueue),
     cuaWatch: Stream.unwrap(
       Effect.gen(function* () {

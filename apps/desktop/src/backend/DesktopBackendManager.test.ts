@@ -163,6 +163,8 @@ function makeTestInstance(input: MakeInstanceInput) {
       changes: Stream.empty,
       encoded: input.desktopTelemetryStream ?? Stream.empty,
       encodedForSource: () => input.desktopTelemetryStream ?? Stream.empty,
+      cuaAppsRequests: Stream.empty,
+      publishCuaApps: () => Effect.void,
       cuaRequests: Stream.empty,
       cuaWatch: Stream.empty,
       cuaWatchApps: Stream.empty,
@@ -362,7 +364,11 @@ describe("DesktopBackendManager", () => {
               makeProcess({
                 getOutputFd: (fd) =>
                   fd === 5
-                    ? Stream.encodeText(Stream.make(`not-json\n${controlMessage}\n`))
+                    ? Stream.encodeText(
+                        Stream.make(
+                          `not-json\n{"version":1,"type":"futureControl"}\n${controlMessage}\n`,
+                        ),
+                      )
                     : Stream.empty,
                 exitCode: Deferred.await(handled).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
               }),

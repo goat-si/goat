@@ -2,15 +2,17 @@ import {
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
+  type DesktopCuaAppsRequest,
   type DesktopCuaDriverRequest,
   type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
-import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
+import { cuaRequestableApps, isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
   cuaDriverHostOptions,
+  cuaDriverListingEnvironment,
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
@@ -40,6 +42,7 @@ import {
 import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
+import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
 import {
   describeDegraded,
@@ -299,6 +302,56 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ...(engine.kind === "helper" ? [engine.bundle.bundleId] : []),
   ];
 
+  // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
+  const helperListing = (engine: Engine) =>
+    engine.kind === "helper" &&
+    (environment.platform === "darwin" || environment.platform === "win32")
+      ? () => native.helperApps(engine.bundle, environment.platform)
+      : undefined;
+
+  const handleAppsRequest = Effect.fn("desktop.cua.appsRequest")(function* (
+    request: DesktopCuaAppsRequest,
+  ) {
+    const apps = yield* Effect.gen(function* () {
+      if (
+        closed ||
+        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
+      )
+        return undefined;
+      const selected = yield* engine();
+      if (typeof selected !== "object") return undefined;
+      const listed = yield* Effect.tryPromise(
+        () =>
+          helperListing(selected)?.() ??
+          native.listApps({
+            binaryPath: enginePath(selected),
+            platform: environment.platform,
+            environment: cuaDriverListingEnvironment(process.env),
+          }),
+      );
+      const hosts = yield* Effect.tryPromise(() =>
+        withResolvedWindowsPaths(hostBundleIds(selected), environment.platform),
+      );
+      if (
+        closed ||
+        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
+      )
+        return undefined;
+      const apps = cuaRequestableApps(listed, hosts);
+      // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
+      return apps.length <= 1000 ? apps : undefined;
+    }).pipe(Effect.orElseSucceed(() => undefined));
+    if (!closed)
+      yield* publisher.publishCuaApps({
+        version: 1,
+        type: "cuaApps",
+        requestId: request.requestId,
+        ...(apps === undefined
+          ? { status: "unavailable" as const }
+          : { status: "listed" as const, apps }),
+      });
+  });
+
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {
     // Which app macOS charges the grants to, so a log shows who held them.
     yield* Effect.logInfo("Starting Cua Driver", {
@@ -313,10 +366,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       platform: environment.platform,
       // The helper verifies its driver before running it, so it lists the apps too; running
       // the driver here would execute it unchecked, under GOAT's identity (#1241).
-      ...(engine.kind === "helper" &&
-      (environment.platform === "darwin" || environment.platform === "win32")
-        ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
-        : {}),
+      ...(helperListing(engine) ? { listApplications: helperListing(engine) } : {}),
     };
     const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;
@@ -787,6 +837,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     grantTarget,
     grants,
     listen: Effect.gen(function* () {
+      yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
+        Effect.forkScoped,
+      );
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
       yield* publisher.cuaWatchApps.pipe(
         Stream.runForEach((apps) =>

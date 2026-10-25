@@ -105,6 +105,58 @@ const collectTelemetry = Effect.fn(function* (stream: Stream.Stream<Uint8Array>)
 });
 
 describe("DesktopTelemetryPublisher", () => {
+  it.effect(
+    "routes app listings only for attached primary requests and never replays them to another source",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        const request = (source: string, requestId: string) =>
+          publisher.handleControlForSource(source, {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("ssh:remote", "foreign");
+        yield* request("primary", "accepted");
+        const accepted = yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runCollect);
+        assert.equal(accepted[0]?.requestId, "accepted");
+        const report = {
+          version: 1,
+          type: "cuaApps",
+          requestId: "accepted",
+          status: "listed",
+          apps: ["Editor"],
+        } as const;
+        yield* publisher.publishCuaApps({ ...report, requestId: "foreign" });
+        yield* publisher.publishCuaApps(report);
+        assert.deepEqual(yield* primary.next("cuaApps"), report);
+        yield* publisher.removeControlSource("primary");
+        yield* publisher.publishCuaApps(report);
+        yield* request("primary", "detached");
+        const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.publishCuaApps(report);
+        yield* request("primary", "replacement");
+        const next = yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runCollect);
+        assert.equal(next[0]?.requestId, "replacement");
+        const fresh = { ...report, requestId: "replacement" };
+        yield* publisher.publishCuaApps(fresh);
+        assert.deepEqual(yield* replacement.next("cuaApps"), fresh);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaApps"));
+        assert.deepEqual(
+          primary.received.filter((message) => message.type === "cuaApps"),
+          [report],
+        );
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
   it.effect("accepts CUA controls only from the attached primary and disables it on detach", () =>
     Effect.gen(function* () {
       const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;

@@ -38,7 +38,7 @@ them do at that keyboard.
 ## Approving apps
 
 An agent in a thread you run asks before it uses an app. The request appears in
-the thread and names the apps, such as Calculator or Notes, and until when;
+the thread and names app ids, such as `com.apple.Notes` or `notepad.exe`, never window titles, and says until when;
 approve it in a GOAT app and the agent may use those apps' windows in that
 thread until then. Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
