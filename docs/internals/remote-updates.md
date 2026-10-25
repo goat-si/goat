@@ -285,7 +285,7 @@ means pairing with explicit scopes. GOAT adds no administrator role.
 | Paired desktop, web, or mobile                            | R                       | M                                                          | M and a confirmation                     | W                           |
 | Owning SSH client (saved key)                             | R                       | Idle refresh of a runtime it owns; M for the manual update | M and a confirmation                     | Never changed by connecting |
 | MCP agent                                                 | R                       | M, `when_idle`                                             | Only after a person approves the handoff | Not through update tools    |
-| Linked host, T3 Connect route                             | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
+| Linked host, GOAT Connect route                             | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
 
 Rules that hold for every row:
 
@@ -308,7 +308,7 @@ Rules that hold for every row:
 - **Organization policy wins.** A managed setting that disables updates beats
   every row. An app that cannot write its bundle is not evidence of such a policy
   and does not stop server updates.
-- **Linking grants nothing new.** Linking a host or routing through T3 Connect
+- **Linking grants nothing new.** Linking a host or routing through GOAT Connect
   changes reachability, not authority. SSH runtime updates are not host-routable.
 
 ### Audit

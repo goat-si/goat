@@ -1118,7 +1118,7 @@ export function ConnectionsSettings() {
                   {pendingDesktopServerExposureMode === "network-accessible"
                     ? "Let your other devices connect to GOAT over the network. Pair devices to give them access. GOAT will restart."
                     : isGoatConnectEnabled()
-                      ? "Devices connected over your local network will disconnect. Existing tunnels, such as T3 Connect or Tailscale HTTPS, keep working. GOAT will restart."
+                      ? "Devices connected over your local network will disconnect. Existing tunnels, such as GOAT Connect or Tailscale HTTPS, keep working. GOAT will restart."
                       : "Devices connected over your local network will disconnect. Tailscale HTTPS keeps working. GOAT will restart."}
                 </AlertDialogDescription>
               </AlertDialogHeader>

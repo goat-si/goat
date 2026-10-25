@@ -98,7 +98,6 @@ describe("recurrence gate", () => {
     ["README.md", "https://github.com/pingdotgg/t3code"],
     ["apps/desktop/src/app/DesktopAppIdentity.ts", "t3code.desktop"],
     ["packages/contracts/src/adoptLegacyEnv.ts", "const legacy = legacyT3Names.env.foo;"],
-    ["apps/server/src/cli/connect.ts", "T3 Connect"],
     ["apps/server/src/legacyReader.ts", 'const legacy = "T3CODE_FOO"; // goat-rename: legacy'],
     ["apps/web/src/copy.test.ts", "T3 Code; T3CODE_FOO; Run `t3 doctor`"],
   ])("accepts retained attribution or compatibility input in %s", (path, text) => {

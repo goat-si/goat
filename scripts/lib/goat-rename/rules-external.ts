@@ -133,6 +133,104 @@ const exactLines = (...lines: readonly string[]) =>
     "g",
   );
 
+/**
+ * Lines that keep "T3 Connect" while visible-connect-account-copy (rules-visible.ts) renames the rest: sentences that
+ * contrast the disabled T3 Connect stack with GOAT Connect, and sentences about upstream's hosted relay, its deployment
+ * workflow, trace export or account. They hold on apply, so a chase that brings them back keeps them intact.
+ */
+const connectServiceLines: readonly (readonly [path: string, line: string])[] = [
+  [
+    "packages/shared/src/goatConnect.ts",
+    " * GOAT Connect will replace T3 Connect (Clerk sign-in plus the hosted relay). Until it ships,",
+  ],
+  [
+    "docs/user/remote-access.md",
+    "GOAT Connect is coming soon. T3 Connect sign-in and managed tunnels are",
+  ],
+  [
+    "docs/user/remote-access.md",
+    "Saved environments with only a T3 Connect route show as unavailable; add a",
+  ],
+  [
+    "apps/mobile/README.md",
+    "GOAT Connect is coming soon. T3 Connect is disabled in every build by",
+  ],
+  [
+    "docs/internals/t3-connect.md",
+    "> **Status:** T3 Connect is disabled in every build by `GOAT_CONNECT_ENABLED=false`",
+  ],
+  [
+    "docs/operations/connect-setup.md",
+    "> **Status:** T3 Connect (Clerk sign-in, hosted relay, and managed Cloudflare",
+  ],
+  [
+    "docs/operations/android-notifications.md",
+    "These steps need T3 Connect, which is disabled in every build until GOAT Connect",
+  ],
+  [
+    "docs/operations/mobile-testflight.md",
+    "- **T3 Connect sign-in** is off in every build until GOAT Connect ships; when enabled it needs the Clerk and relay settings described in the",
+  ],
+  [
+    "docs/operations/release.md",
+    "Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect public configuration",
+  ],
+  [
+    "docs/operations/release.md",
+    "  the PR. Only the version and the public T3 Connect identifiers in `.env.example` are read from the",
+  ],
+  ["docs/operations/release.md", "## T3 Connect relay deployment"],
+  [
+    "docs/operations/release.md",
+    "After changing a variable or secret, run the **Deploy T3 Connect relay** workflow manually from",
+  ],
+  [
+    "docs/operations/relay-observability.md",
+    "relay's delivery id, receive time and trace context only from the relay, so on environments that export to T3 Connect, the environment's",
+  ],
+  [
+    "docs/operations/observability.md",
+    "the relay forwarded, the span also goes to the T3 Connect trace export as a child of the relay's",
+  ],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    "the software keyboard, and supplies deterministic T3 Connect discovery rows to the real",
+  ],
+  [
+    "docs/user/telemetry.md",
+    "uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and",
+  ],
+  [
+    "docs/user/telemetry.md",
+    "GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
+  ],
+  [
+    "structure/overview.md",
+    "T3 Connect relay from `apps/server/src/cloud/relayTracing.ts` retains relay-owned names.",
+  ],
+];
+
+const connectServiceKeeps: readonly KeepRule[] = [
+  ...[...new Set(connectServiceLines.map(([path]) => path))].map((path): KeepRule => ({
+    id: `connect-service-lines:${path}`,
+    pattern: exactLines(
+      ...connectServiceLines.filter(([linePath]) => linePath === path).map(([, line]) => line),
+    ),
+    scope: (candidate) => candidate === path,
+    holdsOnApply: true,
+    reason:
+      "Names the disabled T3 Connect stack or upstream's hosted relay, workflow, trace export or account.",
+  })),
+  {
+    id: "connect-service-hosted-infrastructure",
+    pattern: /T3 Connect's hosted infrastructure/g,
+    scope: (path) => path === "docs/operations/android-notifications.md",
+    holdsOnApply: true,
+    reason:
+      "Upstream's hosted relay infrastructure, which Android push development does not duplicate.",
+  },
+];
+
 // Match the existing upstream phrases before other keeps strip repository URLs or legacy tokens.
 const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
   [
@@ -550,6 +648,7 @@ const mobileNativePaths = new Set([
 ]);
 
 export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
+  ...connectServiceKeeps,
   ...upstreamProductPhrases.map(([path, pattern]) => ({
     id: `upstream-product-identity:${path}`,
     pattern,
@@ -580,7 +679,12 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "relay-service-copy",
     pattern: /T3 Connect|T3 [Aa]ccount/g,
-    scope: (path) => relayCopyPaths.has(path),
+    scope: (path) =>
+      relayCopyPaths.has(path) &&
+      (!/^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
+        path,
+      ) ||
+        path === "docs/user/t3-connect-troubleshooting.md"),
     reason: "The hosted relay/account belongs to upstream, not GOAT (R6/D12/D14).",
   },
   {

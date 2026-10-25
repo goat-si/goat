@@ -65,7 +65,7 @@ export function GitHubRoutingSettings() {
                   </Text>
                   <Text className="text-xs text-foreground-muted" numberOfLines={1}>
                     {connectionCatalogDisplayUrl(entry) ??
-                      (isGoatConnectEnabled() ? "T3 Connect" : "Saved environment")}
+                      (isGoatConnectEnabled() ? "GOAT Connect" : "Saved environment")}
                   </Text>
                 </View>
                 <Text className="text-sm text-foreground-muted">

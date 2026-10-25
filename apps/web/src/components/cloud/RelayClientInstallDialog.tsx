@@ -69,8 +69,8 @@ export function RelayClientInstallDialog() {
           </DialogTitle>
           <DialogDescription>
             {isInstalling
-              ? "GOAT is preparing this environment for secure access through T3 Connect."
-              : "GOAT needs the relay client to make this environment available through T3 Connect."}
+              ? "GOAT is preparing this environment for secure access through GOAT Connect."
+              : "GOAT needs the relay client to make this environment available through GOAT Connect."}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel scrollFade={false}>

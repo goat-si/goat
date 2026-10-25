@@ -57,7 +57,7 @@ const connectComingSoonCommand = Command.make("connect", {
 );
 
 const connectPublicConfigMissingMessage =
-  "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
+  "GOAT Connect commands are unavailable: this build is missing GOAT Connect public configuration.";
 
 class ConnectPublicConfigMissingError extends CliError.UserError {
   override get message() {
@@ -70,7 +70,7 @@ class ConnectPublicConfigMissingError extends CliError.UserError {
 const connectMissingConfigCommand = Command.make("connect", {
   command: Argument.String("command").pipe(Argument.variadic),
 }).pipe(
-  Command.withDescription("T3 Connect is unavailable in builds without public configuration."),
+  Command.withDescription("GOAT Connect is unavailable in builds without public configuration."),
   Command.unlisted,
   Command.withHandler(() =>
     Effect.fail(

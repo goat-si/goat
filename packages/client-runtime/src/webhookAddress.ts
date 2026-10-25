@@ -16,14 +16,14 @@ export function webhookAddress(
     return { address: endpoint.url, copyable: true, note: null };
   }
   const publicUrlHint = isGoatConnectEnabled()
-    ? "Link T3 Connect for a public URL."
+    ? "Link GOAT Connect for a public URL."
     : `Public URLs arrive with ${GOAT_CONNECT_COMING_SOON.title} (${GOAT_CONNECT_COMING_SOON.status.toLowerCase()}).`;
   if (httpBaseUrl === null) {
     return {
       address: endpoint.path,
       copyable: false,
       note: isGoatConnectEnabled()
-        ? "Link this environment to T3 Connect for a public URL."
+        ? "Link this environment to GOAT Connect for a public URL."
         : publicUrlHint,
     };
   }

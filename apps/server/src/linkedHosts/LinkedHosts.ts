@@ -31,7 +31,7 @@ import { base64UrlEncode } from "../auth/utils.ts";
 /**
  * Linked hosts are other GOAT servers this environment reaches over HTTPS
  * instead of SSH: a headless `goat serve` behind Tailscale, a LAN address or
- * T3 Connect. Linking spends a one-time pairing code from that host through
+ * GOAT Connect. Linking spends a one-time pairing code from that host through
  * its own MCP OAuth endpoints, exactly as an outside agent signs in, and keeps
  * the resulting `mcp-client` session. The host decides what that session may
  * do; nothing on the host changes. `SshRemoteDispatch` routes a linked name

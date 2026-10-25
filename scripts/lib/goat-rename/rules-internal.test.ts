@@ -75,6 +75,31 @@ describe("internal remnant rules", () => {
       "console.warn(`GOAT capture preview unavailable: ${error.message}`);",
     ],
     ["apps/server/src/cli/project.ts", 'label: "t3 project cli",', 'label: "goat project cli",'],
+    [
+      "apps/server/src/device/DeviceHubProxy.ts",
+      "  // rejects the loopback Origin set below, so every mutation fails over T3 Connect.",
+      "  // rejects the loopback Origin set below, so every mutation fails over GOAT Connect.",
+    ],
+    [
+      "apps/server/src/relay/AgentAwarenessRelay.ts",
+      '          yield* Effect.logInfo("agent activity publishing disabled by T3 Connect configuration");',
+      '          yield* Effect.logInfo("agent activity publishing disabled by GOAT Connect configuration");',
+    ],
+    [
+      "apps/server/src/telemetry/Identify.ts",
+      " * Who an install belongs to, from strongest to weakest. `connect` is the T3",
+      " * Who an install belongs to, from strongest to weakest. `connect` is the GOAT",
+    ],
+    [
+      "apps/server/src/telemetry/Identify.ts",
+      '      Effect.logWarning("Failed to read the linked T3 Connect account for telemetry", {',
+      '      Effect.logWarning("Failed to read the linked GOAT Connect account for telemetry", {',
+    ],
+    [
+      "packages/contracts/src/relay.ts",
+      '    "Clerk session or OAuth bearer token for the signed-in T3 Connect user.",',
+      '    "Clerk session or OAuth bearer token for the signed-in GOAT Connect user.",',
+    ],
   ])("rewrites %s and remains idempotent", (path, source, expected) => {
     expect(rename(path, source)).toBe(expected);
     expect(rename(path, expected)).toBe(expected);
@@ -84,46 +109,6 @@ describe("internal remnant rules", () => {
     [
       "apps/desktop/scripts/electron-launcher.mjs",
       "// Adopts legacy T3 env names before anything reads the environment.",
-    ],
-    [
-      "apps/server/src/device/DeviceHubProxy.ts",
-      "  // rejects the loopback Origin set below, so every mutation fails over T3 Connect.",
-    ],
-    [
-      "apps/server/src/relay/AgentAwarenessRelay.ts",
-      '            "agent activity publishing standby; waiting for T3 Connect link reconciliation",',
-    ],
-    [
-      "apps/server/src/relay/AgentAwarenessRelay.ts",
-      '          yield* Effect.logInfo("agent activity publishing disabled by T3 Connect configuration");',
-    ],
-    [
-      "apps/server/src/telemetry/Identify.ts",
-      " * Who an install belongs to, from strongest to weakest. `connect` is the T3",
-    ],
-    [
-      "apps/server/src/telemetry/Identify.ts",
-      " * Owners the server can read without a client: the linked T3 Connect account",
-    ],
-    [
-      "apps/server/src/telemetry/Identify.ts",
-      '      Effect.logWarning("Failed to read the linked T3 Connect account for telemetry", {',
-    ],
-    [
-      "packages/client-runtime/src/connection/errors.ts",
-      "  // Over T3 Connect the relay already reached the host, so a request that never",
-    ],
-    [
-      "packages/contracts/src/orchestratorMcp.ts",
-      "  /** For webhook tasks: the public T3 Connect URL, shown only to a caller that may start the task's runs. */",
-    ],
-    [
-      "packages/contracts/src/orchestratorMcp.ts",
-      '      "Public URL to give the sender. Absent when this environment has no T3 Connect managed tunnel or this caller may not start the task\'s runs; webhookUrlUnavailableReason then says why.",',
-    ],
-    [
-      "packages/contracts/src/relay.ts",
-      '    "Clerk session or OAuth bearer token for the signed-in T3 Connect user.",',
     ],
     ["packages/contracts/src/relay.ts", '  .annotate(OpenApi.Title, "T3 Code Relay API")'],
     [
@@ -190,11 +175,13 @@ describe("internal remnant rules", () => {
       "// legacy T3 home",
       "// Copyright T3's authors",
       'const external = "T3 server";',
-      "// T3 Connect relay",
       '// task "T3"',
     ]) {
       expect(rename("apps/server/src/device/DeviceHubProxy.ts", source)).toBe(source);
     }
+    expect(rename("apps/server/src/device/DeviceHubProxy.ts", "// T3 Connect relay")).toBe(
+      "// GOAT Connect relay",
+    );
     expect(
       rename(
         "apps/web/src/components/chat/TimelineWorkEntryRow.logic.ts",
