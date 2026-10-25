@@ -219,6 +219,8 @@ function monitor(
   const lostCalls = { count: 0 };
   const focus: { current: SecureFocus } = { current: NOT_SECURE };
   const events: Array<{ watchId: string; event: ComputerUseEvent }> = [];
+  const waiting: Array<{ count: number; reached: () => void }> = [];
+  const listeners = new Set<() => void>();
   const deferred: Array<() => Promise<void>> = [];
   const armed = new Set<() => Promise<void>>();
   const arming = { count: 0 };
@@ -226,6 +228,12 @@ function monitor(
     secureFocus: options.secureFocus ?? (async () => focus.current),
     windowOpen: options.windowOpen ?? (async () => true),
     input: options.input,
+    focusEvents: {
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
     inputLost: () => void lostCalls.count++,
     delay: () => limit.promise,
     now: () => 0,
@@ -235,7 +243,13 @@ function monitor(
       return () => armed.delete(task);
     },
     afterReply: (task) => void deferred.push(task),
-    emit: (watchId, event) => events.push({ watchId, event }),
+    emit: (watchId, event) => {
+      events.push({ watchId, event });
+      for (const waiter of waiting.filter((entry) => events.length >= entry.count)) {
+        waiting.splice(waiting.indexOf(waiter), 1);
+        waiter.reached();
+      }
+    },
   });
   const runDeferred = async () => {
     for (const task of deferred.splice(0)) await task();
@@ -254,6 +268,18 @@ function monitor(
     lostCalls,
     /** Ends every focus probe still waiting, as its time limit would. */
     expireProbes: () => limit.resolve(),
+    /** The accessibility bus reports a focus change. */
+    focusChange: () => {
+      for (const listener of Array.from(listeners)) listener();
+    },
+    subscribed: () => listeners.size,
+    /** Resolves once count events have gone out in all. */
+    eventCount: (count: number) => {
+      const reached = Promise.withResolvers<void>();
+      if (events.length >= count) reached.resolve();
+      else waiting.push({ count, reached: reached.resolve });
+      return reached.promise;
+    },
   };
 }
 
@@ -375,5 +401,67 @@ describe("makeSignalMonitor", () => {
       watchId: "w",
       event: { type: "privateMode", active: true, target: b },
     });
+  });
+
+  it("a password field taking focus turns private mode on at the focus change, before any tick (#1638)", async () => {
+    const m = monitor();
+    await m.signals.watch("w", [target]);
+    await m.runDeferred();
+    m.focus.current = secure;
+    m.focusChange();
+    await m.eventCount(2);
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
+      { watchId: "w", event: { type: "privateMode", active: true, target } },
+    ]);
+    await m.signals.unwatch();
+    expect(m.subscribed()).toBe(0);
+  });
+
+  it("a not-secret answer from a probe a focus change overlapped is read again, never reported (#1638)", async () => {
+    const probes: Array<PromiseWithResolvers<SecureFocus>> = [];
+    const second = Promise.withResolvers<void>();
+    const m = monitor({
+      secureFocus: () => {
+        const probe = Promise.withResolvers<SecureFocus>();
+        if (probes.push(probe) === 2) second.resolve();
+        return probe.promise;
+      },
+    });
+    await m.signals.watch("w", [target]);
+    const first = m.runDeferred();
+    // Focus moves to the password field while the first probe is still reading.
+    m.focusChange();
+    probes[0]?.resolve(NOT_SECURE);
+    await first;
+    await second.promise;
+    expect(m.events).toEqual([]);
+    probes[1]?.resolve(secure);
+    await m.eventCount(1);
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: true, target } },
+    ]);
+  });
+
+  it("focus moving under every probe counts as unreadable, which is private (#1638)", async () => {
+    const probes = { count: 0 };
+    const changes: Array<() => void> = [];
+    const m = monitor({
+      secureFocus: async () => {
+        // The first three probes each see focus change while they read; the first probe
+        // starts before the watch subscribes, so the change comes after it yields once.
+        await Promise.resolve();
+        if (++probes.count <= 3) changes[0]?.();
+        return NOT_SECURE;
+      },
+    });
+    changes.push(m.focusChange);
+    await m.signals.watch("w", [target]);
+    void m.runDeferred();
+    await m.eventCount(2);
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: true, target } },
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
+    ]);
   });
 });
