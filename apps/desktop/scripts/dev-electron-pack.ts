@@ -25,10 +25,12 @@ interface DevElectronLauncher {
  * (#1568). The launcher here outlives rebuilds and compares output bytes instead.
  */
 export function createDevElectronBuildCoordinator(spawnLauncher: () => DevElectronLauncher) {
-  // Configs whose rebuild has started. Every config's watcher sees the same file event within a
-  // millisecond, well before any rebuild finishes, so waiting for this set to empty keeps the app
-  // from relaunching between the bundles of one change. A config that fails stays here until it
-  // builds again, so the app never relaunches next to a broken bundle.
+  // Configs whose rebuild has started. Each config has its own watcher; on Linux they started
+  // rebuilding for one file event within a millisecond of each other, hundreds of milliseconds
+  // before the first finished. Waiting for this set to empty therefore keeps the app from
+  // relaunching between the bundles of one change; a sibling that started only after another
+  // finished would cost one extra relaunch. A config that fails stays here until it builds
+  // again, so the app never relaunches next to a broken bundle.
   const building = new Set<number>();
   let launcher: DevElectronLauncher | null = null;
 
