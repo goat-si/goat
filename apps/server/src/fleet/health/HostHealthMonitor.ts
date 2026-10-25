@@ -254,7 +254,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const monitor = yield* make({ probe: yield* liveProbe });
     const scheduler = yield* Scheduler.Scheduler;
-    yield* scheduler.register("fleet-health-clock", monitor.tick);
+    // Local bookkeeping only; it probes nothing, so it keeps time while automation is held.
+    yield* scheduler.register("fleet-health-clock", monitor.tick, { whileAutomationHeld: "run" });
     return monitor;
   }),
 );
