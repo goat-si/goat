@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The fake helper speaks over in-memory Node streams, and discovery reads a real temporary directory.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -246,7 +247,7 @@ describe("ComputerUseHelper daemon admission", () => {
         driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
         bundleId: BUNDLE_ID,
       },
-      driverVersion: "0.37.0",
+      driverVersion: CUA_DRIVER_VERSION,
       capabilityManifestPath: "/state/cua-driver/agents.yaml",
       environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
       spawn: () => helper.process,
@@ -265,9 +266,9 @@ describe("ComputerUseHelper daemon admission", () => {
     await host.stop();
   });
 
-  const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: "0.37.0" };
+  const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: CUA_DRIVER_VERSION };
   const metadata = {
-    driverVersion: "0.37.0",
+    driverVersion: CUA_DRIVER_VERSION,
     contractVersion: "0.8.0",
     mcpProtocolVersion: "2025-06-18",
     pid: 700,
@@ -312,7 +313,7 @@ describe("ComputerUseHelper daemon admission", () => {
         driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
         bundleId: BUNDLE_ID,
       },
-      driverVersion: "0.37.0",
+      driverVersion: CUA_DRIVER_VERSION,
       capabilityManifestPath: "/state/manifest.yaml",
       environment: [],
       spawn: () => helper.process,
@@ -354,7 +355,7 @@ describe("ComputerUseHelper daemon admission", () => {
     };
     const host = makeHelperHost({
       bundle,
-      driverVersion: "0.37.0",
+      driverVersion: CUA_DRIVER_VERSION,
       capabilityManifestPath: "C:/state/manifest.yaml",
       environment: [],
       spawn: () => helper.process,

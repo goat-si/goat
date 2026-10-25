@@ -63,7 +63,7 @@ func runMcp() -> Never {
   if let refusal = service.driverRefusal(driverPath) { mcpFail(79, refusal) }
 
   // Only the knobs a host may set come from this process's environment; the rest is fixed.
-  let settable = ProcessInfo.processInfo.environment.filter { hostSettableNames.contains($0.key) }
+  let settable = ProcessInfo.processInfo.environment.filter { DriverEnvironment.hostSettableNames.contains($0.key) }
     .map { ["name": $0.key, "value": $0.value] }
   var environment = service.driverEnvironment(settable)
   environment["CUA_DRIVER_CAPABILITY_MANIFEST_FILE"] = arguments[flag + 1]

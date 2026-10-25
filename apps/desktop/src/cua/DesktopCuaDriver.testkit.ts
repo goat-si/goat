@@ -1,4 +1,5 @@
 // Shared fixture for the DesktopCuaDriver suites; one fake per native dependency.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
@@ -305,7 +306,7 @@ export const fixture = Effect.fn(function* (
               socketPath: "",
               pid: HELPER_PID,
               generation: String(starts),
-              driverVersion: "0.37.0",
+              driverVersion: CUA_DRIVER_VERSION,
               contractVersion: "",
               mcpProtocolVersion: "",
               mcp: {
@@ -318,7 +319,7 @@ export const fixture = Effect.fn(function* (
             socketPath: "/tmp/goat-cu-x/driver.sock",
             pid: 777,
             generation: String(starts),
-            driverVersion: "0.37.0",
+            driverVersion: CUA_DRIVER_VERSION,
             contractVersion: "0.8.0",
             mcpProtocolVersion: "2025-06-18",
             mcp: {
@@ -429,8 +430,8 @@ export const fixture = Effect.fn(function* (
             socketPath: descriptor.socketPath,
             pid: 123,
             generation: String(starts),
-            driverVersion: "0.34.1",
-            contractVersion: "1",
+            driverVersion: CUA_DRIVER_VERSION,
+            contractVersion: "0.8.0",
             mcpProtocolVersion: "1",
             mcp: {
               command: descriptor.command,
