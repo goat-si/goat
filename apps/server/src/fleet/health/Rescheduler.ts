@@ -28,6 +28,9 @@ import {
 
 export type { RescheduleReason } from "./reschedulePolicy.ts";
 
+/** A drain move called off right before its launch: its source stopped draining or runs again. */
+class DrainCalledOff extends Data.TaggedError("DrainCalledOff")<{ readonly message: string }> {}
+
 /** The caller lost the authority the request was made with. */
 export class RescheduleNotAllowed extends Data.TaggedError("RescheduleNotAllowed")<{
   readonly message: string;
@@ -288,20 +291,71 @@ const make = Effect.gen(function* () {
     );
   };
 
+  /** Null while the host is Draining; otherwise why a drain move off it stops. */
+  const notDraining = (host: string | null) =>
+    monitor
+      .conditions(host)
+      .pipe(
+        Effect.map((set) =>
+          set.conditions.some((condition) => condition.type === "Draining")
+            ? null
+            : (host ?? "this machine") + " is no longer draining, so its work stays.",
+        ),
+      );
+
+  const readSource = (request: RescheduleRequest) =>
+    request.ref.host === null
+      ? readLocalStatus(request.ref.threadId).pipe(
+          Effect.map((status) => ({ answered: true, status })),
+        )
+      : probeRemoteStatus(request.ref.host, request.ref.threadId, "approval-required");
+
+  /**
+   * Null when a drain move may still launch: its source still drains, answers, and its attempt
+   * is stopped on the run the move was planned for. Asked again right before every remote write
+   * of the launch, so an uncordon or a new run during the move's preparation stops it.
+   */
+  const drainReady = (request: RescheduleRequest) =>
+    Effect.gen(function* () {
+      const where = request.ref.host ?? "this machine";
+      const gone = yield* notDraining(request.ref.host);
+      if (gone !== null) return gone;
+      const probe = yield* readSource(request);
+      if (!probe.answered || probe.status === null)
+        return (
+          "Could not read the attempt on " +
+          where +
+          "; drain moves only an attempt it sees stopped."
+        );
+      const runId = probe.status.run?.runId ?? null;
+      if (request.stopRunId !== undefined && runId !== null && runId !== request.stopRunId)
+        return "The attempt on " + where + " is on another run now, so it stays.";
+      if (!isStopped(probe.status))
+        return "The attempt is running on " + where + "; drain waits for its run to end.";
+      return null;
+    });
+
   /**
    * Work leaves a host only when it does not answer now and is Lost (or Unreachable with force),
    * or when it answers and its attempt is confirmed stopped. A remembered outage is never enough:
-   * the host is asked first, so one that came back keeps its work. Null means go.
+   * the host is asked first, so one that came back keeps its work. Null means go. A drain moves
+   * only from a host that still drains and answers.
    */
   const gate = (request: RescheduleRequest) =>
     Effect.gen(function* () {
       const host = request.ref.host;
       const where = host ?? "this machine";
-      const probe =
-        host === null
-          ? { answered: true, status: yield* readLocalStatus(request.ref.threadId) }
-          : yield* probeRemoteStatus(host, request.ref.threadId, "approval-required");
+      if (request.reason === "drain") {
+        const gone = yield* notDraining(host);
+        if (gone !== null) return refused("host_still_answers", gone);
+      }
+      const probe = yield* readSource(request);
       if (!probe.answered) {
+        if (request.reason === "drain")
+          return refused(
+            "host_still_answers",
+            where + " does not answer; drain moves only an attempt it sees stopped.",
+          );
         const conditions = new Set(
           (yield* monitor.conditions(host)).conditions.map((condition) => condition.type),
         );
@@ -443,7 +497,15 @@ const make = Effect.gen(function* () {
             callerRuntimeMode: request.callerRuntimeMode ?? request.runtimeMode,
             ...(ceiling === undefined ? {} : { permissionProfileCeiling: ceiling }),
           },
-          recheck(request).pipe(Effect.asVoid),
+          // The drain check first, so the authority recheck stays the last step before the write.
+          (request.reason === "drain"
+            ? drainReady(request).pipe(
+                Effect.flatMap((why) =>
+                  why === null ? Effect.void : Effect.fail(new DrainCalledOff({ message: why })),
+                ),
+              )
+            : Effect.void
+          ).pipe(Effect.andThen(recheck(request)), Effect.asVoid),
         )
         .pipe(Effect.result);
       if (launched._tag === "Success") {
@@ -465,6 +527,10 @@ const make = Effect.gen(function* () {
         } satisfies RescheduleResult;
       }
       const error = launched.failure;
+      if (error._tag === "DrainCalledOff") {
+        yield* claims.release(request.clientRequestId);
+        return refused("host_still_answers", error.message);
+      }
       if (error instanceof RescheduleNotAllowed) {
         yield* claims.release(request.clientRequestId);
         return refused("not_allowed", error.message);

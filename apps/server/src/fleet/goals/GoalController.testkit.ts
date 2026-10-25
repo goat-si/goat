@@ -3,7 +3,13 @@
  * recovery, shared by the controller's test files.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { FleetGoalId, OrchestratorMcpFailure, RunId, ThreadId } from "@goat/contracts";
+import {
+  FleetGoalId,
+  OrchestratorMcpFailure,
+  type PermissionProfile,
+  RunId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -52,6 +58,8 @@ export interface Fake {
   pullRequest: PullRequestObservation;
   /** What runtime.project resolves the goal's project to. */
   project: { readonly cwd: string; readonly canonicalKey: string | null } | null;
+  /** The goatclaw ceiling a move carries to its destination. */
+  moveCeiling: PermissionProfile | null;
 }
 
 export const access = (runtimeMode: OwnerAccess["runtimeMode"] = "full-access"): OwnerAccess => ({
@@ -106,6 +114,7 @@ export const makeFake = (): Fake => {
     reading: (threadId) => running(threadId, fake),
     pullRequest: { kind: "seen", state: "open", checks: "pending" },
     project: { cwd: "/repo", canonicalKey: null },
+    moveCeiling: null,
   };
   return fake;
 };
@@ -202,6 +211,7 @@ export const runtimeFor = (fake: Fake) =>
         callerRuntimeMode: current.runtimeMode,
         authorize,
         authorizeSource: authorize,
+        ...(fake.moveCeiling === null ? {} : { permissionProfileCeiling: fake.moveCeiling }),
       });
     },
   });

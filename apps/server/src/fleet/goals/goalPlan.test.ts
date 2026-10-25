@@ -30,6 +30,8 @@ const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => (
   issues: new Map(),
   turns: 0,
   firstClaimAt: null,
+  drainingHosts: new Set(),
+  refusedReschedules: new Set(),
   ...overrides,
 });
 
@@ -754,5 +756,187 @@ describe("moves to another host (#1451)", () => {
       state: "needs_human",
       modelSelection: { instanceId: "claude", model: "opus" },
     });
+  });
+});
+
+describe("drain moves attempts idle between runs off a draining host (#1130)", () => {
+  const goal = testGoal("goal_dr");
+  const pair = testGoal("goal_dr", {
+    spec: testSpec({ workers: { ...testSpec().workers, count: 2 } }),
+  });
+  const idle = (runId: string | null = "run:5") =>
+    seen({
+      runId: runId === null ? null : RunId.make(runId),
+      health: { _tag: "healthy", idle: true },
+    });
+  const drainOf = (slot: number) => ({
+    type: "drain",
+    slot,
+    attempt: 1,
+    runId: "run:5",
+    actionId: "goal:goal_dr:s" + slot + ":a1:run:5:reschedule",
+  });
+  const draining = (
+    hosts: ReadonlyArray<string | null>,
+    workers: ReadonlyArray<readonly [number, SlotObservation]>,
+    extra: Partial<GoalObservation> = {},
+  ) => observe({ drainingHosts: new Set(hosts), workers: new Map(workers), ...extra });
+  const drains = (plan: ReturnType<typeof planGoal>) =>
+    plan.actions.filter((action) => action.type === "drain");
+
+  it("moves an idle attempt off an SSH host or this machine instead of following it up there", () => {
+    const onA = running(goal, 0, { host: "A" });
+    // Not draining: the finished run gets its follow-up where it is.
+    expect(
+      planGoal(goal, [onA], draining([], [[0, idle()]])).actions.map((action) => action.type),
+    ).toEqual(["followup"]);
+    const ssh = planGoal(goal, [onA], draining(["A"], [[0, idle()]]));
+    expect(ssh.actions).toEqual([drainOf(0)]);
+    expect(ssh.workers[0]).toMatchObject({
+      state: "running",
+      note: expect.stringMatching(/draining/),
+    });
+    const local = planGoal(goal, [running(goal, 0)], draining([null], [[0, idle()]]));
+    expect(local.actions).toEqual([drainOf(0)]);
+    // A thread with no run yet is left to start one: goal launches always carry the first run.
+    expect(
+      drains(
+        planGoal(
+          goal,
+          [onA],
+          draining(["A"], [[0, { ...idle(null), terminal: false, runStatus: null }]]),
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it("never moves a running attempt, queued work, a question, a stopped or failed run, or work on a cordon-only host", () => {
+    const onA = running(goal, 0, { host: "A" });
+    const cases: ReadonlyArray<readonly [string, SlotObservation]> = [
+      [
+        "running",
+        seen({ terminal: false, runStatus: "running", health: { _tag: "healthy", idle: false } }),
+      ],
+      ["queued", seen({ health: { _tag: "waiting" } })],
+      ["question", seen({ terminal: false, runStatus: "running", health: { _tag: "waiting" } })],
+      [
+        "stopped by a person",
+        seen({ runStatus: "interrupted", health: { _tag: "healthy", idle: true } }),
+      ],
+    ];
+    for (const [name, observed] of cases)
+      expect(drains(planGoal(goal, [onA], draining(["A"], [[0, observed]]))), name).toEqual([]);
+    // Cordoned but not draining: placement skips the host, its work stays.
+    expect(drains(planGoal(goal, [onA], draining([], [[0, idle()]])))).toEqual([]);
+    // A failed run on this machine still restarts here through ordinary recovery.
+    const failed = planGoal(
+      goal,
+      [running(goal, 0)],
+      draining(
+        [null],
+        [
+          [
+            0,
+            seen({
+              runId: RunId.make("run:5"),
+              runStatus: "failed",
+              health: { _tag: "failed", failureClass: "unknown", runId: RunId.make("run:5") },
+            }),
+          ],
+        ],
+      ),
+    );
+    expect(failed.actions).toEqual([
+      expect.objectContaining({ type: "recover", reason: "failed", slot: 0 }),
+    ]);
+  });
+
+  it("moves one slot at a time: one drain per pass, none while any move of the goal is unsettled", () => {
+    const workers = [running(pair, 0, { host: "A" }), running(pair, 1, { host: "A" })];
+    const both = planGoal(
+      pair,
+      workers,
+      draining(
+        ["A"],
+        [
+          [0, idle()],
+          [1, idle()],
+        ],
+      ),
+    );
+    expect(both.actions).toEqual([drainOf(0)]);
+    expect(both.workers[1]).toMatchObject({
+      state: "running",
+      note: expect.stringMatching(/move/),
+    });
+    // Slot 1's earlier move is unconfirmed: it is only looked up, and slot 0 waits for it.
+    const held = planGoal(
+      pair,
+      workers,
+      draining(
+        ["A"],
+        [
+          [0, idle()],
+          [1, idle()],
+        ],
+        {
+          pendingMoves: new Map([
+            [
+              1,
+              {
+                actionId: "goal:goal_dr:s1:a1:run:5:reschedule",
+                attempt: 1,
+                clientRequestId: "goal:goal_dr:s1:a2:launch",
+                runId: RunId.make("run:5"),
+              },
+            ],
+          ]),
+        },
+      ),
+    );
+    expect(held.actions.map((action) => action.type)).toEqual(["resolve_move"]);
+    expect(held.workers[0]).toMatchObject({
+      state: "running",
+      note: expect.stringMatching(/move/),
+    });
+  });
+
+  it("asks a person, without working on the draining host, when the attempt cannot move", () => {
+    const last = running(goal, 0, { host: "A", attempt: 3 });
+    const capped = planGoal(goal, [last], draining(["A"], [[0, idle()]]));
+    expect(capped.actions).toEqual([]);
+    expect(capped.workers[0]).toMatchObject({
+      state: "needs_human",
+      note: expect.stringMatching(/cannot move/),
+    });
+    const onA = running(goal, 0, { host: "A" });
+    const refused = planGoal(
+      goal,
+      [onA],
+      draining(["A"], [[0, idle()]], {
+        refusedReschedules: new Set(["goal:goal_dr:s0:a1:run:5:reschedule"]),
+      }),
+    );
+    expect(refused.actions).toEqual([]);
+    expect(refused.workers[0]).toMatchObject({ state: "needs_human" });
+    // Uncordoned: the worker carries on where it is.
+    expect(
+      planGoal(goal, [last], draining([], [[0, idle()]])).actions.map((action) => action.type),
+    ).toEqual(["followup"]);
+  });
+
+  it("takes no drain when the budget is spent, the goal is paused, its owner lost authority, or it is being deleted", () => {
+    const onA = [running(goal, 0, { host: "A" })];
+    const ready = draining(["A"], [[0, idle()]]);
+    expect(planGoal(goal, onA, { ...ready, turns: 40 }).actions).toEqual([]);
+    expect(
+      planGoal(testGoal("goal_dr", { spec: testSpec({ paused: true }) }), onA, ready).actions,
+    ).toEqual([]);
+    expect(
+      planGoal(goal, onA, { ...ready, owner: { available: false, reason: "revoked" } }).actions,
+    ).toEqual([]);
+    expect(
+      drains(planGoal({ ...goal, deletionRequestedAt: "2026-10-20T00:59:00.000Z" }, onA, ready)),
+    ).toEqual([]);
   });
 });

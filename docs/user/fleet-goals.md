@@ -21,7 +21,12 @@ its project on another host (`spec.project.host`). Workers on another host need 
 access and the project's folder there: `spec.project.cwd`, or a `projectId` on that host. A worker
 on another host whose run fails, or whose host stays unreachable, moves to another host the goal
 allows; until GOAT can tell whether a move started, its slot waits instead of starting a second
-worker. Draining a host does not move goal workers yet.
+worker. Draining a host (`goat_call {path:"host.drain"}`) moves the goal workers on it to other hosts
+the goal allows, one worker per goal at a time and only between runs, so a running turn is never
+interrupted. A moved worker starts again from its pushed branch, or from the goal's base branch when
+nothing was pushed; anything it did not push stays on the drained host. A worker that cannot move,
+because no allowed host can take it or it is on its last attempt, stays where it is and its goal
+says why. Uncordoning the host stops further moves.
 
 An agent outside GOAT can declare a goal too, with its MCP sign-in or a
 [client token](outside-agents.md#long-running-orchestrators) approved for more than read-only

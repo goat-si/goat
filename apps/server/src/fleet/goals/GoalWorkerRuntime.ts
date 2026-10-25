@@ -102,7 +102,7 @@ export interface MoveAuthority {
   readonly runtimeMode: RuntimeMode;
   readonly callerRuntimeMode: RuntimeMode;
   readonly authorize: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
-  /** For writes to the moved attempt's own host: its interrupt. */
+  /** For writes to the moved attempt's own host: its interrupt. Never granted for this machine. */
   readonly authorizeSource: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
   readonly allowedHosts?: ReadonlyArray<string>;
   readonly excludeHosts?: ReadonlyArray<string>;
@@ -185,12 +185,15 @@ export class GoalWorkerRuntime extends Context.Service<
     readonly project: (
       goal: FleetGoal,
     ) => Effect.Effect<{ readonly cwd: string; readonly canonicalKey: string | null } | null>;
-    /** The authority a move of this goal's worker off sourceHost to another host carries. */
+    /**
+     * The authority a move of this goal's worker off sourceHost (null for this machine, which
+     * only drain moves) to another host carries.
+     */
     readonly moveAuthority: (
       access: OwnerAccess,
       goal: FleetGoal,
       confirm: ActionConfirm,
-      sourceHost: string,
+      sourceHost: string | null,
     ) => Effect.Effect<MoveAuthority, OrchestratorMcpFailure>;
   }
 >()("goat/fleet/goals/GoalWorkerRuntime") {}
@@ -761,16 +764,26 @@ const make = Effect.gen(function* () {
               Effect.mapError((error) => new RescheduleNotAllowed({ message: error.message })),
             ),
             // Interrupting the old attempt: under the session ceiling, if the profile still reaches it.
-            authorizeSource: remote
-              .stopAuthorize({
-                scope: access.scope,
-                mode: authority.sessionMode,
-                host: sourceHost,
-                confirm: authority.authorize,
-              })
-              .pipe(
-                Effect.mapError((error) => new RescheduleNotAllowed({ message: error.message })),
-              ),
+            // A move off this machine only takes an attempt that already stopped.
+            authorizeSource:
+              sourceHost === null
+                ? Effect.fail(
+                    new RescheduleNotAllowed({
+                      message: "A move never stops an attempt on this machine.",
+                    }),
+                  )
+                : remote
+                    .stopAuthorize({
+                      scope: access.scope,
+                      mode: authority.sessionMode,
+                      host: sourceHost,
+                      confirm: authority.authorize,
+                    })
+                    .pipe(
+                      Effect.mapError(
+                        (error) => new RescheduleNotAllowed({ message: error.message }),
+                      ),
+                    ),
             ...(allowed === undefined ? {} : { allowedHosts: allowed }),
             ...(excluded === undefined || excluded.length === 0 ? {} : { excludeHosts: excluded }),
             ...(authority.ceiling === undefined

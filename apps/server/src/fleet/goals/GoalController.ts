@@ -133,7 +133,10 @@ const make = Effect.gen(function* () {
       // as none, so the launch is claimed and sent again.
       const launchClaims = new Map<string, { claimedAt: number; settled: boolean } | null>();
       const unmovedReschedules = new Set<string>();
+      const refusedReschedules = new Set<string>();
       for (const launch of launches) {
+        if (launch.actionId.endsWith(":reschedule") && launch.outcome === "refused")
+          refusedReschedules.add(launch.actionId);
         if (launch.outcome !== NOT_SENT)
           launchClaims.set(launch.actionId, {
             claimedAt: Date.parse(launch.claimedAt),
@@ -170,8 +173,27 @@ const make = Effect.gen(function* () {
               .pipe(Effect.map((state) => issues.set(number, state))),
           { concurrency: 4, discard: true },
         );
+      // Read where the cordon table lives, so an uncordon takes effect on the next pass.
+      const drainingHosts = new Set<string | null>();
+      yield* Effect.forEach(
+        new Set(
+          record.workers
+            .filter((worker) => worker.threadId !== null && worker.state !== "failed")
+            .map((worker) => worker.host),
+        ),
+        (host) =>
+          health.hostCondition(host).pipe(
+            Effect.map((set) => {
+              if (set.conditions.some((condition) => condition.type === "Draining"))
+                drainingHosts.add(host);
+            }),
+          ),
+        { concurrency: 4, discard: true },
+      );
       const observation: GoalObservation = {
         now,
+        drainingHosts,
+        refusedReschedules,
         owner:
           owner === null
             ? { available: false, reason: (access as { unavailable: string }).unavailable }
@@ -878,6 +900,15 @@ const make = Effect.gen(function* () {
             }
             case "resolve_move":
               return yield* moves.resolve(worker, action, access);
+            case "drain":
+              // The work goes to another host, so this machine's hub-down gate does not apply.
+              return yield* moves.move({
+                worker,
+                handled: worker,
+                reason: "drain",
+                runId: action.runId,
+                selection: worker.modelSelection,
+              });
             case "interrupt": {
               if ((yield* claim(action.actionId, "interrupt", worker, worker.host)) !== null)
                 return;
