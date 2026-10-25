@@ -149,7 +149,6 @@ beforeEach(() => {
     sources: [],
   });
 });
-
 const layerAdapterTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
   IdAllocator.layer,
@@ -13843,9 +13842,7 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
             backgroundTasks: () => Effect.succeed(false),
             stopTask: () => Effect.void,
             interrupt: Effect.void,
-            close: Effect.sync(() => {
-              closes++;
-            }),
+            close: Effect.sync(() => void closes++),
           } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
         }),
       forkSession: () => Effect.die("unused"),
@@ -13860,6 +13857,8 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
       revokeProviderSession: () => Effect.void,
       revokeThread: () => Effect.void,
       revokeAll: Effect.void,
+      subscribeChanges: Effect.die("unused"),
+      inspect: () => Effect.undefined,
       currentMemoryPolicy,
     }),
   );

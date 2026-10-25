@@ -27,6 +27,22 @@ export interface ComputerUseControl {
   readonly target?: { readonly pid: number; readonly windowId: number };
 }
 
+export interface ComputerUseControlSnapshot extends ComputerUseControl {
+  readonly ended?: ComputerUseControlEnd;
+}
+
+/** A grant read for an older control must not change the replacement's remembered scope. */
+export const rememberScope = <C extends ComputerUseControl>(
+  controls: Map<ThreadId, C>,
+  record: C,
+  apps: ReadonlyArray<string> | undefined,
+) => {
+  const current = controls.get(record.threadId);
+  if (current?.controlId === record.controlId)
+    controls.set(record.threadId, { ...current, scope: { apps } });
+  return apps;
+};
+
 /**
  * Marks the thread's live control as asked to act through by an agent's call this turn; false
  * when it is not live or already marked. Until then the session list shows no card for it.

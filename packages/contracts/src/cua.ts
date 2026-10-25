@@ -466,12 +466,41 @@ export const ComputerUseLeaseUpdate = Schema.Union([
   Schema.Struct({
     state: Schema.Literal("paused"),
     controlId: TrimmedNonEmptyString,
+    expiresAt: Schema.optionalKey(Schema.String),
     reason: ComputerUsePauseReason,
   }),
-  Schema.Struct({ state: Schema.Literal("idle"), controlId: TrimmedNonEmptyString }),
+  Schema.Struct({
+    state: Schema.Literal("idle"),
+    controlId: TrimmedNonEmptyString,
+    expiresAt: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
+
+/** Thread subscriptions stay open between controls; only `ended` or EOF ends the subscription. */
+export const ComputerUseLeaseThreadUpdate = Schema.Union([
+  ComputerUseLeaseUpdate.members[0],
+  Schema.Struct({
+    state: Schema.Literal("paused"),
+    controlId: TrimmedNonEmptyString,
+    expiresAt: Schema.String,
+    reason: ComputerUsePauseReason,
+  }),
+  Schema.Struct({
+    state: Schema.Literal("idle"),
+    controlId: TrimmedNonEmptyString,
+    expiresAt: Schema.String,
+  }),
+  ComputerUseLeaseUpdate.members[3],
+  Schema.Struct({ state: Schema.Literal("waiting") }),
+  Schema.Struct({
+    state: Schema.Literal("control-ended"),
+    controlId: TrimmedNonEmptyString,
+    reason: ComputerUseControlEnd,
+  }),
+]);
+export type ComputerUseLeaseThreadUpdate = typeof ComputerUseLeaseThreadUpdate.Type;
 
 /**
  * The proxy's finer account of a refusal, beside its shared reason (ComputerUseRefusalReason in

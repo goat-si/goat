@@ -29,6 +29,28 @@ const layer = it.layer(
   ),
 );
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("reading the current control never mints or revives a stopped control", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-current-control");
+      assert.isTrue(Option.isNone(yield* leases.currentControl(owner)));
+      const control = yield* leases.control(owner, Option.none());
+      assert.equal(
+        Option.getOrThrow(yield* leases.currentControl(owner)).controlId,
+        control.controlId,
+      );
+      yield* leases.stop(owner);
+      assert.equal(
+        Option.getOrThrow(yield* leases.currentControl(owner)).controlId,
+        control.controlId,
+      );
+      assert.deepEqual(yield* leases.controlState(owner, control.controlId), {
+        _tag: "ended",
+        reason: "stopped",
+      });
+    }),
+  );
   it.effect("tells session lists about a control minted for a thread that had none", () =>
     Effect.scoped(
       Effect.gen(function* () {
