@@ -163,7 +163,7 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   outcome, and a missed deadline counts as unverifiable, not refused.
 - No replay: input that may have landed is observed again, never resent; only a refusal that
   dispatched nothing for a transient reason is retried (`computerUseNextStep`).
-- Refusals name their cause. A person's Stop and a person's input or takeover have their own
+- Refusals name their cause. A person's Stop and a person's takeover have their own
   reasons, and a policy refusal or a missing grant never uses them: a vendor helper that reports
   a policy refusal as "stopped by the user" makes agents end their turn (#1146). The mini-view
   stack below needs two reasons the contract does not have yet, for an unsafe capture and for
@@ -343,8 +343,13 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   session is active. A keyboard event tap needs Input Monitoring, a third grant, so the switch is
   optional: onboarding offers it, and without it the Stop controls remain. Not implemented yet
   (#1505).
-- **Input collision.** When a person uses the same desktop while an agent acts, the agent pauses
-  and the session moves to `waiting-for-human`. On macOS each agent connection's helper reports
+- **Human input.** An agent with approved control keeps working while a person uses the same
+  desktop: the person's keyboard and pointer input does not pause it (owner decision, Jun,
+  2026-10-25, [#1550](https://github.com/goat-si/goat/pull/1550)). Stop, stop all, takeover and
+  hand-back, lease expiry and the private-field pause still apply. Unattended attachment requires
+  private-mode detection, not human-input detection. Human-input detection (#1426, #1477, #1504,
+  #1512) tells a person's input from an agent's own for input arbitration and reports; it never
+  gates admission or pauses work. On macOS each agent connection's helper reports
   every pointer event (moves, drags, scrolls, presses) to its lease proxy with its own time, from
   a listen-only event tap that needs no grant and reads only each event's type (#1488). The proxy
   keeps every event and sends whatever piled up behind its last report in the next one, up to
@@ -356,8 +361,8 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   Monitoring, which the helper does not use; a person's key less than 25 ms before an agent's
   can still hide behind it. The driver posts some input through the same system, so the
   server takes an event for an agent's only while one of its input calls of that kind covers it
-  (`apps/server/src/cua/agentInputLog.ts`), and pauses every agent otherwise. Calls known only
-  to read never hide a person's input.
+  (`apps/server/src/cua/agentInputLog.ts`), and reports it as a person's otherwise. Calls known
+  only to read never hide a person's input.
 - **Takeover and hand-back.** Takeover fences new agent input immediately and drops in-flight
   results by generation. Hand-back rechecks the lease and its expiry and requires a fresh
   observation before the next action. Disconnects and retries never hand control back by
@@ -369,8 +374,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   the session moves to `paused`. Resuming needs an unlocked session, a lease that is still live or
   a person's hand-back, and then a fresh observation.
 - **Limits.** Interactive threads on one desktop still share the person's session; GOAT serializes
-  input per target and pauses on collision, and does not promise separate seats. Operating a
-  locked screen is out of scope.
+  agent input per target, does not pause for a person's input, and does not promise separate
+  seats, so a person who wants the window to themselves takes over. Operating a locked screen is
+  out of scope.
 
 ## Permission onboarding
 
@@ -524,7 +530,7 @@ helper does around those methods, each reported through a typed capability or re
 | private mode (`privateMode`)                                                                                                | `AXSecureTextField`                   | `IsPassword`                             | AT-SPI password role                                                       | AT-SPI password role                                                     |
 | end session: kill the driver process, release held input, cleanup report                                                    | yes                                   | yes                                      | yes                                                                        | yes                                                                      |
 | lock, sleep and session switch (`screenLocked`)                                                                             | yes                                   | session change notifications             | logind and screensaver signals                                             | logind and screensaver signals                                           |
-| human input collision (`userIntervened`)                                                                                    | HID idle time                         | last-input time, own input filtered      | X idle time                                                                | not detectable; exclusive lease                                          |
+| human input detection, for arbitration and reports only                                                                     | HID idle time                         | last-input time, own input filtered      | X idle time                                                                | not detectable                                                           |
 | physical kill switch                                                                                                        | Escape tap (optional grant)           | low-level keyboard hook                  | XInput2 raw keys                                                           | none; Stop controls only                                                 |
 | agent cursor overlay drawn by the helper (#1214)                                                                            | yes                                   | yes                                      | yes                                                                        | compositor dependent                                                     |
 | window-only capture for tiles                                                                                               | yes                                   | yes                                      | yes                                                                        | where the portal grants a window; else crop of the window's bounds       |
@@ -578,7 +584,7 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 | P2    | WS3 #1129 macOS helper core                      | WS2             | signed helper launches, disclaims, starts the driver, passes readiness, observes with diffs                        |
 | P2    | WS4 #1131 packaging, signing, notarization       | WS3             | notarized GOAT.app with the helper; grants survive an update; notices complete                                     |
 | P3    | WS5 #1133 action API                             | WS3             | typed results, no replay, exact targets, background first, on fixtures                                             |
-| P3    | WS6 #1134 safety rails                           | WS3, WS5        | every turn through the proxy; Stop and stop all with cleanup report; takeover, private mode, collision             |
+| P3    | WS6 #1134 safety rails                           | WS3, WS5        | every turn through the proxy; Stop and stop all with cleanup report; takeover, private mode, human input reports   |
 | P4    | WS7 #1135 unified preview surface                | WS2, WS6        | one panel, chips and controls for browser and desktop on web, desktop and mobile                                   |
 | P4    | WS8 #1136 onboarding parity and matrix tests     | WS3, WS7        | onboarding on the helper identity; conformance suite enforces the matrix                                           |
 | P5    | WS9 #1137 Windows helper                         | WS2, WS5, WS6   | conformance suite green on Windows; unsupported cells typed                                                        |

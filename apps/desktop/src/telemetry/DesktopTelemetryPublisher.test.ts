@@ -512,6 +512,61 @@ describe("DesktopTelemetryPublisher", () => {
   );
 
   it.effect(
+    "sends a ready driver right behind the readiness of the helper that runs it, in one write",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const readiness = {
+          version: 1,
+          type: "cuaReadiness",
+          generation: 4,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { privateMode: "unsupported", humanInput: "unsupported" },
+        } as const;
+        const chunks = yield* Queue.unbounded<string>();
+        const decoder = new TextDecoder();
+        yield* publisher.encodedForSource("primary").pipe(
+          Stream.runForEach((chunk) => Queue.offer(chunks, decoder.decode(chunk))),
+          Effect.forkScoped,
+        );
+        // Attached once its first snapshot arrives, as collectTelemetry waits.
+        let first = yield* Queue.take(chunks);
+        while (!first.includes('"desktopTelemetry"')) first = yield* Queue.take(chunks);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaDriverRequest",
+          requestId: "agent",
+          enabled: true,
+        });
+        // The server admits unattended work on these signals once the driver is ready; the
+        // readiness stream alone could reach it after the report.
+        yield* publisher.publishCuaReadiness(readiness);
+        yield* publisher.publishCuaReport({
+          version: 1,
+          type: "cuaDriverReport",
+          requestId: "agent",
+          status: "ready",
+          mcp: { command: "/native/driver", args: ["mcp"], environment: [] },
+        });
+        let chunk = yield* Queue.take(chunks);
+        while (!chunk.includes('"cuaDriverReport"')) chunk = yield* Queue.take(chunks);
+        const lines = chunk.trim().split("\n");
+        assert.lengthOf(lines, 2);
+        assert.include(lines[0] ?? "", '"cuaReadiness"');
+        assert.include(lines[0] ?? "", '"privateMode":"unsupported"');
+        assert.include(lines[1] ?? "", '"cuaDriverReport"');
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
     "sends the helper's readiness only to its own server, newest first to one that connects later",
     () =>
       Effect.gen(function* () {

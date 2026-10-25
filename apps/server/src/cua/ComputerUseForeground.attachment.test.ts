@@ -65,6 +65,10 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
   yield* sql`INSERT OR IGNORE INTO orchestration_v2_projection_threads
     (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
     VALUES (${threadId}, 'project', 'foreground fixture', 'codex', ${fullAccess ? "full-access" : "auto"}, 'default', '2026-01-01', '2026-01-01', '{}')`;
+  // Attached for a running turn, as a turn start does; with nothing open the control is idle.
+  yield* sql`INSERT OR IGNORE INTO orchestration_v2_projection_runs
+    (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+    VALUES ('run:attached-foreground', ${threadId}, 1, 'codex', 'running', '2026-01-01', '{}')`;
   const driver = CuaDriver.CuaDriver.of({
     enabled: Effect.succeed(true),
     acquire: Effect.succeedSome({ command: "/fixture/driver", args: ["mcp"], environment: [] }),

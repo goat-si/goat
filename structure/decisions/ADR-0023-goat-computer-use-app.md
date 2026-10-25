@@ -11,6 +11,11 @@
   manifest, unattended origins, admission lease, transport kill boundary and display probe in
   ADR-0022 still stand.
 - Design: [computer-use.md](../../docs/internals/computer-use.md)
+- Amended 2026-10-25, D7 (owner decision, Jun, 2026-10-25; kept in
+  [#1550](https://github.com/goat-si/goat/pull/1550) at `6eb17f5764`): a person's keyboard and
+  pointer input no longer pauses an agent with approved control, unattended attachment requires
+  private-mode detection but not human-input detection, and human-input detection remains for
+  input arbitration and reports only. The Safety bullet below states the amended decision.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -138,8 +143,14 @@
     by Jun on 2026-10-24 (lead decision D14).
   - **Safety.** Per-app approvals and a time-bounded control lease. Unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
-    Stop and the global kill switch end the transport at once. Human input on a shared desktop
-    pauses the agent and marks it waiting for the person.
+    Stop and the global kill switch end the transport at once. An agent with approved control
+    keeps working while a person uses the same desktop; the person's keyboard and pointer input
+    is not a pause condition. Stop, stop all, takeover and hand-back, lease expiry and the
+    private-field pause still stop or pause it. Unattended attachment requires private-mode
+    detection and does not require human-input detection, which opens the macOS unattended path
+    that #1426 had closed by turning off the human-input advertisement. Human-input detection
+    (#1426, #1477, #1504, #1512) remains for input arbitration and reports; it is neither an
+    admission gate nor a pause condition. Owner decision (Jun, 2026-10-25), #1550.
   - **Parity.** Every platform implements every protocol method or returns a typed `unsupported`;
     tests enforce the matrix in the design doc.
   - **Packaging and updates.** Inner executables are signed first, then the helper, then GOAT.app,

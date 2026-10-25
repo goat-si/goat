@@ -41,6 +41,8 @@ export const layerInteractive = (input: {
           threadId,
           expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
         }),
+      // Turns here keep their run open.
+      turnEnded: () => Effect.succeed(false),
     }),
   );
 

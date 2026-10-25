@@ -161,6 +161,12 @@ export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
   readonly live: boolean;
   readonly size?: "card" | "large" | undefined;
+  /**
+   * This desktop draws the browser tab in a <webview> that paints only while on screen. A card
+   * streaming it parked would stay empty and hold an agent's snapshot behind a still that never
+   * comes, so the card names it and opening it shows the webview itself.
+   */
+  readonly drawnHere?: boolean | undefined;
   /** The large browser view's stream, for Take over and Hand back. */
   readonly surfaceRef?: RefObject<ServerBrowserHandle | null> | undefined;
   readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
@@ -185,6 +191,14 @@ export function PreviewSessionThumbnail(props: {
       <Placeholder
         icon="lock"
         text={`No computer use yet. ${session.target.kind === "desktop" ? session.target.title : "Allow it"}${session.reason === "permissionsNotGranted" || session.reason === undefined ? " (System Settings > Privacy & Security)" : ""}.`}
+      />
+    );
+  if (props.drawnHere && session.target.kind === "browser")
+    return (
+      <Placeholder
+        icon="globe"
+        text={stopped ? undefined : "Open to watch"}
+        className={stopped ? "opacity-50" : undefined}
       />
     );
   if (
