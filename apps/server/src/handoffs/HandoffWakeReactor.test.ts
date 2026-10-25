@@ -412,6 +412,53 @@ it.effect(
 );
 
 it.effect(
+  "interrupts an approval wake that started its turn only after a person ended the grant",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* TestClock.adjust("1 second");
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        // Before the reactor hears of the end, the thread's turn ends and the wake starts.
+        yield* TestClock.adjust("1 second");
+        yield* world.orchestrator.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("stop-first"),
+          threadId,
+        });
+        yield* world.worker.drain();
+        const wake = `message:handoff-wake:${approved.handoffId}:completed`;
+        yield* world.orchestrator.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make("resume-queue"),
+          threadId,
+        });
+        yield* world.worker.drain();
+        const started = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === wake,
+        );
+        expect(["running", "waiting", "starting"]).toContain(started?.status);
+        yield* world.reactor.reconcile;
+        yield* world.worker.drain();
+        const after = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === wake,
+        );
+        expect(after?.status).toBe("interrupted");
+      }),
+    ),
+);
+
+it.effect(
   "stays quiet when a person ends an approved computer use grant whose approval wake failed",
   () =>
     withWorld((world) =>

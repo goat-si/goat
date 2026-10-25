@@ -107,6 +107,23 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
           ({ control }) => control.threadId === threadId,
         );
         assert.deepEqual(listed?.state, { _tag: "ended", reason: "stopped" });
+        // A turn whose attachment was already under way finishes after the Stop and mints a new
+        // control: the stopped card still stays, beside it (WS9's vanished stack).
+        const late = yield* leases.control(threadId, Option.none());
+        const afterLate = (yield* leases.sessions).filter(
+          ({ control }) => control.threadId === threadId,
+        );
+        assert.deepEqual(
+          afterLate.map(({ control, state }) => [control.controlId === late.controlId, state._tag]),
+          [
+            [false, "ended"],
+            [true, "active"],
+          ],
+        );
+        assert.equal(
+          afterLate[0]?.state._tag === "ended" ? afterLate[0].state.reason : undefined,
+          "stopped",
+        );
         assert.equal(
           (yield* service.read({ threadId, handoffId: held.handoffId })).state,
           "cancelled",
