@@ -145,6 +145,10 @@ describe("cuaDriverManifest", () => {
       // Linux, by executable with no desktop entry.
       { bundle_id: null, name: "proton-pass", executable: "/opt/proton-pass/proton-pass" },
       { bundle_id: null, name: "nordpass", executable: "/snap/nordpass/current/nordpass" },
+      // Snap desktop ids and Windows AUMIDs join words with "_", with an unhelpful name.
+      { bundle_id: "nordpass_nordpass", name: "Vault" },
+      { bundle_id: "proton-pass_proton-pass", name: "Vault" },
+      { bundle_id: "ProtonPass_6qsfpqg5m1w4e!App", name: "Vault" },
       // Neighbours that are not credential stores stay admitted.
       { bundle_id: "ch.protonmail.desktop", name: "Proton Mail" },
       { bundle_id: "com.example.compass", name: "Compass" },
