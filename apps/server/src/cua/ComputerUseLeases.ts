@@ -47,6 +47,7 @@ import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import { markActed, nextTurn } from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
@@ -378,11 +379,9 @@ const make = Effect.gen(function* () {
       existing.everyApp === everyApp &&
       DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
     ) {
-      const { idle, ...rest } = existing;
-      const reused: ControlRecord = { ...rest, uses: existing.uses + 1 };
+      const reused: ControlRecord = { ...nextTurn(existing), uses: existing.uses + 1 };
       controls.set(threadId, reused);
-      // The session list hid it while idle; it shows again for this turn.
-      if (idle === true) yield* changed;
+      if (existing.idle === true) yield* changed;
       return reused as ComputerUseControl;
     }
     const next: ControlRecord = {
@@ -805,6 +804,7 @@ const make = Effect.gen(function* () {
           const call =
             request.action === "validate" ? reservations.lookup(threadId, request) : request;
           if (call === undefined) return { status: "refused", detail: "replaced" } as const;
+          if (request.action === "reserve" && markActed(controls, threadId, call)) yield* changed;
           const before = controls.get(threadId);
           const state = yield* controlState(threadId, call.controlId);
           const now = DateTime.toEpochMillis(yield* DateTime.now);

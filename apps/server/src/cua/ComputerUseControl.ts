@@ -21,9 +21,40 @@ export interface ComputerUseControl {
    * the proxy, but no agent can act on it until then.
    */
   readonly idle?: boolean;
+  /** An agent's call asked to act through it this turn; until then no card shows it (#1360). */
+  readonly acted?: boolean;
   /** The window the agent's latest admitted call named, as its proxy reported it. */
   readonly target?: { readonly pid: number; readonly windowId: number };
 }
+
+/**
+ * Marks the thread's live control as asked to act through by an agent's call this turn; false
+ * when it is not live or already marked. Until then the session list shows no card for it.
+ */
+export const markActed = <C extends ComputerUseControl & { readonly ended?: unknown }>(
+  controls: Map<ThreadId, C>,
+  threadId: ThreadId,
+  call: { readonly controlId: string },
+) => {
+  const control = controls.get(threadId);
+  if (
+    control?.controlId !== call.controlId ||
+    control.ended !== undefined ||
+    control.idle === true ||
+    control.acted === true
+  )
+    return false;
+  controls.set(threadId, { ...control, acted: true });
+  return true;
+};
+
+/**
+ * A control as a new turn takes it up: active again, so the session list that hid it while idle
+ * may show it, and unmarked if it sat idle between turns, since that turn has not asked for the
+ * screen yet. A stopped card keeps its mark while idle.
+ */
+export const nextTurn = <C extends ComputerUseControl>({ idle, acted, ...rest }: C) =>
+  idle !== true && acted === true ? { ...rest, acted } : rest;
 
 export type ComputerUseControlState =
   | {

@@ -148,6 +148,9 @@ export const desktopSession = (
   if (state._tag === "ended" && state.reason !== "stopped" && state.reason !== "stopped_all")
     return undefined;
   if (state._tag !== "ended" && control.idle === true) return undefined;
+  // A turn's provider gets a control whether or not its agent touches the screen; one that only
+  // opened a browser tab would otherwise show a second, empty card beside it.
+  if (control.acted !== true) return undefined;
   const reason: ComputerUseRefusalReason | undefined =
     state._tag === "ended"
       ? "userStoppedSession"
