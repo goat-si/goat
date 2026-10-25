@@ -43,6 +43,7 @@ const CONTEXT_CHIP_PRESENTATIONS = {
     accent: "#009c96",
     icon: "messages-square",
   },
+  capability: { accent: "#3f9a55", icon: "monitor" },
 } as const satisfies Record<string, ContextChipPresentation>;
 
 const CHIP_CONTRAST = 5;
@@ -107,6 +108,7 @@ export function contextChipPresentation(
     readonly name?: string;
     readonly mimeType?: string;
     readonly sectionId?: string;
+    readonly capability?: string;
     readonly pullRequest?: {
       readonly state?: string;
       readonly isDraft?: boolean;
@@ -126,6 +128,9 @@ export function contextChipPresentation(
         : kind === "review-comment" && record?.sectionId?.startsWith("pull-request:")
           ? "pull-request"
           : kind;
+  if (presentationKind === "capability" && record?.capability === "browser") {
+    return { ...CONTEXT_CHIP_PRESENTATIONS.capability, icon: "globe" };
+  }
   if (presentationKind === "pull-request") {
     const pullRequest = record?.pullRequest;
     const state =

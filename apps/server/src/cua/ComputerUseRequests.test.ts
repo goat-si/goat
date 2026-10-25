@@ -148,22 +148,28 @@ const withRequests = <A, E, R>(
   );
 
 it.effect(
-  "work that runs on its own is refused unless the helper reports both safety signals supported",
+  "work that runs on its own requires private-field detection but not human-input detection",
   () =>
     withHarness(({ orchestrator }) =>
       Effect.gen(function* () {
         for (const signals of [
           undefined,
           { humanInput: "unsupported", privateMode: "unsupported" },
+          { humanInput: "unsupported", privateMode: "unsupported" },
           { humanInput: "supported", privateMode: "unsupported" },
-          { humanInput: "unsupported", privateMode: "supported" },
         ] satisfies ReadonlyArray<Signals | undefined>) {
           const result = yield* withRequests(orchestrator, signals, ({ request }) => request());
           assert.equal(result.kind, "refused", JSON.stringify(signals));
           if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
         }
-        const allowed = yield* withRequests(orchestrator, supported, ({ request }) => request());
-        assert.equal(allowed.kind, "needs_human");
+        for (const humanInput of ["supported", "unsupported"] as const) {
+          const allowed = yield* withRequests(
+            orchestrator,
+            { humanInput, privateMode: "supported" },
+            ({ request }) => request(),
+          );
+          assert.equal(allowed.kind, "needs_human");
+        }
       }),
     ),
 );
@@ -415,7 +421,7 @@ it.effect(
             return yield* fresh.foregroundAvailable(threadId, purpose);
           }).pipe(Effect.provide(Layer.fresh(leasesDetecting(supported))));
           assert.isFalse(afterRestart);
-          yield* leases.pause("human_input");
+          yield* leases.pause("takeover");
           yield* leases.resume;
           yield* handoffs.respond({ ...address, action: "completed" }, sessionId);
           assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));

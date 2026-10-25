@@ -562,13 +562,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     ownerKey: composerDraftKey,
     environmentId: props.environmentId,
     threadShells: useThreadShells(),
-    currentThreadId: props.selectedThread.id,
+    thread: props.selectedThread,
     projectCwd: props.projectCwd,
     pullRequestProjectId: props.serverConfig?.environment.capabilities.pullRequests
       ? (project?.id ?? null)
       : null,
     pullRequestRepository: project?.repositoryIdentity?.displayName ?? null,
-    threadPullRequests: props.selectedThread.pullRequests,
     selectedProviderStatus,
     serverSettings: props.serverConfig?.settings ?? null,
     hasThread: !props.isDraft,

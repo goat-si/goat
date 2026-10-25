@@ -189,10 +189,9 @@ export class ComputerUseLeases extends Context.Service<
     /**
      * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
      * one in time order (#1488). An event another agent's input of the same kind covers is
-     * dropped, and so is one too old or too far from now to judge; the first that is left pauses
-     * every agent on the host, as for the desktop's report. "agents" when none paused anyone.
-     * Refused when the control is not the thread's live one, so an old proxy cannot pause anyone,
-     * and when not one event could be judged.
+     * dropped, and so is one too old or too far from now to judge. A person's input does not
+     * pause admitted work. "agents" when an event was judged, including a person's.
+     * Refused when the control is not the thread's live one or no event could be judged.
      */
     readonly humanInput: (
       threadId: ThreadId,
@@ -227,7 +226,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly disable: Effect.Effect<void>;
     /** Every live grant on this host, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
-    /** Which safety reports this host's helper sends; unattended turns need both. */
+    /** Which safety reports this host's helper sends; unattended turns need private mode. */
     readonly detection: Effect.Effect<ComputerUseDetection>;
     /** Holds every control on this host until resume. */
     readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
@@ -568,7 +567,8 @@ const make = Effect.gen(function* () {
   const readinessReport = Effect.gen(function* () {
     const reported = Option.isSome(desktop) ? yield* desktop.value.cuaReadiness : Option.none();
     if (Option.isSome(reported) || Option.isNone(linuxHelper)) return reported;
-    return yield* linuxHelper.value.readiness;
+    // Only the helper that runs with the driver watches; a setup check never counts (#1542).
+    return yield* linuxHelper.value.liveReadiness;
   });
   const fromDesktop: Effect.Effect<ComputerUseDetection> = readinessReport.pipe(
     Effect.map(
@@ -596,7 +596,8 @@ const make = Effect.gen(function* () {
   if (safetyReports.length > 0)
     yield* Stream.mergeAll(safetyReports, { concurrency: "unbounded" }).pipe(
       Stream.runForEach((report) => {
-        if (report.type === "cuaHumanInput") return pause("human_input");
+        // Admitted work continues while a person uses the computer. Secret fields still pause.
+        if (report.type === "cuaHumanInput") return Effect.void;
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
           if (report.active && !privateHost) {
@@ -881,8 +882,7 @@ const make = Effect.gen(function* () {
           if (!agentInputs.remembers(at, now)) continue;
           judged = true;
           if (isAgents(at, source)) continue;
-          yield* pause("human_input");
-          return "paused" as const;
+          return "agents" as const;
         }
       }
       return judged ? ("agents" as const) : ("refused" as const);

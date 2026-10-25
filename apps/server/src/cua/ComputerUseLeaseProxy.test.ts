@@ -364,7 +364,7 @@ describe("ComputerUseLeaseProxy", () => {
   );
 
   it.effect(
-    "pauses for a person's input: kills the call in flight, refuses until handed back, then restarts the driver",
+    "pauses for an explicit takeover: kills the call in flight, refuses until handed back, then restarts the driver",
     () =>
       Effect.gen(function* () {
         const h = yield* harness();
@@ -385,7 +385,7 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(1, "drag", { pid: 4, window_id: 9 }));
         assert.equal((yield* h.nextToDriver).id, 1);
 
-        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
         yield* h.killed;
         assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
         // The drag was already with the driver: it may have moved something, so no refusal.
@@ -400,7 +400,7 @@ describe("ComputerUseLeaseProxy", () => {
         const waiting = {
           jsonrpc: "2.0",
           result: {
-            content: [{ type: "text", text: PAUSE_MESSAGES.human_input }],
+            content: [{ type: "text", text: PAUSE_MESSAGES.takeover }],
             structuredContent: { refused: "userIntervened", detail: "waiting_for_human" },
             isError: true,
           },

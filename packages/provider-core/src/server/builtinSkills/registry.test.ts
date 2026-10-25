@@ -63,6 +63,14 @@ describe("built-in skill activation", () => {
 });
 
 describe("computer use skill text", () => {
+  it("continues through human input while preserving takeover and private-field stops", () => {
+    const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
+    expect(guidance).toContain("Keep working while the person uses their keyboard or pointer");
+    expect(guidance).toContain("An explicit takeover pause says `userIntervened`");
+    expect(guidance).toContain("password, one-time code, payment and passkey fields are private");
+    expect(guidance).not.toContain("the person's own keyboard or pointer where GOAT can detect it");
+  });
+
   it("fits every section into one Codex context entry on every host", () => {
     for (const platform of PLATFORMS)
       for (const section of builtInSkillSections(["computer-use"], platform))

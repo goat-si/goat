@@ -227,7 +227,7 @@ describe("foreground approval authority", () => {
         yield* runMigrations();
         const { leases, control } = yield* controlWithForeground(thread);
         const grant = yield* foregroundGrant(thread, "handoff:paused");
-        yield* leases.pause("human_input");
+        yield* leases.pause("takeover");
         yield* leases.resume;
         yield* leases.approveForeground(grant, yield* leases.foregroundApprovalEpoch);
         const state = yield* leases.controlState(thread, control.controlId);

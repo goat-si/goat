@@ -13,7 +13,8 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
 
 /**
  * The guarantee of the server's log redaction (#1388), in every sink serverLogger installs (console,
- * tracer span events, OTLP log records) and in DefectReporter's output:
+ * tracer span events, OTLP log records), in DefectReporter's output, and in the cause of a failed
+ * span, which the server tracer records and exports only through redactCause (Observability.ts):
  * - Masked whole: GOAT MCP credentials; bare JWT and JWE tokens; Authorization header values
  *   (Bearer, Basic or any scheme); Cookie and Set-Cookie headers; and the values of JSON fields,
  *   structured log fields and key=value assignments whose name is in the fixed CREDENTIAL_KEY list
@@ -28,8 +29,8 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
  * Secrets of any other shape are outside it. Memory text is redacted separately, before its
  * operation digest (memory/MemorySecretScanner.ts).
  * Also outside it, tracked in #1529: field names in JSON escaped more than once, URL userinfo split
- * across lines, the cause of a failed span exported to traces (packages/shared observability.ts),
- * direct console writes, and memories stored or received signed before a shape was recognized.
+ * across lines, direct console writes, and memories stored or received signed before a shape was
+ * recognized.
  */
 
 const DEFECT_SUMMARY_MAX_CHARS = 2_000;
@@ -86,12 +87,53 @@ const MAX_STACK_CHARS = 8_000;
  * any redaction, so the frames are rendered here instead and redacted with the rest.
  */
 export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> => {
-  const { reasons, total } = reasonSnapshot(cause);
+  const { listed, reasons, total } = reasonSnapshot(cause);
   const redacted = reasons.map(redactReason);
-  if (total > reasons.length)
-    redacted.push(Cause.makeDieReason(new Error(`${total - reasons.length} more reasons omitted`)));
+  if (total > reasons.length) redacted.push(...omittedReasons(listed, reasons.length, total));
   return Cause.fromReasons(redacted);
 };
+
+/**
+ * One marker per kind among the reasons past the first few, so the redacted cause is still a
+ * failure, a defect or interrupt-only as the original was, judged by its first MAX_VISITED_REASONS
+ * reasons. Kinds are read through descriptors.
+ */
+function omittedReasons(
+  listed: unknown,
+  from: number,
+  total: number,
+): Array<Cause.Reason<unknown>> {
+  const visited = Math.min(total, MAX_VISITED_REASONS);
+  const omitted = { Fail: 0, Die: 0, Interrupt: 0 };
+  const seen = new Set<keyof typeof omitted>();
+  for (let index = 0; index < visited; index++) {
+    const tag = dataProperty(dataProperty(listed, index), "_tag");
+    // redactReason shows a reason of unknown kind as a defect.
+    const kind = tag === "Fail" || tag === "Interrupt" ? tag : "Die";
+    seen.add(kind);
+    if (index >= from) omitted[kind] += 1;
+  }
+  const markers: Array<Cause.Reason<unknown>> = [];
+  if (omitted.Fail > 0)
+    markers.push(Cause.makeFailReason(new Error(`${omitted.Fail} more failures omitted`)));
+  if (omitted.Die > 0)
+    markers.push(Cause.makeDieReason(new Error(`${omitted.Die} more defects omitted`)));
+  if (total > visited) {
+    // A list's length costs nothing to forge, so the tail past the bound is never walked. It is
+    // reported as the gravest kind already read, which keeps the classification of every cause
+    // whose tail holds no kind its first MAX_VISITED_REASONS lacked.
+    const unread = new Error(`${total - visited} more reasons not inspected`);
+    markers.push(
+      seen.has("Die")
+        ? Cause.makeDieReason(unread)
+        : seen.has("Fail")
+          ? Cause.makeFailReason(unread)
+          : Cause.makeInterruptReason(),
+    );
+  }
+  if (omitted.Interrupt > 0) markers.push(Cause.makeInterruptReason());
+  return markers;
+}
 
 /**
  * Each Die reason of a reported cause as its own redacted cause, skipping defects Effect marks as
@@ -178,6 +220,7 @@ function ignoredDefect(
  * its list can run code that shows a sink something other than what is redacted here.
  */
 function reasonSnapshot(cause: Cause.Cause<unknown>): {
+  readonly listed: unknown;
   readonly reasons: Array<unknown>;
   readonly total: number;
 } {
@@ -186,7 +229,7 @@ function reasonSnapshot(cause: Cause.Cause<unknown>): {
   const reasons: Array<unknown> = [];
   for (let index = 0; index < Math.min(total, MAX_REASONS); index++)
     reasons.push(dataProperty(listed, index));
-  return { reasons, total };
+  return { listed, reasons, total };
 }
 
 /** An own data property's value; a getter, a missing property or a throwing object give nothing. */
@@ -306,8 +349,21 @@ function inspectError(
       `\n${stack}`;
   // Redacted in one pass with its header, so a header value folded onto the next line stays hidden.
   const stackText = afterHeader.trim().length === 0 ? header : `${header}${afterHeader}`;
-  error.stack = bounded(`${redactLogText(stackText)}${frames}`, MAX_STACK_CHARS);
+  const redactedStack = withoutEffectInternals(redactLogText(stackText), `${name}: ${message}`);
+  error.stack = bounded(`${redactedStack}${frames}`, MAX_STACK_CHARS);
   return error;
+}
+
+// Effect stops printing a stack at its first internal frame (cleanErrorStack in effect's
+// internal/effect.ts), so span frames appended after one would never be shown.
+const EFFECT_INTERNAL_FRAME = /Generator\.next|~effect\/(?:Effect|Utils)/;
+
+/** A redacted stack cut where Effect's renderer would cut it; the header is never cut. */
+function withoutEffectInternals(stack: string, header: string): string {
+  const headerLength = stack.startsWith(header) ? header.length : 0;
+  const lines = stack.slice(headerLength).split("\n");
+  const end = lines.findIndex((line, index) => index > 0 && EFFECT_INTERNAL_FRAME.test(line));
+  return end === -1 ? stack : `${stack.slice(0, headerLength)}${lines.slice(0, end).join("\n")}`;
 }
 
 const MAX_FRAMES = 10;
