@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
+import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 
 const INITIALIZE = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
@@ -23,12 +23,19 @@ const setup = (listing: () => unknown = () => ({ tools: [] })) =>
     let open = true;
     let starts = 0;
     let own = 0;
+    let afterSend: (message: Record<string, unknown>) => void = () => {};
+    const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
     const handshake = [INITIALIZE];
     const answerer = makeLeaseProxyHandshake({
       handshake,
       ownId: (kind) => "goat-proxy:" + kind + ":" + own++,
-      output: (line) => Effect.sync(() => void sent.push(JSON.parse(line))),
-      ownAnswers: new Map<string, Deferred.Deferred<Envelope | undefined>>(),
+      output: (line) =>
+        Effect.sync(() => {
+          const message = JSON.parse(line);
+          sent.push(message);
+          afterSend(message);
+        }),
+      ownAnswers,
       ended,
       endAnswer: (id, _method, reason) => JSON.stringify({ id, ended: reason }),
       startDriver: Effect.gen(function* () {
@@ -59,6 +66,8 @@ const setup = (listing: () => unknown = () => ({ tools: [] })) =>
       sent,
       ended,
       gate,
+      ownAnswers,
+      afterSend: (hook: (message: Record<string, unknown>) => void) => void (afterSend = hook),
       hold: () => void (open = false),
       starts: () => starts,
     };
@@ -146,6 +155,76 @@ describe("handshake answers while computer use is paused (#1622)", () => {
       assert.deepEqual(s.sent, [
         { jsonrpc: "2.0", id: 5, result: { tools: [{ name: "list 2" }] } },
       ]);
+    }),
+  );
+
+  it.effect(
+    "a cached tools/list answer is the newest list when it runs, not when it was asked",
+    () =>
+      Effect.gen(function* () {
+        const { answerer, sent } = yield* setup();
+        const listed = (id: number, name: string) =>
+          parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+          assert.fail("a listing parses");
+        answerer.remember("tools/list", listed(2, "old"));
+        const answer = answerer.answerCached(3, "tools/list");
+        assert.isDefined(answer);
+        // A resumed child's newer list lands between the request and its answer.
+        answerer.remember("tools/list", listed(4, "new"));
+        yield* answer ?? Effect.void;
+        assert.deepEqual(sent.at(-1), {
+          jsonrpc: "2.0",
+          id: 3,
+          result: { tools: [{ name: "new" }] },
+        });
+      }),
+  );
+
+  it.effect("a newer list landing while a cached answer is written is announced again", () =>
+    Effect.gen(function* () {
+      const s = yield* setup();
+      const listed = (id: number, name: string) =>
+        parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+        assert.fail("a listing parses");
+      s.answerer.remember("tools/list", listed(2, "old"));
+      // The refresh lands after the old list was read, as the reply goes out.
+      s.afterSend((message) => {
+        if (message.id === 3) s.answerer.remember("tools/list", listed(4, "new"));
+      });
+      yield* s.answerer.answerCached(3, "tools/list") ?? Effect.void;
+      assert.deepEqual(s.sent, [
+        { jsonrpc: "2.0", id: 3, result: { tools: [{ name: "old" }] } },
+        { jsonrpc: "2.0", method: "notifications/tools/list_changed" },
+      ]);
+    }),
+  );
+
+  it.effect("a recheck before a requested cached answer is written still runs", () =>
+    Effect.gen(function* () {
+      const s = yield* setup();
+      const listed = (id: string | number, name: string) =>
+        parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+        assert.fail("a listing parses");
+      s.answerer.remember("tools/list", listed(2, "old"));
+      const answer = s.answerer.answerCached(3, "tools/list");
+      // The new driver's recheck asks for its list and gets a different one.
+      yield* s.answerer.recheck((line) =>
+        Effect.gen(function* () {
+          const id = String(JSON.parse(line).id);
+          const answered = s.ownAnswers.get(id) ?? assert.fail("the recheck awaits its answer");
+          yield* Deferred.succeed(answered, listed(id, "new"));
+        }),
+      );
+      assert.deepEqual(s.sent.at(-1), {
+        jsonrpc: "2.0",
+        method: "notifications/tools/list_changed",
+      });
+      yield* answer ?? Effect.void;
+      assert.deepEqual(s.sent.at(-1), {
+        jsonrpc: "2.0",
+        id: 3,
+        result: { tools: [{ name: "new" }] },
+      });
     }),
   );
 });
