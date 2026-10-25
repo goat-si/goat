@@ -122,8 +122,8 @@ export const forwardHelperInput = Effect.fn("agentInputReports.forwardHelperInpu
     yield* options.events.pipe(
       Stream.runForEach((input) =>
         Effect.suspend(() => {
-          if (!unsent.some((event) => event.source === input.source && event.at === input.at))
-            unsent.push({ source: input.source, at: input.at });
+          // Two events can share a kind and a millisecond; each is one the server must judge.
+          unsent.push({ source: input.source, at: input.at });
           return Queue.offer(wake, undefined);
         }),
       ),

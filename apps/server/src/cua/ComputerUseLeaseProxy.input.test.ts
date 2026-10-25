@@ -111,6 +111,22 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
       }),
   );
 
+  it.effect("events of one kind in the same millisecond each reach the server, none merged", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ humanInput: true, acceptHuman: () => false, humanGate: gate });
+      yield* h.push(active());
+      yield* h.hid("pointer");
+      assert.equal(yield* h.person, "pointer");
+      // The proxy dates helper lines to the millisecond, so a burst shares one time.
+      for (let move = 0; move < 40; move++) yield* h.hid("pointer");
+      yield* Deferred.succeed(gate, undefined);
+      const reported: Array<string> = [];
+      while (reported.length < 40) reported.push(yield* h.person);
+      assert.lengthOf(reported, 40);
+    }),
+  );
+
   it.effect(
     "under a sustained stream and a slow server, a person's key goes in the report after the one in flight",
     () =>

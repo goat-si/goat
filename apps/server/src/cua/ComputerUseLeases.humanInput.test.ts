@@ -309,3 +309,29 @@ it.effect(
       });
     }).pipe(Effect.provide(freshLeases)),
 );
+
+it.effect(
+  "a person's key after the first chunk of a large batch still pauses, judged against the log as it is then",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* leases.stopAll;
+      const mine = yield* leases.control(thread, Option.none());
+      const bots = yield* leases.control(other, Option.none());
+      yield* TestClock.adjust(30_000);
+      yield* leases.agentInput(other, bots.controlId, {
+        call: "11",
+        state: "start",
+        at: 30_000,
+        kinds: ["pointer"],
+      });
+      const moves = Array.from({ length: 300 }, (_, index) => ({
+        at: 30_000 + index * 4,
+        source: "pointer" as const,
+      }));
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, moves), "agents");
+      const key = { at: 31_190, source: "keyboard" as const };
+      assert.equal(yield* leases.humanInput(thread, mine.controlId, [...moves, key]), "paused");
+    }).pipe(Effect.provide(freshLeases)),
+);
