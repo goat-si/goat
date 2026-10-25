@@ -62,14 +62,15 @@ jobs:
             args:
               - --filter=@goat/marketing...
 
-      # --no-cache: the task cache does not track these variables, so a cached build could
-      # carry another base path.
+      # The package script runs directly: `vp run` loads every workspace package's config, and the
+      # filtered install leaves apps/server's config unresolvable.
       - name: Build
+        working-directory: apps/marketing
         env:
           MARKETING_SITE_URL: https://goat-si.github.io
           MARKETING_BASE_PATH: /goat
           MARKETING_NOINDEX: "1"
-        run: vp run --no-cache --filter @goat/marketing build
+        run: node --run build
 
       # Pages runs Jekyll unless the site root has .nojekyll, and Jekyll drops the _astro directory.
       - name: Mark the site as prebuilt
