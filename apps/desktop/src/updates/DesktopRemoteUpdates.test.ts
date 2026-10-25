@@ -59,7 +59,7 @@ function runRemoteUpdatesTest(
         encoded: Stream.empty,
         encodedForSource: () => Stream.empty,
         cuaAppsRequests: Stream.empty,
-        publishCuaApps: () => Effect.void,
+        takeCuaAppsRequests: Effect.succeed({ requestIds: [], publish: () => Effect.void }),
         cuaRequests: Stream.empty,
         cuaWatch: Stream.empty,
         cuaWatchApps: Stream.empty,

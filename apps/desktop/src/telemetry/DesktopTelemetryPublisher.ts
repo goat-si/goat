@@ -1,7 +1,6 @@
 import {
   DesktopHostTelemetryMessage,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
-  type DesktopCuaAppsRequest,
   type DesktopCuaAppsReport,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
@@ -41,6 +40,7 @@ const CONSTRAINED_SAMPLE_INTERVAL = Duration.seconds(15);
 const DEFAULT_HOST_POWER_ACTIVE_INTERVAL = Duration.seconds(30);
 const DEFAULT_HOST_POWER_IDLE_INTERVAL = Duration.minutes(2);
 const IDLE_THRESHOLD_SECONDS = 60;
+const MAX_PENDING_CUA_APP_REQUESTS = 32;
 const encodeMessage = Schema.encodeSync(Schema.fromJsonString(DesktopHostTelemetryMessage));
 const textEncoder = new TextEncoder();
 
@@ -75,8 +75,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
     readonly changes: Stream.Stream<DesktopHostTelemetrySnapshot>;
     readonly encoded: Stream.Stream<Uint8Array>;
     readonly encodedForSource: (sourceId: string) => Stream.Stream<Uint8Array>;
-    readonly cuaAppsRequests: Stream.Stream<DesktopCuaAppsRequest>;
-    readonly publishCuaApps: (report: DesktopCuaAppsReport) => Effect.Effect<void>;
+    readonly cuaAppsRequests: Stream.Stream<void>;
+    readonly takeCuaAppsRequests: Effect.Effect<{
+      readonly requestIds: ReadonlyArray<string>;
+      readonly publish: (report: DesktopCuaAppsReport) => Effect.Effect<void>;
+    }>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
     /**
      * Whether agents control this host, as this host's own server last said: the current value,
@@ -217,7 +220,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateRequestQueue = yield* Queue.unbounded<DesktopTelemetryRequestDesktopUpdate>();
   const updateCommitQueue = yield* Queue.unbounded<DesktopTelemetryCommitDesktopUpdate>();
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
-  const cuaAppsRequestQueue = yield* Queue.unbounded<DesktopCuaAppsRequest>();
+  const cuaAppsRequestWake = yield* Queue.sliding<void>(1);
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   // Readiness is state: a connection that falls behind needs only the newest report.
@@ -271,6 +274,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   ) {
     if (cuaSource !== source) return;
     cuaSource = undefined;
+    source.appRequestIds.clear();
     // No server, no agent controlling this host through it.
     yield* setCuaWatching(false);
     yield* setCuaWatchApps([]);
@@ -435,7 +439,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         return Effect.suspend(() => {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
           cuaSource.appRequestIds.add(message.requestId);
-          return Queue.offer(cuaAppsRequestQueue, message).pipe(Effect.asVoid);
+          if (cuaSource.appRequestIds.size > MAX_PENDING_CUA_APP_REQUESTS) {
+            const oldest = cuaSource.appRequestIds.values().next().value;
+            // Dropped requests time out on the server and keep the existing approval behavior.
+            if (oldest !== undefined) cuaSource.appRequestIds.delete(oldest);
+          }
+          return Queue.offer(cuaAppsRequestWake, undefined).pipe(Effect.asVoid);
         });
       case "cuaDriverRequest":
         return Effect.suspend(() => {
@@ -608,13 +617,22 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     changes: Stream.fromPubSub(changes),
     encoded,
     encodedForSource,
-    cuaAppsRequests: Stream.fromQueue(cuaAppsRequestQueue),
-    publishCuaApps: (report) =>
-      Effect.suspend(() =>
-        cuaSource?.appRequestIds.delete(report.requestId)
-          ? PubSub.publish(cuaSource.reports, report).pipe(Effect.asVoid)
-          : Effect.void,
-      ),
+    cuaAppsRequests: Stream.fromQueue(cuaAppsRequestWake),
+    takeCuaAppsRequests: Effect.sync(() => {
+      const source = cuaSource;
+      const pending = new Set(source?.appRequestIds);
+      source?.appRequestIds.clear();
+      return {
+        requestIds: [...pending],
+        // Capture the connection too: a replacement server can reuse the same request id.
+        publish: (report) =>
+          Effect.suspend(() =>
+            source !== undefined && cuaSource === source && pending.delete(report.requestId)
+              ? PubSub.publish(source.reports, report).pipe(Effect.asVoid)
+              : Effect.void,
+          ),
+      };
+    }),
     cuaRequests: Stream.fromQueue(cuaRequestQueue),
     cuaWatch: Stream.unwrap(
       Effect.gen(function* () {

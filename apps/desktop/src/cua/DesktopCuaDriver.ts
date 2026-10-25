@@ -2,7 +2,6 @@ import {
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
-  type DesktopCuaAppsRequest,
   type DesktopCuaDriverRequest,
   type DesktopCuaGrants,
   type DesktopCuaVerification,
@@ -309,9 +308,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       ? () => native.helperApps(engine.bundle, environment.platform)
       : undefined;
 
-  const handleAppsRequest = Effect.fn("desktop.cua.appsRequest")(function* (
-    request: DesktopCuaAppsRequest,
-  ) {
+  const handleAppsRequest = Effect.fn("desktop.cua.appsRequest")(function* () {
+    const batch = yield* publisher.takeCuaAppsRequests;
+    if (batch.requestIds.length === 0) return;
     const apps = yield* Effect.gen(function* () {
       if (
         closed ||
@@ -342,14 +341,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return apps.length <= 1000 ? apps : undefined;
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (!closed)
-      yield* publisher.publishCuaApps({
-        version: 1,
-        type: "cuaApps",
-        requestId: request.requestId,
-        ...(apps === undefined
-          ? { status: "unavailable" as const }
-          : { status: "listed" as const, apps }),
-      });
+      for (const requestId of batch.requestIds)
+        yield* batch.publish({
+          version: 1,
+          type: "cuaApps",
+          requestId,
+          ...(apps === undefined
+            ? { status: "unavailable" as const }
+            : { status: "listed" as const, apps }),
+        });
   });
 
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {

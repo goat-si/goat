@@ -3,7 +3,6 @@ import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
   DesktopCuaAppsReport,
-  DesktopCuaAppsRequest,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
   DesktopCuaPrivateModeReport,
@@ -113,9 +112,12 @@ export const fixture = Effect.fn(function* (
     helperAppsFail?: boolean;
     /** The app update puts a new helper generation beside the one already running. */
     updatedHelper?: boolean;
+    publisher?: DesktopTelemetryPublisher["Service"];
+    appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
 ) {
-  const appRequests = yield* Queue.unbounded<DesktopCuaAppsRequest>();
+  const appRequests = yield* Queue.sliding<void>(1);
+  const pendingAppRequests = new Set<string>();
   const appReports = yield* Queue.unbounded<DesktopCuaAppsReport>();
   let computerUseEnabled = true;
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -368,7 +370,7 @@ export const fixture = Effect.fn(function* (
     helperApps: async (bundle) => {
       helperAppListings.push(bundle.bundleId);
       if (appListingFails) throw new Error("driver_untrusted");
-      return listedApps;
+      return options.appListing ? options.appListing() : listedApps;
     },
     processId: HOST_PID,
     executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
@@ -457,7 +459,15 @@ export const fixture = Effect.fn(function* (
     updateCancellations: Stream.empty,
     publishUpdateReport: () => Effect.void,
     cuaAppsRequests: Stream.fromQueue(appRequests),
-    publishCuaApps: (report) => Queue.offer(appReports, report).pipe(Effect.asVoid),
+    takeCuaAppsRequests: Effect.sync(() => {
+      const requestIds = [...pendingAppRequests];
+      pendingAppRequests.clear();
+      return {
+        requestIds,
+        publish: (report: DesktopCuaAppsReport) =>
+          Queue.offer(appReports, report).pipe(Effect.asVoid),
+      };
+    }),
     cuaRequests: Stream.fromQueue(requests),
     cuaWatch: Stream.fromQueue(watching),
     cuaWatchApps: Stream.fromQueue(approvals).pipe(
@@ -499,13 +509,15 @@ export const fixture = Effect.fn(function* (
     ),
   );
   const driver = yield* make(dependencies).pipe(
-    Effect.provideService(DesktopTelemetryPublisher, publisher),
+    Effect.provideService(DesktopTelemetryPublisher, options.publisher ?? publisher),
     Effect.provide(environment),
   );
   yield* driver.listen;
   return {
     requestApps: (requestId: string) =>
-      Queue.offer(appRequests, { version: 1, type: "cuaAppsRequest", requestId }),
+      Effect.sync(() => {
+        pendingAppRequests.add(requestId);
+      }).pipe(Effect.andThen(Queue.offer(appRequests, undefined))),
     nextApps: Queue.take(appReports),
     setComputerUseEnabled: (enabled: boolean) =>
       Effect.sync(() => {
