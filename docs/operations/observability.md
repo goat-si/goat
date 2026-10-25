@@ -267,7 +267,7 @@ state under the base directory's `userdata` folder. An install whose state is st
 TRACE_FILE="${GOAT_HOME:-$HOME/.goat}/userdata/logs/server.trace.ndjson"
 ```
 
-A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` if the worktree was created before the GOAT rename):
+A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` while only that one holds the state):
 
 ```bash
 STATE_HOME="$WORKTREE/.goat"; [ -d "$STATE_HOME/userdata" ] || [ ! -d "$WORKTREE/.t3"/userdata ] || STATE_HOME="$WORKTREE/.t3"; TRACE_FILE="$STATE_HOME/userdata/logs/server.trace.ndjson"

@@ -132,7 +132,7 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     "observability-worktree-fallback",
     at("docs/operations/observability.md"),
     /^A dev server started from a linked worktree defaults to that worktree's local home:$/g,
-    "A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` if the worktree was created before the GOAT rename):",
+    "A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` while only that one holds the state):",
   ),
   // The worktree and implicit dev commands pick the home as resolveGoatHome does: .goat when it holds the state,
   // otherwise a .t3 that does. The quoted "$X/.t3" stays outside observability-home-paths.
