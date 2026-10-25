@@ -6,10 +6,55 @@ import * as TestClock from "effect/testing/TestClock";
 import { cloudTaskResultText } from "@goat/provider-core/server/cloudTask";
 import { makeHarness, sessionAnswer, sessionWorkingRead } from "./adapter.testkit.ts";
 import { ClaudeCloudError } from "./protocol.ts";
-import { cloudAssistant, cloudPrompt, teleportTranscript } from "./testing.ts";
+import {
+  cloudApiError,
+  cloudAssistant,
+  cloudPrompt,
+  LOGIN,
+  teleportTranscript,
+} from "./testing.ts";
 
 const terminalOf = (h: Effect.Success<ReturnType<typeof makeHarness>>) =>
   h.events.find((event) => event.type === "turn.terminal");
+const lastTerminalOf = (h: Effect.Success<ReturnType<typeof makeHarness>>) =>
+  h.events.findLast((event) => event.type === "turn.terminal");
+const followUpsBlocked = (h: Effect.Success<ReturnType<typeof makeHarness>>) =>
+  h.events.some(
+    (event) =>
+      event.type === "provider_session.updated" &&
+      event.providerSession.capabilities.sessions.followUp?.supported === false,
+  );
+/** A follow-up run with its own message, as the base hands it over: the saved task, submitting. */
+const followUpTurn = (
+  h: Effect.Success<ReturnType<typeof makeHarness>>,
+  ordinal: number,
+  text: string,
+  task: typeof h.saved.cloudTask,
+) => ({
+  ...h.input,
+  runId: RunId.make("cloud-run-follow-up-" + ordinal),
+  attemptId: RunAttemptId.make("cloud-attempt-follow-up-" + ordinal),
+  runOrdinal: ordinal,
+  providerTurnOrdinal: ordinal,
+  message: { ...h.input.message, text },
+  providerThread: { ...h.saved, cloudTask: { ...task, status: "submitting" as const } },
+});
+const API_ERROR = "API Error: 529 Overloaded";
+const failedHistory = [
+  cloudPrompt("task", "1970-01-01T00:00:00.000Z"),
+  cloudAssistant({ type: "text", text: "First answer." }, "end_turn"),
+  cloudPrompt("retry me", "1970-01-01T00:00:01.000Z"),
+  cloudApiError(API_ERROR),
+];
+/** A task saved after the session answered its run's own prompt with a terminal API error. */
+const confirmedFailure = (h: Effect.Success<ReturnType<typeof makeHarness>>) => ({
+  ...h.saved.cloudTask,
+  status: "failed" as const,
+  progress: "Session reported an error (1 read, $0.0064)",
+  error: API_ERROR,
+  summary: API_ERROR,
+  confirmedTerminalError: true as const,
+});
 /** Starts a first turn whose session never opens a PR and waits until GOAT follows it. */
 const launchWithoutPullRequest = Effect.fnUntraced(function* () {
   const h = yield* makeHarness();
@@ -385,4 +430,141 @@ it.effect(
         expect(h.counts().reads).toBe(0);
       }),
     ),
+);
+
+it.effect(
+  "regression #1474: a terminal API error fails the run but the next message reaches the same session",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        h.sessionReads(
+          Effect.succeed({ transcript: teleportTranscript(failedHistory), costUsd: 0.0064 }),
+          Effect.succeed({
+            transcript: teleportTranscript([
+              ...failedHistory,
+              cloudPrompt("try again", "1970-01-01T00:01:00.000Z"),
+              cloudAssistant({ type: "text", text: "Done now." }, "end_turn"),
+            ]),
+            costUsd: 0.0064,
+          }),
+        );
+        yield* h.runtime.startTurn({
+          ...followUpTurn(h, 2, "retry me", h.saved.cloudTask),
+          providerThread: h.saved,
+        });
+        yield* Deferred.await(h.admitted);
+        yield* TestClock.adjust("30 seconds");
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ status: "failed", failure: { message: API_ERROR } });
+        const failed = h.ledger.at(-1);
+        expect(failed).toMatchObject({
+          status: "failed",
+          error: API_ERROR,
+          confirmedTerminalError: true,
+        });
+        // The base persists the failed task and loads it before the user's next message.
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: failed! } });
+        yield* h.runtime.startTurn(followUpTurn(h, 3, "try again", failed!));
+        yield* TestClock.adjust("30 seconds");
+        yield* Deferred.await(h.secondTerminal);
+        expect(lastTerminalOf(h)).toMatchObject({ status: "completed", resultText: "Done now." });
+        expect(h.counts()).toEqual({ starts: 0, sends: 2, reads: 0 });
+        expect(h.ledger.at(-1)?.status).toBe("succeeded");
+        expect(h.ledger.at(-1)).not.toHaveProperty("confirmedTerminalError");
+        expect(followUpsBlocked(h)).toBe(false);
+      }),
+    ),
+);
+
+it.effect(
+  "regression #1474: a restart settles a confirmed API error as failed without replay and keeps the session usable",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const failed = confirmedFailure(h);
+        yield* h.runtime.resumeTurn!({
+          ...h.attach,
+          providerThread: { ...h.saved, cloudTask: failed },
+          cloudTask: failed,
+        });
+        yield* Deferred.await(h.terminal);
+        expect(terminalOf(h)).toMatchObject({ status: "failed", failure: { message: API_ERROR } });
+        // The saved failure stands as it was: no rewrite to unknown, no read, no prompt.
+        expect(h.ledger).toEqual([]);
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+        expect(h.sessionReadTimes).toEqual([]);
+        expect(followUpsBlocked(h)).toBe(false);
+        h.sessionReads(
+          Effect.succeed({
+            transcript: teleportTranscript([
+              ...failedHistory,
+              cloudPrompt("try again", "1970-01-01T00:01:00.000Z"),
+              cloudAssistant({ type: "text", text: "Done now." }, "end_turn"),
+            ]),
+            costUsd: 0.0064,
+          }),
+        );
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: failed } });
+        yield* h.runtime.startTurn(followUpTurn(h, 2, "try again", failed));
+        yield* TestClock.adjust("30 seconds");
+        yield* Deferred.await(h.secondTerminal);
+        expect(lastTerminalOf(h)).toMatchObject({ status: "completed", resultText: "Done now." });
+        expect(h.counts()).toEqual({ starts: 0, sends: 1, reads: 0 });
+      }),
+    ),
+);
+
+it.effect(
+  "a confirmed API error authorizes one submission: an uncertain send after it blocks the next message, also after a restart",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const failed = confirmedFailure(h);
+        h.sendError(new ClaudeCloudError({ detail: "Send timed out.", outcome: "uncertain" }));
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: failed } });
+        yield* h.runtime.startTurn(followUpTurn(h, 2, "try again", failed));
+        yield* Deferred.await(h.terminal);
+        expect(h.counts().sends).toBe(1);
+        expect(h.ledger.map((task) => task.status)).toEqual(["submitting", "unknown"]);
+        expect(h.ledger.every((task) => task.confirmedTerminalError === undefined)).toBe(true);
+        const unknown = h.ledger.at(-1)!;
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: unknown } });
+        yield* h.runtime.startTurn(followUpTurn(h, 3, "and again", unknown));
+        yield* Deferred.await(h.secondTerminal);
+        expect(h.counts().sends).toBe(1);
+
+        // A restart that finds the follow-up's own submission saved never sends again either.
+        const restarted = yield* makeHarness();
+        const submitting = h.ledger[0]!;
+        yield* restarted.runtime.resumeTurn!({
+          ...restarted.attach,
+          providerThread: { ...restarted.saved, cloudTask: submitting },
+          cloudTask: submitting,
+        });
+        yield* Deferred.await(restarted.terminal);
+        expect(restarted.ledger.at(-1)?.status).toBe("unknown");
+        yield* restarted.runtime.startTurn(followUpTurn(restarted, 3, "and again", submitting));
+        yield* Deferred.await(restarted.secondTerminal);
+        expect(restarted.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+      }),
+    ),
+);
+
+it.effect("a confirmed API error does not bypass the login check for the next message", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const failed = confirmedFailure(h);
+      h.login({ ...LOGIN, binding: "another-login" });
+      yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: failed } });
+      yield* h.runtime.startTurn(followUpTurn(h, 2, "try again", failed));
+      yield* Deferred.await(h.terminal);
+      expect(h.controlCommands).toEqual([]);
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+      expect(h.ledger.at(-1)).not.toHaveProperty("confirmedTerminalError");
+    }),
+  ),
 );
