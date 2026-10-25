@@ -45,6 +45,22 @@ describe("ComputerUseLeaseProxy telling a person's input from the agent's", () =
     }),
   );
 
+  it.effect("a settle wait posts no input, so a person's keys and pointer stay a person's", () =>
+    Effect.gen(function* () {
+      // The server's first accepted event pauses the child, so each kind gets its own run.
+      for (const source of ["keyboard", "pointer"] as const) {
+        // Never released: a call that reported an agent input start would wait here.
+        const agentInputGate = yield* Deferred.make<void>();
+        const h = yield* harness({ humanInput: true, agentInputGate });
+        yield* h.push(active());
+        yield* h.send(call(1, "wait_for_window_settle", { pid: 4, window_id: 9 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.hid(source);
+        assert.equal(yield* h.person, source);
+      }
+    }),
+  );
+
   it.effect("a call whose start report a pause overtook never reaches the next driver", () =>
     Effect.gen(function* () {
       const agentInputGate = yield* Deferred.make<void>();
