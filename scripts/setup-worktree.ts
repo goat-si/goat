@@ -40,6 +40,14 @@ function isDirectRun(): boolean {
   }
 }
 
+/**
+ * Without group or other access even under umask 002: the dev server keeps the
+ * modes it finds here, and its memory import rejects writable state (#1648).
+ */
+export function createMarkerDirectory(directory: string): void {
+  NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
+}
+
 async function main(): Promise<void> {
   // Setup can run in the background, so agents can start before it ends.
   // `setup-running` holds this PID until setup ends with `setup-done` or
@@ -50,7 +58,7 @@ async function main(): Promise<void> {
   const failedMarker = NodePath.join(markerDir, "setup-failed");
   NodeFS.rmSync(doneMarker, { force: true });
   NodeFS.rmSync(failedMarker, { force: true });
-  NodeFS.mkdirSync(markerDir, { recursive: true });
+  createMarkerDirectory(markerDir);
   NodeFS.writeFileSync(runningMarker, `${process.pid}\n`);
   let failureDetail = "";
   process.on("uncaughtExceptionMonitor", (error) => {

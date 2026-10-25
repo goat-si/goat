@@ -333,6 +333,7 @@ export default defineConfig({
       ),
     ],
     globalSetup: [
+      NodeURL.fileURLToPath(new URL("./scripts/lib/node-runtime.ts", import.meta.url)),
       NodeURL.fileURLToPath(
         new URL("./packages/shared/src/testing/gitConfigGuard.ts", import.meta.url),
       ),

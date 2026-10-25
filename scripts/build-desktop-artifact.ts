@@ -3304,7 +3304,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
-      maintainer: "T3 Tools <hello@t3.codes>",
+      // The .deb Maintainer field, and the rpm vendor, which electron-builder copies from it.
+      maintainer: "GOAT <jun@lidgeai.com>",
       protocols: [
         {
           name: "GOAT",
@@ -4510,7 +4511,8 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     license: "MIT",
     // Required by the .deb control file. Public: the source repository is private (D-10).
     homepage: `https://github.com/${DESKTOP_UPDATE_REPOSITORY}`,
-    author: "T3 Tools",
+    // electron-builder reads the name as the Windows CompanyName and the default copyright holder.
+    author: "GOAT <jun@lidgeai.com>",
     main: "apps/desktop/dist-electron/boot.cjs",
     build: withComputerUseHelper(
       yield* createBuildConfig(

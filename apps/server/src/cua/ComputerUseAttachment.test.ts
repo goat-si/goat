@@ -82,6 +82,7 @@ const fakeLeases = (input: {
           ...(Option.isSome(grant) ? { handoffId: grant.value.handoffId } : {}),
         };
       }),
+    currentControl: () => Effect.die("unused"),
     controlState: () => Effect.die("unused"),
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),

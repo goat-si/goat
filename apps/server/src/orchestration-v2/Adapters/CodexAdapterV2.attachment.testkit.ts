@@ -59,6 +59,8 @@ export const unusedRegistry = {
   revokeProviderSession: () => Effect.void,
   revokeThread: () => Effect.void,
   revokeAll: Effect.void,
+  subscribeChanges: Effect.die("unused"),
+  inspect: () => Effect.undefined,
   currentMemoryPolicy: () => Effect.succeed(undefined),
 } satisfies McpSessionRegistry.McpSessionRegistry["Service"];
 
@@ -130,15 +132,25 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   const goalTokens = yield* Queue.unbounded<number>();
   // Every status a subagent task was given, in order.
   const subagentStatuses: Array<string> = [];
+  // Every status each execution node was given, in order.
+  const nodeStatuses = new Map<string, Array<string>>();
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
         : event.type === "subagent.updated"
           ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
-          : event.type === "provider_thread.updated" && event.providerThread.goal
-            ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-            : Effect.void,
+          : event.type === "node.updated"
+            ? Effect.sync(
+                () =>
+                  void nodeStatuses.set(event.node.id, [
+                    ...(nodeStatuses.get(event.node.id) ?? []),
+                    event.node.status,
+                  ]),
+              )
+            : event.type === "provider_thread.updated" && event.providerThread.goal
+              ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+              : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -166,6 +178,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
     subagentStatuses,
+    nodeStatuses,
     runtime,
     providerThread,
   };
@@ -426,3 +439,12 @@ export const spawnChild = (f: ReturnType<typeof fixture>, root: string, child: s
       },
     },
   });
+
+// What a child spawnChild started shows: its subagent node in the parent and its thread's root node.
+export const childNodes = (allocator: IdAllocator.IdAllocatorV2["Service"], child: string) =>
+  ["", ":thread-root"].map((suffix) =>
+    allocator.derive.nodeFromProviderItem({
+      driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+      nativeItemId: `spawn-${child}:${child}${suffix}`,
+    }),
+  );

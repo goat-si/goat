@@ -497,20 +497,21 @@ function laneRun(lane) {
 
 /**
  * The quick run for a pull request: check always, typecheck unless only documents changed, and
- * test-changed when tests sit beside the changes. changedTests splits them by runner.
+ * test-changed when the changes select tests (scripts/lib/changed-tests.ts). changedTests splits
+ * them by runner.
  */
 function quickRun(changed, root) {
   const reasons = new Map([["check", "quick run"]]);
   const placed = changed.find((file) => !isDocument(file));
   if (placed !== undefined) reasons.set("typecheck", placed);
-  const code = changed.filter((file) => CODE_RE.test(file) && fs.existsSync(path.join(root, file)));
+  const code = changed.filter((file) => CODE_RE.test(file));
   const tests = [...testsForChanges(root, code, changed)].sort();
   const changedTests = {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),
   };
   if (tests.length > 0) {
-    reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) beside the changes");
+    reasons.set(CHANGED_TESTS_TASK, tests.length + " test file(s) for the changes");
   }
   return {
     full: false,

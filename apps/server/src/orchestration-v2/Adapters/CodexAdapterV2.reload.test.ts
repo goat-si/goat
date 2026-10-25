@@ -137,6 +137,111 @@ describe("Codex subagent limit reload (#1572)", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  // The check asks each thread in turn. A thread already asked about can run a turn meanwhile,
+  // start a dev server there and report idle again before the last answer (#1658).
+  it.effect.each(["status", "turn"] as const)(
+    "keeps the old limit when a checked thread works and goes idle during the check (%s)",
+    (reported) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "lanes-active-during-check-" + reported;
+          const child = root + "-agent";
+          const { f, dropLanes, reloadNoLanes } = yield* limitScenario(root);
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, child);
+          f.status(child, "idle");
+          f.turnCompleted(1);
+          f.goalGet(4, root, { result: { goal: null } });
+          f.goalGet(5, child, { result: { goal: null } });
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 6,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: root },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 6, result: { data: [], nextCursor: null } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 7,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: child },
+              },
+            },
+          );
+          if (reported === "status") {
+            f.status(root, "active");
+            f.status(root, "idle");
+          } else {
+            // Only the turn's own notifications, with no status change in between.
+            for (const status of ["inProgress", "completed"] as const)
+              f.entries.push({
+                type: "emit_inbound",
+                frame: {
+                  method: status === "inProgress" ? "turn/started" : "turn/completed",
+                  params: {
+                    threadId: child,
+                    turn: makeCodexReplayTurn({ id: "child-turn", status }),
+                  },
+                },
+              });
+          }
+          f.entries.push({
+            type: "emit_inbound",
+            frame: { id: 7, result: { data: [], nextCursor: null } },
+          });
+          // Turn 2 runs on the held thread; turn 3 checks again and applies the limit.
+          yield* f.turnStart(8, 2, false);
+          f.turnCompleted(2);
+          yield* f.turnStart(reloadNoLanes(9, [root, child]), 3, false);
+          f.turnCompleted(3);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* dropLanes;
+          for (const ordinal of [2, 3]) {
+            yield* replay.startTurn(ordinal);
+            yield* replay.terminal;
+          }
+          assert.deepEqual(replay.threadConfigs.map(lanesOf), [3, false]);
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("applies the limit when Codex only repeats an idle status during the check", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "lanes-idle-repeated";
+        const { f, dropLanes, reloadNoLanes } = yield* limitScenario(root);
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        const next = reloadNoLanes(4);
+        const answer = f.entries.findIndex(
+          (entry) => entry.type === "emit_inbound" && (entry.frame as { id?: number }).id === 4,
+        );
+        f.entries.splice(answer, 0, {
+          type: "emit_inbound",
+          frame: {
+            method: "thread/status/changed",
+            params: { threadId: root, status: { type: "idle" } },
+          },
+        });
+        yield* f.turnStart(next, 2, false);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* dropLanes;
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepEqual(replay.threadConfigs.map(lanesOf), [3, false]);
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("keeps the old limit while a goal is active, then applies it once none is", () =>
     Effect.scoped(
       Effect.gen(function* () {

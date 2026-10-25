@@ -2,8 +2,10 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Statement from "effect/sql/Statement";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -12,6 +14,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
+import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
 
 /** `threadId` in the projection, in `runtimeMode`. */
 const threadIn = (threadId: ThreadId, runtimeMode: string) =>
@@ -36,6 +39,40 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
       ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
     ),
   ),
+);
+
+it.effect.each(["replacement", "approval after Stop"] as const)(
+  "a suspended full access read cannot revoke a newer %s",
+  (transition) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-control-read-race");
+      yield* threadIn(owner, "full-access");
+      const first = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const pending = yield* leases.controlState(owner, first.controlId).pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          Deferred.succeed(reading, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(statement),
+          ),
+        ),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(reading);
+      yield* threadIn(owner, "auto");
+      yield* leases.stop(owner);
+      const second =
+        transition === "replacement" ? yield* leases.control(owner, Option.none()) : undefined;
+      if (transition === "approval after Stop") yield* foregroundGrant(owner, "handoff:after-stop");
+      yield* Deferred.succeed(release, undefined);
+      assert.deepEqual(yield* Fiber.join(pending), { _tag: "ended", reason: "revoked" });
+      if (second !== undefined)
+        assert.equal((yield* leases.controlState(owner, second.controlId))._tag, "active");
+      else assert.isTrue(yield* leases.foregroundAvailable(owner, "Check the build status"));
+    }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("gives a full access thread every app until it leaves full access", () =>

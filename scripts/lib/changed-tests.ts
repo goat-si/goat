@@ -5,6 +5,10 @@ import * as NodePath from "node:path";
 
 const CODE = /\.[cm]?[jt]sx?$/;
 const TEST = /\.test\.[cm]?[jt]sx?$/;
+/** An app's src directory, every .ts/.tsx of which its React Compiler coverage suite compiles. */
+const APP_SOURCE = /^apps\/[^/]+\/src\//;
+const COMPILED = /\.tsx?$/;
+const COVERAGE_SUITE = "reactCompilerCoverage.test.ts";
 
 /** Text GOAT sends to providers: instruction sections, runtime notes, the memory frame. */
 const PROMPT_TEXT =
@@ -70,11 +74,27 @@ function promptTextTests(root: string): ReadonlyArray<string> {
 }
 
 /**
+ * The coverage suite finds its files by walking src, so a component that starts bailing out of
+ * React Compiler has no test beside it: #1483 passed its quick run and broke every full run until
+ * #1491 (#1579). A deletion counts too, since mobile's suite fails when a file it lists as a known
+ * bailout is gone.
+ */
+function compilerCoverageSuite(root: string, file: string): string | undefined {
+  const app = APP_SOURCE.exec(file)?.[0];
+  if (app === undefined || !COMPILED.test(file) || TEST.test(file)) return undefined;
+  const suite = app + COVERAGE_SUITE;
+  return NodeFS.existsSync(NodePath.join(root, suite)) ? suite : undefined;
+}
+
+/**
  * Changed test files, and the test files beside a changed source file
  * (foo.ts -> foo.test.ts, foo.browser.test.tsx). Vitest's import-graph
  * `related` reaches most of a package: one leaf server file pulled in 252 of
- * 406 server test files and took 7 minutes. CI runs the rest. Prompt text is the
- * exception; see promptTextTests.
+ * 406 server test files and took 7 minutes. CI runs the rest. Prompt text and an app's React
+ * Compiler coverage suite are the exceptions; see promptTextTests and compilerCoverageSuite.
+ *
+ * `code` includes deleted files: they select no test beside them, but still select the suites
+ * that read them through another path.
  *
  * Paths are git's repo-relative POSIX paths in and out on every platform, so Windows selects
  * the same suites as CI; NodePath.join would emit backslashes there.
@@ -87,18 +107,23 @@ export function testsForChanges(
   code: ReadonlyArray<string>,
   changed: ReadonlyArray<string> = code,
 ): ReadonlySet<string> {
-  const tests = new Set(code.filter((file) => TEST.test(file)));
+  const present = code.filter((file) => NodeFS.existsSync(NodePath.join(root, file)));
+  const tests = new Set(present.filter((file) => TEST.test(file)));
   if (changed.some((file) => INGEST_SUITE_TRIGGER.test(file))) {
     for (const entry of NodeFS.readdirSync(NodePath.join(root, INGEST_TESTS))) {
       if (TEST.test(entry)) tests.add(NodePath.posix.join(INGEST_TESTS, entry));
     }
   }
-  for (const file of code) {
+  for (const file of present) {
     const dir = NodePath.posix.dirname(file);
     const prefix = `${NodePath.posix.basename(file).replace(CODE, "")}.`;
     for (const entry of NodeFS.readdirSync(NodePath.join(root, dir))) {
       if (entry.startsWith(prefix) && TEST.test(entry)) tests.add(NodePath.posix.join(dir, entry));
     }
+  }
+  for (const file of code) {
+    const suite = compilerCoverageSuite(root, file);
+    if (suite !== undefined) tests.add(suite);
   }
   if (code.some((file) => PROMPT_TEXT.test(file) && !TEST.test(file)))
     for (const test of promptTextTests(root)) tests.add(test);

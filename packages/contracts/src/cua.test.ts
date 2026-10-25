@@ -5,6 +5,7 @@ import {
   ComputerUseCallReservation,
   ComputerUseCallAdmission,
   ComputerUseLeaseUpdate,
+  ComputerUseLeaseThreadUpdate,
   ComputerUseForegroundGrant,
   ComputerUseRequestInput,
   ComputerUseRequestResult,
@@ -47,6 +48,33 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("thread updates require snapshot expiry and bind each control end to its id", () => {
+    const decode = Schema.decodeUnknownSync(ComputerUseLeaseThreadUpdate);
+    expect(decode({ state: "waiting" })).toEqual({ state: "waiting" });
+    const ended = { state: "control-ended", controlId: "control:one", reason: "replaced" };
+    expect(decode(ended)).toEqual(ended);
+    expect(() => decode({ ...ended, controlId: "" })).toThrow();
+    for (const state of ["paused", "idle"]) {
+      const snapshot = {
+        state,
+        controlId: "control:one",
+        ...(state === "paused" ? { reason: "takeover" } : {}),
+      };
+      expect(() => decode(snapshot)).toThrow();
+      const withExpiry = { ...snapshot, expiresAt: "1970-01-01T00:10:00.000Z" };
+      expect(decode(withExpiry)).toEqual(withExpiry);
+    }
+  });
+  it("preserves optional paused and idle expiry while accepting legacy snapshots", () => {
+    for (const snapshot of [
+      { state: "paused", controlId: "control:one", reason: "takeover" },
+      { state: "idle", controlId: "control:one" },
+    ]) {
+      expect(decodeLeaseUpdate(snapshot)).toEqual(snapshot);
+      const withExpiry = { ...snapshot, expiresAt: "1970-01-01T00:10:00.000Z" };
+      expect(decodeLeaseUpdate(withExpiry)).toEqual(withExpiry);
+    }
+  });
   it("decodes correlated app listing controls, reports and actionable unknown-app refusals", () => {
     const request = { version: 1, type: "cuaAppsRequest", requestId: "apps-1" };
     expect(decodeControlMessage(request)).toEqual(request);

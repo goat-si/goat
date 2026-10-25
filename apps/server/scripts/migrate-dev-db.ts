@@ -4,7 +4,11 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
-import { resolveWorktreeHome } from "@goat/shared/devHome";
+import {
+  describePrivateDevDirectoryChange,
+  ensurePrivateDevDirectory,
+  resolveWorktreeHome,
+} from "@goat/shared/devHome";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 import * as Console from "effect/Console";
@@ -19,6 +23,7 @@ import { Command, Flag } from "effect/cli";
 
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import { migrationManifest, runMigrations } from "../src/persistence/Migrations.ts";
+import { isProtectedDestination } from "./migrate-dev-db-protected.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 export class MigrateDevDbNotInWorktreeError extends Schema.TaggedError<MigrateDevDbNotInWorktreeError>()(
@@ -781,12 +786,8 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const canonicalBaseDir = yield* fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir));
-  for (const home of protectedHomes) {
-    const canonicalHome = yield* fs.realPath(home).pipe(Effect.orElseSucceed(() => home));
-    if (canonicalBaseDir === canonicalHome) {
-      return yield* new MigrateDevDbSharedHomeError();
-    }
+  if (yield* isProtectedDestination(baseDir, protectedHomes)) {
+    return yield* new MigrateDevDbSharedHomeError();
   }
   // The destination db and snapshot both get deleted below; a --source that
   // resolves to either (e.g. a leftover snapshot file) would be destroyed
@@ -803,7 +804,11 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     }
   }
 
-  yield* fs.makeDirectory(stateDir, { recursive: true });
+  // Only userdata: --base-dir may be any directory, so its mode is left alone.
+  const modeChange = yield* ensurePrivateDevDirectory(stateDir);
+  if (modeChange !== undefined) {
+    yield* Console.log(describePrivateDevDirectoryChange(stateDir, modeChange));
+  }
   yield* ensureNotInUse(databasePath);
 
   const wrapPhase =

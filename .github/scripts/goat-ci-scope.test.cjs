@@ -462,6 +462,24 @@ describe("planRun", () => {
     assert.deepEqual(workflow.tasks, ["check", "typecheck"]);
   });
 
+  it("runs an app's React Compiler coverage suite for its source changes, deletions included (#1579)", async () => {
+    const web = "apps/web/src/reactCompilerCoverage.test.ts";
+    const mobile = "apps/mobile/src/reactCompilerCoverage.test.ts";
+    // #1483 changed this component; its quick run passed and the bailout reached dev (#1491).
+    const component = await plan(pr(), labels([]), [
+      "apps/web/src/components/settings/HubNodesSettings.tsx",
+    ]);
+    assert.deepEqual(component.tasks, ["check", "typecheck", "test-changed"]);
+    assert.ok(component.changedTests.vitest.includes(web));
+    assert.ok(!component.changedTests.vitest.includes(mobile));
+    const deleted = await plan(pr(), labels([]), ["apps/mobile/src/features/removed/Removed.tsx"]);
+    assert.deepEqual(deleted.changedTests, { vitest: [mobile], node: [] });
+    const server = await plan(pr(), labels([]));
+    assert.ok(
+      !server.changedTests.vitest.some((file) => file.endsWith("reactCompilerCoverage.test.ts")),
+    );
+  });
+
   it("keeps the quick run when the live labels cannot be read", async () => {
     const result = await plan(pr(), failing);
     assert.equal(result.quick, true);
