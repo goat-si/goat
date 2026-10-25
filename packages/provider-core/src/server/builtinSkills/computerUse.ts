@@ -63,6 +63,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
 - Computer use needs Accessibility and Screen Recording on this Mac. When \`check_permissions\` or a \`permission_denied\` refusal shows one missing, tell the person which one and stop; only someone at the Mac can grant it, and AppleScript or a terminal is no substitute.
 - An app may raise its own Automation prompt the first time it is controlled. Only the person can answer it; wait for them.
 - When an app's display name does not resolve, retry with its bundle id, such as \`com.apple.TextEdit\`.
+- A row whose actions list only \`AXOpen\` (Finder list rows) ignores a plain click; click it with \`action: "open"\`. An "AX action failed" answer, such as CannotComplete, may still have acted: observe before trying again.
 - Minimized windows and windows on another Space may not be observable, and a Chromium window on another Space shows an old tree and picture until it is shown. Ask before moving them.
 - Secure text fields are private fields (see above).
 - \`command\` is Command and \`option\` is Option.

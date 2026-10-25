@@ -1770,7 +1770,7 @@ export function GeneralSettingsPanel() {
         />
         <SettingsRow
           {...searchableSetting("privacy-policy")}
-          description="How we handle your data, including the anonymous usage data GOAT collects."
+          description="How we handle your data, including the product usage data GOAT collects."
           control={
             <Button
               render={<a href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer noopener" />}

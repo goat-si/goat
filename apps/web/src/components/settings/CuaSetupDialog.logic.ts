@@ -143,6 +143,7 @@ export function computerUseUnavailable(status: CuaHostStatus | null): boolean {
 const VERIFICATION_ORDER: readonly CuaVerificationStepId[] = [
   "grants",
   "restart",
+  "agentRoute",
   "permissions",
   "identity",
   "capture",
@@ -152,6 +153,7 @@ const VERIFICATION_ORDER: readonly CuaVerificationStepId[] = [
 const VERIFICATION_LABELS: Record<CuaVerificationStepId, string> = {
   grants: "Permissions allowed",
   restart: "Computer use restarted with them",
+  agentRoute: "Agents can start computer use",
   permissions: "Computer use sees both permissions",
   identity: "Computer use runs as the allowed app",
   capture: "Captured a GOAT window",

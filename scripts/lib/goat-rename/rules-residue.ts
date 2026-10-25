@@ -34,12 +34,6 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "#99/R6 retains upstream's support playbook and commands.",
   ),
   keep(
-    "upstream-security-owner",
-    [".github/SECURITY.md"],
-    /T3 Tools-operated/g,
-    "#99/R6 retains upstream's security policy and infrastructure owner.",
-  ),
-  keep(
     "legacy-env-adoption-comment",
     [
       "apps/desktop/scripts/dev-electron.mjs",

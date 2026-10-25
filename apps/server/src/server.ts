@@ -117,6 +117,7 @@ import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
 import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
+import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
@@ -842,6 +843,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ThreadSearch.layer,
       layerCuaDriver,
       layerLinuxFrameSource,
+      ComputerUseAgentConnections.layer,
       ComputerUseLeases.layer.pipe(
         Layer.provide(layerDesktopTelemetryReceiver),
         Layer.provide(layerLinuxFrameSource),

@@ -47,7 +47,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { nextTurn, rememberScope } from "./ComputerUseControl.ts";
+import { type Cursor, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
@@ -197,13 +197,13 @@ export class ComputerUseLeases extends Context.Service<
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
-     * Records the window an agent's admitted call named, reported by that control's own proxy;
-     * false when the control is not the thread's live one.
+     * Records the window an agent's admitted call named, or where its cursor is on it (see
+     * withCursor), reported by that control's own proxy; false when not the thread's live one.
      */
     readonly setTarget: (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number },
+      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
     ) => Effect.Effect<boolean>;
     /**
      * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
@@ -810,16 +810,13 @@ const make = Effect.gen(function* () {
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number },
+      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
     ) {
       const record = yield* liveControl(threadId, controlId);
       if (record === undefined) return false;
-      if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
-        return true;
-      controls.set(threadId, {
-        ...record,
-        target: { pid: target.pid, windowId: target.windowId },
-      });
+      const next = targeted(record, target);
+      if (next === undefined) return true;
+      controls.set(threadId, next);
       yield* changed;
       return true;
     }),

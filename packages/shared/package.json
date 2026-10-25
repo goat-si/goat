@@ -23,6 +23,10 @@
       "types": "./src/cuaDriverRelease.ts",
       "import": "./src/cuaDriverRelease.ts"
     },
+    "./computerUseActions": {
+      "types": "./src/computerUseActions.ts",
+      "import": "./src/computerUseActions.ts"
+    },
     "./computerUseObservation": {
       "types": "./src/computerUseObservation.ts",
       "import": "./src/computerUseObservation.ts"
@@ -254,6 +258,10 @@
     "./telemetryId": {
       "types": "./src/telemetryId.ts",
       "import": "./src/telemetryId.ts"
+    },
+    "./analyticsAllowlist": {
+      "types": "./src/analyticsAllowlist.ts",
+      "import": "./src/analyticsAllowlist.ts"
     },
     "./relayAuth": {
       "types": "./src/relayAuth.ts",

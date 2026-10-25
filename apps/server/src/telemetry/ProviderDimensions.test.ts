@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ThreadId, type ServerProvider } from "@goat/contracts";
+import { ingestDrops } from "./ingestAllowlist.testkit.ts";
 import { agentToolProperties, handoffSettings, type AgentThread } from "./ProviderDimensions.ts";
 
 const provider = (
@@ -74,4 +75,28 @@ it("drops input strings outside the schema's literals, since rejected calls are 
   expect(
     handoffSettings("goat_thread_launch", { workspaceStrategy: { type: "/home/me/secret" } }, {}),
   ).toEqual({ targetChosen: false, workspace: "root" });
+});
+
+it("reports only properties GOAT's ingest stores for mcp.tool.invoked", () => {
+  const settings = [
+    handoffSettings("delegate_task", { target: {}, mode: "wait" }, { waitTimedOut: true }),
+    handoffSettings("create_threads", { threads: [{ target: {} }] }, {}),
+    handoffSettings("goat_thread_launch", { scratch: true, modelSelection: {} }, {}),
+    handoffSettings("goat_thread_send", {}, { delivery: "steer" }),
+    handoffSettings("schedule_task", { bindToCurrentThread: false }, {}),
+  ];
+  const recorded = settings.flatMap((setting) =>
+    agentToolProperties({
+      tool: "delegate_task",
+      providers,
+      caller: thread("work-codex", "gpt-5.5"),
+      callerDepth: 2,
+      callerScheduledRun: true,
+      targets: [thread("claudeAgent", "claude-opus-5-5")],
+      outcome: { outcome: "error", errorCode: "not_found" },
+      settings: setting,
+      durationMs: 12,
+    }).map((properties) => ({ event: "mcp.tool.invoked", properties })),
+  );
+  expect(ingestDrops(recorded)).toEqual([]);
 });

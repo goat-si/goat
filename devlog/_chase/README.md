@@ -10,8 +10,8 @@ GOAT가 따라가는 upstream은 둘이고, 축 번호로 나눈다.
 GOAT는 T3 Code의 포크이고 git 히스토리를 공유한다. 그래서 jawcode처럼 별도 클론을 읽고 카드 단위로 손 포팅하지 않는다.
 T3 upstream은 사이클마다 `git merge`로 들여오고, 이 폴더는 그 머지를 안전하게 만드는 기록만 둔다.
 
-Cua Driver는 GOAT 저장소에 코드가 없다. 지금 GOAT는 upstream 0.37.0 공식 릴리스 아카이브와 npm SDK를 이름, 크기, SHA-256으로
-pin한다 (`packages/shared/src/cuaDriverRelease.ts`). 포크 릴리스는 아직 없고, pin은 #1591에서 포크 아티팩트로 옮긴다 (#1595).
+Cua Driver는 GOAT 저장소에 코드가 없다. GOAT는 포크(goat-si/cua-driver) 릴리스 아카이브를 이름, 크기, SHA-256으로 pin하고
+(`packages/shared/src/cuaDriverRelease.ts`, #1591), npm SDK는 upstream 0.37.0을 쓴다 (#1595).
 그래서 20 축은 두 단계를 기록한다: upstream을 포크에 들이는 것, 포크 릴리스로 GOAT pin을 옮기는 것.
 
 ## 구조

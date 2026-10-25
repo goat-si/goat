@@ -49,3 +49,14 @@ export const ComputerUseOverlayCommand = Schema.Union([
   Schema.Struct({ op: Schema.Literal("hide"), reason: ComputerUseOverlayHideReason }),
 ]);
 export type ComputerUseOverlayCommand = typeof ComputerUseOverlayCommand.Type;
+
+/**
+ * Where the agent's cursor is on the window a live picture shows, for previews that draw it
+ * over the frame like the helper draws it on screen. Fractions of the window, as in the overlay.
+ */
+export const ComputerUseAgentCursor = Schema.Struct({
+  windowId: Schema.Int,
+  point: ComputerUseOverlayPoint,
+  phase: Schema.Literals(["acting", "resting"]),
+});
+export type ComputerUseAgentCursor = typeof ComputerUseAgentCursor.Type;

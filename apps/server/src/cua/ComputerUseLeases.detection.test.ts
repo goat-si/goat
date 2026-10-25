@@ -167,6 +167,26 @@ it.effect(
           (entry) => entry.control.controlId === control.controlId,
         );
         assert.deepEqual(recorded?.control.target, { pid: 7, windowId: 3 });
+        // The agent's cursor rides on the live control for the preview, and only there.
+        const cursor = { windowId: 3, point: { fx: 0.25, fy: 0.5 }, phase: "acting" } as const;
+        assert.isFalse(yield* leases.setTarget(thread, "control:old", { cursor }));
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor }));
+        const cursorOf = Effect.map(
+          leases.sessions,
+          (entries) =>
+            entries.find((entry) => entry.control.controlId === control.controlId)?.control.cursor,
+        );
+        assert.deepEqual(yield* cursorOf, cursor);
+        // Another window becomes the target: a point on the old one says nothing about it.
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { pid: 7, windowId: 4 }));
+        assert.isUndefined(yield* cursorOf);
+        // A cursor for a window that is not the target is not kept, and null clears it.
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor }));
+        assert.isUndefined(yield* cursorOf);
+        yield* leases.setTarget(thread, control.controlId, { cursor: { ...cursor, windowId: 4 } });
+        assert.deepEqual(yield* cursorOf, { ...cursor, windowId: 4 });
+        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { cursor: null }));
+        assert.isUndefined(yield* cursorOf);
       }).pipe(
         Effect.provide(
           ComputerUseLeases.layer.pipe(

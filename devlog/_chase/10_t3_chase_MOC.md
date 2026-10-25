@@ -1,9 +1,11 @@
 # 10 — T3 chase MOC
 
 > 축: upstream `pingdotgg/t3code` `main`
-> reviewed-through: `2c592a108` · 열린 카드 없음 · 갱신 2026-10-25
+> reviewed-through: `2c592a108` · 열린 카드 015 · 갱신 2026-10-25
 
-열린 카드 없음.
+| NNN | 카드                                                                           | 상태          |
+| --- | ------------------------------------------------------------------------------ | ------------- |
+| 015 | [패키지 소유자, 보안 신고, 기여 정책](./10.015_t3_chase_owner_and_security.md) | 🟡 PR 머지 전 |
 
 머지 순서: 사이클 PR goat-ci green → dev에 merge commit으로 랜딩 → 000 기준선 갱신, 카드 `_fin` 이동.
 

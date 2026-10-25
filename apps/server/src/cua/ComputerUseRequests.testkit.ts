@@ -158,6 +158,7 @@ export const withRequests = <A, E, R>(
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
           listedApps: Effect.succeed(listedApps),
+          appCatalog: Effect.succeed([]),
           block: Effect.sync(() => CuaDriver.agentBlock(current)),
           acquire: Effect.sync(() => {
             retry.starts += 1;

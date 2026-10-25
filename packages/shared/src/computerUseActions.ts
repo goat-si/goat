@@ -251,7 +251,7 @@ export function driverCallFor(
  * mouse-up. background_unavailable is not here either: a drag reports it after starting. With no
  * explicit refused effect those stay unverifiable.
  */
-const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
+export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "stale_element_token",
   "screenshot_context_missing",
   "px_frame_mismatch",

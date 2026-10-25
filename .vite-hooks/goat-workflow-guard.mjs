@@ -11,6 +11,7 @@ const [sha, ref] = NodeProcess.argv.slice(2);
 const workflowPath = ".github/workflows/goat-ci.yml";
 const nightlyPath = ".github/workflows/goat-nightly.yml";
 const closeOutsidePrsPath = ".github/workflows/close-outside-prs.yml";
+const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
 const labels = new Set(["self-hosted", "linux", "x64", "goat", "epyc"]);
 // goat-ci jobs run on a pinned GitHub-hosted image or on EPYC, never on a moving label.
@@ -524,6 +525,26 @@ function validateCloseOutsidePrsWorkflow(source, yaml) {
   }
 }
 
+// marketing-pages.yml publishes the marketing preview to the gh-pages branch from dev. Its deploy job
+// holds contents: write and pages: write, so the whole file is pinned like
+// close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
+// this hash on purpose.
+const pinnedMarketingPagesSha256 =
+  "bb57ba4cbcb8a7c78eda250ec51456828cc6c5d837c1f59c3fed049c0bb38613";
+
+function validateMarketingPagesWorkflow(source, yaml) {
+  const fail = (reason) => refuse(reason, marketingPagesPath);
+  const workflow = parseWorkflow(source, yaml);
+  if (workflow === undefined) return fail("invalid YAML");
+  if (!isMapping(workflow)) return fail("root must be a mapping");
+  const digest = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify(canonical(workflow)))
+    .digest("hex");
+  if (digest !== pinnedMarketingPagesSha256) {
+    return fail("must match the reviewed workflow; review it and update the pinned hash");
+  }
+}
+
 let paths;
 try {
   paths = NodeChildProcess.execFileSync(
@@ -544,6 +565,7 @@ for (const path of paths) {
     path !== workflowPath &&
     path !== nightlyPath &&
     path !== closeOutsidePrsPath &&
+    path !== marketingPagesPath &&
     /\.ya?ml$/.test(path) &&
     !disabled.has(path)
   ) {
@@ -551,7 +573,7 @@ for (const path of paths) {
     status = 1;
   }
 }
-for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath]) {
+for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath, marketingPagesPath]) {
   if (!paths.includes(path)) continue;
   let source;
   try {
@@ -579,6 +601,7 @@ for (const path of [workflowPath, nightlyPath, closeOutsidePrsPath]) {
   }
   if (path === workflowPath) validateWorkflow(source, yaml);
   else if (path === nightlyPath) validateNightlyWorkflow(source, yaml);
+  else if (path === marketingPagesPath) validateMarketingPagesWorkflow(source, yaml);
   else validateCloseOutsidePrsWorkflow(source, yaml);
 }
 if (status !== 0) NodeProcess.exit(status);

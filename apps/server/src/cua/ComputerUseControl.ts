@@ -1,4 +1,5 @@
 import type {
+  ComputerUseAgentCursor,
   ComputerUseControlEnd,
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
@@ -25,6 +26,8 @@ export interface ComputerUseControl {
   readonly acted?: boolean;
   /** The window the agent's latest admitted call named, as its proxy reported it. */
   readonly target?: { readonly pid: number; readonly windowId: number };
+  /** Where the helper draws the agent's cursor on that window, for the preview to draw too. */
+  readonly cursor?: ComputerUseAgentCursor;
 }
 
 export interface ComputerUseControlSnapshot extends ComputerUseControl {
@@ -109,3 +112,40 @@ export interface Interruptions {
   readonly count: number;
   readonly last: ComputerUsePauseReason;
 }
+
+/** The agent's cursor a proxy reports, or null when the overlay draws none. */
+export type Cursor = ComputerUseAgentCursor | null;
+
+const sameCursor = (a: ComputerUseAgentCursor | undefined, b: ComputerUseAgentCursor | undefined) =>
+  a === b ||
+  (a !== undefined &&
+    b !== undefined &&
+    a.windowId === b.windowId &&
+    a.phase === b.phase &&
+    a.point.fx === b.point.fx &&
+    a.point.fy === b.point.fy);
+
+/**
+ * The record with the agent's cursor set, or cleared by null or a point on another window than
+ * the target; undefined when nothing changes.
+ */
+const withCursor = <C extends ComputerUseControl>(record: C, cursor: Cursor): C | undefined => {
+  const next = cursor !== null && cursor.windowId === record.target?.windowId ? cursor : undefined;
+  if (sameCursor(next, record.cursor)) return undefined;
+  const { cursor: _previous, ...rest } = record;
+  return (next === undefined ? rest : { ...rest, cursor: next }) as C;
+};
+
+/**
+ * The record after a proxy's report: a new target window, which drops a cursor on the previous
+ * one, or the cursor itself. Undefined when nothing changes.
+ */
+export const targeted = <C extends ComputerUseControl>(
+  record: C,
+  report: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+): C | undefined => {
+  if ("cursor" in report) return withCursor(record, report.cursor);
+  if (record.target?.pid === report.pid && record.target.windowId === report.windowId) return;
+  const moved = { ...record, target: { pid: report.pid, windowId: report.windowId } };
+  return withCursor(moved, null) ?? moved;
+};

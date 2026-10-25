@@ -44,8 +44,8 @@ import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmis
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
-
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
+import { driverExitReason, markUnverified } from "./ComputerUseDriverOutcome.ts";
 import {
   approvedApps,
   learnApps,
@@ -57,12 +57,8 @@ import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseD
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
-import {
-  initialOverlayState,
-  type OverlayEvent,
-  overlayStep,
-  replyImageSize,
-} from "./ComputerUseOverlay.ts";
+import { makeOverlayDrawer } from "./agentCursorReports.ts";
+import { replyImageSize } from "./ComputerUseOverlay.ts";
 import {
   type Envelope,
   namedWindows,
@@ -115,15 +111,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
-  /** Another thread holds apps on this screen; see takesScreen. */
   let shared = false;
-  /**
-   * What the latest active update taken says, applied or not: an older update applied after it
-   * must not lift a newer update's restriction, so a call is judged by both (sharedNow).
-   */
+  // An older applied update cannot lift the latest receipt's restriction (sharedNow).
   let sharedTaken = false;
   const sharedNow = () => shared || sharedTaken;
-  /** Lease updates taken but not applied yet, and what each holds back. */
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -154,26 +145,23 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
+    onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
   // The control's window survives pauses: the server keeps it until the control ends.
   let reported: ComputerUseCallTarget | undefined;
-  let overlay = initialOverlayState;
   /** When the agent's own input calls were on their way, to tell a person's input apart. */
   const agentInput = yield* makeAgentInputReports({
     send: options.onAgentInput,
     ended: Deferred.await(ended),
   });
 
-  /** Updates what the overlay shows and waits until the helper has drawn it. */
-  const drawOverlay = Effect.fn("ComputerUseLeaseProxy.overlay")(function* (event: OverlayEvent) {
-    const [next, commands] = overlayStep(overlay, event);
-    overlay = next;
-    const sink = lifecycle.current?.driver.overlay;
-    if (sink === undefined) return;
-    for (const command of commands) yield* sink(command);
-  });
+  const overlay = yield* makeOverlayDrawer(
+    options.onCursor,
+    () => lifecycle.current?.driver.overlay,
+  );
+  const drawOverlay = overlay.draw;
 
   /** Why the last child was cut off, for a call that was waiting when it happened. */
   let lastInterruption: Interruption = { _tag: "end", reason: "helper_restarted" };
@@ -217,7 +205,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const latest = outstanding.get(key);
       if (latest?.connectionId !== request.connectionId) continue;
       outstanding.delete(key);
-      if (latest.cancelled) continue;
+      if (latest.cancelled) {
+        options.onCancelledRequestSettled?.(key);
+        continue;
+      }
       const refuse = options.output(
         request.method === "tools/call"
           ? cutOff(request.id, request.tool, cause)
@@ -272,6 +263,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            if (request.method === "tools/call") line = markUnverified(request.tool, line);
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
@@ -285,6 +277,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               )
                 return;
               outstanding.delete(key);
+              options.onCancelledRequestSettled?.(key);
               return;
             }
             const session = message.result?.structuredContent?.session;
@@ -329,7 +322,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               )
                 return;
               outstanding.delete(key);
-              if (latest.cancelled) return;
+              if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
               if (verdict === "other") {
                 yield* options.output(
                   offScreenAnswer(request.id, request.method, request.tool, "other"),
@@ -354,7 +347,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // agent hears why instead of an approval failure (#1233).
       Effect.andThen(
         Effect.suspend(() =>
-          lifecycle.current === current ? end("helper_restarted") : Effect.void,
+          lifecycle.current === current
+            ? driverExitReason(current.driver).pipe(Effect.flatMap(end))
+            : Effect.void,
         ),
       ),
     );
@@ -376,7 +371,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             current: () => active() && lifecycle.current === current,
           }).pipe(Effect.scoped, Effect.forkIn(current.scope));
         if (lifecycle.current !== current) return;
-        overlay = initialOverlayState;
+        overlay.reset();
         // A fresh child hears the provider's handshake again; its answers are dropped.
         for (const line of handshake) {
           if (lifecycle.current !== current || !active()) return;
@@ -519,9 +514,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ),
       )
       .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
-  // The server is the authority: the first word for this control confirms it, anything else
-  // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
-  // update never keeps a later one's fence from going up. The stream ending applies as lost.
+  // Receipt raises fences independently of the ordered application fiber and its lifecycle lock.
+  // The stream ending applies as lost.
   const applying = yield* Queue.unbounded<{
     readonly update: ComputerUseLeaseUpdate | undefined;
     readonly fence: ReturnType<typeof fences.take>;
@@ -533,14 +527,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
-  const take = (update: ComputerUseLeaseUpdate | undefined) =>
-    Effect.suspend(() => {
-      // Another thread's grant only denies, so it counts as soon as it is taken.
-      if (update?.state === "active" && update.controlId === options.controlId)
-        sharedTaken = update.shared === true;
-      const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
-      return Queue.offer(applying, { update, fence });
-    });
+  const receive = (update: ComputerUseLeaseUpdate | undefined) => {
+    // Another thread's grant only denies, so it counts as soon as it is taken.
+    if (update?.state === "active" && update.controlId === options.controlId)
+      sharedTaken = update.shared === true;
+    const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
+    Queue.offerUnsafe(applying, { update, fence });
+  };
+  options.onLeaseUpdateReceiver?.(receive);
+  const take = (update: ComputerUseLeaseUpdate | undefined) => Effect.sync(() => receive(update));
   yield* options.leaseUpdates.pipe(
     Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
@@ -566,7 +561,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (active() && (yield* Clock.currentTimeMillis) < deadline) yield* start(token);
     }),
   }).pipe(
-    Effect.catchCause(() => end("helper_restarted")),
+    Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
 

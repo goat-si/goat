@@ -35,6 +35,10 @@
       "types": "./src/server/builtinSkills/registry.ts",
       "import": "./src/server/builtinSkills/registry.ts"
     },
+    "./server/builtinSkills/computerUseSkillFiles": {
+      "types": "./src/server/builtinSkills/computerUseSkillFiles.ts",
+      "import": "./src/server/builtinSkills/computerUseSkillFiles.ts"
+    },
     "./server/collectStreamText": {
       "types": "./src/server/collectStreamText.ts",
       "import": "./src/server/collectStreamText.ts"

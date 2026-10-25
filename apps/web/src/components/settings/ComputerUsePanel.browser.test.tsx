@@ -40,7 +40,15 @@ const HELPER = {
 const PASSED: DesktopCuaVerification = {
   verified: true,
   steps: (
-    ["grants", "restart", "permissions", "identity", "capture", "accessibility"] as const
+    [
+      "grants",
+      "restart",
+      "agentRoute",
+      "permissions",
+      "identity",
+      "capture",
+      "accessibility",
+    ] as const
   ).map((id) => ({ id, ok: true })),
 };
 const idleMac: CuaHostStatus = { platform: "darwin", running: false, tools: "unavailable" };
@@ -207,6 +215,7 @@ it("shows Retry setup when the check fails, without opening Advanced, and Retry 
     steps: [
       { id: "grants", ok: true },
       { id: "restart", ok: true },
+      { id: "agentRoute", ok: true },
       { id: "permissions", ok: true },
       { id: "identity", ok: true },
       { id: "capture", ok: false, detail: "No window to capture." },
