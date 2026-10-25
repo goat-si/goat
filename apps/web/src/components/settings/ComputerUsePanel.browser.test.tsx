@@ -379,7 +379,7 @@ it("keeps the readiness list and skill switch in Advanced, closed by default and
 
 it.each([
   ["computer-use-skill", "Computer Use skill"],
-  ["computer-use-full-access", "Full access without approval"],
+  ["computer-use-full-access", "Unattended work without approval"],
 ])("a settings search for %s opens Advanced without remembering it", async (target, name) => {
   const f = setup({ enabled: true });
   state.searchTargetId = target;

@@ -127,6 +127,17 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
         ),
       ],
     };
+  // AT-SPI answered, yet app controls are unavailable: the driver will not list windows for
+  // agents on this desktop (#1610). Turning accessibility on would change nothing.
+  if (readiness.grants.accessibility === "granted")
+    return {
+      id: "accessibility",
+      status: "unavailable",
+      title: "App controls",
+      detail:
+        "Cua Driver cannot read this Wayland desktop's screen layout, so agents cannot list or use windows here.",
+      guidance: [text("Use an X11 or XWayland session.")],
+    };
   return {
     id: "accessibility",
     status: "action",
@@ -229,12 +240,18 @@ function inputStep(readiness: ComputerUseReadiness): ComputerUseSetupStep | unde
       guidance: [],
     };
   const wayland = readiness.platform?.linux?.displayServer === "wayland";
+  // AT-SPI answered but the driver will not list windows for agents (#1610): no control works,
+  // in the background or in front.
+  const controls = !(
+    readiness.tree === "unavailable" && readiness.grants.accessibility === "granted"
+  );
   return {
     id: "input",
     status: "limited",
     title: "Typing and pointing need the window in front",
     detail:
-      "GOAT presses buttons and fills fields in the background through AT-SPI. Typing keys and clicking at a point bring the window to the front, which a computer use approval has to allow.",
+      (controls ? "GOAT presses buttons and fills fields in the background through AT-SPI. " : "") +
+      "Typing keys and clicking at a point bring the window to the front, which a computer use approval has to allow.",
     guidance: wayland
       ? [
           text(

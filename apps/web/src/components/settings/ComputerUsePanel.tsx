@@ -295,8 +295,8 @@ export function ComputerUsePanel({
             <SettingSwitchRow
               {...searchableSetting("computer-use-full-access")}
               settingKey="cuaFullAccessAutoAdmit"
-              description={`Threads in full access mode use every app on ${hostLabel} without asking, including scheduled tasks and GOAT Bot. Stop and turning computer use off still end them.`}
-              label="Full access without approval"
+              description={`Scheduled tasks, GOAT Bot and other unattended work in full access mode use every app on ${hostLabel} without asking. Threads you direct in full access mode never ask. Stop and turning computer use off still end them.`}
+              label="Unattended work without approval"
               checked={fullAccessAutoAdmit}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaFullAccessAutoAdmit: checked })}

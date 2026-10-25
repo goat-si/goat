@@ -268,14 +268,34 @@ export const codexReloadFixture = (scenario: string) => {
   const reload = (
     first: number,
     cua?: Record<string, unknown>,
-    threads: ReadonlyArray<string> = [nativeThreadId],
-    goalResponse: Record<string, unknown> = { result: { goal: null } },
-    params = threadParams(cua),
-    error?: Record<string, unknown>,
-    thread = threads[0] ?? nativeThreadId,
+    options: {
+      /** The conversation Codex is asked about; the reload unsubscribes and resumes the first. */
+      readonly threads?: ReadonlyArray<string>;
+      readonly goal?: Record<string, unknown>;
+      readonly params?: Record<string, unknown>;
+      /** Answers the resume with this error instead of the thread. */
+      readonly error?: Record<string, unknown>;
+      /** Any change but a new driver also waits for background terminals (#1569). */
+      readonly terminals?: boolean;
+    } = {},
   ) => {
-    threads.forEach((threadId, index) => goalGet(first + index, threadId, goalResponse));
-    const id = first + threads.length;
+    const threads = options.threads ?? [nativeThreadId];
+    const thread = threads[0] ?? nativeThreadId;
+    threads.forEach((threadId, index) =>
+      goalGet(first + index, threadId, options.goal ?? { result: { goal: null } }),
+    );
+    let id = first + threads.length;
+    if (options.terminals)
+      for (const threadId of threads) {
+        entries.push(
+          {
+            type: "expect_outbound",
+            frame: { id, method: "thread/backgroundTerminals/list", params: { threadId } },
+          },
+          { type: "emit_inbound", frame: { id, result: { data: [], nextCursor: null } } },
+        );
+        id++;
+      }
     entries.push(
       {
         type: "expect_outbound",
@@ -283,7 +303,7 @@ export const codexReloadFixture = (scenario: string) => {
       },
       { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
     );
-    resume(id + 1, params, error, thread);
+    resume(id + 1, options.params ?? threadParams(cua), options.error, thread);
     return id + 2;
   };
   // Each helper below drives the fixture's thread unless given another native thread.

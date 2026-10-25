@@ -24,6 +24,7 @@ import {
   type CuaAgentBlock,
   cuaAgentBlockUnder,
   type Handoff,
+  type RunId,
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
@@ -55,9 +56,11 @@ import type {
 } from "./ComputerUseControl.ts";
 import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
+import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
+import { openRuns } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
-import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
+import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
 import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
@@ -122,10 +125,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly active: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseLease>, ComputerUseLeaseError>;
-    /**
-     * The thread other than `except` whose admission reaches an app `apps` names, or any app
-     * when `apps` is absent: a live grant, or unattended work admitted to every app.
-     */
+    /** The thread other than `except` holding what `apps` asks for; see holderOf. */
     readonly holder: (
       except: ThreadId | undefined,
       apps: ReadonlyArray<string> | undefined,
@@ -143,6 +143,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly control: (
       threadId: ThreadId,
       lease: Option.Option<ComputerUseLease>,
+      runId?: RunId,
     ) => Effect.Effect<ComputerUseControl>;
     /**
      * A control on every app without a grant, for a full access thread on a host that admits
@@ -152,7 +153,17 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
+      run?: { readonly person?: boolean; readonly runId?: RunId },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
+    /** The thread's control while an agent can act through it, and the run it was taken for. */
+    readonly attached: (threadId: ThreadId) => Effect.Effect<
+      Option.Option<{
+        readonly controlId: string;
+        readonly runId?: RunId;
+        readonly everyApp: boolean;
+      }>,
+      ComputerUseLeaseError
+    >;
     /**
      * Runs a grant approval's holder check through its commit with unattended claims held off,
      * so neither lands between the other's check and its commit and two unattended threads
@@ -261,8 +272,10 @@ interface ControlRecord extends ComputerUseControl {
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
-  /** Admitted by the full access setting rather than a grant; see everyAppControl. */
-  readonly everyApp?: "interactive" | "unattended";
+  /** Admitted by full access rather than a grant; see everyAppControl. */
+  readonly everyApp?: EveryAppKind;
+  /** The run whose attachment last took this control up. */
+  readonly runId?: RunId;
 }
 
 /** Whether an agent can act on the screen through this control now. */
@@ -277,18 +290,7 @@ const make = Effect.gen(function* () {
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  // A failed read admits nothing, so a control living on the setting ends.
-  const fullAccessAdmitted = Effect.fn("ComputerUseLeases.fullAccessAdmitted")(
-    function* (threadId: ThreadId) {
-      if (Option.isNone(settings)) return false;
-      if (!(yield* settings.value.getSettings).cuaFullAccessAutoAdmit) return false;
-      const rows = yield* sql<{ readonly runtime_mode: string }>`
-        SELECT runtime_mode FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}
-      `;
-      return rows[0]?.runtime_mode === "full-access";
-    },
-    Effect.orElseSucceed(() => false),
-  );
+  const fullAccessAdmitted = makeFullAccessAdmitted(sql, settings);
   const controls = new Map<ThreadId, ControlRecord>();
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
@@ -359,10 +361,18 @@ const make = Effect.gen(function* () {
         DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now),
     );
 
+  // A person's full access run takes the foreground without asking; see ComputerUseForeground.
+  const implyFocus = (record: ControlRecord) => {
+    if (record.everyApp !== "person" || record.runId === undefined) return;
+    if (paused !== undefined || privateHost) return;
+    foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
+  };
+
   const mint = Effect.fn("ComputerUseLeases.mint")(function* (
     threadId: ThreadId,
     lease: Option.Option<ComputerUseLease>,
     everyApp: ControlRecord["everyApp"],
+    runId?: RunId,
   ) {
     const now = yield* DateTime.now;
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
@@ -379,8 +389,13 @@ const make = Effect.gen(function* () {
       existing.everyApp === everyApp &&
       DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
     ) {
-      const reused: ControlRecord = { ...nextTurn(existing), uses: existing.uses + 1 };
+      const reused: ControlRecord = {
+        ...nextTurn(existing),
+        uses: existing.uses + 1,
+        ...(runId === undefined ? {} : { runId }),
+      };
       controls.set(threadId, reused);
+      implyFocus(reused);
       if (existing.idle === true) yield* changed;
       return reused as ComputerUseControl;
     }
@@ -392,6 +407,7 @@ const make = Effect.gen(function* () {
         : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
       ...(handoffId === undefined ? {} : { handoffId }),
       ...(everyApp === undefined ? {} : { everyApp }),
+      ...(runId === undefined ? {} : { runId }),
       uses: 0,
     };
     if (existing !== undefined) {
@@ -405,25 +421,36 @@ const make = Effect.gen(function* () {
       next.controlId,
       everyApp === undefined ? handoffId : undefined,
     );
+    implyFocus(next);
     // New controls publish immediately; reusing an existing control above publishes nothing.
     yield* changed;
     return next as ComputerUseControl;
   });
 
-  const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>) =>
-    mint(threadId, lease, undefined).pipe(Effect.map((record) => record as ComputerUseControl));
+  const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
+    mint(threadId, lease, undefined, runId).pipe(
+      Effect.map((record) => record as ComputerUseControl),
+    );
 
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
+    run?: { readonly person?: boolean; readonly runId?: RunId },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "interactive"));
+      return Option.fromNullishOr(
+        yield* mint(
+          threadId,
+          Option.none(),
+          run?.person === true ? "person" : "interactive",
+          run?.runId,
+        ),
+      );
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
-        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended"));
+        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended", run?.runId));
       }),
     );
   });
@@ -452,7 +479,7 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
-    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
+    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId, record.everyApp))) {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
@@ -699,34 +726,9 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
-  /**
-   * Whether the thread still has a run, provider turn or native subagent open. Native subagents
-   * work through the parent's provider session, and so its control, on their own child threads;
-   * one can outlive a failed parent run. Delegated tasks hold controls of their own.
-   */
-  const openWork = Effect.fn("ComputerUseLeases.openWork")(function* (threadId: ThreadId) {
-    const open = yield* sql<{ readonly one: number }>`
-      WITH RECURSIVE native(child_thread_id, status) AS (
-        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
-        WHERE s.thread_id = ${threadId} AND s.origin = 'provider_native'
-        UNION
-        SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
-        JOIN native n ON s.thread_id = n.child_thread_id
-        WHERE s.origin = 'provider_native'
-      )
-      SELECT 1 AS one FROM orchestration_v2_projection_runs
-      WHERE thread_id = ${threadId}
-        AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
-      UNION ALL
-      SELECT 1 AS one FROM native WHERE status IN ('pending', 'running', 'waiting')
-      UNION ALL
-      SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
-      WHERE status IN ('pending', 'running')
-        AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
-      LIMIT 1
-    `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-    return open.length > 0;
-  });
+  /** Whether the thread still has work open; see ComputerUseOpenWork. */
+  const openWork = (threadId: ThreadId) =>
+    openRuns(sql, threadId).pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
 
   const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
     const before = controls.get(threadId);
@@ -754,23 +756,8 @@ const make = Effect.gen(function* () {
       except: ThreadId | undefined,
       apps: ReadonlyArray<string> | undefined,
     ) {
-      for (const lease of yield* live(undefined, true)) {
-        if (lease.threadId === except) continue;
-        const shared = overlap(lease.apps, apps);
-        if (shared !== undefined)
-          return Option.some<ComputerUseHolder>({
-            threadId: lease.threadId,
-            expiresAt: lease.expiresAt,
-            ...shared,
-          });
-      }
-      const admitted = unattendedEveryApp(except, yield* DateTime.now);
-      return admitted === undefined
-        ? Option.none<ComputerUseHolder>()
-        : Option.some<ComputerUseHolder>({
-            threadId: admitted.threadId,
-            expiresAt: admitted.expiresAt,
-          });
+      const grants = yield* live(undefined, true);
+      return holderOf(grants, except, apps, unattendedEveryApp(except, yield* DateTime.now));
     }),
     channelOrigin: Effect.fn("ComputerUseLeases.channelOrigin")(function* (threadId) {
       const read = <A>(effect: Effect.Effect<A, ChannelBotDirectory.ChannelBotDirectoryError>) =>
@@ -781,6 +768,17 @@ const make = Effect.gen(function* () {
     state,
     control,
     everyAppControl,
+    attached: Effect.fn("ComputerUseLeases.attached")(function* (threadId: ThreadId) {
+      const record = controls.get(threadId);
+      if (record === undefined || !acting(record)) return Option.none();
+      const state = yield* controlState(threadId, record.controlId);
+      if (state._tag !== "active") return Option.none();
+      return Option.some({
+        controlId: record.controlId,
+        everyApp: record.everyApp !== undefined,
+        ...(record.runId === undefined ? {} : { runId: record.runId }),
+      });
+    }),
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
     ...makeForegroundAuthority({

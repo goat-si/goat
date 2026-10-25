@@ -43,13 +43,11 @@ const limitScenario = (scenario: string) =>
     const dropLanes = sessions.set({ ...f.config, nativeSubagentLimit: 0 });
     // The reload that applies the dropped limit; returns the next request id.
     const reloadNoLanes = (first: number, threads?: ReadonlyArray<string>) =>
-      f.reload(
-        first,
-        undefined,
-        threads,
-        undefined,
-        f.threadParams(undefined, f.config, GOAT_MEMORY_TOOLS, NO_LANES),
-      );
+      f.reload(first, undefined, {
+        ...(threads === undefined ? {} : { threads }),
+        params: f.threadParams(undefined, f.config, GOAT_MEMORY_TOOLS, NO_LANES),
+        terminals: true,
+      });
     return { f, dropLanes, reloadNoLanes };
   });
 
@@ -205,11 +203,15 @@ describe("Codex GOAT authority reload (#1569)", () => {
           // Turn 3: the resume fails after Codex dropped the thread, so the turn fails with it.
           const failure = { code: -32603, message: "rollout unavailable" };
           const params = f.threadParams(undefined, rotated);
-          const next = f.reload(5, undefined, undefined, undefined, params, failure);
+          const next = f.reload(5, undefined, { params, error: failure, terminals: true });
           // Turn 4 reloads again, even when the credential is back to the one Codex last applied:
           // the dropped thread needs a resume either way.
           const retried = retry === "rotated" ? params : f.threadParams();
-          yield* f.turnStart(f.reload(next, undefined, undefined, undefined, retried), 4, false);
+          yield* f.turnStart(
+            f.reload(next, undefined, { params: retried, terminals: true }),
+            4,
+            false,
+          );
           f.turnCompleted(4);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -253,7 +255,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
           // changes. Codex ignores the new credential there, so the next turn still reloads.
           const params = f.threadParams(undefined, rotated);
           f.resume(4, params);
-          yield* f.turnStart(f.reload(5, undefined, undefined, undefined, params), 2, false);
+          yield* f.turnStart(f.reload(5, undefined, { params, terminals: true }), 2, false);
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -304,7 +306,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
           );
           const params = f.threadParams(undefined, rotated);
           f.resume(5, params);
-          yield* f.turnStart(f.reload(6, undefined, undefined, undefined, params), 2, false);
+          yield* f.turnStart(f.reload(6, undefined, { params, terminals: true }), 2, false);
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -345,20 +347,17 @@ describe("Codex GOAT authority reload (#1569)", () => {
         f.turnCompleted(1);
         // Turn 2's reload drops the thread and fails to load it again.
         const failure = { code: -32603, message: "rollout unavailable" };
-        f.reload(
-          4,
-          undefined,
-          undefined,
-          undefined,
-          f.threadParams(undefined, credential("b")),
-          failure,
-        );
+        f.reload(4, undefined, {
+          params: f.threadParams(undefined, credential("b")),
+          error: failure,
+          terminals: true,
+        });
         // Rollback finds the thread unloaded and loads it with credential b before reverting.
         f.entries.push(
           {
             type: "expect_outbound",
             frame: {
-              id: 7,
+              id: 8,
               method: "thread/read",
               params: { threadId: f.nativeThreadId, includeTurns: false },
             },
@@ -366,7 +365,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
           {
             type: "emit_inbound",
             frame: {
-              id: 7,
+              id: 8,
               result: {
                 thread: {
                   id: f.nativeThreadId,
@@ -377,12 +376,12 @@ describe("Codex GOAT authority reload (#1569)", () => {
             },
           },
         );
-        f.resume(8, f.threadParams(undefined, credential("b")));
+        f.resume(9, f.threadParams(undefined, credential("b")));
         f.entries.push(
           {
             type: "expect_outbound",
             frame: {
-              id: 9,
+              id: 10,
               method: "thread/turns/list",
               params: {
                 threadId: f.nativeThreadId,
@@ -396,7 +395,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
           {
             type: "emit_inbound",
             frame: {
-              id: 9,
+              id: 10,
               result: {
                 data: [makeCodexReplayTurn({ id: "turn-1", status: "completed" })],
                 nextCursor: null,
@@ -406,17 +405,17 @@ describe("Codex GOAT authority reload (#1569)", () => {
           {
             type: "expect_outbound",
             frame: {
-              id: 10,
+              id: 11,
               method: "thread/revert",
               params: { threadId: f.nativeThreadId, beforeTurnId: "turn-1" },
             },
           },
-          withReplayRequestId(threadResult, 10),
+          withReplayRequestId(threadResult, 11),
         );
         // Now held with b: a resume with c changes nothing, and the next turn reloads c.
         const params = f.threadParams(undefined, credential("c"));
-        f.resume(11, params);
-        yield* f.turnStart(f.reload(12, undefined, undefined, undefined, params), 3, false);
+        f.resume(12, params);
+        yield* f.turnStart(f.reload(13, undefined, { params, terminals: true }), 3, false);
         f.turnCompleted(3);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
@@ -483,15 +482,18 @@ describe("Codex GOAT authority reload (#1569)", () => {
         f.turnCompleted(1);
         f.turnCompleted(2);
         yield* f.turnStart(
-          f.reload(5, undefined, undefined, undefined, f.threadParams(undefined, f.config, [])),
+          f.reload(5, undefined, {
+            params: f.threadParams(undefined, f.config, []),
+            terminals: true,
+          }),
           3,
           false,
         );
         // Revoked while turn 3 runs: deferred, then reloaded once it ends.
-        yield* f.turnStart(9, 4, false);
+        yield* f.turnStart(10, 4, false);
         f.turnCompleted(3);
         f.turnCompleted(4);
-        yield* f.turnStart(f.reload(10), 5, false);
+        yield* f.turnStart(f.reload(11, undefined, { terminals: true }), 5, false);
         f.turnCompleted(5);
         // The registry backs the grant; the adapter offers memory tools only under a live policy.
         const replay = yield* f.openWith({

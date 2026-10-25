@@ -101,13 +101,19 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   "com.apple.passwords",
   "com.1password.1password",
   "com.agilebits.onepassword7",
+  "com.1password.safari",
   "com.bitwarden.desktop",
   "org.keepassxc.keepassxc",
   "com.lastpass.lastpass",
   "com.dashlane.dashlanephonefinal",
+  "com.nordsec.nordpass",
+  "me.proton.pass.electron",
+  "me.proton.pass.catalyst",
 ]);
+// Names cover Windows and Linux, where an app is listed by its executable path or desktop name.
+// Any non-alphanumeric character bounds a word: snap desktop ids and Windows AUMIDs use "_".
 const EXCLUDED_NAME =
-  /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|keychain access|passwords)\b/iu;
+  /(?<![\p{L}\p{N}])(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords)(?![\p{L}\p{N}])/iu;
 /** The driver, and GOAT's helper on Windows, named by their executables. */
 const EXCLUDED_EXECUTABLE = /(^|[\\/])((cua-driver|GOAT Computer Use)\.exe|cua-driver)$/iu;
 
@@ -184,6 +190,15 @@ function excludedCuaApplication(
     EXCLUDED_NAME.test(id) ||
     EXCLUDED_EXECUTABLE.test(id)
   );
+}
+
+/**
+ * Whether a requested app id or name is one the driver never touches (a credential store, the
+ * driver itself), judged without a listing so a request can be refused when the host lists
+ * nothing.
+ */
+export function isExcludedCuaApplication(app: string): boolean {
+  return excludedCuaApplication({ name: app }, app, new Set());
 }
 
 /**

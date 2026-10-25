@@ -170,7 +170,11 @@ describe("Codex computer use attachment", () => {
           yield* f.turnStart(4, 2, true, true);
           f.status(child, "idle");
           f.turnCompleted(2);
-          yield* f.turnStart(f.reload(5, f.managed("control:b"), [root, child]), 3, true);
+          yield* f.turnStart(
+            f.reload(5, f.managed("control:b"), { threads: [root, child] }),
+            3,
+            true,
+          );
           f.turnCompleted(3);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -423,7 +427,11 @@ describe("Codex computer use attachment", () => {
           goalNotice(childGoal(child, "active", 101));
           f.status(child, "idle");
           f.turnCompleted(1);
-          yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+          yield* f.turnStart(
+            f.reload(4, f.managed("control:b"), { threads: [root, child] }),
+            2,
+            true,
+          );
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -503,7 +511,11 @@ describe("Codex computer use attachment", () => {
         // Codex keeps a loaded child whose turn failed in systemError until it runs again.
         f.status(child, "systemError");
         f.turnCompleted(1);
-        yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+        yield* f.turnStart(
+          f.reload(4, f.managed("control:b"), { threads: [root, child] }),
+          2,
+          true,
+        );
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
@@ -534,7 +546,7 @@ describe("Codex computer use attachment", () => {
         yield* f.turnStart(3, 1, true);
         f.turnCompleted(1);
         const off = { error: { code: -32600, message: "goals feature is disabled" } };
-        yield* f.turnStart(f.reload(4, f.managed("control:b"), undefined, off), 2, true);
+        yield* f.turnStart(f.reload(4, f.managed("control:b"), { goal: off }), 2, true);
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
@@ -585,7 +597,7 @@ describe("Codex computer use attachment", () => {
           f.resume(4, params, undefined, forked);
           // With computer use removed, the quiet fork reloads with the managed driver switched off.
           const off = f.threadParams({ ...f.managed("control:a"), enabled: false });
-          const turn = f.reload(5, undefined, [forked], undefined, off);
+          const turn = f.reload(5, undefined, { threads: [forked], params: off });
           yield* f.turnStart(turn, 1, false, false, forked);
           f.turnCompleted(1, forked);
           const replay = yield* f.open;
@@ -611,6 +623,66 @@ describe("Codex computer use attachment", () => {
               f.managed("control:a"),
               { ...f.managed("control:a"), enabled: false },
             ],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("waits for a root left in systemError to run a turn before reloading it (#1569)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("cua-root-failed");
+        const withCua = (control: string) => ({
+          ...f.config,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a"));
+        f.start(f.managed("control:a"));
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        // Codex resumes a thread cold only from idle: a failed root would keep its old config.
+        f.status("cua-root-failed", "systemError");
+        yield* f.turnStart(4, 2, true, true);
+        f.turnCompleted(2);
+        yield* f.turnStart(f.reload(5, f.managed("control:b")), 3, true);
+        f.turnCompleted(3);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b"));
+        for (const ordinal of [2, 3]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [f.managed("control:a"), f.managed("control:b")],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "counts a running subagent as its thread's background work after the parent turn ends (#1571)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "background-child";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnCodexChild(f, root, root + "-agent");
+          f.status(root + "-agent", "active");
+          f.turnCompleted(1);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          assert.isTrue(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),

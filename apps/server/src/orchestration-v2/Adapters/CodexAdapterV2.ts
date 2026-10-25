@@ -1315,12 +1315,13 @@ const approvalOwnerCodexTurn = (
   return { owner, subagent };
 };
 
-/** Whether a subagent thread descends, however deeply, from a turn of this provider thread. */
-const ownsCodexSubagent = (providerThreadId: string, subagent: CodexSubagentThreadContext) => {
-  for (let parent: ActiveCodexTurnContext | undefined = subagent.parentContext; parent;) {
-    if (parent.providerThread.id === providerThreadId) return true;
-    parent = parent.subagent?.parentContext;
-  }
+/** Whether this turn, or any turn it descends from, belongs to the provider thread. */
+const descendsFromCodexThread = (
+  context: ActiveCodexTurnContext | undefined,
+  providerThreadId: string,
+): boolean => {
+  for (let turn = context; turn; turn = turn.subagent?.parentContext)
+    if (turn.providerThread.id === providerThreadId) return true;
   return false;
 };
 
@@ -7198,7 +7199,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // so a later turn retries.
             const conversation = [threadId];
             for (const [nativeId, subagent] of yield* Ref.get(subagentThreads))
-              if (ownsCodexSubagent(turnInput.providerThread.id, subagent))
+              if (descendsFromCodexThread(subagent.parentContext, turnInput.providerThread.id))
                 conversation.push(nativeId);
             const applied = credentialsByThread.get(threadId);
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
@@ -7206,12 +7207,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               applied !== next ||
               (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey ||
               threadStatuses.dropped(threadId);
-            const busy = stale && (yield* threadStatuses.busy(client, conversation));
-            const computerUseDeferred =
-              busy &&
-              applied !== undefined &&
-              next !== undefined &&
-              cuaPartOf(applied) !== cuaPartOf(next);
+            const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            // Other changes wait for background terminals too; a new driver does not (#1569).
+            const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
+            const busy =
+              stale && (yield* threadStatuses.busy(client, conversation, !driverChanged));
+            const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (stale && !busy) {
               const previousCuaDriver = managedCuaByThread.get(threadId);
               const detached = {
@@ -7533,30 +7534,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           hasPendingBackgroundWorkForThread: Effect.fn(
             "CodexAdapterV2.hasPendingBackgroundWorkForThread",
           )(function* (providerThread) {
-            const contexts = [
-              ...(yield* Ref.get(activeTurns)).values(),
+            // Owned through any turn it descends from, even one gone from both maps while its work
+            // runs (#1571), so an intermediate parent's thread counts its running subagents too.
+            const owned = (context: ActiveCodexTurnContext) =>
+              descendsFromCodexThread(context, providerThread.id);
+            const active = yield* Ref.get(activeTurns);
+            for (const context of [
+              ...active.values(),
               ...(yield* Ref.get(settledTurns)).values(),
-            ];
-            const roots = contexts.filter(
-              (context) => context.providerThread.id === providerThread.id,
-            );
-            // A parent turn that kept no work of its own is gone from both maps (#1571).
+            ]) {
+              if (!owned(context)) continue;
+              if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+              if (context.subagent !== null && active.has(context.nativeTurnId)) return true;
+            }
             for (const subagent of (yield* Ref.get(subagentThreads)).values())
               if (
-                subagent.task.status === "running" &&
-                ownsCodexSubagent(providerThread.id, subagent)
+                (subagent.task.status === "running" || subagent.task.status === "pending") &&
+                owned(subagent.parentContext)
               )
                 return true;
-            for (const context of contexts) {
-              if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
-                continue;
-              if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
-              if (
-                context.subagent !== null &&
-                (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
-              )
-                return true;
-            }
             return false;
           }),
           ensureThread: (threadInput) =>
