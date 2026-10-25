@@ -27,7 +27,6 @@ import * as Client from "effect/sql/SqlClient";
 import type { Borrower, Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
-
 import { satisfiesSemverRange } from "./semver.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
@@ -144,10 +143,8 @@ export class UnsupportedNodeSqliteOperationError extends Schema.TaggedError<Unsu
   }
 }
 
-/**
- * Before 24.16.0 and 26.1.0, `node:sqlite` returns a TEXT value cut off at its first
- * NUL character (nodejs/node#61954). The server's `engines.node` is this same range.
- */
+// `node:sqlite` before 24.16.0 and 26.1.0 cuts TEXT off at a NUL (nodejs/node#61954).
+// The server's `engines.node` is this same range.
 export const NODE_SQLITE_RUNTIME_RANGE = "^24.16.0 || >=26.1.0";
 
 const checkNodeSqliteCompat = () => {
