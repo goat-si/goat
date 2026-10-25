@@ -863,6 +863,42 @@ describe("Codex computer use attachment", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("waits for a root left in systemError to run a turn before reloading it (#1569)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("cua-root-failed");
+        const withCua = (control: string) => ({
+          ...f.config,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a"));
+        f.start(f.managed("control:a"));
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        // Codex resumes a thread cold only from idle: a failed root would keep its old config.
+        f.status("cua-root-failed", "systemError");
+        yield* f.turnStart(4, 2, true, true);
+        f.turnCompleted(2);
+        yield* f.turnStart(f.reload(5, f.managed("control:b")), 3, true);
+        f.turnCompleted(3);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b"));
+        for (const ordinal of [2, 3]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [f.managed("control:a"), f.managed("control:b")],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>
     Effect.scoped(
       Effect.gen(function* () {
