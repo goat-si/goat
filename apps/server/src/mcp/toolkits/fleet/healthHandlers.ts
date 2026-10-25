@@ -69,9 +69,9 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
         input.host,
         "No new goal work is placed on " +
           input.host +
-          ". Goal workers run only on this machine for now, so draining moves no goal attempt." +
-          " goat_thread_reschedule moves another thread by hand; a goal keeps following the" +
-          " original thread, not the moved one.",
+          ". Draining does not move goal attempts yet; a failed or lost one moves when its goal" +
+          " recovers it. goat_thread_reschedule moves another thread by hand; a goal keeps" +
+          " following the original thread, not the moved one.",
       );
     }),
   ),
@@ -185,7 +185,10 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
               " on its own branch." +
               (ceilingAdvice === undefined ? "" : " " + ceilingAdvice),
           }
-        : { status: "refused" as const, reason: result.reason, message: result.message };
+        : result._tag === "Unconfirmed"
+          ? // A person's move retries on the same host, so the outcome is a refusal for now.
+            { status: "refused" as const, reason: "no_capacity" as const, message: result.message }
+          : { status: "refused" as const, reason: result.reason, message: result.message };
     }),
   ),
 });

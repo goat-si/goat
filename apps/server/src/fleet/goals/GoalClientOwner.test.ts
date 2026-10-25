@@ -22,16 +22,19 @@ import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as SessionStore from "../../auth/SessionStore.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
+import * as FleetSync from "../../goatclaw/FleetSync.ts";
 import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as HostThreadsMcpService from "../../mcp/HostThreadsMcpService.ts";
 import * as LaunchWatchService from "../../mcp/LaunchWatchService.ts";
 import type { McpInvocationScope } from "../../mcp/McpInvocationContext.ts";
 import { liveThreadShell } from "../../mcp/McpToolAccess.testkit.ts";
 import * as ThreadLaunchMcpService from "../../mcp/ThreadLaunchMcpService.ts";
+import { ProjectStoreV2 } from "../../orchestration-v2/ProjectStore.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as PullRequestService from "../../pullRequest/PullRequestService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as FleetDefaults from "../defaults.ts";
 import { Health } from "../health/Health.ts";
 import { Fallback } from "../resources/Fallback.ts";
@@ -79,6 +82,10 @@ const makeWorld = (): World => ({
 
 const edge = (world: World) =>
   Layer.mergeAll(
+    // Every worker here runs on this machine.
+    Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+    Layer.mock(FleetSync.GoatclawFleetSync)({}),
+    Layer.mock(ProjectStoreV2)({}),
     Layer.mock(ThreadManagement.ThreadManagementService)({
       getThreadShell: (threadId) => Effect.succeed(world.threads.get(threadId) ?? null),
       assertReviewTaskSendAllowed: () => Effect.void,

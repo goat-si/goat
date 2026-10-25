@@ -169,6 +169,8 @@ const runtimeFor = (world: World) =>
         if (world.stopOnInterrupt)
           setRun(world, threadId, world.shells.get(threadId)!.latestRunId!, "interrupted");
       }),
+    project: () => Effect.succeed(null),
+    moveAuthority: () => Effect.die("unused"),
   });
 
 const project = (world: World) =>
@@ -229,6 +231,7 @@ const layerFor = (world: World) =>
               world.rescheduled.push(request);
               return { _tag: "Refused" as const, reason: "no_capacity" as const, message: "no" };
             }),
+          findMove: () => Effect.succeed({ _tag: "NotLaunched" as const }),
         }),
         Layer.succeed(Fallback, {
           next: () => Effect.succeed({ _tag: "Exhausted" as const, reason: "No chain." }),
