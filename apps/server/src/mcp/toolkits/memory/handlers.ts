@@ -135,17 +135,19 @@ const failureShape = (error: unknown) => {
 };
 
 /** Failures the caller cannot act on are logged by shape so they are never silent. */
-const memoryFailure = (tool: string) => (error: unknown) => {
-  if (isRefusal(error)) return Effect.fail(error);
-  const mapped = memoryError(error);
-  return mapped.code === "invalid_output" || mapped.code === "storage_failed"
-    ? Effect.logWarning("memory tool failed", {
-        tool,
-        code: mapped.code,
-        ...failureShape(error),
-      }).pipe(Effect.andThen(Effect.fail(mapped)))
-    : Effect.fail(mapped);
-};
+const memoryFailure =
+  (tool: string) =>
+  (error: unknown): Effect.Effect<never, M.MemoryRpcError | M.OrchestratorMcpFailure> => {
+    if (isRefusal(error)) return Effect.fail(error);
+    const mapped = memoryError(error);
+    return mapped.code === "invalid_output" || mapped.code === "storage_failed"
+      ? Effect.logWarning("memory tool failed", {
+          tool,
+          code: mapped.code,
+          ...failureShape(error),
+        }).pipe(Effect.andThen(Effect.fail(mapped)))
+      : Effect.fail(mapped);
+  };
 
 const decodeSearch = argumentsOf("memory_search", M.MemorySearchInput);
 const decodeList = argumentsOf("memory_list", M.MemoryListInput);

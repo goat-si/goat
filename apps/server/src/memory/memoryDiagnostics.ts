@@ -31,7 +31,7 @@ const reasonOf = (issue: SchemaIssue.Leaf): SchemaIssueEntry["reason"] => {
  * Object keys can be input too: an unexpected key is reported on its parent, and any segment that
  * is not a plain field name or index is masked.
  */
-export const schemaIssueEntries = (root: SchemaIssue.Issue): ReadonlyArray<SchemaIssueEntry> => {
+const schemaIssueEntries = (root: SchemaIssue.Issue): ReadonlyArray<SchemaIssueEntry> => {
   const entries = new Map<string, SchemaIssueEntry>();
   const visit = (issue: SchemaIssue.Issue, path: ReadonlyArray<PropertyKey>): void => {
     switch (issue._tag) {

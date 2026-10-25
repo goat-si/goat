@@ -26,6 +26,7 @@ const decodeReceipt = Schema.decodeUnknownEffect(M.MemoryMutationReceipt);
 const decodePage = Schema.decodeUnknownEffect(M.MemoryPage);
 const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const encodeError = Schema.encodeSync(M.MemoryRpcError);
+const decodeRefusal = Schema.decodeUnknownEffect(M.OrchestratorMcpFailure);
 
 it("registers all nine core tools", () => {
   expect(Object.keys(MemoryToolkit.tools).sort()).toEqual([...M.MEMORY_MCP_TOOLS].sort());
@@ -120,32 +121,37 @@ it.effect(
       ] as const) {
         const { result, body } = yield* Fixture.call(name, input);
         expect(result.isError).toBe(true);
-        expect(body).toMatchObject({ code: "invalid_request" });
-        for (const field of fields) expect(body.message).toContain(field);
-        expect(body.message).toContain("goat_memory_sync_status");
+        const refusal = yield* decodeRefusal(body);
+        expect(refusal.code).toBe("invalid_request");
+        for (const field of fields) expect(refusal.message).toContain(field);
+        expect(refusal.message).toContain("goat_memory_sync_status");
         expect(yield* Fixture.callThroughGoatCall(name, input)).toMatchObject({
           status: "error",
           error: { code: "invalid_request", reason: "invalid_request", retryable: false },
         });
       }
       const rejected = "not-a-space-synthetic-value";
-      const { body } = yield* Fixture.call("goat_memory_list", {
-        memorySpaceId: rejected,
-        includeQuarantined: false,
-      });
-      expect(body).toMatchObject({ code: "invalid_request" });
-      expect(body.message).toContain("memorySpaceId");
-      expect(body.message).not.toContain(rejected);
+      const invalid = yield* decodeRefusal(
+        (yield* Fixture.call("goat_memory_list", {
+          memorySpaceId: rejected,
+          includeQuarantined: false,
+        })).body,
+      );
+      expect(invalid.code).toBe("invalid_request");
+      expect(invalid.message).toContain("memorySpaceId");
+      expect(invalid.message).not.toContain(rejected);
       const key = "synthetic private key text";
-      const nested = yield* Fixture.call("goat_memory_list", {
-        memorySpaceId: Fixture.space,
-        includeQuarantined: false,
-        scope: { kind: "user", [key]: rejected },
-      });
-      expect(nested.body).toMatchObject({ code: "invalid_request" });
-      expect(nested.body.message).toContain("scope");
-      expect(nested.body.message).not.toContain(key);
-      expect(nested.body.message).not.toContain(rejected);
+      const nested = yield* decodeRefusal(
+        (yield* Fixture.call("goat_memory_list", {
+          memorySpaceId: Fixture.space,
+          includeQuarantined: false,
+          scope: { kind: "user", [key]: rejected },
+        })).body,
+      );
+      expect(nested.code).toBe("invalid_request");
+      expect(nested.message).toContain("scope");
+      expect(nested.message).not.toContain(key);
+      expect(nested.message).not.toContain(rejected);
     }).pipe(Effect.provide(Fixture.layer)),
 );
 
