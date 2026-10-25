@@ -56,6 +56,17 @@ export const markActed = <C extends ComputerUseControl & { readonly ended?: unkn
 export const nextTurn = <C extends ComputerUseControl>({ idle, acted, ...rest }: C) =>
   idle !== true && acted === true ? { ...rest, acted } : rest;
 
+/**
+ * Whether a person sees a card for this control in this state: its agent acted through it, and
+ * a person stopped it or one of its turns is live (#1360, #1555). The session list and the
+ * stopped-card merge both judge by this, so a thread never shows two cards or none.
+ */
+export const hasCard = (control: ComputerUseControl, state: ComputerUseControlState) =>
+  control.acted === true &&
+  (state._tag === "ended"
+    ? state.reason === "stopped" || state.reason === "stopped_all"
+    : control.idle !== true);
+
 export type ComputerUseControlState =
   | {
       readonly _tag: "active";
