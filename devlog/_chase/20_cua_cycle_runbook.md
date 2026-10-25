@@ -116,17 +116,24 @@ git -C .. diff "$OLD" "$NEW" -- rust/Cargo.lock | rg '^\+name = '   # 새 crate�
 
 ## 7. 후보 아티팩트
 
-`RELEASE_SHA`에서 포크 CI가 만든 아카이브, `SHA256SUMS`, SDK를 내려받아 검증한다.
+`RELEASE_SHA`에서 포크 CI가 만든 아카이브, `SHA256SUMS`, SDK를 내려받아 검증한다. artifact 이름과 배치는 #1590이 정한다.
+`gh run download`는 artifact마다 하위 폴더를 만들므로 아래는 `$CAND/<artifact>/` 아래의 파일을 찾는다.
 
 ```bash
-gh run download <run-id> -R goat-si/cua-driver -D "../cua-candidates-$VER"
-shasum -a 256 ../cua-candidates-$VER/*
-gh attestation verify "../cua-candidates-$VER/<archive>" --repo goat-si/cua-driver \
-  --signer-workflow goat-si/cua-driver/.github/workflows/<build workflow> \
-  --source-digest "$RELEASE_SHA" --source-ref refs/heads/main
+CAND="../cua-candidates-$VER"
+gh run download <run-id> -R goat-si/cua-driver -D "$CAND"
+SUMS=$(find "$CAND" -name SHA256SUMS)   # 하나여야 한다
+find "$CAND" -type f \( -name 'cua-driver-rs-*.tar.gz' -o -name 'cua-driver-rs-*.zip' \) | while read -r a; do
+  want=$(awk -v n="$(basename "$a")" '$2 == n || $2 == "*" n { print $1 }' "$SUMS")
+  have=$(shasum -a 256 "$a" | cut -d' ' -f1)
+  [ -n "$want" ] && [ "$want" = "$have" ] || { echo "SHA256SUMS mismatch: $a"; exit 1; }
+  gh attestation verify "$a" --repo goat-si/cua-driver \
+    --signer-workflow goat-si/cua-driver/.github/workflows/<build workflow> \
+    --source-digest "$RELEASE_SHA" --source-ref refs/heads/main || exit 1
+done
 ```
 
-크기, SHA-256, attestation 중 하나라도 어긋나면 멈춘다.
+아카이브 다섯 개(`cuaDriverRelease.ts:11-37`의 플랫폼마다 하나)가 모두 통과해야 한다. 하나라도 어긋나면 멈춘다. 크기는 8번에서 pin과 함께 확인된다.
 
 ## 8. GOAT pin 검증 (후보로)
 

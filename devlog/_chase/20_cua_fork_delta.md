@@ -70,14 +70,17 @@ trycua/cua `main`에 별도 PR로 보내며, 드라이버 문제는 upstream에 
 ### `privacy-defaults` 텔레메트리와 업데이트 확인
 
 - 변경: 없음 (포크는 기본값을 바꾸지 않았다)
-- 경로: `rust/crates/cua-driver/Cargo.toml:37`, `vendor/cua/crates/cua-telemetry/`
+- 경로: `rust/crates/cua-driver/src/telemetry.rs`, `rust/crates/cua-driver/Cargo.toml:37`, `vendor/cua/crates/cua-telemetry/`
 - upstream: 해당 없음
 - 상태: 적용 (GOAT 쪽 설정으로)
-- 정책: upstream 0.37.0부터 드라이버는 `cua-telemetry`를 `default-features = false`로 링크해 HTTP 전송 코드가 빠지고, 이벤트는
-  로컬에서만 기록된다. 기본으로 켜진 텔레메트리 설정과 GitHub 업데이트 확인은 GOAT가 환경 변수로 끈다
-  (`cuaDriverRelease.ts:85-91`, `:140-148`, [ADR-0022](../../structure/decisions/ADR-0022-cua-driver-computer-use.md)). 사이클마다
-  `default-features = false` 줄이 남았는지, 새 전송 경로나 endpoint가 없는지, 그 환경 변수 이름이 그대로인지 확인한다. 이름이
-  바뀌면 같은 pin bump에서 `cuaDriverRelease.ts`를 고친다. 포크에서 기본값 자체를 끌지는 [20.001](./20.001_cua_chase_fork_bootstrap.md)의 결정이다.
+- 정책: 전송 경로가 둘이다. 공유 crate `cua-telemetry`는 0.37.0부터 `default-features = false`로 링크되어 그 crate의 HTTP 전송
+  코드는 빠진다 (`Cargo.toml:37`). 드라이버 자신의 `telemetry.rs`는 `ureq`로 PostHog에 보내는 코드를 따로 가지고 있고
+  (`telemetry.rs:25`, `:2225`), 아무 설정이 없으면 켜져 있다 (`:241`). 이 전송과 GitHub 업데이트 확인은 GOAT가 환경 변수로 끈다
+  (`cuaDriverRelease.ts:85-91`, `:140-148`, [ADR-0022](../../structure/decisions/ADR-0022-cua-driver-computer-use.md)). 사이클마다 두
+  경로를 모두 본다: `default-features = false` 줄이 남았는지, `telemetry.rs`가 읽는 끄기 스위치(`CUA_DRIVER_RS_TELEMETRY_ENABLED`,
+  `CUA_TELEMETRY_ENABLED`, `DO_NOT_TRACK`, `CUA_TELEMETRY`)와 업데이트 확인 스위치가 그대로인지, 새 전송 경로나 endpoint가 없는지.
+  이름이 바뀌면 같은 pin bump에서 `cuaDriverRelease.ts`를 고친다. 포크에서 드라이버 전송을 기본으로 끄거나 빼는지는
+  [20.001](./20.001_cua_chase_fork_bootstrap.md)의 결정이다.
 
 ### `protocol-compat` 0.37.0 프로토콜 표면
 
@@ -133,4 +136,5 @@ trycua/cua `main`에 별도 PR로 보내며, 드라이버 문제는 upstream에 
 - **새 crate의 라이선스.** `Cargo.lock`에 새로 들어온 패키지를 `cargo deny`가 통과시켜도 고지에 반영한다.
 - **split 밖 파일.** monorepo 루트의 라이선스 파일과 workflow, `vendor/`의 원본(`libs/cua/crates/cua-telemetry`,
   `libs/cua/Cargo.toml`, `targets.json`, `sandbox-images.json`). split diff에는 보이지 않는다.
-- **toolchain과 텔레메트리 feature.** `rust/rust-toolchain.toml`과 `cua-driver/Cargo.toml`의 `default-features = false`.
+- **toolchain과 텔레메트리.** `rust/rust-toolchain.toml`, `cua-driver/Cargo.toml`의 `default-features = false`, 드라이버 `telemetry.rs`의
+  전송 대상과 끄기 스위치 (`privacy-defaults`).
