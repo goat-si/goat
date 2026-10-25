@@ -286,7 +286,7 @@ hash, so its grants stop applying after a rebuild and System Settings adds anoth
 same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
 
 A signed macOS package always carries the Developer ID helper in `GOAT.app/Contents/Helpers`.
-An unsigned one carries an ad-hoc helper when asked to:
+An unsigned one keeps computer use off unless built with an ad-hoc helper:
 
 ```sh
 node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
