@@ -259,6 +259,8 @@ function SessionThumbnail({
 }) {
   const { themeVariables } = useAppearancePreferences();
   if (session.owner === "private") return <Placeholder text="Private (paused)" />;
+  // A person who took over works in their own view; other viewers' cards do not watch them.
+  if (session.owner === "human") return <Placeholder text="A person is in control" />;
   if (
     session.target.kind === "browser" &&
     session.capabilities.frames &&
