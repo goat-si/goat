@@ -26,7 +26,8 @@ the goal allows, one worker per goal at a time and only between runs, so a runni
 interrupted. A moved worker starts again from its pushed branch, or from the goal's base branch when
 nothing was pushed; anything it did not push stays on the drained host. A worker that cannot move,
 because no allowed host can take it or it is on its last attempt, stays where it is and its goal
-says why. Uncordoning the host stops further moves.
+says why. A worker that only waits for its pull request to merge stays until it needs another turn.
+Uncordoning the host stops further moves.
 
 An agent outside GOAT can declare a goal too, with its MCP sign-in or a
 [client token](outside-agents.md#long-running-orchestrators) approved for more than read-only

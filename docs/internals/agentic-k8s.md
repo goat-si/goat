@@ -457,16 +457,18 @@ at). Cordon only stops new placement, like `kubectl cordon`. Drain also moves go
 only between runs, one move per goal at a time (a fixed `maxUnavailable: 1` in PodDisruptionBudget
 terms, [disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)), never
 interrupting a running turn or touching threads that no goal owns. The goal controller asks for a
-`drain` reschedule once an attempt's run has finished, on #1451's move path. Three things keep it
-safe across passes and restarts: the goal store admits a move only while no other move of the goal
-is unsettled, since an unsettled one may have started its successor; the Rescheduler checks that the
-source still drains and its attempt is stopped on the planned run right before every remote write,
-ahead of the owner's last authority check, so an uncordon or a new run calls the move off; and a
-move that may have started is only looked up, never sent again. An attempt on this machine moves
-too, from its pushed branch or the goal's base, never a replica. An attempt that cannot move (its
-last attempt, or a destination that refused it for good) waits for a person instead of starting
-new turns on the draining host. `goat_thread_reschedule` moves a thread by hand, but a goal keeps
-following the original thread. `goat_host_uncordon` clears both and stops further drain moves.
+`drain` reschedule, on #1451's move path, where it would otherwise give a finished attempt its next
+turn; an attempt that only waits for its pull request to merge stays, since nothing more runs there.
+Three things keep it safe across passes and restarts: the goal store admits a move only while no
+other move of the goal is unsettled, since an unsettled one may have started its successor; the
+Rescheduler checks that the source still drains and its attempt is stopped on the planned run right
+before every remote write, ahead of the owner's last authority check, so an uncordon or a new run
+calls the move off; and a move that may have started is only looked up, never sent again. An attempt
+on this machine moves too, from its pushed branch or the goal's base, never a replica. An attempt
+that cannot move (its last attempt, or a destination that refused it for good) waits for a person
+instead of starting new turns on the draining host. `goat_thread_reschedule` moves a thread by hand,
+but a goal keeps following the original thread. `goat_host_uncordon` clears both and stops further
+drain moves.
 
 ### Thread health
 

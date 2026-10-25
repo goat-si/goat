@@ -860,6 +860,37 @@ describe("drain moves attempts idle between runs off a draining host (#1130)", (
     ]);
   });
 
+  it("leaves an attempt that only waits for its pull request to merge: no next turn runs there", () => {
+    const merging = testGoal("goal_dr", {
+      spec: testSpec({ doneWhen: [{ type: "pull_requests_merged" }] }),
+    });
+    const waiting = running(merging, 0, {
+      host: "A",
+      pullRequest: { number: 7, state: "open", checks: "passing" },
+    });
+    const plan = planGoal(
+      merging,
+      [waiting],
+      draining(["A"], [[0, idle()]], {
+        pullRequests: new Map([[7, { kind: "seen", state: "open", checks: "passing" }]]),
+      }),
+    );
+    expect(plan.actions).toEqual([]);
+    expect(plan.workers[0]).toMatchObject({
+      state: "running",
+      note: "Waiting for the pull request to merge.",
+    });
+    // Its checks fail: the fix would be a turn on the draining host, so it moves instead.
+    const failing = planGoal(
+      merging,
+      [waiting],
+      draining(["A"], [[0, idle()]], {
+        pullRequests: new Map([[7, { kind: "seen", state: "open", checks: "failing" }]]),
+      }),
+    );
+    expect(failing.actions).toEqual([drainOf(0)]);
+  });
+
   it("moves one slot at a time: one drain per pass, none while any move of the goal is unsettled", () => {
     const workers = [running(pair, 0, { host: "A" }), running(pair, 1, { host: "A" })];
     const both = planGoal(
