@@ -93,6 +93,8 @@ private final class FakeAX: WindowAXFunctions {
   var subroles: [String: WindowAXAttribute] = [:]
   var childrenMap: [String: WindowAXAttribute] = [:]
   var parents: [String: String] = [:]
+  // AXUIElementGetAttributeValueCount results for AXChildren; unset falls back to the children read.
+  var childCounts: [String: WindowAXCount] = [:]
   var missingSubrole = false
   var duplicateTarget = false
   var unknownMapping = false
@@ -169,6 +171,17 @@ private final class FakeAX: WindowAXFunctions {
       if element.same(window) || element.same(other) { return .element(app) }
       return .failure
     default: return .failure
+    }
+  }
+  func childCount(_ element: WindowAXElement) -> WindowAXCount {
+    queries.append("\(key(element)):AXChildrenCount")
+    if let count = childCounts[key(element)] { return count }
+    switch attribute(element, "AXChildren") {
+    case .elements(let list): return .count(list.count)
+    case .absent: return .absent
+    case .unsupported: return .unsupported
+    case .error(let code): return .error(code)
+    default: return .error(-25200)
     }
   }
   /// Bounded read like AXUIElementCopyAttributeValues: at most `max` children come back.
@@ -390,7 +403,7 @@ private func runObserverFixture(_ scenario: String) {
       f.start()
       f.unsupported("no focus with a \(defect) window tree fails closed")
       check(f.api.observerCount == 0, "the tree check precedes observation (\(defect))")
-      let expected = ["secure": "tree_subrole:AXTextField", "unreadable": "tree_children_unreadable:AXGroup",
+      let expected = ["secure": "tree_subrole:AXTextField", "unreadable": "tree_children_unreadable:AXGroup:count_err25200",
         "huge": "tree_node_limit", "unsupported-focus": "focus_unsupported", "unknown": "tree_role:AXUnknown",
         "opaque-web": "tree_children_unsupported:AXWebArea"][defect] ?? ""
       check(f.events.last == "unsupported:private_or_unknown_focus:" + expected,
@@ -512,15 +525,29 @@ private func runObserverFixture(_ scenario: String) {
     // WS13's rerun: reading a Calculator button's AXChildren returns an AX error, not noValue.
     let erring = WatchFixture()
     calculator(erring.api)
-    for i in 0..<53 { erring.api.childrenMap["key-\(i)"] = .error(-25204) }
+    for i in 0..<53 {
+      erring.api.childrenMap["key-\(i)"] = .error(-25204)
+      erring.api.childCounts["key-\(i)"] = .count(0)
+    }
     erring.start()
-    check(erring.events == ["ready"], "a leaf button whose child read errors has no children: \(erring.events)")
+    check(erring.events == ["ready"], "a child read that errors but counts zero means no children: \(erring.events)")
+    // A role proves nothing about children: a "button" hiding a secure field behind a failing read refuses.
+    for (count, reason) in [(WindowAXCount.count(1), "tree_children_unreadable:AXButton:err25204:count1"),
+                            (WindowAXCount.error(-25204), "tree_children_unreadable:AXButton:err25204:count_err25204")] {
+      let f = WatchFixture()
+      calculator(f.api)
+      for i in 0..<53 { f.api.childrenMap["key-\(i)"] = .error(-25204); f.api.childCounts["key-\(i)"] = .count(0) }
+      f.api.childCounts["key-7"] = count
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:" + reason],
+        "a button whose child read errors and whose count is not zero refuses: \(f.events)")
+    }
     let container = WatchFixture()
     calculator(container.api)
     container.api.childrenMap["keypad"] = .error(-25204)
     container.start()
-    check(container.events == ["unsupported:private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204"],
-      "a container whose child read errors refuses with the code: \(container.events)")
+    check(container.events == ["unsupported:private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204:count_err25204"],
+      "a container whose child read and count both error refuses with the codes: \(container.events)")
     // Every distinct problem in one run, so a live check shows all remaining blockers at once.
     let several = WatchFixture()
     calculator(several.api)

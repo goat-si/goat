@@ -48,6 +48,13 @@ protocol WindowAXSubscription: AnyObject {
   func detach()
 }
 
+enum WindowAXCount {
+  case count(Int)
+  case absent
+  case unsupported
+  case error(Int32)
+}
+
 protocol WindowAXFunctions: AnyObject {
   func trusted() -> Bool
   func ownerPID(_ windowID: UInt32) -> Int32?
@@ -57,6 +64,8 @@ protocol WindowAXFunctions: AnyObject {
   func attribute(_ element: WindowAXElement, _ name: String) -> WindowAXAttribute
   /// AXChildren, fetching at most `max` elements so a huge container is never copied whole.
   func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute
+  /// How many AXChildren an element reports, as separate evidence when reading them fails.
+  func childCount(_ element: WindowAXElement) -> WindowAXCount
   func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void)
     -> WindowAXSubscription?
 }
@@ -480,17 +489,32 @@ final class WindowAXWatch: SettleWatch {
         guard children.count <= budget else { note("tree_node_limit"); break walk }
         pending.append(contentsOf: children.map { ($0, depth + 1) })
       case .absent: break
-      // A leaf role cannot hold a secure field, so an unsupported or failing child read there means
-      // no children (Calculator's buttons return an AX error, #1585). A container must list them.
       case .unsupported: if !isLeaf { note("tree_children_unsupported:" + Self.axName(role)) }
-      case .error(let code): if !isLeaf { note("tree_children_unreadable:\(Self.axName(role)):err\(abs(Int(code)))") }
-      default: if !isLeaf { note("tree_children_unreadable:" + Self.axName(role)) }
+      // A failing read proves nothing about children, whatever the role (Calculator's buttons return
+      // an AX error, #1585); only a separate count of zero shows the node is empty.
+      case .error(let code):
+        if let problem = emptyChildrenProblem(node, role: role, read: ":err\(abs(Int(code)))") { note(problem) }
+      default:
+        if let problem = emptyChildrenProblem(node, role: role, read: "") { note(problem) }
       }
     }
     // An unknown focus the walk never reached was never judged by it (its parent and the window's
     // children disagree), so it refuses.
     if !reachedAllowed { note("focus_not_in_tree") }
     return problems.isEmpty ? nil : Self.privacy(problems.joined(separator: ","))
+  }
+
+  /// Nil when an element whose children could not be read reports zero children; otherwise the
+  /// problem, naming the read error and what the count said.
+  private func emptyChildrenProblem(_ node: WindowAXElement, role: String, read: String) -> String? {
+    let problem = "tree_children_unreadable:" + Self.axName(role) + read
+    guard isAdmitted else { return problem }
+    switch api.childCount(node) {
+    case .count(0), .absent: return nil
+    case .count(let n): return problem + ":count\(n)"
+    case .unsupported: return problem + ":count_unsupported"
+    case .error(let code): return problem + ":count_err\(abs(Int(code)))"
+    }
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {
@@ -649,6 +673,15 @@ private final class SystemWindowAX: WindowAXFunctions {
       return .elements(values.map(WindowAXElement.init))
     }
     return .failure
+  }
+
+  func childCount(_ element: WindowAXElement) -> WindowAXCount {
+    guard let element = ax(element) else { return .error(AXError.illegalArgument.rawValue) }
+    var count: CFIndex = 0
+    let error = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
+    if error == .noValue { return .absent }
+    if error == .attributeUnsupported { return .unsupported }
+    return error == .success ? .count(count) : .error(error.rawValue)
   }
 
   func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute {
