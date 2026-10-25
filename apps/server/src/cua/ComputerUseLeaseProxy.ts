@@ -40,7 +40,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
-import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
+import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -148,7 +148,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
     ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
-    output: options.output,
+    // Remembered answers are the driver's too (#1677).
+    output: (line) => options.output(options.screenshots?.scrub(line) ?? line),
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
@@ -243,19 +244,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }, Effect.uninterruptible);
 
   const release = (request: { readonly reservationId?: string; readonly connectionId?: string }) =>
-    request.reservationId === undefined || request.connectionId === undefined
-      ? Effect.void
-      : options
-          .reservation({
-            action: "release",
-            controlId: options.controlId,
-            connectionId: request.connectionId,
-            reservationId: request.reservationId,
-          })
-          .pipe(Effect.asVoid);
+    releaseProxyCall(options, request);
 
-  const readLines = (current: Running) =>
+  // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
+  // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
+  const readLines = (current: Running, exited: Deferred.Deferred<void>) =>
     current.driver.lines.pipe(
+      Stream.onEnd(Deferred.succeed(exited, undefined)),
+      Stream.buffer({ capacity: "unbounded" }),
       Stream.runForEach((line) =>
         Effect.gen(function* () {
           if (finished !== undefined || lifecycle.current !== current) return;
@@ -279,18 +275,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            // Stopped, ended, or answered by a pause or cancellation meanwhile.
+            const gone = () =>
+              finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
               yield* release(request);
-              if (
-                finished !== undefined ||
-                paused !== undefined ||
-                idle ||
-                lifecycle.current !== current ||
-                !outstanding.has(key)
-              )
-                return;
+              if (gone() || paused !== undefined || idle) return;
               outstanding.delete(key);
               return;
             }
@@ -300,11 +292,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (request.method === "tools/call") {
               const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
               // Stopped, paused or cancelled while it was checked: that already answered it.
-              if (finished !== undefined || lifecycle.current !== current || !outstanding.has(key))
-                return;
+              if (gone()) return;
               // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
-              if (options.screenshots && verdict !== "other" && verdict !== "unknown")
-                delivered = yield* options.screenshots({ ...request, line });
+              if (options.screenshots && verdict !== "other" && verdict !== "unknown") {
+                const admitted = yield* Effect.raceFirst(
+                  options.screenshots.admit({ ...request, line }),
+                  Effect.as(Deferred.await(exited), undefined),
+                );
+                if (admitted === undefined) return;
+                delivered = admitted;
+              }
               // Every answered call updates the overlay; a display refusal counts as failed. It is
               // drawn while the call is still outstanding, so a stop or pause that lands during
               // the draw answers the call itself, and the check below drops this reply. A pause
@@ -321,23 +318,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 ...(image ? { image } : {}),
                 ...(failed ? { failed: true } : {}),
               });
-              if (
-                finished !== undefined ||
-                paused !== undefined ||
-                lifecycle.current !== current ||
-                !outstanding.has(key)
-              )
-                return;
+              if (gone() || paused !== undefined) return;
               yield* release(request);
               const latest = outstanding.get(key);
-              if (
-                finished !== undefined ||
-                paused !== undefined ||
-                idle ||
-                lifecycle.current !== current ||
-                latest === undefined
-              )
-                return;
+              if (gone() || paused !== undefined || idle || latest === undefined) return;
               outstanding.delete(key);
               if (latest.cancelled) return;
               if (verdict === "other") {
@@ -356,6 +340,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               outstanding.delete(key);
             }
           }
+          if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
           yield* options.output(admitDriverReplyScreenshots(delivered));
         }),
       ),
@@ -397,7 +382,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               : JSON.stringify({ ...message, id: `${OWN_ID}init:${ownRequests++}` }),
           );
         }
-        yield* readLines(current).pipe(Effect.forkIn(scope));
+        yield* readLines(current, yield* Deferred.make<void>()).pipe(Effect.forkIn(scope));
         yield* handshakeAnswers.recheck(current.driver.send).pipe(Effect.forkIn(current.scope));
       },
     ),
@@ -657,6 +642,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // The driver no longer lists it (cuaDriverManifest.ts); a stale tool list still gets a reason.
     if (message.params?.name === "get_desktop_state")
       return refusal(id, message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
+    const toFile = options.screenshots?.refuseArguments(message.params?.arguments);
+    if (toFile !== undefined) return refusal(id, message.method, "desktop_capture_off", toFile);
     if (verdict._tag === "resolve")
       return refusal(
         id,

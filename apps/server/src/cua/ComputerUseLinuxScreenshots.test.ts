@@ -2,8 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
-  admitLinuxScreenshots,
+  linuxScreenshotPolicy,
   proxyCaptureRoute,
+  SCREENSHOT_FILE_REFUSED,
   UNVERIFIED_IMAGE,
 } from "./ComputerUseLinuxScreenshots.ts";
 import { CROPPED_CAPTURE, type CaptureRoute } from "./linuxHelper/windowCapture.ts";
@@ -44,21 +45,23 @@ const own = (answer: X11WindowCapture) => {
 };
 
 const admitted = (route: CaptureRoute, tool: string, line: string, windowId?: number) =>
-  admitLinuxScreenshots(route)({
-    tool,
-    line,
-    ...(windowId === undefined ? {} : { windowId }),
-  }).pipe(
-    Effect.map(
-      (out) =>
-        JSON.parse(out) as {
-          result: {
-            content: Array<Record<string, unknown>>;
-            structuredContent?: Record<string, unknown>;
-          };
-        },
-    ),
-  );
+  linuxScreenshotPolicy(route)
+    .admit({
+      tool,
+      line,
+      ...(windowId === undefined ? {} : { windowId }),
+    })
+    .pipe(
+      Effect.map(
+        (out) =>
+          JSON.parse(out) as {
+            result: {
+              content: Array<Record<string, unknown>>;
+              structuredContent?: Record<string, unknown>;
+            };
+          },
+      ),
+    );
 
 describe("Linux agent screenshots (#1677)", () => {
   it.effect(
@@ -144,7 +147,7 @@ describe("Linux agent screenshots (#1677)", () => {
           type: "text",
           text: "GOAT withheld a screenshot from this result. " + CROPPED_CAPTURE,
         });
-        const kept = yield* admitLinuxScreenshots({ route: "driver" })({
+        const kept = yield* linuxScreenshotPolicy({ route: "driver" }).admit({
           tool: "get_window_state",
           windowId: 9,
           line: read(),
@@ -166,7 +169,10 @@ describe("Linux agent screenshots (#1677)", () => {
         id: 3,
         result: { content: [{ type: "text", text: "clicked" }] },
       });
-      assert.equal(yield* admitLinuxScreenshots(route)({ tool: "click", windowId: 9, line }), line);
+      assert.equal(
+        yield* linuxScreenshotPolicy(route).admit({ tool: "click", windowId: 9, line }),
+        line,
+      );
       assert.deepEqual(asked, []);
     }),
   );
@@ -191,6 +197,99 @@ describe("Linux agent screenshots (#1677)", () => {
         driverEnvironment: { WAYLAND_DISPLAY: "wayland-0" },
       }),
       { route: "refused", reason: CROPPED_CAPTURE },
+    );
+  });
+
+  it.effect(
+    "an image hidden anywhere else in a reply, nested, as a resource blob or as base64 in text, is withheld (review r1)",
+    () =>
+      Effect.gen(function* () {
+        const { route, asked } = own({
+          png: OWN_PNG,
+          rgb: new Uint8Array(),
+          width: 400,
+          height: 300,
+        });
+        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]).toString(
+          "base64",
+        );
+        const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]).toString("base64");
+        const line = JSON.stringify({
+          jsonrpc: "2.0",
+          id: 4,
+          result: {
+            content: [
+              { type: "text", text: JSON.stringify({ frame: png }) },
+              { type: "text", text: "see data:image/jpeg;base64," + jpeg },
+              { type: "resource", resource: { uri: "x", mimeType: "image/png", blob: png } },
+            ],
+            structuredContent: { nested: { image: { type: "image", data: png } }, raw: jpeg },
+          },
+        });
+        for (const out of [
+          yield* linuxScreenshotPolicy(route).admit({ tool: "zoom", windowId: 9, line }),
+          linuxScreenshotPolicy(route).scrub(line),
+          linuxScreenshotPolicy({ route: "refused", reason: CROPPED_CAPTURE }).scrub(line),
+        ]) {
+          assert.notInclude(out, png);
+          assert.notInclude(out, jpeg);
+          assert.include(out, "GOAT withheld a screenshot");
+        }
+        assert.deepEqual(asked, []);
+        // Hyprland's export is the window's own, so nothing there is touched.
+        assert.equal(linuxScreenshotPolicy({ route: "driver" }).scrub(line), line);
+      }),
+  );
+
+  it.effect("GOAT's capture replaces the driver's screenshot type with its own PNG", () =>
+    Effect.gen(function* () {
+      const { route } = own({ png: OWN_PNG, rgb: new Uint8Array(), width: 400, height: 300 });
+      const out = yield* admitted(
+        route,
+        "get_window_state",
+        read({ ...SHOT, screenshot_mime_type: "image/jpeg" }),
+        9,
+      );
+      assert.equal(out.result.structuredContent?.screenshot_mime_type, "image/png");
+      assert.equal(out.result.content[1]?.mimeType, "image/png");
+    }),
+  );
+
+  it("calls that would write the driver's capture to a file are refused on every route", () => {
+    for (const route of [
+      own({ refused: STILL_DRAWING, transient: true }).route,
+      { route: "driver" } as const,
+      { route: "refused", reason: CROPPED_CAPTURE } as const,
+    ]) {
+      const policy = linuxScreenshotPolicy(route);
+      for (const name of ["screenshot_out_file", "image_path", "file_path"])
+        assert.equal(
+          policy.refuseArguments({ window_id: 9, [name]: "/tmp/shot.png" }),
+          SCREENSHOT_FILE_REFUSED,
+        );
+      assert.isUndefined(policy.refuseArguments({ window_id: 9 }));
+    }
+  });
+
+  it("a Wayland backend the driver reads as off, or an X display GOAT did not place, is not trusted", () => {
+    const hyprland = {
+      WAYLAND_DISPLAY: "wayland-1",
+      HYPRLAND_INSTANCE_SIGNATURE: "sig",
+    };
+    for (const off of ["0", "false", "FALSE", " 0 "])
+      assert.equal(
+        proxyCaptureRoute({
+          x11Display: undefined,
+          driverEnvironment: { ...hyprland, CUA_DRIVER_RS_ENABLE_WAYLAND: off },
+        }).route,
+        "refused",
+      );
+    assert.equal(
+      proxyCaptureRoute({
+        x11Display: undefined,
+        driverEnvironment: { ...hyprland, CUA_DRIVER_RS_ENABLE_WAYLAND: "1", DISPLAY: ":0" },
+      }).route,
+      "refused",
     );
   });
 });

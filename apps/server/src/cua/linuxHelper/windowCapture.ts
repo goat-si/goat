@@ -47,9 +47,14 @@ export function waylandCaptureRoute(
   driverEnvironment: Readonly<Record<string, string | undefined>>,
 ): CaptureRoute {
   const present = (name: string) => (driverEnvironment[name] ?? "").trim() !== "";
+  // The driver's wayland_enabled (platform-linux wayland/mod.rs): "0" and "false" turn it off.
+  const enabled = (name: string) => {
+    const value = (driverEnvironment[name] ?? "").trim();
+    return value !== "" && value !== "0" && value.toLowerCase() !== "false";
+  };
   // The driver's own test: the Wayland backend on, a Hyprland instance, and not injecting.
   const hyprland =
-    present("CUA_DRIVER_RS_ENABLE_WAYLAND") &&
+    enabled("CUA_DRIVER_RS_ENABLE_WAYLAND") &&
     present("WAYLAND_DISPLAY") &&
     present("HYPRLAND_INSTANCE_SIGNATURE") &&
     !present("CUA_INJECT_SOCKET");

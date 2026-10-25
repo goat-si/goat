@@ -29,7 +29,7 @@ import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
-import { admitLinuxScreenshots, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
+import { linuxScreenshotPolicy, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
@@ -139,7 +139,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   // On Linux the agent's screenshots follow the helper's capture route (#1677).
   const screenshots =
     platform === "linux"
-      ? admitLinuxScreenshots(
+      ? linuxScreenshotPolicy(
           proxyCaptureRoute({
             x11Display: Option.getOrUndefined(x11Display),
             driverEnvironment: childEnvironment,
