@@ -8,12 +8,14 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 const readiness: ComputerUseReadiness = {
@@ -159,5 +161,35 @@ it.effect.each([true, false])(
       Effect.provide(ServerSettings.layerTest()),
       Effect.provideService(HostProcess.Platform, "linux"),
       Effect.scoped,
+    ),
+);
+
+// #1538: an idle desktop-owned driver reads as "starts with the next agent turn", which is only
+// true while the desktop app is still connected; the next start is refused once it is gone.
+it.effect.each(["stopped", "unavailable", "degraded", "healthy"] as const)(
+  "a desktop app whose telemetry is %s reports its last readiness only while connected",
+  (status) =>
+    Effect.gen(function* () {
+      const reported = yield* yield* CuaDriver.desktopHelperReadiness;
+      expect(Option.isSome(reported)).toBe(status === "healthy" || status === "degraded");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(DesktopTelemetryReceiver.DesktopTelemetryReceiver)({
+          cuaReadiness: Effect.succeed(
+            Option.some({
+              version: 1,
+              type: "cuaReadiness",
+              generation: 1,
+              readiness,
+              signals: { privateMode: "supported", humanInput: "supported" },
+            } as const),
+          ),
+          health: Effect.succeed({
+            status,
+            lastSampleAt: Option.none(),
+            lastError: Option.none(),
+          }),
+        }),
+      ),
     ),
 );
