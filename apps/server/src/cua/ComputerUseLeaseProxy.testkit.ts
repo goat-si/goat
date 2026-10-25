@@ -22,6 +22,7 @@ import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
 import type { AgentInputReport } from "./agentInputReports.ts";
+import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -73,6 +74,8 @@ export const harness = Effect.fn(function* (
     readonly elsewhere?: ReadonlySet<number>;
     /** Holds every placement answer until it is done, as a slow X server would. */
     readonly placementGate?: Deferred.Deferred<void>;
+    /** What each reply's images may show, as the Linux proxy decides (#1677). */
+    readonly screenshots?: LeaseProxyOptions<never, never>["screenshots"];
     /** Answers each window report; reports land in `targets`. */
     readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
     readonly reservation?: (
@@ -278,6 +281,7 @@ export const harness = Effect.fn(function* (
           : {}),
       };
     }),
+    ...(options.screenshots === undefined ? {} : { screenshots: options.screenshots }),
     ...(options.elsewhere === undefined
       ? {}
       : {

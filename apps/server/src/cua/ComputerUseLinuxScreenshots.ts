@@ -28,9 +28,9 @@ export const UNVERIFIED_IMAGE =
   "On this desktop GOAT shows an agent only a window's own capture, and this result's image is not one. Read the window with get_window_state to see it.";
 
 export interface DriverReply {
-  readonly tool: string | undefined;
+  readonly tool?: string;
   /** The window the call named, when it named one. */
-  readonly windowId: number | undefined;
+  readonly windowId?: number;
   readonly line: string;
 }
 

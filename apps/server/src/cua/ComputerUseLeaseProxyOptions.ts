@@ -81,8 +81,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * deliver, its images kept, replaced by GOAT's own capture, or withheld.
    */
   readonly screenshots?: (reply: {
-    readonly tool: string | undefined;
-    readonly windowId: number | undefined;
+    readonly tool?: string;
+    readonly windowId?: number;
     readonly line: string;
   }) => Effect.Effect<string>;
   /**

@@ -66,6 +66,7 @@ import {
 import {
   type Envelope,
   namedWindows,
+  OWN_ID,
   parse,
   replyPlacement,
   sendUnlessShared,
@@ -80,6 +81,7 @@ import {
   PAUSE_MESSAGES,
   scopeMessage,
   SCREEN_SHARED,
+  WRONG_DISPLAY,
 } from "./ComputerUseLeaseMessages.ts";
 import {
   type JsonRpcId,
@@ -95,12 +97,6 @@ import {
 } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { windowArgument } from "./ComputerUseLinuxScreenshots.ts";
-
-const WRONG_DISPLAY =
-  "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
-
-/** Ids of the proxy's own requests to the driver; their answers never reach the provider. */
-const OWN_ID = "goat-proxy:";
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
@@ -307,11 +303,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               if (finished !== undefined || lifecycle.current !== current || !outstanding.has(key))
                 return;
               // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
-              const shots = options.screenshots;
-              if (shots && verdict !== "other" && verdict !== "unknown") {
-                delivered = yield* shots({ tool: request.tool, windowId: request.windowId, line });
-                if (finished !== undefined || lifecycle.current !== current) return;
-              }
+              if (options.screenshots && verdict !== "other" && verdict !== "unknown")
+                delivered = yield* options.screenshots({ ...request, line });
               // Every answered call updates the overlay; a display refusal counts as failed. It is
               // drawn while the call is still outstanding, so a stop or pause that lands during
               // the draw answers the call itself, and the check below drops this reply. A pause
