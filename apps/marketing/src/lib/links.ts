@@ -9,6 +9,7 @@ export const LINKS = {
   inheritedSecurityPolicy: `${REPOSITORY}/blob/dev/.github/SECURITY.md`,
   issues: `${REPOSITORY}/issues`,
   releases: "https://github.com/goat-si/goat-releases/releases",
+  nightlyReleases: "https://github.com/goat-si/goat-releases/releases?q=nightly&expanded=true",
   githubPrivacy:
     "https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement",
   installScript: "https://raw.githubusercontent.com/goat-si/goat-releases/main/install.sh",

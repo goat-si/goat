@@ -35,7 +35,7 @@ export const ko: Messages = {
     lede: "GOAT는 이미 쓰고 있는 Claude Code, Codex, Cursor 같은 에이전트를 노트북, 집 데스크톱, SSH 서버, 클라우드 머신에서 실행해요. 그리고 데스크톱 앱, 브라우저, 휴대폰 어디서든 전부 조종할 수 있어요.",
     primary: "GOAT 다운로드",
     secondary: "가이드 읽기",
-    note: "MIT 라이선스로 무료 공개된 오픈 소스예요. macOS, Windows, Linux용 Nightly 빌드를 받을 수 있어요.",
+    note: "MIT 라이선스로 무료 공개된 오픈 소스예요. macOS, Windows, Linux에서 쓸 수 있어요.",
     captureAlt:
       "trailhead라는 데모 프로젝트의 스레드를 띄운 GOAT 앱. Codex가 elevationGainM 헬퍼를 추가했고, 답변에는 npm test 6개 통과가, 옆 diff 패널에는 src/format.ts 변경이 보여요.",
     captureCaption: "데모 프로젝트예요. 요청과 답변, diff는 GOAT에서 실제로 실행한 Codex 결과예요.",
@@ -170,7 +170,7 @@ export const ko: Messages = {
   },
   install: {
     title: "GOAT 설치",
-    lede: "아직은 Nightly 빌드만 공개돼 있어요. 설치하면 스스로 업데이트해요.",
+    lede: "데스크톱 앱은 스스로 업데이트해요. goat 설치 스크립트는 GOAT_CHANNEL=stable을 설정하지 않으면 Nightly 빌드를 따라가요.",
     desktopTitle: "데스크톱 앱",
     desktopBody:
       "macOS, Windows, Linux용이에요. 서버와 goat 명령이 함께 들어 있어서, 다른 화면이 연결할 환경을 직접 띄울 수도 있어요.",
@@ -226,6 +226,7 @@ export const ko: Messages = {
     mobileGuide: "모바일 앱 가이드",
     mobileGuideHref: guide("install", "mobile-app"),
     allBuilds: "모든 빌드와 체크섬",
+    nightlyBuilds: "Nightly 빌드",
     installGuide: "설치 가이드",
     installGuideHref: guide("install"),
   },

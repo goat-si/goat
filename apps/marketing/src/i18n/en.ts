@@ -34,7 +34,7 @@ export const en = {
     lede: "GOAT runs the agents you already use, like Claude Code, Codex and Cursor, on your laptop, a desktop at home, an SSH server or a cloud machine. Steer all of them from the desktop app, a browser or your phone.",
     primary: "Download GOAT",
     secondary: "Read the guides",
-    note: "Free and open source under the MIT license. Nightly builds for macOS, Windows and Linux.",
+    note: "Free and open source under the MIT license, for macOS, Windows and Linux.",
     captureAlt:
       "The GOAT app showing a thread in a demo project called trailhead. Codex added an elevationGainM helper; its reply reports npm test with 6 passed, and the diff panel beside it shows the change to src/format.ts.",
     captureCaption:
@@ -170,7 +170,7 @@ export const en = {
   },
   install: {
     title: "Install GOAT",
-    lede: "So far only Nightly builds are published. They update themselves.",
+    lede: "The desktop app updates itself. The goat install script follows the Nightly train unless you set GOAT_CHANNEL=stable.",
     desktopTitle: "Desktop app",
     desktopBody:
       "For macOS, Windows and Linux. It includes the server and the goat command, so it can also host the environment your other screens connect to.",
@@ -227,6 +227,7 @@ export const en = {
     mobileGuide: "Mobile app guide",
     mobileGuideHref: guide("install", "mobile-app"),
     allBuilds: "All builds and checksums",
+    nightlyBuilds: "Nightly builds",
     installGuide: "Install guide",
     installGuideHref: guide("install"),
   },
