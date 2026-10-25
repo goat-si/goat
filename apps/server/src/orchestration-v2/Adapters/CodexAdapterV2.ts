@@ -1289,6 +1289,10 @@ interface CodexSubagentThreadContext {
   task: OrchestrationV2Subagent;
   /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
   endedByStop?: boolean;
+  /** A Stop swept its work before it started; new work given to it clears this (#1643). */
+  workStopped?: boolean;
+  /** The turns its work was given under, fixed then; a later move of a parent leaves it (#1643). */
+  workLineage: ReadonlyArray<string>;
 }
 
 const approvalOwnerCodexTurn = (
@@ -2415,6 +2419,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
+        /** Turns Stop ended; failed turns are not among them, their children keep working. */
+        const stoppedNativeTurns = new Set<string>();
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -3130,41 +3136,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               subagent.parentContext.providerThread,
             );
             const currentParent = yield* findActiveTurnByNativeThreadId(parentNativeThreadId);
-            if (currentParent !== undefined) subagent.parentContext = currentParent;
-            const terminalizedNativeTurns = yield* Ref.get(terminalizedNonCompletedNativeTurns);
-            let ancestor: ActiveCodexTurnContext | undefined = subagent.parentContext;
-            while (ancestor !== undefined) {
-              if (terminalizedNativeTurns.has(ancestor.nativeTurnId)) {
-                const nativeThreadId = yield* getNativeThreadId(subagent.providerThread);
-                const interrupted = yield* client
-                  .request("turn/interrupt", {
-                    threadId: nativeThreadId,
-                    turnId: turn.nativeTurnId,
-                  })
-                  .pipe(
-                    Effect.as(true),
-                    Effect.catch((cause) =>
-                      Effect.logWarning("orchestration-v2.codex-late-subagent-interrupt-failed", {
-                        nativeThreadId,
-                        nativeTurnId: turn.nativeTurnId,
-                        cause,
-                      }).pipe(Effect.as(false)),
-                    ),
-                    Effect.timeoutOption("10 seconds"),
-                  );
-                if (Option.isNone(interrupted)) {
-                  yield* Effect.logWarning(
-                    "orchestration-v2.codex-late-subagent-interrupt-timeout",
-                    {
-                      nativeThreadId,
-                      nativeTurnId: turn.nativeTurnId,
-                    },
-                  );
-                }
-                return;
-              }
-              ancestor = ancestor.subagent?.parentContext;
-            }
+            if (currentParent !== undefined) CodexSubagents.reparent(subagent, currentParent);
+            if (
+              CodexSubagents.stoppedLineage(
+                [subagent.parentContext],
+                yield* Ref.get(terminalizedNonCompletedNativeTurns),
+              ) ||
+              // Work given under a turn Stop ended is stopped, however late it starts (#1643).
+              subagent.workStopped === true ||
+              subagent.workLineage.some((turnId) => stoppedNativeTurns.has(turnId))
+            )
+              // Forked: notifications are handled on the input reader, which must stay free to
+              // read the interrupt's answer.
+              return yield* CodexSubagents.interruptLateTurn(
+                client,
+                yield* getNativeThreadId(subagent.providerThread),
+                turn.nativeTurnId,
+              ).pipe(Effect.forkIn(scope), Effect.asVoid);
             const providerTurnId = idAllocator.derive.providerTurn({
               driver: CODEX_PROVIDER,
               nativeTurnId: turn.nativeTurnId,
@@ -3460,6 +3448,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
             const subagent = {
               parentContext: input.context,
+              workLineage: CodexSubagents.lineage(input.context),
               providerThread,
               childThread,
               subagentNodeId,
@@ -5354,6 +5343,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               return;
             }
+            if (payload.item.type === "collabAgentToolCall")
+              CodexSubagents.assign(yield* Ref.get(subagentThreads), payload.item, context);
 
             yield* completeProviderRetry(context, yield* DateTime.now);
             if (payload.item.type !== "reasoning") {
@@ -6683,6 +6674,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) =>
                   new Set(current).add(input.nativeTurnId),
                 );
+              // Stop ended this turn: work given under it stays stopped when it starts late (#1643).
+              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId))
+                stoppedNativeTurns.add(input.nativeTurnId);
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
