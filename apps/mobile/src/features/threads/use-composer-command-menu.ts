@@ -181,7 +181,7 @@ export function useComposerCommandMenu({
   pullRequestProjectId = null,
   pullRequestRepository = null,
   selectedProviderStatus,
-  serverSettings = null,
+  serverConfig = null,
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
@@ -195,13 +195,22 @@ export function useComposerCommandMenu({
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
   /** The composer's thread, with the draft's unsent settings such as plan mode applied. */
-  readonly thread?: Pick<EnvironmentThreadShell, "id" | "pullRequests" | "interactionMode"> | null;
+  readonly thread?: Pick<
+    EnvironmentThreadShell,
+    "id" | "projectId" | "pullRequests" | "interactionMode"
+  > | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepository?: string | null;
   readonly selectedProviderStatus: ServerProvider | null;
-  /** Decides which of GOAT's built-in skills the menu lists for this provider. */
-  readonly serverSettings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null;
+  /** Decides which of GOAT's built-in skills the menu lists for this provider and project. */
+  readonly serverConfig?: {
+    readonly settings: Pick<
+      ServerSettings,
+      "enableCua" | "disabledBuiltInSkills" | "projectSettingsOverrides"
+    >;
+    readonly environment: { readonly capabilities: { readonly devDisciplineSkill?: boolean } };
+  } | null;
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
   readonly offersUsageLimits?: boolean;
@@ -245,7 +254,11 @@ export function useComposerCommandMenu({
   const skills = withBuiltInProviderSkills(
     selectedProviderStatus ? resolveProviderSkillsForCwd(selectedProviderStatus, projectCwd) : [],
     selectedProviderStatus,
-    serverSettings,
+    serverConfig?.settings,
+    {
+      devDisciplineSkill: serverConfig?.environment.capabilities.devDisciplineSkill,
+      projectId: thread?.projectId,
+    },
   );
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,

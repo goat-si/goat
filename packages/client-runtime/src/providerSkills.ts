@@ -1,7 +1,10 @@
 import {
+  BUILTIN_SKILL_PROVIDER_DRIVERS,
   BUILTIN_SKILL_SCOPE,
   BUILTIN_SKILLS,
   COMPUTER_USE_PROVIDER_DRIVERS,
+  type ProjectId,
+  resolveProjectBuiltInSkillEnabled,
   isProviderWorkspaceSnapshotCurrent,
   type ServerProvider,
   type ServerSettings,
@@ -134,27 +137,46 @@ export function resolveProviderSkillsForCwd(
   return resolveProviderWorkspaceSnapshot(provider, cwd)?.skills ?? provider.skills;
 }
 
+type BuiltInSkillSettings = Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> &
+  Partial<Pick<ServerSettings, "projectSettingsOverrides">>;
+
+/** Where the skills are offered: the destination server's support and the thread's project. */
+export interface BuiltInSkillTarget {
+  /** The destination environment advertises `devDisciplineSkill`. */
+  readonly devDisciplineSkill?: boolean | undefined;
+  readonly projectId?: ProjectId | null | undefined;
+}
+
 /**
  * Adds GOAT's built-in skills that this provider's turns can carry. They come last, so a skill
  * of the same name the person wrote wins when the menu dedupes by name. A skill switched off in
- * Settings is listed as disabled, which keeps it out of the menu.
+ * Settings, for the environment or the thread's project, is listed as disabled, which keeps it
+ * out of the menu. Computer Use needs computer use on; goat-discipline needs a server that
+ * delivers it.
  */
 export function withBuiltInProviderSkills(
   skills: ReadonlyArray<ServerProviderSkill>,
   provider: Pick<ServerProvider, "driver"> | null | undefined,
-  settings: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null | undefined,
+  settings: BuiltInSkillSettings | null | undefined,
+  target?: BuiltInSkillTarget,
 ): ReadonlyArray<ServerProviderSkill> {
-  if (!provider || !settings?.enableCua || !COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver))
-    return skills;
+  if (!provider || !settings) return skills;
+  const offered = BUILTIN_SKILLS.filter((skill) =>
+    skill.capability === "computer-use"
+      ? settings.enableCua && COMPUTER_USE_PROVIDER_DRIVERS.has(provider.driver)
+      : target?.devDisciplineSkill === true && BUILTIN_SKILL_PROVIDER_DRIVERS.has(provider.driver),
+  );
+  if (offered.length === 0) return skills;
+  const resolved = { projectSettingsOverrides: {}, ...settings };
   return [
     ...skills,
-    ...BUILTIN_SKILLS.filter((skill) => skill.capability === "computer-use").map((skill) => ({
+    ...offered.map((skill) => ({
       name: skill.name,
       displayName: skill.displayName,
       description: skill.description,
       path: `goat:builtin/${skill.name}`,
       scope: BUILTIN_SKILL_SCOPE,
-      enabled: !settings.disabledBuiltInSkills.includes(skill.name),
+      enabled: resolveProjectBuiltInSkillEnabled(resolved, target?.projectId ?? null, skill.name),
     })),
   ];
 }
@@ -164,12 +186,16 @@ export function resolveThreadProviderSkills(
   config:
     | {
         readonly providers: ReadonlyArray<ServerProvider>;
-        readonly settings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills">;
+        readonly settings?: BuiltInSkillSettings;
+        readonly environment?: {
+          readonly capabilities: { readonly devDisciplineSkill?: boolean | undefined };
+        };
       }
     | null
     | undefined,
   instanceId: ServerProvider["instanceId"],
   cwd: string | null | undefined,
+  projectId?: ProjectId | null,
 ): ReadonlyArray<ServerProviderSkill> {
   const provider = config?.providers.find((candidate) => candidate.instanceId === instanceId);
   return provider
@@ -177,6 +203,10 @@ export function resolveThreadProviderSkills(
         resolveProviderSkillsForCwd(provider, cwd),
         provider,
         config?.settings,
+        {
+          devDisciplineSkill: config?.environment?.capabilities.devDisciplineSkill,
+          projectId,
+        },
       )
     : [];
 }
