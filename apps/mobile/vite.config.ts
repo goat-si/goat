@@ -71,6 +71,7 @@ export default defineConfig({
             "../../packages/shared/src/testing/providerEnv.ts",
             "../../packages/shared/src/testing/gitEnv.setup.ts",
           ],
+          globalSetup: ["../../scripts/lib/node-runtime.ts"],
         },
       },
     ],
