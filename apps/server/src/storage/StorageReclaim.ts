@@ -18,6 +18,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -34,7 +35,7 @@ import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
-import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { tryWithWorkspaceSubtree, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
@@ -225,6 +226,15 @@ const make = Effect.gen(function* () {
   }, Effect.provideContext(context));
 
   /**
+   * Runs a removal holding the folder whole, so no lease on it or inside it goes to anyone else
+   * meanwhile; skipped when something on this server already works inside it.
+   */
+  const holdingWhole = <E, R>(folder: string, effect: Effect.Effect<string | null, E, R>) =>
+    tryWithWorkspaceSubtree(path.resolve(folder), effect).pipe(
+      Effect.map(Option.getOrElse(() => "something on this server is working inside it")),
+    );
+
+  /**
    * Why this server now uses a leftover folder: a thread bound to it or inside it since the scan,
    * deleted and archived ones included, or a project folder overlapping it. Null when none does.
    */
@@ -284,26 +294,32 @@ const make = Effect.gen(function* () {
               ? "it could not be searched for git checkouts inside it"
               : "it holds another git checkout, whose work its own git status cannot see";
         }).pipe(Effect.provideContext(context));
-        const result = yield* worktrees
-          .removeAbandoned({
-            path: item.path,
-            head: target.head,
-            branch: target.branch,
-            verify,
-          })
-          .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-        return result.removed ? null : result.reason;
+        return yield* holdingWhole(
+          item.path,
+          worktrees
+            .removeAbandoned({
+              path: item.path,
+              head: target.head,
+              branch: target.branch,
+              verify,
+            })
+            .pipe(
+              Effect.map((result) => (result.removed ? null : result.reason)),
+              Effect.mapError((error) => new RemoveFailed({ message: error.message })),
+            ),
+        );
       }
       case "path": {
         if (target.worktree === null) {
           if (item.kind !== "orphan_folder")
             return yield* removeChecked(target.root, item.path, target.identity);
           // Everything on this server that writes into a folder (turn startup, terminals, git
-          // workflows, rollback) takes this lease, so no write lands between these checks and
-          // removal. Recording a binding writes nothing here, so one recorded in that moment
-          // leaves its thread pointing at a folder whose reviewed, unchanged contents are gone.
-          return yield* withWorkspaceLease(
-            path.resolve(item.path),
+          // workflows, rollback) takes a lease on it or a folder inside it, which the hold turns
+          // away, so no write lands between these checks and removal. Recording a binding writes
+          // nothing, so one recorded in that moment leaves its thread pointing at a folder whose
+          // reviewed, unchanged contents are gone.
+          return yield* holdingWhole(
+            item.path,
             Effect.gen(function* () {
               const reason = yield* inUse(item.path);
               if (reason !== null) return reason;
@@ -320,28 +336,32 @@ const make = Effect.gen(function* () {
         // Turn start leases the path its thread recorded, which can be a folder inside the
         // worktree; holding every such lease keeps those threads from starting mid-removal.
         const keys = [...new Set([path.resolve(worktree), ...before.leaseKeys])].toSorted();
-        return yield* keys.reduceRight(
-          (inner, key) => withWorkspaceLease(key, inner),
-          Effect.gen(function* () {
-            const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
-            const current = facts?.find((fact) => samePath(fact.entry.path, worktree, rules));
-            if (current === undefined) return "its worktree is no longer listed";
-            if (current.leaseKeys.some((key) => !keys.includes(key)))
-              return "a thread started using its worktree";
-            const entry = current.entry;
-            if (entry.threads.some((thread) => thread.busy || !thread.archived))
-              return "a thread still uses its worktree";
-            const reason = yield* inUse(worktree);
-            if (reason !== null) return reason;
-            const keeps = yield* buildOutputKeeps(worktree, item.path);
-            if (keeps !== null) return keeps;
-            const nested = yield* holdsGitCheckout(item.path);
-            if (nested !== false)
-              return nested === null
-                ? "it could not be searched for git checkouts"
-                : "it holds a git checkout, whose work its worktree's git cannot see";
-            return yield* removeChecked(target.root, item.path, target.identity);
-          }),
+        // Holding the worktree whole also turns away threads bound inside it after this read.
+        return yield* holdingWhole(
+          worktree,
+          keys.reduceRight(
+            (inner, key) => withWorkspaceLease(key, inner),
+            Effect.gen(function* () {
+              const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
+              const current = facts?.find((fact) => samePath(fact.entry.path, worktree, rules));
+              if (current === undefined) return "its worktree is no longer listed";
+              if (current.leaseKeys.some((key) => !keys.includes(key)))
+                return "a thread started using its worktree";
+              const entry = current.entry;
+              if (entry.threads.some((thread) => thread.busy || !thread.archived))
+                return "a thread still uses its worktree";
+              const reason = yield* inUse(worktree);
+              if (reason !== null) return reason;
+              const keeps = yield* buildOutputKeeps(worktree, item.path);
+              if (keeps !== null) return keeps;
+              const nested = yield* holdsGitCheckout(item.path);
+              if (nested !== false)
+                return nested === null
+                  ? "it could not be searched for git checkouts"
+                  : "it holds a git checkout, whose work its worktree's git cannot see";
+              return yield* removeChecked(target.root, item.path, target.identity);
+            }),
+          ),
         );
       }
       case "stale": {

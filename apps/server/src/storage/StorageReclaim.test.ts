@@ -2,7 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { ThreadId, type HostCapacitySnapshot, type StorageItem } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -667,6 +669,34 @@ describe("StorageReclaim", () => {
         "intent",
         "removed",
       ]);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("no thread can start inside a leftover folder while it is removed", () =>
+    Effect.gen(function* () {
+      const { path, leftover, reclaim, find } = yield* setup;
+      const item = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
+      expect(item.state).toBe("removable");
+      // The cleanup pauses inside its final checks while a thread launched into a folder inside
+      // the leftover tries to start its turn, which leases that folder.
+      const checking = yield* Deferred.make<void>();
+      const proceed = yield* Deferred.make<void>();
+      machine.onProcessListing = {
+        after: 1,
+        run: Deferred.succeed(checking, undefined).pipe(Effect.andThen(Deferred.await(proceed))),
+      };
+      const cleaning = yield* reclaim
+        .clean({ items: [{ id: item.id, token: item.token }], actor: "test" })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(checking);
+      const started = yield* tryWithWorkspaceLease(
+        path.join(leftover, "node_modules", "pkg"),
+        Effect.void,
+      );
+      yield* Deferred.succeed(proceed, undefined);
+      const result = yield* Fiber.join(cleaning);
+      expect(result.results[0]?.outcome).toBe("removed");
+      expect(started).toEqual(Option.none());
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 

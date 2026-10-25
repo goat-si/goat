@@ -4,7 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 
-import { tryWithWorkspaceLease, withWorkspaceLease } from "./workspaceLease.ts";
+import {
+  tryWithWorkspaceLease,
+  tryWithWorkspaceSubtree,
+  withWorkspaceLease,
+} from "./workspaceLease.ts";
 
 it.effect("rejects contention without entering the checkout and admits a later attempt", () =>
   Effect.scoped(
@@ -77,4 +81,72 @@ it.effect("interrupting a blocking waiter does not release the holder's lease", 
       assert.deepEqual(yield* tryWithWorkspaceLease(cwd, Effect.succeed(3)), Option.some(3));
     }),
   ),
+);
+
+it.effect(
+  "a folder held whole admits no lease inside it but its holder's, and lets waiters in after",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "/lease-test/tree";
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let holderDone = false;
+        const holder = yield* tryWithWorkspaceSubtree(
+          root,
+          Effect.gen(function* () {
+            // The removal takes the leases it needs inside the folder it holds.
+            assert.equal(yield* withWorkspaceLease(root + "/pkg", Effect.succeed("own")), "own");
+            yield* Deferred.succeed(held, undefined);
+            yield* Deferred.await(release);
+            holderDone = true;
+          }),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(held);
+        // A thread bound inside the folder cannot start while it is held.
+        assert.isTrue(
+          Option.isNone(
+            yield* tryWithWorkspaceLease(root + "/packages/app", Effect.die("must not start")),
+          ),
+        );
+        assert.deepEqual(
+          yield* tryWithWorkspaceLease("/lease-test/treehouse", Effect.succeed(1)),
+          Option.some(1),
+        );
+        const waiter = yield* withWorkspaceLease(
+          root + "/pkg",
+          Effect.sync(() => holderDone),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.succeed(release, undefined);
+        assert.deepEqual(yield* Fiber.join(holder), Option.some(undefined));
+        assert.isTrue(yield* Fiber.join(waiter));
+      }),
+    ),
+);
+
+it.effect(
+  "a folder is not held whole while a lease inside it is held or another hold overlaps",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "/lease-test/busy";
+        const held = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const worker = yield* withWorkspaceLease(
+          root + "/pkg",
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(held);
+        assert.isTrue(
+          Option.isNone(yield* tryWithWorkspaceSubtree(root, Effect.die("must not remove"))),
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(worker);
+        const nested = yield* tryWithWorkspaceSubtree(
+          root,
+          tryWithWorkspaceSubtree(root + "/inner", Effect.die("must not overlap")),
+        );
+        assert.deepEqual(nested, Option.some(Option.none()));
+      }),
+    ),
 );
