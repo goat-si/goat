@@ -2,7 +2,7 @@ import {
   PREVIEW_SESSION_STACK_WINDOW_NAME,
   type DesktopPreviewSessionStackState,
 } from "@goat/contracts";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
@@ -47,7 +47,12 @@ function copyStyles(doc: Document) {
   doc.body.style.margin = "0";
 }
 
-/** A portal keeps navigation, stores and the existing thumbnail stream in the owning React tree. */
+/**
+ * A portal keeps navigation, stores and the existing thumbnail stream in the owning React tree.
+ * With a desktop bridge the stack always renders into one host element, which moves between its
+ * place in GOAT and the floating window: a card survives Pop out and Dock with its own state,
+ * such as the last frame a stopped session no longer sends (#1518).
+ */
 export function PreviewSessionStackSurface(props: {
   readonly hasContent: boolean;
   readonly dockedHidden: boolean;
@@ -65,6 +70,13 @@ export function PreviewSessionStackSurface(props: {
   const child = useRef<Window | null>(null);
   const visible = useDocumentVisible(target?.ownerDocument);
   const content = useRef<HTMLDivElement>(null);
+  const anchor = useRef<HTMLDivElement>(null);
+  const [host] = useState(() => {
+    if (!bridge) return null;
+    const element = document.createElement("div");
+    element.style.display = "contents";
+    return element;
+  });
   const floating = target !== null;
   const shown = props.hasContent && (floating || !props.dockedHidden);
   const interactive = useRef(false);
@@ -79,6 +91,13 @@ export function PreviewSessionStackSurface(props: {
     next.document.body.replaceChildren(root);
     setTarget(root);
   });
+
+  // Before paint, so the stack never shows in both places or in neither.
+  useLayoutEffect(() => {
+    if (!host) return;
+    const place = target ?? anchor.current;
+    if (place && host.parentNode !== place) place.append(host);
+  }, [host, target]);
 
   useEffect(() => {
     if (!bridge) return;
@@ -180,24 +199,25 @@ export function PreviewSessionStackSurface(props: {
         captureNotice: floating ? notice : null,
       })
     : null;
-  if (!target) return stack;
+  if (!host) return stack;
   const portal = createPortal(
     <div
       ref={content}
-      className="p-1"
-      onMouseMove={(event) => setInteractive(event.target)}
-      onMouseLeave={() => setInteractive(null)}
+      className={floating ? "p-1" : "contents"}
+      onMouseMove={floating ? (event) => setInteractive(event.target) : undefined}
+      onMouseLeave={floating ? () => setInteractive(null) : undefined}
     >
       {stack}
     </div>,
-    target,
+    host,
   );
   return (
     <>
       {/* Linux cannot forward ignored mouse movement; Dock remains reachable in GOAT. */}
-      {native?.mouseEventForwarding === false ? (
+      {floating && native?.mouseEventForwarding === false ? (
         <div className="fixed top-14 right-3 z-40 rounded-lg border bg-popover p-1">{toggle}</div>
       ) : null}
+      {floating ? null : <div ref={anchor} className="contents" />}
       {portal}
     </>
   );
