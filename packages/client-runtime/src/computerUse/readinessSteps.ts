@@ -141,10 +141,6 @@ const WINDOWS_TREE_UNCHECKED = "The accessibility tree is read by the same check
 
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
-  userIntervened: {
-    step: "capture",
-    remedy: "Computer use resumes after the person hands control back.",
-  },
   noInteractiveDesktop: {
     step: "capture",
     remedy:
