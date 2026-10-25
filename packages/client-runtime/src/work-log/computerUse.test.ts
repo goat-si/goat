@@ -10,6 +10,8 @@ import {
   computerUseRun,
   computerUseRunStatus,
   computerUseCatalogApp,
+  computerUseAppName,
+  computerUseAppToolIcon,
   computerUseObservedApp,
 } from "./computerUse.ts";
 import { toolCallLines } from "./itemDetail.ts";
@@ -335,5 +337,33 @@ describe("computer use app icons", () => {
       computerUseObservedApp({ content: [{ type: "text", text: '{"app_name":"Safari"}' }] }),
     ).toEqual({ name: "Safari" });
     expect(computerUseObservedApp({ content: [{ type: "text", text: "done" }] })).toBe(null);
+  });
+});
+
+describe("computerUseAppToolIcon", () => {
+  it("names the app by bundle id first, then by name, and leaves a pid-only call generic", () => {
+    expect(
+      computerUseAppToolIcon({ name: "Finder", pid: 4 }, { bundleId: "com.apple.finder" }),
+    ).toEqual({
+      _tag: "native-app",
+      app: { _tag: "app-id", appId: "com.apple.finder" },
+    });
+    expect(computerUseAppToolIcon({ pid: 4 }, { name: "Safari" })).toEqual({
+      _tag: "native-app",
+      app: { _tag: "display-name", displayName: "Safari" },
+    });
+    expect(computerUseAppToolIcon({ pid: 4 }, null)).toBeUndefined();
+    // An executable path is not an app id or a display name the icon asset can look up.
+    expect(
+      computerUseAppToolIcon({ bundleId: "C:\\Apps\\a.exe", name: "/usr/bin/gedit" }),
+    ).toBeUndefined();
+  });
+
+  it("gives the accessible label the app's name, else its id", () => {
+    expect(computerUseAppName({ pid: 4 }, { name: "Finder", bundleId: "com.apple.finder" })).toBe(
+      "Finder",
+    );
+    expect(computerUseAppName({ bundleId: "com.apple.finder" })).toBe("com.apple.finder");
+    expect(computerUseAppName({ pid: 4 }, null)).toBeNull();
   });
 });
