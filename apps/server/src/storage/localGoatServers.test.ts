@@ -6,6 +6,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
@@ -58,16 +59,31 @@ describe("local GOAT server discovery", () => {
   it("reads which database each process holds open from lsof field output", () => {
     const output = [
       "p101",
+      "f19",
+      "i39914287",
       "n/Users/me/.goat/desktop/userdata/statev2.sqlite",
+      "f20",
+      "i39914288",
       "n/Users/me/.goat/desktop/userdata/statev2.sqlite-wal",
       "p202",
+      "f3",
       "n/dev/null",
       "p303",
+      "f9",
       "n/Users/me/.goat/userdata/statev2.sqlite",
     ].join("\n");
     expect([...databasesByPid(output)]).toEqual([
-      [101, ["/Users/me/.goat/desktop/userdata/statev2.sqlite"]],
-      [303, ["/Users/me/.goat/userdata/statev2.sqlite"]],
+      [
+        101,
+        [
+          {
+            path: "/Users/me/.goat/desktop/userdata/statev2.sqlite",
+            inode: "39914287",
+            deleted: false,
+          },
+        ],
+      ],
+      [303, [{ path: "/Users/me/.goat/userdata/statev2.sqlite", inode: null, deleted: false }]],
     ]);
   });
 
@@ -170,6 +186,78 @@ describe("local GOAT server discovery", () => {
           found.unverified.some((reason) => reason.includes(database)),
           database,
         ).toBe(true);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("never reads a different file for a database a server holds open after deletion", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-" }));
+      const own = path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite");
+      // A replacement at the path the server opened: it holds none of that server's bindings.
+      const database = path.join(home, "custom", "userdata", "statev2.sqlite");
+      yield* fs.makeDirectory(path.dirname(database), { recursive: true });
+      const replacement = new NodeSqlite.DatabaseSync(database);
+      replacement.exec(
+        "CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT, payload_json TEXT);" +
+          "CREATE TABLE projection_projects (workspace_root TEXT, deleted_at TEXT);",
+      );
+      replacement.close();
+      const output = (stdout: string): ProcessRunner.ProcessRunOutput => ({
+        stdout,
+        stderr: "",
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutInvalidUtf8: false,
+        stderrInvalidUtf8: false,
+      });
+      const runner = Layer.mock(ProcessRunner.ProcessRunner)({
+        run: (input) =>
+          Effect.succeed(
+            input.command === "ps"
+              ? output("  4242     1   501 Sat Oct 25 10:00:00 2026 node dist/bin.mjs\n")
+              : output("p4242\nf7\ni1\nn" + database + "\n"),
+          ),
+      });
+      const folder = yield* fs.stat(home);
+      // Linux names a deleted file a process still holds as "<path> (deleted)".
+      const linuxProc: FileSystem.FileSystem["Service"] = {
+        ...fs,
+        readDirectory: (target, options) =>
+          target === "/proc"
+            ? Effect.succeed(["4242"])
+            : target === "/proc/4242/fd"
+              ? Effect.succeed(["7"])
+              : fs.readDirectory(target, options),
+        stat: (target) =>
+          target === "/proc/4242"
+            ? Effect.succeed({ ...folder, uid: Option.some(501) })
+            : fs.stat(target),
+        readLink: (target) =>
+          target === "/proc/4242/fd/7"
+            ? Effect.succeed(database + " (deleted)")
+            : fs.readLink(target),
+      };
+      for (const platform of ["darwin", "linux"] as const) {
+        const found = yield* Effect.gen(function* () {
+          return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
+        }).pipe(
+          Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(HostProcess.UserId, 501),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(FileSystem.FileSystem, platform === "linux" ? linuxProc : fs),
+        );
+        expect(found.databases, platform).toEqual([]);
+        expect(
+          found.unverified.some((reason) => reason.includes(database)),
+          platform,
+        ).toBe(true);
+      }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

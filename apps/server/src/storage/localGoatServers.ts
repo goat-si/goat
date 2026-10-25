@@ -58,17 +58,34 @@ const SERVER_ENTRY = new RegExp(
 );
 // goat-rename: legacy-end
 
-/** `lsof -F pn` output: which database files each process holds open. */
-export function databasesByPid(lsofOutput: string): ReadonlyMap<number, ReadonlyArray<string>> {
-  const result = new Map<number, Array<string>>();
+/** A database file a process holds open, as the process sees it. */
+export interface HeldDatabase {
+  readonly path: string;
+  /** The inode it holds, when known; a file at the path with another inode is not the same one. */
+  readonly inode: string | null;
+  /** Unlinked while held: whatever is at the path now is not what the process reads. */
+  readonly deleted: boolean;
+}
+
+/** `lsof -F pni` output: which database files each process holds open. */
+export function databasesByPid(
+  lsofOutput: string,
+): ReadonlyMap<number, ReadonlyArray<HeldDatabase>> {
+  const result = new Map<number, Array<HeldDatabase>>();
   let pid: number | null = null;
+  let inode: string | null = null;
   for (const line of lsofOutput.split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
+    // Each file's fields start with its descriptor; its inode comes before its name.
+    else if (line.startsWith("f")) inode = null;
+    else if (line.startsWith("i")) inode = line.slice(1);
     else if (line.startsWith("n") && pid !== null && line.endsWith("statev2.sqlite"))
-      result.set(pid, [...(result.get(pid) ?? []), line.slice(1)]);
+      result.set(pid, [...(result.get(pid) ?? []), { path: line.slice(1), inode, deleted: false }]);
   }
   return result;
 }
+
+const LINUX_DELETED = " (deleted)";
 
 interface ReadRows {
   readonly worktreePaths: ReadonlyArray<string>;
@@ -111,12 +128,15 @@ const readDatabase = (file: string) =>
  * user cannot search hides a database without proving there is none.
  */
 const presence = (file: string) =>
-  NodeFSP.stat(file).then(
-    () => "present" as const,
-    (error: NodeJS.ErrnoException) =>
-      error.code === "ENOENT" || error.code === "ENOTDIR"
-        ? ("absent" as const)
-        : ("unreachable" as const),
+  NodeFSP.stat(file, { bigint: true }).then(
+    (stat) => ({ found: "present" as const, inode: stat.ino.toString() }),
+    (error: NodeJS.ErrnoException) => ({
+      found:
+        error.code === "ENOENT" || error.code === "ENOTDIR"
+          ? ("absent" as const)
+          : ("unreachable" as const),
+      inode: null,
+    }),
   );
 
 const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindings")(
@@ -133,8 +153,9 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
 
     const candidates = new Set<string>();
-    // Databases a running process holds open must be there; the known homes may not exist.
-    const heldOpen = new Set<string>();
+    // Databases a running process holds open must be there, as the very file it holds; the known
+    // homes may not exist.
+    const heldOpen = new Map<string, Array<HeldDatabase>>();
     for (const goatHome of [
       env.GOAT_HOME,
       path.join(home, ".goat"),
@@ -169,8 +190,8 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       if (open === null) unverified.push("the databases open on this machine could not be listed");
       for (const files of open?.values() ?? [])
         for (const file of files) {
-          candidates.add(file);
-          heldOpen.add(file);
+          candidates.add(file.path);
+          heldOpen.set(file.path, [...(heldOpen.get(file.path) ?? []), file]);
         }
       const servers = rows.filter(
         (row) => row.uid === uid && row.pid !== process.pid && looksLikeGoatServer(row.command),
@@ -181,7 +202,7 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
           unverified.push(
             "GOAT server process " + row.pid + " has no database this check could find",
           );
-        for (const file of files) candidates.add(file);
+        for (const file of files) candidates.add(file.path);
       }
     }
 
@@ -191,14 +212,25 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
     const worktreePaths: Array<string> = [];
     const projectRoots: Array<string> = [];
     for (const candidate of candidates) {
-      const found = yield* Effect.promise(() => presence(candidate));
+      const held = heldOpen.get(candidate) ?? [];
+      if (held.some((file) => file.deleted)) {
+        unverified.push("the GOAT database " + candidate + " was deleted while a process holds it");
+        continue;
+      }
+      const { found, inode } = yield* Effect.promise(() => presence(candidate));
       if (found === "unreachable") {
         unverified.push("the GOAT database " + candidate + " could not be reached");
         continue;
       }
       if (found === "absent") {
-        if (heldOpen.has(candidate))
+        if (held.length > 0)
           unverified.push("the GOAT database " + candidate + " a process holds open was not found");
+        continue;
+      }
+      if (held.some((file) => file.inode !== null && file.inode !== inode)) {
+        unverified.push(
+          "the GOAT database " + candidate + " on disk is not the file a process holds open",
+        );
         continue;
       }
       const file = yield* real(candidate);
@@ -231,7 +263,7 @@ const databasesOpenBy = Effect.fn("localGoatServers.databasesOpenBy")(function* 
       .run({
         command: "lsof",
         // -n and -P skip name lookups for sockets, which otherwise take most of the time.
-        args: ["-a", "-u", String(uid), "-n", "-P", "-b", "-w", "-F", "pn"],
+        args: ["-a", "-u", String(uid), "-n", "-P", "-b", "-w", "-F", "pni"],
         env: { LC_ALL: "C" },
         timeout: Duration.seconds(20),
         maxOutputBytes: 64 * 1024 * 1024,
@@ -244,17 +276,20 @@ const databasesOpenBy = Effect.fn("localGoatServers.databasesOpenBy")(function* 
   if (platform !== "linux") return null;
   const pids = yield* fs.readDirectory("/proc").pipe(Effect.option);
   if (pids._tag === "None") return null;
-  const result = new Map<number, ReadonlyArray<string>>();
+  const result = new Map<number, ReadonlyArray<HeldDatabase>>();
   for (const pid of pids.value) {
     if (!/^\d+$/u.test(pid)) continue;
     const owner = yield* fs.stat(path.join("/proc", pid)).pipe(Effect.option);
     if (owner._tag === "None" || owner.value.uid._tag !== "Some" || owner.value.uid.value !== uid)
       continue;
     const fds = path.join("/proc", pid, "fd");
-    const files: Array<string> = [];
+    const files: Array<HeldDatabase> = [];
     for (const name of yield* fs.readDirectory(fds).pipe(Effect.orElseSucceed(() => []))) {
       const target = yield* fs.readLink(path.join(fds, name)).pipe(Effect.orElseSucceed(() => ""));
-      if (target.endsWith("statev2.sqlite")) files.push(target);
+      // The kernel names a file unlinked while held "<path> (deleted)".
+      const deleted = target.endsWith(LINUX_DELETED);
+      const held = deleted ? target.slice(0, -LINUX_DELETED.length) : target;
+      if (held.endsWith("statev2.sqlite")) files.push({ path: held, inode: null, deleted });
     }
     if (files.length > 0) result.set(Number(pid), files);
   }
