@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import { RunAttemptId, RunId } from "@goat/contracts";
+import { RunAttemptId, RunId, type OrchestrationV2CloudTask } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
@@ -29,7 +29,7 @@ const followUpTurn = (
   h: Effect.Success<ReturnType<typeof makeHarness>>,
   ordinal: number,
   text: string,
-  task: typeof h.saved.cloudTask,
+  task: OrchestrationV2CloudTask,
 ) => ({
   ...h.input,
   runId: RunId.make("cloud-run-follow-up-" + ordinal),
