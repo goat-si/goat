@@ -90,18 +90,16 @@ export function ThreadPreviewSessions(props: ComponentProps<typeof ThreadBrowser
     if (busy || !canControl) return;
     setBusy(true);
     setError(null);
-    try {
-      const result = await control({ environmentId: props.environmentId, input });
-      if (result._tag === "Failure") setError("Could not change this preview session. Try again.");
-      else if (!result.value.applied)
-        setError(
-          result.value.reason === "not_found"
-            ? "This session is no longer available."
-            : "This session does not allow that control.",
-        );
-    } finally {
-      setBusy(false);
-    }
+    // runAtomCommand settles a rejected request into a Failure, so this never throws.
+    const result = await control({ environmentId: props.environmentId, input });
+    if (result._tag === "Failure") setError("Could not change this preview session. Try again.");
+    else if (!result.value.applied)
+      setError(
+        result.value.reason === "not_found"
+          ? "This session is no longer available."
+          : "This session does not allow that control.",
+      );
+    setBusy(false);
   };
   const act = (session: PreviewSession, next: PreviewSessionControl) =>
     void send({ sessionId: session.id, control: next });
