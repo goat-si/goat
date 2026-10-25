@@ -564,6 +564,50 @@ it("shows a desktop thread's live frames, drops them in private mode, and keeps 
   expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
 });
 
+// #1518: Pop out and Dock mount the stack anew, and a stopped session sends no more frames.
+it("keeps a stopped desktop session's last frame on a card mounted anew, as when popped out", async () => {
+  setup([]);
+  const desk = desktopApp({
+    id: "desktop-remounted",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  state.frame = { type: "frame", seq: 1, width: 4, height: 4, mime: "image/jpeg", data: "CCCC" };
+  {
+    await using docked = await render(cardView(desk).element);
+    await vi.waitFor(() =>
+      expect(docked.container.querySelector("img")?.getAttribute("src")).toBe(
+        "data:image/jpeg;base64,CCCC",
+      ),
+    );
+  }
+  state.frame = null;
+  await using popped = await render(cardView({ ...desk, status: "stopped" }).element);
+  const picture = () => popped.container.querySelector("img");
+  await vi.waitFor(() =>
+    expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,CCCC"),
+  );
+  expect(picture()?.className).toContain("opacity-50");
+});
+
+it("forgets a desktop session's last frame once it turns private, even on a card mounted anew", async () => {
+  setup([]);
+  const desk = desktopApp({
+    id: "desktop-private-remounted",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  state.frame = { type: "frame", seq: 1, width: 4, height: 4, mime: "image/jpeg", data: "DDDD" };
+  {
+    await using docked = await render(cardView(desk).element);
+    await vi.waitFor(() => expect(docked.container.querySelector("img")).not.toBeNull());
+    await sendFrame({ type: "unavailable", reason: "private" });
+    await expect.element(docked.getByText("Private")).toBeVisible();
+  }
+  state.frame = null;
+  await using popped = await render(cardView({ ...desk, status: "stopped" }).element);
+  await vi.waitFor(() => expect(state.frameRequests.at(-1)).toBeNull());
+  expect(popped.container.querySelector("img")).toBeNull();
+});
+
 it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
   setup([]);
   const desk = desktopApp({
