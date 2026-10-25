@@ -4,7 +4,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   busSocketPath,
@@ -66,6 +66,8 @@ async function scriptedBus(
     firstString: string | undefined,
     signature: string | undefined,
   ) => boolean,
+  /** Calls the bus answers by closing the connection instead. */
+  drop: (member: string, signature: string | undefined) => boolean = () => false,
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-bus-"));
   const path = NodePath.join(dir, "bus");
@@ -93,6 +95,10 @@ async function scriptedBus(
         data = data.subarray(next.length);
         const { message } = next;
         calls.push(message.member + "(" + (message.signature ?? "") + ")");
+        if (drop(message.member ?? "", message.signature)) {
+          socket.destroy();
+          return;
+        }
         const refused = refuse(message.member ?? "", message.firstString, message.signature);
         socket.write(reply(message.serial, refused ? "refused" : undefined));
         if (
@@ -150,6 +156,57 @@ describe("AT-SPI focus events", () => {
       firstString: "object:state-changed:focused",
     });
     expect(call && isFocusChange(call.message)).toBe(false);
+  });
+
+  it("skips header fields of codes it does not use when their type is basic, as the spec asks (#1650)", () => {
+    const bytes: number[] = [];
+    const pad = (n: number) => {
+      while (bytes.length % n !== 0) bytes.push(0);
+    };
+    const u32 = (value: number) => {
+      pad(4);
+      bytes.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
+    };
+    const field = (code: number, type: string, write: () => void) => {
+      pad(8);
+      bytes.push(code, 1, type.charCodeAt(0), 0);
+      write();
+    };
+    const text = (value: string) => {
+      u32(Buffer.byteLength(value));
+      bytes.push(...Buffer.from(value), 0);
+    };
+    bytes.push(0x6c, 4, 1, 1);
+    u32(0);
+    u32(5);
+    u32(0);
+    const start = bytes.length;
+    field(1, "o", () => text("/org/a11y/atspi/accessible/3"));
+    // Unknown codes holding an INT32 and an INT64.
+    field(42, "i", () => u32(7));
+    field(43, "x", () => {
+      pad(8);
+      bytes.push(1, 0, 0, 0, 0, 0, 0, 0);
+    });
+    field(2, "s", () => text("org.a11y.atspi.Event.Object"));
+    field(3, "s", () => text("StateChanged"));
+    field(8, "g", () => bytes.push(9, ...Buffer.from("siiva{sv}"), 0));
+    const fieldsLength = bytes.length - start;
+    pad(8);
+    const bodyStart = bytes.length;
+    text("focused");
+    pad(4);
+    bytes.push(1, 0, 0, 0, 0, 0, 0, 0);
+    bytes.push(1, 0x73, 0, 0);
+    text("");
+    pad(4);
+    bytes.push(0, 0, 0, 0);
+    const signal = Buffer.from(bytes);
+    signal.writeUInt32LE(bytes.length - bodyStart, 4);
+    signal.writeUInt32LE(fieldsLength, 12);
+    const read = readMessage(signal);
+    expect(read?.length).toBe(signal.length);
+    expect(read && isFocusChange(read.message)).toBe(true);
   });
 
   it("finds the socket of a unix bus address, escaped or abstract", () => {
@@ -247,6 +304,7 @@ describe("AT-SPI focus events", () => {
         return retry.promise;
       },
     });
+    const stopListening = events.subscribe(() => undefined);
     try {
       const first = await firstArrival;
       const firstClosed = closedSocket(first);
@@ -261,9 +319,74 @@ describe("AT-SPI focus events", () => {
       events.close();
       await secondClosed;
     } finally {
+      stopListening();
       events.close();
       server.close();
       NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("connects only while someone listens, and leaving drops the registration (#1650)", async () => {
+    const bus = await scriptedBus(() => false);
+    const retry = Promise.withResolvers<void>();
+    const events = openFocusEvents({
+      address: async () => bus.address,
+      uid: 1000,
+      retry: () => retry.promise,
+    });
+    try {
+      const first = bus.registration();
+      const stop = events.subscribe(() => undefined);
+      await first;
+      expect(bus.clients).toHaveLength(1);
+      const dropped = new Promise<void>((resolve) => {
+        bus.clients[0]?.once("close", () => resolve());
+      });
+      stop();
+      await dropped;
+      // Listening again registers again on a new connection.
+      const second = bus.registration();
+      const stopAgain = events.subscribe(() => undefined);
+      retry.resolve();
+      await second;
+      expect(bus.clients).toHaveLength(2);
+      stopAgain();
+    } finally {
+      events.close();
+      bus.close();
+    }
+  });
+
+  it("stops trying older RegisterEvent forms once the bus closes the connection (#1680 r1)", async () => {
+    // Only the call deadlines are faked, to count them; sockets run for real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const bus = await scriptedBus(
+      () => false,
+      (member, signature) => member === "RegisterEvent" && signature === "sass",
+    );
+    const retried = Promise.withResolvers<void>();
+    const events = openFocusEvents({
+      address: async () => bus.address,
+      uid: 1000,
+      setupLimit: () => new Promise<void>(() => undefined),
+      retry: () => {
+        retried.resolve();
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const stop = events.subscribe(() => undefined);
+    try {
+      await retried.promise;
+      expect(bus.calls.filter((call) => call.startsWith("RegisterEvent"))).toEqual([
+        "RegisterEvent(sass)",
+      ]);
+      // No later form was attempted on the closed connection, so no call deadline is pending.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      stop();
+      events.close();
+      bus.close();
+      vi.useRealTimers();
     }
   });
 });
