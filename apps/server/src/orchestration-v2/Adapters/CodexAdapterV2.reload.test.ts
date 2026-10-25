@@ -176,6 +176,70 @@ describe("Codex subagent limit reload (#1572)", () => {
   );
 });
 
+describe("Codex subagent limit and driver changed together (#1572)", () => {
+  // A new driver alone reloads past a background terminal (the Stop must not keep refusing), but
+  // a reload that also carries a new subagent limit is other authority and waits for it.
+  it.effect("waits for a background terminal when the limit changes with the driver", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("lanes-and-driver");
+        const withCua = (control: string, lanes: number) => ({
+          ...f.config,
+          nativeSubagentLimit: lanes,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a", 3));
+        f.start(
+          undefined,
+          f.threadParams(f.managed("control:a"), f.config, GOAT_MEMORY_TOOLS, THREE_LANES),
+        );
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        // Turn 2: Stop minted control B and the profile dropped to no lanes, while a dev server
+        // runs. The turn runs on the held thread and carries the computer use note.
+        f.goalGet(4, "lanes-and-driver", { result: { goal: null } });
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 5,
+              method: "thread/backgroundTerminals/list",
+              params: { threadId: "lanes-and-driver" },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: { id: 5, result: { data: [{ processId: "dev-server" }], nextCursor: null } },
+          },
+        );
+        yield* f.turnStart(6, 2, true, true);
+        f.turnCompleted(2);
+        // Turn 3: quiet, so one reload applies both.
+        yield* f.turnStart(
+          f.reload(7, undefined, {
+            params: f.threadParams(f.managed("control:b"), f.config, GOAT_MEMORY_TOOLS, NO_LANES),
+            terminals: true,
+          }),
+          3,
+          true,
+        );
+        f.turnCompleted(3);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b", 0));
+        for (const ordinal of [2, 3]) {
+          yield* replay.startTurn(ordinal);
+          yield* replay.terminal;
+        }
+        assert.deepEqual(replay.threadConfigs.map(lanesOf), [3, false]);
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+});
+
 describe("Codex GOAT authority reload (#1569)", () => {
   // Codex 0.163.0 keeps a held thread's MCP headers and disabled tools across thread/resume.
   const goatServer = (config: Record<string, unknown>) =>
