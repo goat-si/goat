@@ -7164,27 +7164,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               runtimePolicy: turnInput.runtimePolicy,
               nativeThreadId: threadId,
             });
-            if ((appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey) {
-              // Without a subscriber an idle loaded thread is shut down and rebuilt from these
-              // overrides, so the next turn runs under the profile's current limit.
-              yield* client.request("thread/unsubscribe", { threadId });
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
-                ...runtime.params,
-              });
-              appliedSubagentsByThread.set(threadId, runtime.subagentKey);
-              if (mcpSession) {
-                credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
-                rememberCuaDriver(threadId, runtime.cuaDriver);
-              } else {
-                credentialsByThread.delete(threadId);
-                managedCuaByThread.delete(threadId);
-              }
-            }
-            // Codex ignores resume overrides on a held thread: any attachment change, a new driver
-            // (#1564) or new GOAT MCP authority (#1569), needs a cold reload, only while Codex
-            // reports this thread and its subagent threads quiet with no active goal.
+            // Codex ignores resume overrides on a held thread: a new subagent limit (#1572), a new
+            // driver (#1564) or new GOAT MCP authority (#1569) needs a cold reload, only while
+            // Codex reports this thread and its subagent threads quiet with no active goal.
+            const limitChanged =
+              (appliedSubagentsByThread.get(threadId) ?? "") !== runtime.subagentKey;
             const ownSubagents = Array.from((yield* Ref.get(subagentThreads)).entries()).filter(
               ([, { parentContext }]) =>
                 approvalOwnerCodexTurn(parentContext).owner.providerThread.id ===
@@ -7207,16 +7191,26 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // Other authority waits for background terminals too; a new driver does not (#1569).
             const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
-              (mcpSession ? applied !== next : applied !== undefined) &&
+              ((mcpSession ? applied !== next : applied !== undefined) || limitChanged) &&
               (yield* threadStatuses.busy(client, conversation, !driverChanged));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
-            if (mcpSession && applied !== next && !busy) {
+            if (limitChanged && !busy) {
+              yield* reload(runtime.params);
+              appliedSubagentsByThread.set(threadId, runtime.subagentKey);
+              if (mcpSession) {
+                credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
+                rememberCuaDriver(threadId, runtime.cuaDriver);
+              } else {
+                credentialsByThread.delete(threadId);
+                managedCuaByThread.delete(threadId);
+              }
+            } else if (mcpSession && applied !== next && !busy) {
               yield* reload(runtime.params);
               credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
               rememberCuaDriver(threadId, runtime.cuaDriver);
             }
             const previousCuaDriver = managedCuaByThread.get(threadId);
-            if (!mcpSession && applied !== undefined && !busy) {
+            if (!limitChanged && !mcpSession && applied !== undefined && !busy) {
               yield* reload({
                 config: {
                   ...CODEX_THREAD_CONFIG,
