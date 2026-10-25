@@ -63,4 +63,19 @@ describe("cloud foundation schemas", () => {
     expect(() => decodeTask({ ...task, tracking: "timer" })).toThrow();
     expect(() => decodeTask({ ...task, localChangesIncluded: "true" })).toThrow();
   });
+  it("decodes saved failures without terminal-error evidence and round-trips it when present", () => {
+    const failed = {
+      taskId: "session_ABC123",
+      status: "failed" as const,
+      tracking: "polled" as const,
+      error: "API Error: 529 Overloaded",
+      source: { repository: "https://github.com/acme/repo", branch: "dev" },
+      localChangesExcluded: false,
+      updatedAt: "2026-10-13T00:00:00.000Z",
+    };
+    expect(Object.hasOwn(decodeTask(failed), "confirmedTerminalError")).toBe(false);
+    const confirmed = { ...failed, confirmedTerminalError: true as const };
+    expect(decodeTask(encodeTask(confirmed))).toEqual(confirmed);
+    expect(() => decodeTask({ ...failed, confirmedTerminalError: false })).toThrow();
+  });
 });

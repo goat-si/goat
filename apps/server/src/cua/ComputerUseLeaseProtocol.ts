@@ -1,11 +1,29 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Reads only the raw MCP fields the lease proxy uses.
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Scheduler from "effect/Scheduler";
 
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
 const MAX_NAMED_NODES = 4_096;
+
+/**
+ * Tools that act on no app: they run before the driver has shown it is on GOAT's screen. Every
+ * other tool waits for that proof (#1358).
+ */
+export const DISPLAY_PROOF_FREE: ReadonlySet<string> = new Set([
+  "check_permissions",
+  "get_guide",
+  "list_apps",
+  "list_windows",
+  "get_screen_size",
+  "get_cursor_position",
+  "start_session",
+  "get_session",
+  "list_sessions",
+  "get_agent_cursor_state",
+]);
 
 /**
  * Every window a driver reply or request names, wherever it sits (a list, a nested target, a
@@ -99,20 +117,24 @@ export const replyPlacement = Effect.fnUntraced(function* (
 
 /**
  * Runs a call's registration and write unless its child is no longer current ("stale") or it
- * takes the screen while another thread shares it ("shared"); the caller answers either as not
- * run. The checks and the write run with no scheduler yield between them (#1496), so neither a
+ * takes the screen while another thread shares it ("shared"), or its permission expired; the caller
+ * answers as not run. The checks and the write run with no scheduler yield between them (#1496), so neither a
  * pause, a narrowed approval nor the update that shares the screen can land in between.
  */
-export const sendUnlessShared = (
-  takesScreen: boolean,
-  shared: () => boolean,
-  current: () => boolean,
-  send: Effect.Effect<void>,
-) =>
-  Effect.suspend(() =>
-    !current()
-      ? Effect.succeed("stale" as const)
-      : takesScreen && shared()
-        ? Effect.succeed("shared" as const)
-        : send.pipe(Effect.as("sent" as const)),
-  ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
+// Already traced by the proxy's call handler; this is its final per-call scheduling barrier.
+export const sendUnlessShared = Effect.fnUntraced(
+  function* (
+    takesScreen: boolean,
+    shared: () => boolean,
+    current: () => boolean,
+    send: Effect.Effect<void>,
+    permissionDeadline = Infinity,
+  ) {
+    if (!current()) return "stale" as const;
+    if (takesScreen && shared()) return "shared" as const;
+    if ((yield* Clock.currentTimeMillis) >= permissionDeadline) return "expired" as const;
+    yield* send;
+    return "sent" as const;
+  },
+  Effect.provideService(Scheduler.PreventSchedulerYield, true),
+);

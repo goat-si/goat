@@ -23,6 +23,7 @@ import {
   type ComputerUsePauseReason,
   type CuaAgentBlock,
   cuaAgentBlockUnder,
+  type Handoff,
   type ThreadId,
   type TurnItemId,
 } from "@goat/contracts";
@@ -45,10 +46,18 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { callResource, makeCallReservations } from "./ComputerUseCallReservations.ts";
+import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import type {
+  ComputerUseControl,
+  ComputerUseControlState,
+  Interruptions,
+} from "./ComputerUseControl.ts";
+import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
+import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
-import { appsOf, decodeHandoff, leaseOf, overlap } from "./computerUseGrants.ts";
-import { takesScreen } from "./ComputerUseScope.ts";
+import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
+import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
+import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
@@ -67,29 +76,8 @@ export interface ComputerUseLease {
   readonly expiresAt: DateTime.Utc;
   /** Absent when the grant admits every app. */
   readonly apps?: ReadonlyArray<string>;
+  readonly computerUseForeground?: NonNullable<Handoff["computerUseForeground"]>;
 }
-
-/** A thread whose admission overlaps one asked for, by grant or by unattended full access. */
-export interface ComputerUseHolder {
-  readonly threadId: ThreadId;
-  readonly expiresAt: DateTime.Utc;
-  /** The holder's apps in the way, as its grant names them; absent when it holds the whole screen. */
-  readonly apps?: ReadonlyArray<string>;
-}
-
-const heldApps = (holder: ComputerUseHolder) =>
-  holder.apps === undefined ? "the whole screen" : holder.apps.join(", ");
-
-/** Who holds what an admission would overlap, and until when, as one sentence for an agent. */
-export const describeHolder = (holder: ComputerUseHolder) =>
-  `Thread ${holder.threadId} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt)}.`;
-
-/**
- * The same sentence for a person on an approval card: the holder by its title, and the end as a
- * UTC clock time like the request's own text, since the server does not know the reader's zone.
- */
-export const describeHolderForPerson = (holder: ComputerUseHolder, title: string | undefined) =>
-  `${title === undefined ? "Another thread" : `The thread "${title}"`} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt).slice(11, 16)} UTC.`;
 
 /**
  * Whether the host's helper reports a person's input and secret fields at all: true only for a
@@ -102,49 +90,11 @@ export interface ComputerUseDetection {
   readonly frames: boolean;
 }
 
-/** One thread's current stretch of computer use, what its proxy was started with. */
-export interface ComputerUseControl {
-  readonly controlId: string;
-  readonly threadId: ThreadId;
-  readonly expiresAt: DateTime.Utc;
-  /** The grant an unattended control lives on; interactive controls have none. */
-  readonly handoffId?: TurnItemId;
-  /** The apps it last held while active, so a stopped one keeps its label; absent until then. */
-  readonly scope?: { readonly apps: ReadonlyArray<string> | undefined };
-  /**
-   * Its thread has no open run. It stays valid, so the next turn reuses it without respawning
-   * the proxy, but no agent can act on it until then.
-   */
-  readonly idle?: boolean;
-  /** The window the agent's latest admitted call named, as its proxy reported it. */
-  readonly target?: { readonly pid: number; readonly windowId: number };
-}
-
-export type ComputerUseControlState =
-  | {
-      readonly _tag: "active";
-      readonly expiresAt: DateTime.Utc;
-      /** Host pauses so far, so a proxy that missed one still ends the call it overlapped. */
-      readonly interruptions: Interruptions;
-      /** Absent when every app the driver admits is allowed. */
-      readonly apps: ReadonlyArray<string> | undefined;
-      /** When this state can next change without a signal, epoch ms. */
-      readonly wakeAt: number;
-      /**
-       * Another thread holds a grant on this screen, so this one must not raise windows or move
-       * the pointer over it.
-       */
-      readonly shared?: true;
-      readonly idle?: true;
-      readonly idleEpoch?: number;
-    }
-  | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }
-  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
-
-export interface Interruptions {
-  readonly count: number;
-  readonly last: ComputerUsePauseReason;
-}
+export type {
+  ComputerUseControl,
+  ComputerUseControlState,
+  Interruptions,
+} from "./ComputerUseControl.ts";
 
 /** How long an interactive control lasts before the thread's next turn mints another. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
@@ -153,6 +103,8 @@ const WATCH_RETRY_MS = 1_000;
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
 const REPORT_SKEW_MS = 60_000;
+/** How many of a batch's events are judged between turns of the server's other work. */
+const HUMAN_INPUT_CHUNK = 256;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -216,6 +168,12 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
+    readonly foregroundApprovalEpoch: Effect.Effect<number>;
+    readonly approveForeground: (handoff: Handoff, observedEpoch: number) => Effect.Effect<void>;
+    readonly foregroundAvailable: (
+      threadId: ThreadId,
+      purpose: string,
+    ) => Effect.Effect<boolean, ComputerUseLeaseError>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -228,16 +186,17 @@ export class ComputerUseLeases extends Context.Service<
       target: { readonly pid: number; readonly windowId: number },
     ) => Effect.Effect<boolean>;
     /**
-     * A keyboard or pointer event at "at" that a control's proxy saw through its helper, outside
-     * its own input calls (#1235). Unless another agent's input of the same kind covers that
-     * moment, every agent on the host pauses, as for the desktop's report. Refused when the
-     * control is not the thread's live one, so an old proxy cannot pause anyone.
+     * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
+     * one in time order (#1488). An event another agent's input of the same kind covers is
+     * dropped, and so is one too old or too far from now to judge; the first that is left pauses
+     * every agent on the host, as for the desktop's report. "agents" when none paused anyone.
+     * Refused when the control is not the thread's live one, so an old proxy cannot pause anyone,
+     * and when not one event could be judged.
      */
     readonly humanInput: (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) => Effect.Effect<"paused" | "agents" | "refused">;
     /**
      * One of a control's calls that can post input started or ended (#1235). A person's input
@@ -330,6 +289,7 @@ const make = Effect.gen(function* () {
   );
   const controls = new Map<ThreadId, ControlRecord>();
   const reservations = makeCallReservations();
+  const foreground = makeForegroundApprovals();
   /** Turns the desktop gave no driver for want of a grant, while they run (#1399). */
   const blockedTurns = new Map<ThreadId, CuaAgentBlock>();
   const admission = yield* Semaphore.make(1);
@@ -428,10 +388,17 @@ const make = Effect.gen(function* () {
       ...(everyApp === undefined ? {} : { everyApp }),
       uses: 0,
     };
-    if (existing !== undefined) reservations.forgetClosed(threadId, existing.controlId);
+    if (existing !== undefined) {
+      reservations.forgetClosed(threadId, existing.controlId);
+      foreground.revokeControl(threadId, existing.controlId);
+    }
     controls.set(threadId, next);
-    // Session lists show a new thread's control at once, and a proxy still holding a previous id
-    // hears it was replaced. Reuse above publishes nothing, so tool calls cause no churn.
+    foreground.bindPending(
+      threadId,
+      next.controlId,
+      everyApp === undefined ? handoffId : undefined,
+    );
+    // New controls publish immediately; reusing an existing control above publishes nothing.
     yield* changed;
     return next as ComputerUseControl;
   });
@@ -493,6 +460,10 @@ const make = Effect.gen(function* () {
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
+    const own = grants.filter((lease) => lease.threadId === threadId);
+    const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
+    const focusState = focus.length === 0 ? {} : { foreground: focus };
+    const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
     // Other threads' grants hold apps on this screen until they end, which this state outlasts.
     const active = (apps: ReadonlyArray<string> | undefined, wakeAt: number) =>
       ({
@@ -500,7 +471,12 @@ const make = Effect.gen(function* () {
         expiresAt: record.expiresAt,
         interruptions,
         apps: scoped(record, apps),
-        wakeAt: Math.min(wakeAt, ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt))),
+        wakeAt: Math.min(
+          wakeAt,
+          focusWake,
+          ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
+        ),
+        ...focusState,
         ...(others.length === 0 ? {} : ({ shared: true } as const)),
         ...(record.idle === true ? ({ idle: true } as const) : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
@@ -510,10 +486,13 @@ const make = Effect.gen(function* () {
     if (record.handoffId !== undefined) {
       const grant = yield* state(threadId, record.handoffId);
       if (grant._tag === "ended") return grant;
-      return active(grant.lease.apps, DateTime.toEpochMillis(record.expiresAt));
+      // A shorter desktop approval widens scope only while bound to this control.
+      return active(
+        focus.length > 0 ? undefined : grant.lease.apps,
+        DateTime.toEpochMillis(record.expiresAt),
+      );
     }
     // An interactive thread controls the apps its grants name, and only the safe reads without one.
-    const own = grants.filter((lease) => lease.threadId === threadId);
     return active(
       own.length === 0 ? [] : appsOf(own),
       Math.min(
@@ -524,6 +503,7 @@ const make = Effect.gen(function* () {
   });
 
   const end = (threadId: ThreadId, reason: ComputerUseControlEnd) => {
+    foreground.revokeThread(threadId);
     const record = controls.get(threadId);
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
@@ -561,6 +541,7 @@ const make = Effect.gen(function* () {
 
   const pause = (reason: ComputerUsePauseReason) =>
     Effect.sync(() => {
+      foreground.clear();
       // A person's input with no agent on the screen is just a person using their computer,
       // also between a thread's turns.
       if (![...controls.values()].some(acting)) return false;
@@ -613,7 +594,10 @@ const make = Effect.gen(function* () {
         if (report.type === "cuaHumanInput") return pause("human_input");
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
-          if (report.active && !privateHost) interrupted("private");
+          if (report.active && !privateHost) {
+            foreground.clear();
+            interrupted("private");
+          }
           privateHost = report.active;
         }).pipe(Effect.andThen(changed));
       }),
@@ -748,6 +732,7 @@ const make = Effect.gen(function* () {
       after.idle === true
     )
       return false;
+    foreground.revokeControl(threadId, after.controlId);
     controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
     yield* changed;
     return true;
@@ -789,42 +774,52 @@ const make = Effect.gen(function* () {
     everyAppControl,
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
     controlState,
-    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, call) {
-      if (call.action !== "reserve") {
+    ...makeForegroundAuthority({
+      foreground,
+      controls,
+      live,
+      blocked: () => paused !== undefined || privateHost,
+      changed,
+    }),
+    callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, request) {
+      if (request.action === "release" || request.action === "close") {
         const current = controls.get(threadId);
         return reservations.release(
           threadId,
-          call,
-          current?.controlId === call.controlId && current.ended === undefined,
+          request,
+          current?.controlId === request.controlId && current.ended === undefined,
         );
       }
       return yield* admission.withPermits(1)(
         Effect.gen(function* () {
+          const call =
+            request.action === "validate" ? reservations.lookup(threadId, request) : request;
+          if (call === undefined) return { status: "refused", detail: "replaced" } as const;
           const before = controls.get(threadId);
           const state = yield* controlState(threadId, call.controlId);
           const now = DateTime.toEpochMillis(yield* DateTime.now);
-          const current = controls.get(threadId);
-          if (state._tag === "ended") return { status: "refused", detail: state.reason } as const;
-          if (state._tag === "paused" || paused !== undefined || privateHost)
-            return { status: "refused", detail: "waiting_for_human" } as const;
-          if (current?.idle === true && callResource(call) !== "read")
-            return { status: "refused", detail: "control_idle" } as const;
-          if (
-            current === undefined ||
-            current.controlId !== call.controlId ||
-            current.ended !== undefined ||
-            current.uses !== before?.uses ||
-            interruptions.count !== call.interruptions ||
-            (current.idleEpoch ?? 0) !== call.idleEpoch
-          )
+          // Release and close do not wait on admission: neither can resurrect a yielding validation.
+          if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
             return { status: "refused", detail: "replaced" } as const;
-          if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now)
-            return { status: "refused", detail: "expired" } as const;
-          // Judged here, under the admission lock, with the grants as they are now: the proxy
-          // hears of another thread's grant through its lease stream, which can lag.
-          if (state.shared === true && takesScreen(call.name, call.args))
-            return { status: "refused", detail: "screen_shared" } as const;
-          return reservations.reserve(threadId, call);
+          const detail = callAdmissionRefusal({
+            call,
+            state,
+            current: controls.get(threadId),
+            beforeUses: before?.uses,
+            blocked: paused !== undefined || privateHost,
+            interruptions: interruptions.count,
+            now,
+            bound: (id) => foreground.bound(id, threadId, call.controlId),
+          });
+          if (detail !== undefined) return { status: "refused", detail } as const;
+          if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
+          // Confirmation retains the original ticket and its conflict coverage until cleanup.
+          return withCallPermissions(
+            request.action === "validate"
+              ? { status: "admitted", reservationId: request.reservationId }
+              : reservations.reserve(threadId, call),
+            state,
+          );
         }),
       );
     }),
@@ -851,26 +846,38 @@ const make = Effect.gen(function* () {
     humanInput: Effect.fn("ComputerUseLeases.humanInput")(function* (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) {
-      if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
-      if (!(yield* nearNow(at))) return "refused" as const;
-      // The calls that could have covered an older event are forgotten, so it cannot be judged:
-      // an agent's own late event would pass for a person's. A person still at the machine makes
-      // newer ones.
-      if (!agentInputs.remembers(at, yield* Clock.currentTimeMillis)) return "refused" as const;
-      // Another agent's input on this host shows up in every helper; only a live control's
-      // calls count.
-      const live = new Set(
-        [...controls.values()]
-          .filter((record) => record.ended === undefined)
-          .map((record) => record.controlId),
-      );
-      if (agentInputs.isAgents(at, source, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
-        return "agents" as const;
-      yield* pause("human_input");
-      return "paused" as const;
+      const sorted = [...events].sort((left, right) => left.at - right.at);
+      let judged = false;
+      // A batch can hold thousands of events: each chunk is judged against the log as it is when
+      // the chunk starts, and the server gets to run its other work between chunks.
+      for (let start = 0; start < sorted.length; start += HUMAN_INPUT_CHUNK) {
+        if (start > 0) yield* Effect.yieldNow;
+        if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
+        // Another agent's input on this host shows up in every helper; only a live control's
+        // calls count.
+        const live = new Set(
+          [...controls.values()]
+            .filter((record) => record.ended === undefined)
+            .map((record) => record.controlId),
+        );
+        const now = yield* Clock.currentTimeMillis;
+        agentInputs.prune(now);
+        const isAgents = agentInputs.judge((key) => live.has(key.slice(0, key.indexOf(CALL_KEY))));
+        for (const { at, source } of sorted.slice(start, start + HUMAN_INPUT_CHUNK)) {
+          if (Math.abs(now - at) > REPORT_SKEW_MS) continue;
+          // The calls that could have covered an older event are forgotten, so it cannot be
+          // judged: an agent's own late event would pass for a person's. A person still at the
+          // machine makes newer ones.
+          if (!agentInputs.remembers(at, now)) continue;
+          judged = true;
+          if (isAgents(at, source)) continue;
+          yield* pause("human_input");
+          return "paused" as const;
+        }
+      }
+      return judged ? ("agents" as const) : ("refused" as const);
     }),
     agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
       threadId: ThreadId,
@@ -889,9 +896,10 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.sync(() => [...controls.keys()].filter((id) => end(id, "stopped_all"))).pipe(
-      Effect.tap(() => changed),
-    ),
+    stopAll: Effect.sync(() => {
+      foreground.clear();
+      return [...controls.keys()].filter((id) => end(id, "stopped_all"));
+    }).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>
@@ -927,6 +935,7 @@ const make = Effect.gen(function* () {
       ),
     ),
     disable: Effect.sync(() => {
+      foreground.clear();
       const listed = blockedTurns.size > 0;
       blockedTurns.clear();
       const ended = [...controls.keys()].filter((id) => end(id, "disabled"));

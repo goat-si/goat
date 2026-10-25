@@ -4,9 +4,81 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  foregroundActive,
+  call,
+  CONTROL,
+  harness,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("proxy execution ownership", () => {
+  it.effect.each(["missing", "empty", "substituted", "no-permissions"] as const)(
+    "refuses %s execution ticket authority without forwarding or retaining input cover",
+    (invalid) =>
+      Effect.gen(function* () {
+        const h = yield* harness({
+          humanInput: true,
+          overlay: true,
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve"
+                ? {
+                    status: "admitted",
+                    reservationId:
+                      invalid === "missing" ? null : invalid === "empty" ? "" : "original",
+                  }
+                : request.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId:
+                        invalid === "substituted" ? "replacement" : request.reservationId,
+                      ...(invalid === "no-permissions"
+                        ? {}
+                        : { permissions: { validUntilMillis: 1_800_000 } }),
+                    }
+                  : { status: "released" },
+            ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(observed.kind, "answer");
+        assert.deepInclude(
+          (observed.message.result as { structuredContent: object }).structuredContent,
+          { detail: "unauthorized" },
+        );
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        if (invalid === "missing" || invalid === "empty") {
+          assert.equal(yield* h.agentCallsQueued, 0);
+          assert.equal(h.reservations.length, 1);
+        } else {
+          assert.equal(yield* h.agentCall, "start 1");
+          assert.equal(yield* h.agentCall, "end 1");
+          const validation = yield* h.nextValidation;
+          const released = yield* h.nextReservation;
+          assert.deepEqual(validation, {
+            action: "validate",
+            controlId: CONTROL,
+            connectionId: validation.connectionId,
+            reservationId: "original",
+          });
+          assert.deepEqual(released, { ...validation, action: "release" });
+          assert.deepEqual(
+            h.reservations.map((request) => request.action),
+            ["reserve", "validate", "release"],
+          );
+        }
+        assert.include(
+          h.log.findLast((entry) => entry.startsWith("draw ")),
+          '"phase":"resting"',
+        );
+      }),
+  );
+
   it.effect(
     "settles the acting overlay when a cancelled call receives its terminal reply (#1490)",
     () =>
@@ -45,6 +117,45 @@ describe("proxy execution ownership", () => {
       }),
   );
 
+  it.effect(
+    "refuses an unsent mutation when its admitted permission expires during the input report",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({
+          humanInput: true,
+          agentInputGate: gate,
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve" || request.action === "validate"
+                ? {
+                    status: "admitted" as const,
+                    reservationId: "expiry-ticket",
+                    permissions: { validUntilMillis: 60_000 },
+                  }
+                : { status: "released" as const },
+            ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 4, window_id: 9, text: "hello" }));
+        yield* h.nextReservation;
+        assert.equal(yield* h.agentCall, "start 1");
+        yield* TestClock.adjust("1 minute");
+        yield* Deferred.succeed(gate, undefined);
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(observed.kind, "answer");
+        assert.equal(
+          (observed.message.result as { structuredContent: { detail: string } }).structuredContent
+            .detail,
+          "expired",
+        );
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.equal(yield* h.agentCall, "end 1");
+      }),
+  );
   it.effect("suppresses cancellation received after Stop while native closure is pending", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
@@ -118,10 +229,86 @@ describe("proxy execution ownership", () => {
       }),
   );
 
+  it.effect("ends the control if restarting after foreground expiry fails", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ restartFailure: "fixture restart failure" });
+      const update = foregroundActive();
+      yield* h.push({
+        ...update,
+        foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
+      });
+      yield* h.send(call(1, "run_script", { script: "opaque work" }));
+      yield* h.nextToDriver;
+      yield* TestClock.adjust("5 minutes");
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "get_guide"));
+      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(result.structuredContent.detail, "helper_restarted");
+    }),
+  );
+  it.effect("cuts off foreground expiry on its own clock while a lease stream is silent", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const update = foregroundActive();
+      yield* h.push({
+        ...update,
+        foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
+      });
+      yield* h.send(call(1, "run_script", { script: "opaque work" }));
+      yield* h.nextToDriver;
+      yield* h.nextReservation;
+      yield* TestClock.adjust("5 minutes");
+      yield* h.killed;
+      assert.equal((yield* h.nextReservation).action, "close");
+      const result = (yield* h.nextToProvider).result as { structuredContent: { detail: string } };
+      assert.equal(result.structuredContent.detail, "foreground_not_approved");
+      yield* h.restarted;
+      yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "background" }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+    }),
+  );
+  it.effect(
+    "refuses foreground and opaque routes without an explicit foreground grant before dispatch",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const routes = [
+          ["bring_to_front", { pid: 42, window_id: 7 }],
+          ["launch_app", { bundle_id: "com.example.Build" }],
+          ["move_cursor", { scope: "desktop", x: 1, y: 1 }],
+          ["click", { pid: 42, window_id: 7, delivery_mode: "foreground" }],
+          ["click", { pid: 42, window_id: 7, delivery_mode: "FOREGROUND" }],
+          ["press_key", { pid: 42, window_id: 7, delivery_mode: "FoReGrOuNd" }],
+          ["press_key", { pid: 42, window_id: 7, dispatch: "foreground" }],
+          ["run_steps", { foreground_fallback: true, steps: [{ delivery_mode: "foreground" }] }],
+          ["run_steps", { steps: [{ type: "click", pid: 42, window_id: 7 }] }],
+          ["run_script", { script: "opaque work" }],
+        ] as const;
+        let id = 0;
+        for (const [name, args] of routes) {
+          const mutationId = ++id;
+          const discoveryId = ++id;
+          yield* h.send(call(mutationId, name, args));
+          yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: discoveryId, method: "tools/list" }));
+          assert.equal((yield* h.nextToDriver).id, discoveryId);
+          const refused = (yield* h.nextToProvider).result as {
+            structuredContent: { detail: string };
+          };
+          assert.equal(refused.structuredContent.detail, "foreground_not_approved");
+          yield* h.reply(
+            JSON.stringify({ jsonrpc: "2.0", id: discoveryId, result: { tools: [] } }),
+          );
+          yield* h.nextToProvider;
+        }
+        assert.equal(h.reservations.length, 0);
+      }),
+  );
+
   it.effect("suppresses a cancelled call when its driver is later cut off", () =>
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       yield* h.send(call(1, "run_script", { code: "opaque" }));
       yield* h.nextToDriver;
       const acquired = yield* h.nextReservation;
@@ -134,7 +321,8 @@ describe("proxy execution ownership", () => {
         }),
       );
       yield* h.nextToDriver;
-      assert.deepEqual(h.reservations, [acquired]);
+      const validated = yield* h.nextValidation;
+      assert.deepEqual(h.reservations, [acquired, validated]);
       yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
       assert.equal((yield* h.nextReservation).action, "close");
       assert.equal(yield* h.agentCall, "end 1");
@@ -286,7 +474,7 @@ describe("proxy execution ownership", () => {
               : { status: "released" },
           ),
       });
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       yield* h.send(
         call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1, dispatch: "foreground" }),
       );
@@ -304,7 +492,7 @@ describe("proxy execution ownership", () => {
     () =>
       Effect.gen(function* () {
         const h = yield* harness({ humanInput: true });
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         yield* h.send(call(1, "run_script", { code: "opaque" }));
         yield* h.nextToDriver;
         const acquired = yield* h.nextReservation;
@@ -317,7 +505,8 @@ describe("proxy execution ownership", () => {
           }),
         );
         yield* h.nextToDriver;
-        assert.deepEqual(h.reservations, [acquired]);
+        const validated = yield* h.nextValidation;
+        assert.deepEqual(h.reservations, [acquired, validated]);
         assert.equal(yield* h.agentCallsQueued, 0);
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         assert.equal((yield* h.nextReservation).action, "release");

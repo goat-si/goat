@@ -12,6 +12,15 @@ import * as Redactable from "effect/Redactable";
 import { defectSummary, redactCause, redactedDefects, redactLogMessage } from "./LogRedaction.ts";
 import { redactLogText } from "./LogTextRedaction.ts";
 
+// Provider prefixes are joined at runtime so push protection does not take these synthetic
+// canaries for real credentials.
+const xox = "xox";
+const xapp = "xapp";
+const sk = "sk";
+const rk = "rk";
+const aiza = "AIza";
+const pemBegin = "-----BEGIN";
+
 // Synthetic canaries throughout; none of them is a real credential.
 const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnkifQ.Y2FuYXJ5LXNpZ25hdHVyZQ";
 // The header { "alg": "HS256", "typ": "JWT" }, with spaces, encodes as "eyAi…".
@@ -21,6 +30,16 @@ const spacedJwt =
   "eyAiYWxnIjogIkhTMjU2IiwgInR5cCI6ICJKV1QiIH0.eyJzdWIiOiJjYW5hcnktd3Mtand0In0.Y2FuYXJ5LXdzLXNpZw";
 
 describe("redactLogText", () => {
+  /**
+   * A huge text whose scanned part ends with secret. A masked field before it shrinks the text
+   * below the shown bound, so the end of the scanned part shows.
+   */
+  const endingTheScannedPart = (secret: string) => {
+    const lead = `{"token":"${"t".repeat(255_000)}"} `;
+    const pad = "p".repeat(256_000 - lead.length - secret.length - 1);
+    return `${lead}${pad} ${secret}${"Z".repeat(64)} end`;
+  };
+
   it.each([
     [
       "fatal: unable to access 'https://bot:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git/'",
@@ -60,8 +79,8 @@ describe("redactLogText", () => {
     [`requestid.${jwt} done`, "requestid.*** done"],
     // A whole assigned value: quoted segments joined to more text, or a JSON value with spaces.
     ["password='first'CANARY user=me", "password=*** user=me"],
-    [`authorization=${"A".repeat(65)} CANARY next`, "authorization=*** next"],
-    ["authorization=Bearer\nCANARY next", "authorization=*** next"],
+    [`authorization=${"A".repeat(65)} CANARY next`, "authorization=***"],
+    ["authorization=Bearer\nCANARY next", "authorization=***"],
     ['token={"a": "CANARY", "b": [1, 2]} next', "token=*** next"],
     // Pretty JSON escaped inside a JSON string: its whitespace is escaped too.
     [
@@ -110,6 +129,56 @@ describe("redactLogText", () => {
     ['{"token":"never closed CANARY', '{"token":***'],
     [`whitespace ${leadingSpaceJwt} header`, "whitespace *** header"],
     [`id ${spacedJwt} expired`, "id *** expired"],
+    // An authorization or cookie assignment holds every word to the end of its line (#1487).
+    ["authorization=Bearer abc CANARY", "authorization=***"],
+    ["authorization=Custom+Scheme CANARY words\nnext line", "authorization=***\nnext line"],
+    ["cookie=sid=abc; theme=CANARY", "cookie=***"],
+    ["set-cookie: sid=abc; theme=CANARY\nnext", "set-cookie: ***\nnext"],
+    // Slack, Stripe secret and restricted, and Google API keys, and PEM private-key blocks.
+    [`slack ${xox}b-0123456789-0123456789012-CANARYabcdefghij ok`, "slack *** ok"],
+    [`refresh ${xox}e.${xox}p-1-CANARYabcdefghijklmnop ok`, "refresh *** ok"],
+    [`socket ${xapp}-1-A0123456789-0123456789012-CANARYabcdef ok`, "socket *** ok"],
+    [`STRIPE_KEY=${sk}_live_51CANARYabcdefghijklmnop ok`, "STRIPE_KEY=*** ok"],
+    [`restricted ${rk}_test_51CANARYabcdefghijklmnop ok`, "restricted *** ok"],
+    [`GET /maps?key=${aiza}SyCANARYabcdefghijklmnopqrstuvwxyz0&q=1`, "GET /maps?key=***&q=1"],
+    [
+      `${pemBegin} RSA PRIVATE KEY-----\nMIIECANARY\nabc=\n-----END RSA PRIVATE KEY-----\nnext`,
+      `${pemBegin} RSA PRIVATE KEY-----***-----END RSA PRIVATE KEY-----\nnext`,
+    ],
+    [
+      `{"key":"${pemBegin} PRIVATE KEY-----\\nMIIECANARY\\n-----END PRIVATE KEY-----\\n","ok":1}`,
+      `{"key":"${pemBegin} PRIVATE KEY-----***-----END PRIVATE KEY-----\\n","ok":1}`,
+    ],
+    [
+      `${pemBegin} OPENSSH PRIVATE KEY-----\nb3BlbnNzaCANARY`,
+      `${pemBegin} OPENSSH PRIVATE KEY-----***`,
+    ],
+    [
+      `${pemBegin} PGP PRIVATE KEY BLOCK-----\nCANARY\n-----END PGP PRIVATE KEY BLOCK-----`,
+      `${pemBegin} PGP PRIVATE KEY BLOCK-----***-----END PGP PRIVATE KEY BLOCK-----`,
+    ],
+    // A block ends only at the END marker of its own label, after any block nested in it.
+    [
+      `${pemBegin} RSA PRIVATE KEY-----\nA\n${pemBegin} EC PRIVATE KEY-----\nB\n-----END EC PRIVATE KEY-----\nCANARY\n-----END RSA PRIVATE KEY-----\nkept`,
+      `${pemBegin} RSA PRIVATE KEY-----***-----END RSA PRIVATE KEY-----\nkept`,
+    ],
+    [
+      `${pemBegin} RSA PRIVATE KEY-----\nA\n-----END EC PRIVATE KEY-----\nCANARY`,
+      `${pemBegin} RSA PRIVATE KEY-----***`,
+    ],
+    [
+      `${pemBegin} EC PRIVATE KEY-----\nCANARY\n-----END EC PRIVATE KEY-----\nkept\n-----END EC PRIVATE KEY-----\n${pemBegin} PRIVATE KEY-----\nCANARY`,
+      `${pemBegin} EC PRIVATE KEY-----***-----END EC PRIVATE KEY-----\nkept\n-----END EC PRIVATE KEY-----\n${pemBegin} PRIVATE KEY-----***`,
+    ],
+    // A cookie assignment, unlike an authorization one, takes no scheme from the line before.
+    ["cookie=sid\nnext line", "cookie=***\nnext line"],
+    // A quoted or escaped line break inside the value does not end its line.
+    ['authorization="first\nCANARY" next\nkept', "authorization=***\nkept"],
+    ['cookie="sid=first\r\nCANARY" next\r\nkept', "cookie=***\r\nkept"],
+    ["authorization=first\\\nCANARY next\nkept", "authorization=***\nkept"],
+    // A scheme word alone on its line leads the credential however many blank lines follow.
+    ["authorization=Bearer\n\nCANARY next", "authorization=***"],
+    ["Authorization=Bearer\r\n \t\r\nCANARY next\r\nkept", "Authorization=***\r\nkept"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
   });
@@ -125,8 +194,38 @@ describe("redactLogText", () => {
     "Basic auth is enabled for the dev server",
     "apps/server/src/serverLogger.test.ts and collector.example.com.local",
     "see https://example.com/docs, then mail bob@example.com",
+    "Stripe publishable key pk_live_51abcdefghijklmnopqrstuv",
+    "xoxo hugs, task_live_status and AIzawesome",
+    "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU\n-----END CERTIFICATE-----",
+    "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYI\n-----END PUBLIC KEY-----",
+    "the authorization header was missing; cookie jar empty",
   ])("leaves %j as it is", (text) => {
     expect(redactLogText(text)).toBe(text);
+  });
+
+  it.each([
+    ["a GitHub token", "ghp_CANARY12"],
+    ["a Stripe key", `${sk}_live_CANARY12`],
+    ["a Slack token", `${xox}b-CANARY12`],
+    ["a Slack token joined to a word", `request-id-${xox}b-CANARY12`],
+    ["a Google API key", `${aiza}CANARY12`],
+    // Its end could also start a JOSE header; the token is still found from its prefix.
+    ["a Google API key ending like a JOSE header", `${aiza}CANARY12eyJhbGci`],
+    ["a Slack token ending like a JOSE header", `${xox}b-CANARY12eyJhbGci`],
+    ["a PEM private key", `${pemBegin} PRIVATE KEY-----\nCANARY12`],
+    ["an authorization assignment", "authorization=Custom+Scheme CANARY12"],
+    ["a cookie assignment", "cookie=sid=1; theme=CANARY12"],
+  ])("hides %s that the scanned part of a huge text cuts short", (_family, secret) => {
+    const text = redactLogText(endingTheScannedPart(secret));
+    expect(text).toMatch(/cut from \d+ characters\]$/);
+    expect(text).not.toContain("CANARY");
+  });
+
+  it("hides a whole JOSE token when the scanned part ends on a provider prefix inside it", () => {
+    const header = Buffer.from('{"alg":"RSA-OAEP","enc":"A256GCM"}').toString("base64url");
+    const text = redactLogText(endingTheScannedPart(`${header}.Zm9v${aiza}CANARY12`));
+    expect(text).not.toContain(header);
+    expect(text).not.toContain("CANARY");
   });
 
   it("hides a token whose remaining dots fall past the scanned part of a huge text", () => {

@@ -30,6 +30,7 @@ export const layerInteractive = (input: {
       }),
     ),
     Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+      foregroundApprovalEpoch: Effect.die("unused"),
       proxy: { command: "/goat/node", entrypoint: "/goat/bin.mjs" },
       channelOrigin: () => Effect.succeed(undefined),
       active: () => Effect.succeed(Option.none()),

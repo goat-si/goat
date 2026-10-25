@@ -77,14 +77,17 @@ export interface LeaseProxyOptions<EU, ED> {
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   /**
-   * Tells the server of a keyboard or pointer event outside this agent's own input calls; the
-   * server drops it if another agent's input covers it, else pauses every agent. True when the
-   * server took it; until then each later event is offered again.
+   * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
+   * last report, in time order; the server drops each event another agent's input covers, and
+   * pauses every agent at the first it does not. True when the server took one; until then the
+   * events after them are offered in the next report.
    */
-  readonly onHumanInput?: (input: {
-    readonly source: ComputerUseHumanInputSource;
-    readonly at: number;
-  }) => Effect.Effect<boolean>;
+  readonly onHumanInput?: (
+    events: ReadonlyArray<{
+      readonly source: ComputerUseHumanInputSource;
+      readonly at: number;
+    }>,
+  ) => Effect.Effect<boolean>;
   /**
    * Tells the server one of this agent's calls that can post input started or ended, and the
    * kinds of event it can post, so another agent's helper seeing that input is not taken for a

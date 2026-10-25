@@ -5,7 +5,6 @@ import {
   type DesktopCuaReadinessReport,
   ThreadId,
 } from "@goat/contracts";
-import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -126,6 +125,9 @@ const fixture = Effect.fnUntraced(function* (
     stop: () => unused,
     setTarget: () => unused,
     callReservation: () => unused,
+    foregroundApprovalEpoch: unused,
+    approveForeground: () => unused,
+    foregroundAvailable: () => unused,
     humanInput: () => unused,
     agentInput: () => unused,
     stopAll: unused,

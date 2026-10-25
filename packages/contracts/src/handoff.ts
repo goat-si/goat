@@ -49,6 +49,9 @@ export const Handoff = Schema.Struct({
   actor: HandoffActor,
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  computerUseForeground: Schema.optionalKey(
+    Schema.Struct({ purpose: TrimmedNonEmptyString, target: Schema.Literal("desktop") }),
+  ),
 });
 export type Handoff = typeof Handoff.Type;
 

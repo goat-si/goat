@@ -15,6 +15,8 @@ export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wr
 
 const REQUEST = goatCallText("computer_use.request");
 
+export const FOREGROUND_NOT_APPROVED = `This call can take foreground control and did not run. Ask with ${REQUEST} and args {purpose, foreground:true}, without apps, then end your turn. Pause or Stop requires new foreground approval.`;
+
 export const DESKTOP_CAPTURE_OFF =
   "Screenshots of the whole display are off in GOAT: they would show every other app on this screen. Look at one window with get_window_state and that window's pid and window_id.";
 

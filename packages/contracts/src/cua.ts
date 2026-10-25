@@ -1,6 +1,14 @@
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 import {
   ComputerUseCapabilities,
   ComputerUseHumanInputSource,
@@ -110,14 +118,31 @@ export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 const EpochMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /**
- * Proxy -> server, on the same route: a keyboard or pointer event at `at` that the lease
- * proxy's helper saw while the control was live, outside the proxy's own input calls (#1235).
- * The server drops it when another agent's input covers `at`, else every agent pauses. Only the
- * kind of input, never what was typed or where.
+ * Proxy -> server, on the same route: keyboard or pointer events the lease proxy's helper saw
+ * while the control was live (#1235), one or every event that piled up behind the last report
+ * (#1488), in time order. The server judges each: an event another agent's input covers is
+ * dropped, and the first one no agent covers pauses every agent. Only the kind of input and when,
+ * never what was typed or where.
  */
+const ComputerUseHumanInputEvent = Schema.Struct({
+  source: ComputerUseHumanInputSource,
+  at: EpochMillis,
+});
+/**
+ * The most events one report carries; a proxy sends any more in the next one. Large enough that
+ * a 1 kHz pointer behind a report as slow as the proxy's 2 s timeout fits in one.
+ */
+export const COMPUTER_USE_HUMAN_INPUT_BATCH = 4096;
 export const ComputerUseLeaseHumanInput = Schema.Struct({
   controlId: TrimmedNonEmptyString,
-  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource, at: EpochMillis }),
+  // One event is what a proxy from before batching sends.
+  humanInput: Schema.Union([
+    ComputerUseHumanInputEvent,
+    Schema.Array(ComputerUseHumanInputEvent).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(COMPUTER_USE_HUMAN_INPUT_BATCH),
+    ),
+  ]),
 });
 export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
 
@@ -336,6 +361,16 @@ export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
 export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
+export const ComputerUseForegroundGrant = Schema.Struct({
+  handoffId: TurnItemId,
+  purpose: TrimmedNonEmptyString,
+  target: Schema.Literal("desktop"),
+  expiresAtMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+});
+export type ComputerUseForegroundGrant = typeof ComputerUseForegroundGrant.Type;
+
 /**
  * What the computer use proxy hears from its own server about the control it was started for,
  * one JSON object per line. "active" carries the apps the thread may control, absent when every
@@ -348,6 +383,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
@@ -383,6 +419,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "control_idle",
   "app_not_approved",
   "desktop_not_approved",
+  "foreground_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
   "desktop_capture_off",
   "waiting_for_human",
@@ -424,6 +461,27 @@ const ComputerUseCallOwner = {
   connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
 };
 
+// Validation carries only ticket identity; replacement call authority is never accepted.
+const ticketValidation = Schema.Struct({
+  ...ComputerUseCallOwner,
+  action: Schema.Literal("validate"),
+  reservationId: TrimmedNonEmptyString,
+});
+const strictTicketValidation = Schema.declareConstructor<
+  typeof ticketValidation.Type,
+  typeof ticketValidation.Encoded
+>()(
+  [ticketValidation],
+  ([codec]) => {
+    const decode = SchemaParser.decodeUnknownEffect(codec);
+    return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
+  },
+  {
+    toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
+    toCodecJson: () => undefined,
+  },
+);
+
 /** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
 export const ComputerUseCallReservation = Schema.Union([
   Schema.Struct({
@@ -434,7 +492,9 @@ export const ComputerUseCallReservation = Schema.Union([
     idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     args: Schema.Unknown,
+    foregroundGrantId: Schema.optionalKey(TurnItemId),
   }),
+  strictTicketValidation,
   Schema.Struct({
     ...ComputerUseCallOwner,
     action: Schema.Literal("release"),
@@ -448,6 +508,16 @@ export const ComputerUseCallAdmission = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("admitted"),
     reservationId: Schema.NullOr(Schema.String),
+    /** Scope at atomic admission; streamed updates may still be in transit. */
+    permissions: Schema.optionalKey(
+      Schema.Struct({
+        apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+        validUntilMillis: Schema.Int.check(
+          Schema.isGreaterThanOrEqualTo(0),
+          Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+        ),
+      }),
+    ),
   }),
   Schema.Struct({ status: Schema.Literal("released") }),
   Schema.Struct({
@@ -519,6 +589,12 @@ const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLen
 );
 
 export const ComputerUseRequestInput = Schema.Struct({
+  foreground: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Ask to bring apps forward and take keyboard or pointer focus for this purpose. Default false (background-only). Requires whole-desktop approval: omit apps. Pause, Stop or control replacement requires approval again.",
+    }),
+  ),
   purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(500)).annotate({
     description:
       "What you will do on the screen and why, in one or two sentences. The person sees it before approving.",

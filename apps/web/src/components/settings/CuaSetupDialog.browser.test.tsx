@@ -38,7 +38,7 @@ function fixture(options: { grantOnOpen?: boolean; unusable?: string } = {}) {
 
 function dialog(
   f: ReturnType<typeof fixture>,
-  props: { status?: CuaHostStatus; localMac?: boolean } = {},
+  props: { status?: CuaHostStatus; localMac?: boolean; localCheck?: boolean } = {},
 ) {
   return render(
     <CuaSetupDialog
@@ -46,6 +46,7 @@ function dialog(
       hostLabel="this Mac"
       status={props.status ?? mac}
       localMac={props.localMac ?? true}
+      localCheck={props.localCheck ?? props.localMac ?? true}
       onCheck={f.onCheck}
       onAllow={f.onAllow}
       onReveal={f.onReveal}

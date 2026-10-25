@@ -220,6 +220,21 @@ it("tells Windows users about the security prompt, administrator apps and a bloc
   expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
 });
 
+it("calls an unchecked Windows desktop not checked, not unsupported or waiting for consent (#1520)", () => {
+  // What the Windows helper reports after it authenticated but before a check read a window.
+  const unchecked = { ...ready, capture: "pending", tree: "unavailable" } as const;
+  const step = view(unchecked, "win32").steps[2];
+  expect(step?.state).toBe("pending");
+  expect(step?.detail.join(" ")).not.toContain("consent");
+  expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
+  // A remote client cannot run the check, so the text names where it runs.
+  expect(step?.detail.join(" ")).toContain("in the GOAT desktop app on this computer");
+  // A tree that a check really could not read still says so.
+  expect(view({ ...ready, tree: "unavailable" }, "win32").steps[2]?.state).toBe("unsupported");
+  // macOS keeps its consent wording.
+  expect(view(unchecked, "darwin").steps[2]?.detail.join(" ")).toContain("consent");
+});
+
 it("uses host-specific names and reports the Linux display server", () => {
   expect(view(ready).steps[0]?.grants[1]?.title).toBe("Screen & System Audio Recording");
   expect(view(ready, "win32").steps[0]?.grants[0]?.title).toBe("UI Automation");
@@ -361,4 +376,32 @@ it("does not call input unsupported while the helper has not confirmed itself ye
   expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
   // A confirmed helper in a session without input still says so.
   expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
+});
+
+// The server's readiness after a check the Linux helper did not answer (#1514).
+const UNANSWERED_REASON =
+  "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
+const unanswered: ComputerUseReadiness = {
+  grants: { accessibility: "unknown", screenCapture: "unknown" },
+  helper: "unauthenticated",
+  capture: "unavailable",
+  tree: "unavailable",
+  input: "unavailable",
+  blockers: [],
+  reasons: [UNANSWERED_REASON],
+  platform: { linux: { displayServer: "x11" } },
+};
+
+it("a Linux helper that stopped answering names that one cause and proves no later step (#1514)", () => {
+  const result = view(unanswered, "linux", "available");
+  const [grants, helper, capture, tools] = result.steps;
+  expect(helper?.state).not.toBe("ok");
+  expect(helper?.detail).toContain(UNANSWERED_REASON);
+  expect(capture?.detail).not.toContain(UNANSWERED_REASON);
+  // Nothing was found unsupported; the helper did not answer.
+  expect(result.steps.map((step) => step.state)).not.toContain("unsupported");
+  expect(capture?.detail.join(" ")).not.toContain("Check accessibility access");
+  expect(tools?.state).not.toBe("ok");
+  expect(grants?.grants.map((row) => row.detail.join(" "))).not.toContain("Access granted.");
+  expect(result.ready).toBe(false);
 });
