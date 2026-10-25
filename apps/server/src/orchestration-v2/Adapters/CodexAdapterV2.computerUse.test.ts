@@ -219,8 +219,22 @@ const fixture = (scenario: string) => {
       },
       threadResult,
     );
+  // Before reloading a quiet conversation the adapter asks Codex for each thread's goal.
+  const goalGet = (id: number, threadId: string, response: Record<string, unknown>) =>
+    entries.push(
+      { type: "expect_outbound", frame: { id, method: "thread/goal/get", params: { threadId } } },
+      { type: "emit_inbound", frame: { id, ...response } },
+    );
   // Codex ignores resume overrides on a thread a client holds: a reload unsubscribes first.
-  const reload = (id: number, cua: Record<string, unknown>) =>
+  // Returns the next request id.
+  const reload = (
+    first: number,
+    cua: Record<string, unknown>,
+    threads: ReadonlyArray<string> = [nativeThreadId],
+    goalResponse: Record<string, unknown> = { result: { goal: null } },
+  ) => {
+    threads.forEach((threadId, index) => goalGet(first + index, threadId, goalResponse));
+    const id = first + threads.length;
     entries.push(
       {
         type: "expect_outbound",
@@ -237,6 +251,8 @@ const fixture = (scenario: string) => {
       },
       withReplayRequestId(threadResult, id + 1),
     );
+    return id + 2;
+  };
   const turnStart = (id: number, ordinal: number, computerUse: boolean, deferred = false) =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -306,6 +322,7 @@ const fixture = (scenario: string) => {
     managed,
     entries,
     start,
+    goalGet,
     reload,
     turnStart,
     turnCompleted,
@@ -375,8 +392,7 @@ describe("Codex computer use attachment", () => {
               [4, { ...f.managed("control:b"), enabled: false }, false],
             ] as const;
             for (const [ordinal, cua, computerUse] of turns) {
-              f.reload(id, cua);
-              id += 2;
+              id = f.reload(id, cua);
               yield* f.turnStart(id++, ordinal, computerUse);
               f.turnCompleted(ordinal);
             }
@@ -449,8 +465,7 @@ describe("Codex computer use attachment", () => {
           f.turnCompleted(1);
           f.turnCompleted(2);
           // Once Codex reports the thread idle, the new control reaches it through a reload.
-          f.reload(5, f.managed("control:b"));
-          yield* f.turnStart(7, 3, true);
+          yield* f.turnStart(f.reload(5, f.managed("control:b")), 3, true);
           f.turnCompleted(3);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -495,8 +510,7 @@ describe("Codex computer use attachment", () => {
           yield* f.turnStart(4, 2, true, true);
           f.status(child, "idle");
           f.turnCompleted(2);
-          f.reload(5, f.managed("control:b"));
-          yield* f.turnStart(7, 3, true);
+          yield* f.turnStart(f.reload(5, f.managed("control:b"), [root, child]), 3, true);
           f.turnCompleted(3);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -576,8 +590,7 @@ describe("Codex computer use attachment", () => {
           f.entries.push(...turnTwoStarted);
           f.turnCompleted(2);
           f.turnCompleted(3);
-          f.reload(6, f.managed("control:b"));
-          yield* f.turnStart(8, 4, true);
+          yield* f.turnStart(f.reload(6, f.managed("control:b")), 4, true);
           f.turnCompleted(4);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -642,12 +655,13 @@ describe("Codex computer use attachment", () => {
           notice("thread/goal/updated", { threadId: root, turnId: null, goal: goal(11) });
           // Codex has started a continuation turn but not yet published it; the person's input
           // folds into it, so a new control must wait instead of reloading under it.
-          yield* f.turnStart(7, 3, true, true);
+          f.goalGet(7, root, { result: { goal: goal(11) } });
+          yield* f.turnStart(8, 3, true, true);
           f.entries.splice(-3);
           f.entries.push({
             type: "emit_inbound",
             frame: {
-              id: 7,
+              id: 8,
               result: { turn: makeCodexReplayTurn({ id: "turn-auto", status: "inProgress" }) },
             },
           });
@@ -670,45 +684,59 @@ describe("Codex computer use attachment", () => {
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
+  const childGoal = (child: string, status: string, updatedAt: number) => ({
+    threadId: child,
+    objective: "Keep working",
+    status,
+    tokenBudget: null,
+    tokensUsed: 10,
+    timeUsedSeconds: 3,
+    createdAt: 1782622440,
+    updatedAt,
+  });
+  // A subagent's goal notifications do not hold the parent's run, so these tests need no clock.
+  const childGoalScenario = (root: string) =>
+    Effect.gen(function* () {
+      const child = root + "-agent";
+      const f = fixture(root);
+      const withCua = (control: string) => ({
+        ...f.config,
+        cuaDriver: f.driver(control),
+        cuaDriverOverridesUserConfig: true,
+      });
+      const goalNotice = (goal: ReturnType<typeof childGoal> | null) =>
+        f.entries.push({
+          type: "emit_inbound",
+          frame:
+            goal === null
+              ? { method: "thread/goal/cleared", params: { threadId: child } }
+              : { method: "thread/goal/updated", params: { threadId: child, turnId: null, goal } },
+        });
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      yield* sessions.set(withCua("control:a"));
+      f.start(f.managed("control:a"));
+      yield* f.turnStart(3, 1, true);
+      spawnChild(f, root, child);
+      f.status(child, "active");
+      return { f, child, goalNotice, withCua, sessions };
+    });
+
   it.effect(
-    "defers the reload while a subagent's goal is active, even when its status reads idle (#1564)",
+    "asks Codex for goals before reloading, so a new same-second subagent goal still defers it (#1564)",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
           const root = "cua-child-goal";
-          const child = root + "-agent";
-          const f = fixture(root);
-          const withCua = (control: string) => ({
-            ...f.config,
-            cuaDriver: f.driver(control),
-            cuaDriverOverridesUserConfig: true,
-          });
-          const notice = (method: string, params: unknown) =>
-            f.entries.push({ type: "emit_inbound", frame: { method, params } });
-          const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(withCua("control:a"));
-          f.start(f.managed("control:a"));
-          yield* f.turnStart(3, 1, true);
-          spawnChild(f, root, child);
-          f.status(child, "active");
-          notice("thread/goal/updated", {
-            threadId: child,
-            turnId: null,
-            goal: {
-              threadId: child,
-              objective: "Keep working",
-              status: "active",
-              tokenBudget: null,
-              tokensUsed: 10,
-              timeUsedSeconds: 3,
-              createdAt: 1782622440,
-              updatedAt: 1782622450,
-            },
-          });
+          const { f, child, goalNotice, withCua, sessions } = yield* childGoalScenario(root);
+          // Codex stamps goals to the second: a finished goal and the next one can tie.
+          goalNotice(childGoal(child, "complete", 1782622450));
+          goalNotice(childGoal(child, "active", 1782622450));
+          // The child's new goal has started a turn whose active status Codex has not published.
           f.status(child, "idle");
           f.turnCompleted(1);
-          // The child's goal has started a continuation Codex has not published yet.
-          yield* f.turnStart(4, 2, true, true);
+          f.goalGet(4, root, { result: { goal: null } });
+          f.goalGet(5, child, { result: { goal: childGoal(child, "active", 1782622450) } });
+          yield* f.turnStart(6, 2, true, true);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.terminal;
@@ -720,5 +748,65 @@ describe("Codex computer use attachment", () => {
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "reloads after a goal clear even when an older active goal update arrives after it (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "cua-child-goal-cleared";
+          const { f, child, goalNotice, withCua, sessions } = yield* childGoalScenario(root);
+          goalNotice(childGoal(child, "active", 100));
+          goalNotice(null);
+          // Accounting Codex queued before the clear, published after it.
+          goalNotice(childGoal(child, "active", 101));
+          f.status(child, "idle");
+          f.turnCompleted(1);
+          yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a"), f.managed("control:b")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("cua-goals-off");
+        const withCua = (control: string) => ({
+          ...f.config,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a"));
+        f.start(f.managed("control:a"));
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        const off = { error: { code: -32600, message: "goals feature is disabled" } };
+        yield* f.turnStart(f.reload(4, f.managed("control:b"), undefined, off), 2, true);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b"));
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [f.managed("control:a"), f.managed("control:b")],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 });

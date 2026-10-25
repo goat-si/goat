@@ -5118,7 +5118,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("thread/goal/updated", (payload) =>
           Effect.gen(function* () {
             goalsByNativeThread.set(payload.threadId, providerGoalFromCodex(payload.goal));
-            threadStatuses.goal(payload.threadId, payload.goal.status, payload.goal.updatedAt);
             yield* emitGoalUpdate(payload.threadId);
             if (payload.goal.status !== "active") yield* releaseGoalHold(payload.threadId);
           }).pipe(turnTerminalizationPermit.withPermits(1)),
@@ -5126,7 +5125,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* client.handleServerNotification("thread/goal/cleared", (payload) =>
           Effect.gen(function* () {
             goalsByNativeThread.set(payload.threadId, null);
-            threadStatuses.goal(payload.threadId, null);
             yield* emitGoalUpdate(payload.threadId);
             yield* releaseGoalHold(payload.threadId);
           }).pipe(turnTerminalizationPermit.withPermits(1)),
@@ -7193,8 +7191,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 turnInput.providerThread.id,
             );
             const conversation = [threadId, ...ownSubagents.map(([nativeId]) => nativeId)];
-            const busy =
-              threadStatuses.goalActive(conversation) || !threadStatuses.quiet(conversation);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(
@@ -7204,6 +7200,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const applied = credentialsByThread.get(threadId);
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            const busy =
+              (mcpSession ? cuaChanged : managedCuaByThread.has(threadId)) &&
+              (yield* threadStatuses.busy(client, conversation));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (mcpSession && applied !== next && !(cuaChanged && busy)) {
               // Other authority changes keep the same native conversation; stale credentials are

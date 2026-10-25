@@ -1,3 +1,7 @@
+import * as Effect from "effect/Effect";
+import type * as CodexClient from "effect-codex-app-server/client";
+import type * as CodexErrors from "effect-codex-app-server/errors";
+
 /** Added to a turn whose computer use change waits for a quiet conversation (#1564). */
 export const CUA_DEFERRED_NOTE =
   "This conversation's computer use connection changed (for example after Stop), and the change applies only once this conversation and its subagents are idle and none of their goals is active. Until then computer use keeps its previous connection, which may refuse calls. If it does, tell the person to send their next message after this turn ends (pausing an active goal first), or to start a new thread.";
@@ -13,29 +17,30 @@ export function makeCodexThreadStatuses() {
   const lastStarted = new Map<string, string>();
   // The turn a thread waits to see start; null until Codex answers turn/start.
   const pending = new Map<string, string | null>();
-  // An active goal lets Codex start continuation turns on its own. Goal updates can arrive out of
-  // order, so an older one never replaces a newer one, and on a tie the inactive state wins.
-  const goals = new Map<string, { readonly active: boolean; readonly updatedAt: number }>();
+  const quiet = (threadId: string) => {
+    const status = statuses.get(threadId);
+    return !pending.has(threadId) && (status === "idle" || status === "notLoaded");
+  };
   return {
-    goal: (threadId: string, status: string | null, updatedAt?: number) => {
-      const known = goals.get(threadId);
-      const active = status === "active";
-      const at = updatedAt ?? known?.updatedAt ?? 0;
-      if (known && (at < known.updatedAt || (at === known.updatedAt && active))) return;
-      goals.set(threadId, { active, updatedAt: at });
-    },
-    goalActive: (threadIds: ReadonlyArray<string>) =>
-      threadIds.some((threadId) => goals.get(threadId)?.active === true),
+    /**
+     * Whether a reload now could drop work: a thread is not reported quiet, or one has an active
+     * goal. An unloaded thread cannot start a turn, so only loaded ones are asked about goals.
+     */
+    busy: (
+      client: CodexClient.CodexAppServerClient["Service"],
+      threadIds: ReadonlyArray<string>,
+    ) =>
+      threadIds.every(quiet)
+        ? codexGoalsActive(
+            client,
+            threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
+          )
+        : Effect.succeed(true),
     record: (threadId: string, status: string) => void statuses.set(threadId, status),
     turnStarted: (threadId: string, turnId: string) => {
       lastStarted.set(threadId, turnId);
       if (pending.get(threadId) === turnId) pending.delete(threadId);
     },
-    quiet: (threadIds: ReadonlyArray<string>) =>
-      threadIds.every((threadId) => {
-        const status = statuses.get(threadId);
-        return !pending.has(threadId) && (status === "idle" || status === "notLoaded");
-      }),
     starting: (threadId: string) => {
       pending.set(threadId, null);
       return {
@@ -49,3 +54,30 @@ export function makeCodexThreadStatuses() {
     },
   };
 }
+
+// Codex refuses goal requests when the goals feature is off or the thread is ephemeral, and older
+// app servers lack the method: none of these threads can have a goal.
+const hasNoGoals = (error: CodexErrors.CodexAppServerRequestError) =>
+  error.code === -32601 ||
+  (error.code === -32600 &&
+    (error.errorMessage === "goals feature is disabled" ||
+      error.errorMessage.startsWith("ephemeral thread does not support goals")));
+
+/**
+ * Whether any of these threads has an active goal, which lets Codex start a continuation turn on
+ * its own. Goal notifications can arrive late or out of order, so this asks Codex, which reads its
+ * own goal store; an unexplained failure counts as active and defers the reload.
+ */
+const codexGoalsActive = (
+  client: CodexClient.CodexAppServerClient["Service"],
+  threadIds: ReadonlyArray<string>,
+) =>
+  Effect.forEach(threadIds, (threadId) =>
+    client.request("thread/goal/get", { threadId }).pipe(
+      Effect.map(({ goal }) => goal?.status === "active"),
+      Effect.catchTags({
+        CodexAppServerRequestError: (error) => Effect.succeed(!hasNoGoals(error)),
+      }),
+      Effect.catch(() => Effect.succeed(true)),
+    ),
+  ).pipe(Effect.map((active) => active.includes(true)));
