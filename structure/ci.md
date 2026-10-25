@@ -72,7 +72,9 @@ still creates a goat-ci suite for it and reads the required `goat-ci-result` fro
 on the head commit (#1672). That run waits in the pull request's concurrency group without
 cancelling the real run, then its `goat-ci-result` republishes the newest real result on the same
 head: success passes, anything else fails. Its skipped tasks keep their raw name expressions, so no
-skipped check carries a real name. `goat-ci-result` is the one check to read: it fails when goat-scope or any
+skipped check carries a real name. A re-run keeps its run's original suite, so after re-running a
+run that such an edit or label followed, re-run that later run too; it republishes the new result.
+`goat-ci-result` is the one check to read: it fails when goat-scope or any
 selected task failed or was cancelled, and its notice says whether the run was quick and names the
 label and the command that start the full run.
 
@@ -103,9 +105,9 @@ do not count, so the untouched `.github/pull_request_template.md` never satisfie
 or maintain role.
 
 The repository variable `GOAT_SCREENSHOT_GATE` selects `warn` (the default: annotation only),
-`enforce` (the job fails), or `off`. goat-ci does not run on description edits, and a label other
-than `ci:*` (the waiver included) starts no job, so the script reads the live PR and a re-run of
-that one job re-evaluates it. Switching modes is in
+`enforce` (the job fails), or `off`. A description edit, or a label other than `ci:*` (the waiver
+included), runs no goat-ci task, so the script reads the live PR and a re-run of that one job
+re-evaluates it, followed by a re-run of the goat-ci run the edit or label started. Switching modes is in
 [the operations guide](../docs/operations/pr-screenshot-gate.md).
 
 An embed counts only if it loads for a reader. A relative path resolves against the PR page, and a
