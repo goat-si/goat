@@ -40,7 +40,10 @@ export function looksLikeGoatServer(command: string): boolean {
   return (
     serveBaseDir(command) !== null ||
     (/goat/iu.test(command) && /(?:^|\s)serve(?:\s|$)/u.test(command)) ||
-    /[/\\]apps[/\\]server[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts)(?:\s|$)/u.test(command)
+    // The entry with no subcommand, or serve/start, runs a server; others (cua-lease-proxy, pair) do not.
+    /[/\\]apps[/\\]server[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts)(?:$|\s+(?:-|(?:serve|start)(?:\s|$)))/u.test(
+      command,
+    )
   );
 }
 

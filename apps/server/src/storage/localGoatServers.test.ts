@@ -22,6 +22,11 @@ describe("local GOAT server discovery", () => {
       ),
     ).toBe(false);
     expect(looksLikeGoatServer("node /work/goat/node_modules/.bin/vitest run")).toBe(false);
+    expect(
+      looksLikeGoatServer(
+        "/Applications/GOAT.app/Contents/MacOS/GOAT /Applications/GOAT.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs cua-lease-proxy --control c",
+      ),
+    ).toBe(false);
   });
 
   it("reads which database each process holds open from lsof field output", () => {
