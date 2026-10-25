@@ -40,7 +40,7 @@ import {
 } from "./goalPlan.ts";
 import { makeGoalMoves } from "./GoalMoves.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
-import { pendingMoves } from "./goalWorkers.ts";
+import { followedUp, pendingMoves } from "./goalWorkers.ts";
 import {
   type GoalRecord,
   GoalStore,
@@ -257,17 +257,21 @@ const make = Effect.gen(function* () {
                   ? Effect.succeed(null)
                   : kind === "launch"
                     ? Effect.succeed(refusal)
-                    : store
-                        .claimOf(actionId)
-                        .pipe(
-                          Effect.map((receipt) =>
-                            receipt === null || receipt.settledAt !== null
-                              ? refusal
+                    : store.claimOf(actionId).pipe(
+                        Effect.map((receipt) =>
+                          receipt === null
+                            ? refusal
+                            : receipt.settledAt !== null
+                              ? // Sent, or maybe sent, and its slot write may have been lost.
+                                kind === "followup" &&
+                                (receipt.outcome === "sent" || receipt.outcome === "uncertain")
+                                ? ("consumed" as const)
+                                : refusal
                               : kind === "followup" && host !== null
                                 ? ("uncertain" as const)
                                 : null,
-                          ),
                         ),
+                      ),
             ),
             Effect.tap((refusal) =>
               refusal === null || refusal === "uncertain"
@@ -279,7 +283,7 @@ const make = Effect.gen(function* () {
                         reason: "BudgetExhausted",
                         message: "The goal spent its budget.",
                       });
-                    if (refusal !== "already_claimed")
+                    if (refusal !== "already_claimed" && refusal !== "consumed")
                       note(
                         "Normal",
                         "ActionRefused",
@@ -610,6 +614,8 @@ const make = Effect.gen(function* () {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
               const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken === "consumed")
+                return void workers.set(worker.slot, followedUp(worker, action.runId));
               if (taken !== null && taken !== "uncertain") return;
               const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;
@@ -648,12 +654,7 @@ const make = Effect.gen(function* () {
               }
               if (work._tag === "Hop")
                 yield* hubDown.notice(worker.threadId!, action.actionId, work.notice);
-              workers.set(worker.slot, {
-                ...worker,
-                followUps: worker.followUps + 1,
-                followedUpRunId: action.runId,
-                steeredRunId: worker.state === "stalled" ? action.runId : worker.steeredRunId,
-              });
+              workers.set(worker.slot, followedUp(worker, action.runId));
               note(
                 "Normal",
                 "FollowUpSent",
@@ -667,6 +668,8 @@ const make = Effect.gen(function* () {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
               const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken === "consumed")
+                return void workers.set(worker.slot, { ...worker, resumedRunId: action.runId });
               if (taken !== null && taken !== "uncertain") return;
               const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;

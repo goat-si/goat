@@ -296,3 +296,14 @@ export const nextAttempt = (goal: FleetGoal, worker: WorkerRecord, note: string)
   worker.attempt >= goal.spec.limits.maxAttemptsPerWorker
     ? { ...worker, state: "failed", note: note + " No attempts left." }
     : successorOf(goal, worker, note);
+
+/** The slot once a follow-up on runId went out, or may have: it is never sent again for that run. */
+export const followedUp = (
+  worker: WorkerRecord,
+  runId: NonNullable<WorkerRecord["followedUpRunId"]>,
+): WorkerRecord => ({
+  ...worker,
+  followUps: worker.followUps + 1,
+  followedUpRunId: runId,
+  steeredRunId: worker.state === "stalled" ? runId : worker.steeredRunId,
+});

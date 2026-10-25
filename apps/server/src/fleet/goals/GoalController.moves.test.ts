@@ -296,26 +296,31 @@ const startThenFail = (world: World, fake: Fake, id: string) =>
 const turnsOf = (id: string) =>
   GoalStore.pipe(Effect.flatMap((store) => store.turns(FleetGoalId.make(id))));
 
+/** The first worker's run on A reads as running but stalled. */
+const stall = (world: World, fake: Fake) => {
+  world.sourceRun = "running";
+  fake.reading = (threadId) =>
+    threadId === "thread:worker-1"
+      ? {
+          kind: "seen",
+          terminal: world.sourceRun !== "running",
+          runId: RunId.make(world.sourceRunId),
+          runStatus: world.sourceRun,
+          lastActivityAt: null,
+          result: null,
+        }
+      : running(threadId, fake);
+  world.health = (threadId) =>
+    threadId === "thread:worker-1" && world.sourceRun === "running"
+      ? { _tag: "stalled", idleMs: 30 * 60_000 }
+      : { _tag: "healthy" };
+};
+
 /** The first worker's run on A stalls; after a steer, the goal's move stops that run itself. */
 const stallThenStop = (world: World, fake: Fake, id: string) =>
   Effect.gen(function* () {
     yield* pass(id);
-    world.sourceRun = "running";
-    fake.reading = (threadId) =>
-      threadId === "thread:worker-1"
-        ? {
-            kind: "seen",
-            terminal: world.sourceRun !== "running",
-            runId: RunId.make(world.sourceRunId),
-            runStatus: world.sourceRun,
-            lastActivityAt: null,
-            result: null,
-          }
-        : running(threadId, fake);
-    world.health = (threadId) =>
-      threadId === "thread:worker-1" && world.sourceRun === "running"
-        ? { _tag: "stalled", idleMs: 30 * 60_000 }
-        : { _tag: "healthy" };
+    stall(world, fake);
     yield* pass(id);
     yield* pass(id);
     expect(world.sourceRun).toBe("interrupted");
@@ -773,6 +778,34 @@ describe("goal moves across a restart (#1451)", () => {
             expect((yield* record(id)).workers[0]).toMatchObject({
               followedUpRunId: "run:9",
             });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "restores a sent steer whose slot write was lost, then moves the stalled worker without steering again",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_steer_lost";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* pass(id);
+            stall(world, fake);
+            yield* pass(id);
+            expect(fake.followUps).toHaveLength(1);
+            // The steer's receipt settled, but the slot's status write after it was lost.
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`UPDATE fleet_goal_workers SET detail_json = json_set(detail_json, '$.steeredRunId', NULL, '$.followedUpRunId', NULL, '$.followUps', 0) WHERE goal_id = ${id}`;
+            expect((yield* record(id)).workers[0]).toMatchObject({ steeredRunId: null });
+            yield* pass(id);
+            yield* pass(id);
+            expect(fake.followUps).toHaveLength(1);
+            expect(world.sourceRun).toBe("interrupted");
           }).pipe(Effect.provide(server(fake, world, path)));
         }),
       ),
