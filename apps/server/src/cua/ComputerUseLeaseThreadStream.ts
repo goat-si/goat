@@ -31,6 +31,14 @@ export const threadLeaseUpdates = (input: {
       const controls = yield* leases.subscribe;
       const credentials = yield* registry.subscribeChanges;
       const settingsChanges = yield* settings.subscribeChanges;
+      // The proxy reading this exited, crashed or lost its connection: every control it followed
+      // releases its app leases, and the calls they had out hold their apps only briefly (D17).
+      const followed = new Set<string>();
+      yield* Effect.addFinalizer(() =>
+        Effect.forEach(followed, (id) => leases.releaseApps(input.threadId, id), {
+          discard: true,
+        }),
+      );
       for (const subscription of [controls, credentials]) {
         yield* PubSub.take(subscription).pipe(
           Effect.andThen(Queue.offer(wake, undefined)),
@@ -108,6 +116,7 @@ export const threadLeaseUpdates = (input: {
           continue;
         }
         previous = current.controlId;
+        followed.add(current.controlId);
         waiting = false;
         const identity = {
           controlId: current.controlId,

@@ -93,10 +93,18 @@ export const callResource = (call: Pick<Call, "name" | "args">): Resource | "rea
   return "desktop";
 };
 
+/**
+ * How long a call of a control that can no longer act still holds its app: longer than any proxy
+ * takes to cut its driver off (an overlay acknowledgement of at most 250 ms, then the kill).
+ */
+export const ORPHAN_CALL_GRACE_MS = 10_000;
+
 interface Ticket {
   readonly threadId: ThreadId;
   readonly call: Call;
   readonly resource: Resource;
+  /** When this call's control was first seen unable to act, or its proxy's stream ended. */
+  stoppedAt?: number;
 }
 
 const connectionKey = (threadId: ThreadId, call: ComputerUseCallReservation) =>
@@ -133,7 +141,8 @@ export const makeCallReservations = () => {
     appTicket(
       threadId: ThreadId,
       call: Call,
-      mayRun: (holder: ThreadId, controlId: string) => boolean,
+      canAct: (holder: ThreadId, controlId: string) => boolean,
+      now: number,
     ) {
       const resource = callResource(call);
       if (typeof resource !== "object") return undefined;
@@ -144,10 +153,11 @@ export const makeCallReservations = () => {
           call.app !== undefined &&
           ticket.call.app !== undefined &&
           call.app.toLowerCase() === ticket.call.app.toLowerCase();
-        if (
-          (ticket.resource.pid === resource.pid || sameApp) &&
-          mayRun(ticket.threadId, ticket.call.controlId)
-        )
+        if (ticket.resource.pid !== resource.pid && !sameApp) continue;
+        // Marked per call, never per control: a later call of a reused control starts unmarked.
+        if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
+          ticket.stoppedAt = now;
+        if (ticket.stoppedAt === undefined || now - ticket.stoppedAt < ORPHAN_CALL_GRACE_MS)
           return {
             holderThreadId: ticket.threadId,
             app: ticket.call.app ?? call.app ?? `the app with pid ${resource.pid}`,
@@ -155,9 +165,11 @@ export const makeCallReservations = () => {
       }
       return undefined;
     },
-    /** The controls that still have a call outstanding. */
-    ticketControls(): ReadonlySet<string> {
-      return new Set([...tickets.values()].map((ticket) => ticket.call.controlId));
+    /** The control's proxy went away: the calls it has out now may only be stopping. */
+    markStopped(threadId: ThreadId, controlId: string, now: number) {
+      for (const ticket of tickets.values())
+        if (ticket.threadId === threadId && ticket.call.controlId === controlId)
+          ticket.stoppedAt ??= now;
     },
     reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))

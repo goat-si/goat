@@ -14,9 +14,9 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { APP_LEASE_IDLE_MS, makeAppLeases } from "./ComputerUseAppLeases.ts";
-import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import { makeCallReservations, ORPHAN_CALL_GRACE_MS } from "./ComputerUseCallReservations.ts";
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
-import { makeCallReservation, ORPHAN_CALL_GRACE_MS } from "./ComputerUseLeaseAdmission.ts";
+import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
@@ -428,6 +428,54 @@ describe("app leases between threads (D17)", () => {
           assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
         }),
       ).pipe(Effect.provide(layer)),
+  );
+  it.effect("a call in a reused control is not cut short by an earlier turn's stop", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const a = yield* fullAccess("reused-a");
+      const b = yield* fullAccess("reused-b");
+      const ticket = (callId: string, idleEpoch: number) =>
+        leases.callReservation(a.threadId, {
+          action: "reserve",
+          controlId: a.control.controlId,
+          connectionId: `proxy:${a.threadId}`,
+          callId,
+          interruptions: 0,
+          idleEpoch,
+          name: "type_text",
+          args: { pid: 42, window_id: 7, text: "a long text" },
+          app: TEXTEDIT,
+        });
+      assert.equal((yield* ticket("before-idle", 0)).status, "admitted");
+      // A's turn goes idle while that call is still out; B meets it and it is marked stopped.
+      assert.isTrue(yield* leases.turnEnded(a.threadId));
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+      // The driver closes that call; A's next turn reuses the same control.
+      yield* leases.callReservation(a.threadId, {
+        action: "close",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+      });
+      const reused = Option.getOrThrow(yield* leases.everyAppControl(a.threadId, false));
+      assert.equal(reused.controlId, a.control.controlId);
+      // A new long call starts under a new driver connection.
+      const running = yield* leases.callReservation(a.threadId, {
+        action: "reserve",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}:next`,
+        callId: "after-reuse",
+        interruptions: 0,
+        idleEpoch: 1,
+        name: "type_text",
+        args: { pid: 42, window_id: 7, text: "a long text" },
+        app: TEXTEDIT,
+      });
+      assert.equal(running.status, "admitted");
+      // Past the app lease's idle window and the orphan grace, the running call still holds it.
+      yield* TestClock.adjust(APP_LEASE_IDLE_MS + ORPHAN_CALL_GRACE_MS);
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+    }).pipe(Effect.provide(layer)),
   );
 });
 

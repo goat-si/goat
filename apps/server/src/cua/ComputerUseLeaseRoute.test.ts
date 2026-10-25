@@ -143,6 +143,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     threadId,
     providerInstanceId: ProviderInstanceId.make("codex"),
   });
+  const released: Array<readonly [string, string]> = [];
   const signals = yield* PubSub.unbounded<void>();
   const subscribed = yield* Deferred.make<void>();
   const heldRead = yield* Ref.make<
@@ -160,7 +161,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       ServerSettings.layerTest({ enableCua: true }),
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
       Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-        releaseApps: () => Effect.void,
+        releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
         proxy: undefined,
         currentControl: () =>
           Ref.get(current).pipe(
@@ -239,6 +240,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     credential,
     request,
     open,
+    released,
     holdNextRead: Effect.gen(function* () {
       const reading = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -253,6 +255,21 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("a thread stream that ends releases the app leases of the controls it followed", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      // The proxy reads its first update, then goes away (exit, crash or lost connection).
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const next = yield* f.open();
+          assert.deepEqual(yield* next, active);
+        }),
+      );
+      assert.deepEqual(f.released, [[threadId, controlId]]);
+    }),
+  );
+
   it.effect.each(["stopped", "replaced", "revoked"] as const)(
     "%s during a suspended control read discards the older snapshot",
     (transition) =>
