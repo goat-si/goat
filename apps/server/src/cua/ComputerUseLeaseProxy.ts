@@ -10,7 +10,7 @@
  * - on an end or a lost connection it refuses new calls, sends MCP cancellation for every
  *   outstanding request, kills its `cua-driver mcp` child, answers the provider, and only
  *   then revokes the driver sessions the agent named, in the background;
- * - on an explicit pause or takeover it does the same without ending, refuses calls
+ * - on a pause (a person's input or takeover) it does the same without ending, refuses calls
  *   while paused, and starts a fresh driver child when the server hands control back.
  *
  * Killing the child is what stops nested work. Against the pinned 0.37.0 driver, MCP

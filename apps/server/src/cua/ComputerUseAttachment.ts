@@ -33,7 +33,7 @@ export type ComputerUseRefusal =
   | "needs-approval"
   /** Another thread holds the screen for unattended work; one does at a time. */
   | "held"
-  /** Unattended work needs a helper that reports secret fields (#1235). */
+  /** Unattended work needs a helper that reports a person's input and secret fields (#1235). */
   | "detection-unsupported";
 
 /**
@@ -117,9 +117,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   }
   if (unattended && Option.isSome(leases)) {
     const detection = yield* leases.value.detection;
-    // Admitted work continues while a person uses the machine; secret-field detection still
-    // protects unattended turns. Supported human-input signals never become an admission gate.
-    if (!detection.privateMode) return none("detection-unsupported", true);
+    if (!detection.humanInput || !detection.privateMode) return none("detection-unsupported", true);
   }
   // Without its proxy nothing could stop the driver, so there is no computer use at all.
   if (Option.isNone(leases) || leases.value.proxy === undefined)

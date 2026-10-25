@@ -467,7 +467,7 @@ describe("foreground through real computer-use attachment", () => {
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
       yield* h.nextToProvider;
       yield* h.nextReservation;
-      yield* leases.pause("takeover");
+      yield* leases.pause("human_input");
       yield* h.killed;
       assert.equal((yield* h.nextReservation).action, "close");
       yield* leases.resume;

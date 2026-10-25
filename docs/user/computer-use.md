@@ -58,10 +58,6 @@ access stops at once. Work that runs on its own still uses the screen one thread
 at a time. Stop, **Stop all** and turning the setting or computer use off still
 end their computer use.
 
-Once admitted, agents keep working while you use the keyboard and mouse. Use
-**Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
-password, one-time code, or passkey field still pauses them automatically.
-
 ## Watching agents
 
 While agents use the built-in browser or this computer, GOAT shows them in a
@@ -97,10 +93,9 @@ request names the thread, this computer, what the agent wants to do, and until
 when. Someone allowed to change this environment's settings approves it in a
 GOAT app; a reply in a chat channel does not count.
 
-Such work only gets the screen on a computer whose GOAT can tell when you enter
-a password or another secret; elsewhere the request is refused and says why.
-Admitted work keeps running while you use the keyboard and mouse. Approving
-admits that thread until the time shown. It does not approve each
+Such work only gets the screen on a computer whose GOAT can tell when you type a
+password or use the keyboard or mouse yourself; elsewhere the request is refused
+and says why. Approving admits that thread until the time shown. It does not approve each
 action. Threads approved for different apps work at the same time, each in its
 own apps. An app belongs to one thread at a time, and approving the whole screen
 waits until no other thread holds an app. While another thread holds apps, an

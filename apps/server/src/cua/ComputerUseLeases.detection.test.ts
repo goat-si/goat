@@ -157,9 +157,13 @@ it.effect(
           1,
         );
         assert.deepInclude(after, { interruptions: { count: 2, last: "private" } });
-        // A person using the computer does not interrupt admitted agents.
+        // A person's input the helper cannot attribute to a device still pauses the agents.
         yield* Queue.offer(reports, { version: 1, type: "cuaHumanInput", source: "unknown" });
-        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "human_input",
+        });
         // Only the thread's live control records a window; a replaced proxy's report changes nothing.
         assert.isFalse(yield* leases.setTarget(thread, "control:old", { pid: 9, windowId: 9 }));
         assert.isTrue(yield* leases.setTarget(thread, control.controlId, { pid: 7, windowId: 3 }));

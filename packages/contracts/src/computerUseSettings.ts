@@ -13,8 +13,7 @@ export const CuaSettingsFields = {
   ),
   /**
    * Threads in full access mode control every app on this host without a computer_use.grant,
-   * unattended ones included. Stop, the kill switch and secret-field detection still hold them;
-   * a person typing does not pause admitted work.
+   * unattended ones included. Stop, the kill switch and a person's input still hold them.
    */
   cuaFullAccessAutoAdmit: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 };
