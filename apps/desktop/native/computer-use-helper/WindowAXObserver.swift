@@ -18,10 +18,6 @@ protocol SettleWatch: AnyObject {
   func cancel()
 }
 
-func makeWindowSettleWatch(pid: Int32, windowID: UInt32, permitted: @escaping () -> Bool) -> SettleWatch {
-  WindowAXWatch(pid: pid, windowID: windowID, api: SystemWindowAX(), executor: WindowAXRunLoop(),
-    permitted: permitted)
-}
 
 // The wrapper owns its CF reference; fixture references are invented CF strings, never AX objects.
 final class WindowAXElement {
@@ -444,18 +440,40 @@ final class WindowAXWatch: SettleWatch {
   /// Reads the whole target window, within bounds, and fails closed on anything it cannot read or
   /// identify (AXUnknown, a container hiding its children), a secure field, or a tree past its bounds.
   private static let maxReportedProblems = 8
+  /// Roles that can be a secure text input; only for these does an unreadable subrole leave the
+  /// secure-field question open. Any other role cannot be a secure field whatever its subrole.
+  private static let textInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField"]
 
-  /// `allowing` is the one AXUnknown focused element the caller already placed inside the window.
-  /// Every distinct problem is collected (up to a cap) instead of stopping at the first, so one live
-  /// check shows all remaining blockers; any problem still refuses.
+  private static func token(_ attribute: WindowAXAttribute, _ name: String) -> String {
+    switch attribute {
+    case .string: return name + "_ok"
+    case .elements(let list): return name + "\(list.count)"
+    case .absent: return name + "_absent"
+    case .unsupported: return name + "_unsupported"
+    case .error(let code): return name + "_err\(abs(Int(code)))"
+    default: return name + "_fail"
+    }
+  }
+
+  /// `allowing` is the one AXUnknown focused element the caller already placed inside the window by
+  /// its parent chain. It is a second root, so its own subtree is judged even when the window does not
+  /// list it as a child. Every distinct problem is collected (up to a cap) instead of stopping at the
+  /// first, and a refusal ends with "seen:" entries summarizing what each kind of node returned
+  /// (role names, AX codes and counts only), so one live check shows every remaining blocker.
   private func windowTreeRefusal(allowing allowed: WindowAXElement? = nil) -> String? {
     guard let target else { return Self.privacy("tree_target_missing") }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
+    if let allowed { pending.insert((allowed, 0), at: 0) }
     var visited = 0
-    var reachedAllowed = allowed == nil
     var problems: [String] = []
+    var seen: [String: Int] = [:]
+    var seenOrder: [String] = []
     func note(_ problem: String) {
       if problems.count < Self.maxReportedProblems, !problems.contains(problem) { problems.append(problem) }
+    }
+    func record(_ entry: String) {
+      if seen[entry] == nil { seenOrder.append(entry) }
+      seen[entry, default: 0] += 1
     }
     walk: while let (node, depth) = pending.popLast() {
       visited += 1
@@ -463,57 +481,75 @@ final class WindowAXWatch: SettleWatch {
       guard depth <= Self.treeDepthLimit else { note("tree_depth_limit"); continue }
       guard isAdmitted else { return Self.privacy("invalidated") }
       let isAllowed = allowed?.same(node) == true
-      if isAllowed { reachedAllowed = true }
       let role: String
       switch api.attribute(node, "AXRole") {
       case .string(let value): role = value.isEmpty && isAllowed ? "AXUnknown" : value
       case .absent where isAllowed: role = "AXUnknown"
-      default: note("tree_role_unreadable"); continue
+      default: note("tree_role_unreadable"); record("unreadable"); continue
       }
+      let name = Self.axName(role)
       // A refused node's subtree is skipped: its own problem already refuses the window.
       guard !role.isEmpty, role != "AXSecureTextField", role != "AXUnknown" || isAllowed else {
-        note("tree_role:" + Self.axName(role)); continue
+        note("tree_role:" + name); record(name); continue
       }
-      switch api.attribute(node, "AXSubrole") {
-      case .string(let subrole):
-        if subrole == "AXSecureTextField" { note("tree_subrole:" + Self.axName(role)); continue }
+      let subrole = api.attribute(node, "AXSubrole")
+      switch subrole {
+      case .string(let value):
+        if value == "AXSecureTextField" { note("tree_subrole:" + name); record(name + ":sub_secure"); continue }
       case .absent, .unsupported:
-        if role == "AXTextField" { note("tree_subrole:" + Self.axName(role)); continue }
-      default: note("tree_subrole_unreadable:" + Self.axName(role)); continue
+        if role == "AXTextField" { note("tree_subrole:" + name); record(name + ":" + Self.token(subrole, "sub")); continue }
+      default:
+        // The focused AXUnknown element is held to text-input rules: its kind is not known.
+        if Self.textInputRoles.contains(role) || isAllowed {
+          let code = { if case .error(let c) = subrole { return ":err\(abs(Int(c)))" }; return "" }()
+          note("tree_subrole_unreadable:" + name + code); record(name + ":" + Self.token(subrole, "sub")); continue
+        }
       }
       // Ask for one more than the budget allows, so an overflow is refused and never truncated.
       let budget = Self.treeNodeLimit - visited - pending.count
       let isLeaf = Self.leafRoles.contains(role)
-      switch api.children(node, max: budget + 1) {
-      case .elements(let children):
-        guard children.count <= budget else { note("tree_node_limit"); break walk }
-        pending.append(contentsOf: children.map { ($0, depth + 1) })
+      let children = api.children(node, max: budget + 1)
+      var entry = name + ":" + Self.token(subrole, "sub") + ":" + Self.token(children, "kids")
+      switch children {
+      case .elements(let list):
+        guard list.count <= budget else { note("tree_node_limit"); record(entry); break walk }
+        pending.append(contentsOf: list.map { ($0, depth + 1) })
       case .absent: break
-      case .unsupported: if !isLeaf { note("tree_children_unsupported:" + Self.axName(role)) }
+      case .unsupported: if !isLeaf { note("tree_children_unsupported:" + name) }
       // A failing read proves nothing about children, whatever the role (Calculator's buttons return
       // an AX error, #1585); only a separate count of zero shows the node is empty.
       case .error(let code):
-        if let problem = emptyChildrenProblem(node, role: role, read: ":err\(abs(Int(code)))") { note(problem) }
+        let (problem, count) = emptyChildrenProblem(node, role: role, read: ":err\(abs(Int(code)))")
+        entry += ":" + count
+        if let problem { note(problem) }
       default:
-        if let problem = emptyChildrenProblem(node, role: role, read: "") { note(problem) }
+        let (problem, count) = emptyChildrenProblem(node, role: role, read: "")
+        entry += ":" + count
+        if let problem { note(problem) }
       }
+      record(entry)
     }
-    // An unknown focus the walk never reached was never judged by it (its parent and the window's
-    // children disagree), so it refuses.
-    if !reachedAllowed { note("focus_not_in_tree") }
-    return problems.isEmpty ? nil : Self.privacy(problems.joined(separator: ","))
+    guard !problems.isEmpty else { return nil }
+    var reason = Self.privacy(problems.joined(separator: ","))
+    for entry in seenOrder {
+      let item = ",seen:" + entry + ":x\(seen[entry] ?? 0)"
+      if reason.count + item.count > 600 { break }
+      reason += item
+    }
+    return reason
   }
 
   /// Nil when an element whose children could not be read reports zero children; otherwise the
   /// problem, naming the read error and what the count said.
-  private func emptyChildrenProblem(_ node: WindowAXElement, role: String, read: String) -> String? {
+  private func emptyChildrenProblem(_ node: WindowAXElement, role: String, read: String) -> (String?, String) {
     let problem = "tree_children_unreadable:" + Self.axName(role) + read
-    guard isAdmitted else { return problem }
+    guard isAdmitted else { return (problem, "count_skipped") }
     switch api.childCount(node) {
-    case .count(0), .absent: return nil
-    case .count(let n): return problem + ":count\(n)"
-    case .unsupported: return problem + ":count_unsupported"
-    case .error(let code): return problem + ":count_err\(abs(Int(code)))"
+    case .count(0): return (nil, "count0")
+    case .absent: return (nil, "count_absent")
+    case .count(let n): return (problem + ":count\(n)", "count\(n)")
+    case .unsupported: return (problem + ":count_unsupported", "count_unsupported")
+    case .error(let code): return (problem + ":count_err\(abs(Int(code)))", "count_err\(abs(Int(code)))")
     }
   }
 
@@ -560,223 +596,4 @@ final class WindowAXWatch: SettleWatch {
     refuse("event_ancestry_limit")
   }
 
-}
-
-private final class WindowAXRunLoop: WindowAXExecutor {
-  private let lock = NSLock()
-  private var loop: CFRunLoop?
-  private var pending: [() -> Void] = []
-  private var finished = false
-
-  func start(_ body: @escaping () -> Void) {
-    Thread.detachNewThread { [self] in
-      let current = CFRunLoopGetCurrent()!
-      var context = CFRunLoopSourceContext()
-      let keepAlive = CFRunLoopSourceCreate(nil, 0, &context)!
-      CFRunLoopAddSource(current, keepAlive, .defaultMode)
-      lock.lock()
-      loop = current
-      let work = pending
-      pending = []
-      lock.unlock()
-      body()
-      for item in work { item() }
-      lock.lock()
-      let shouldRun = !finished
-      lock.unlock()
-      if shouldRun { CFRunLoopRun() }
-      CFRunLoopRemoveSource(current, keepAlive, .defaultMode)
-      lock.lock()
-      loop = nil
-      pending = []
-      lock.unlock()
-    }
-  }
-
-  func enqueue(_ body: @escaping () -> Void) {
-    lock.lock()
-    defer { lock.unlock() }
-    guard !finished else { return }
-    if let loop {
-      CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue, body)
-      CFRunLoopWakeUp(loop)
-    } else { pending.append(body) }
-  }
-
-  func finish() {
-    lock.lock()
-    finished = true
-    if let loop { CFRunLoopStop(loop) }
-    lock.unlock()
-  }
-}
-
-private final class SystemWindowAX: WindowAXFunctions {
-  private typealias WindowBridge = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
-  private let bridge: WindowBridge?
-  private let framework: UnsafeMutableRawPointer?
-
-  init() {
-    // Resolve our own bridge in the system framework; no driver implementation or token state.
-    framework = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY)
-    if let handle = framework {
-      if let symbol = dlsym(handle, "_AXUIElementGetWindow") {
-        bridge = unsafeBitCast(symbol, to: WindowBridge.self)
-      } else { bridge = nil }
-    } else { bridge = nil }
-  }
-
-  deinit { if let framework { dlclose(framework) } }
-
-  private func ax(_ element: WindowAXElement) -> AXUIElement? {
-    guard CFGetTypeID(element.reference) == AXUIElementGetTypeID() else { return nil }
-    return unsafeBitCast(element.reference, to: AXUIElement.self)
-  }
-
-  func trusted() -> Bool { AXIsProcessTrusted() }
-
-  func ownerPID(_ windowID: UInt32) -> Int32? {
-    guard let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
-      rows.count == 1, let row = rows.first,
-      (row[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID,
-      let owner = row[kCGWindowOwnerPID as String] as? NSNumber
-    else { return nil }
-    return owner.int32Value
-  }
-
-  func application(_ pid: Int32) -> WindowAXElement? { WindowAXElement(AXUIElementCreateApplication(pid)) }
-
-  func pid(_ element: WindowAXElement) -> Int32? {
-    guard let element = ax(element) else { return nil }
-    var pid: pid_t = 0
-    return AXUIElementGetPid(element, &pid) == .success ? pid : nil
-  }
-
-  func windowID(_ element: WindowAXElement) -> UInt32? {
-    guard let bridge, let element = ax(element) else { return nil }
-    var id: CGWindowID = 0
-    guard bridge(element, &id) == .success, id != 0 else { return nil }
-    return id
-  }
-
-  func attribute(_ element: WindowAXElement, _ name: String) -> WindowAXAttribute {
-    guard let element = ax(element) else { return .failure }
-    var value: CFTypeRef?
-    let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-    if error == .noValue { return .absent }
-    if error == .attributeUnsupported { return .unsupported }
-    guard error == .success, let value else { return .failure }
-    if CFGetTypeID(value) == AXUIElementGetTypeID() { return .element(WindowAXElement(value)) }
-    if let string = value as? String { return .string(string) }
-    if CFGetTypeID(value) == CFArrayGetTypeID(), let values = value as? [CFTypeRef] {
-      guard values.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { return .failure }
-      return .elements(values.map(WindowAXElement.init))
-    }
-    return .failure
-  }
-
-  func childCount(_ element: WindowAXElement) -> WindowAXCount {
-    guard let element = ax(element) else { return .error(AXError.illegalArgument.rawValue) }
-    var count: CFIndex = 0
-    let error = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count)
-    if error == .noValue { return .absent }
-    if error == .attributeUnsupported { return .unsupported }
-    return error == .success ? .count(count) : .error(error.rawValue)
-  }
-
-  func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute {
-    guard let element = ax(element), max > 0 else { return .failure }
-    var values: CFArray?
-    let error = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, max, &values)
-    if error == .noValue { return .absent }
-    if error == .attributeUnsupported { return .unsupported }
-    guard error == .success else { return .error(error.rawValue) }
-    guard let list = values as? [CFTypeRef] else { return .failure }
-    guard list.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { return .failure }
-    return .elements(list.map(WindowAXElement.init))
-  }
-
-  func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void)
-    -> WindowAXSubscription? {
-    SystemWindowAXSubscription(pid: pid, receive: receive)
-  }
-}
-
-private final class WindowAXCallbackBox {
-  var receive: ((WindowAXElement, String) -> Void)?
-  init(_ receive: @escaping (WindowAXElement, String) -> Void) { self.receive = receive }
-}
-
-private final class SystemWindowAXSubscription: WindowAXSubscription {
-  private let fenceLock = NSLock()
-  private var source: CFRunLoopSource?
-  private var invalidated = false
-  private var observer: AXObserver?
-  private let context: UnsafeMutableRawPointer
-  private var registrations: [(WindowAXElement, String)] = []
-  private var loop: CFRunLoop?
-
-  init?(pid: Int32, receive: @escaping (WindowAXElement, String) -> Void) {
-    context = Unmanaged.passRetained(WindowAXCallbackBox(receive)).toOpaque()
-    let result = AXObserverCreate(pid, { _, element, name, refcon in
-      guard let refcon else { return }
-      let box = Unmanaged<WindowAXCallbackBox>.fromOpaque(refcon).retain().takeRetainedValue()
-      box.receive?(WindowAXElement(element), name as String)
-      withExtendedLifetime(box) {}
-    }, &observer)
-    guard result == .success, let observer else {
-      Unmanaged<WindowAXCallbackBox>.fromOpaque(context).release()
-      return nil
-    }
-    source = AXObserverGetRunLoopSource(observer)
-  }
-
-  func add(_ element: WindowAXElement, notification: String) -> Bool {
-    guard let observer, CFGetTypeID(element.reference) == AXUIElementGetTypeID() else { return false }
-    let ax = unsafeBitCast(element.reference, to: AXUIElement.self)
-    guard AXObserverAddNotification(observer, ax, notification as CFString, context) == .success else {
-      return false
-    }
-    registrations.append((element, notification))
-    return true
-  }
-
-  func attach() {
-    fenceLock.lock()
-    defer { fenceLock.unlock() }
-    guard !invalidated, let source else { return }
-    loop = CFRunLoopGetCurrent()
-    CFRunLoopAddSource(loop, source, .defaultMode)
-  }
-
-  func invalidate() {
-    // This local CF operation must remain independent of any blocking AX messaging on the runloop.
-    fenceLock.lock()
-    defer { fenceLock.unlock() }
-    guard !invalidated else { return }
-    invalidated = true
-    if let source { CFRunLoopSourceInvalidate(source) }
-  }
-
-  func detach() {
-    guard let observer else { return }
-    invalidate()
-    // Callbacks and teardown share one runloop. Retire delivery before removing its source/refcon.
-    Unmanaged<WindowAXCallbackBox>.fromOpaque(context).takeUnretainedValue().receive = nil
-    fenceLock.lock()
-    let source = self.source
-    let attachedLoop = loop
-    self.source = nil
-    loop = nil
-    fenceLock.unlock()
-    if let source, let attachedLoop { CFRunLoopRemoveSource(attachedLoop, source, .defaultMode) }
-    for (element, notification) in registrations {
-      let ax = unsafeBitCast(element.reference, to: AXUIElement.self)
-      AXObserverRemoveNotification(observer, ax, notification as CFString)
-    }
-    registrations = []
-    self.observer = nil
-    // The callback owns a temporary retain while unwinding; invalidating the source fences new ones.
-    Unmanaged<WindowAXCallbackBox>.fromOpaque(context).release()
-  }
 }

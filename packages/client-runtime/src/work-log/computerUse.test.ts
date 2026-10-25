@@ -161,6 +161,17 @@ describe("computerUseResult", () => {
     ).toBe(
       "Window did not settle: focus is private or unknown (tree children unreadable: AXGroup: err25204; tree role: AXUnknown)",
     );
+    // The read summary after a refusal is diagnostic detail, not something the card shows.
+    expect(
+      computerUseResult(
+        settle,
+        "succeeded",
+        structured(
+          "unsupported",
+          "private_or_unknown_focus:tree_role:AXUnknown,seen:AXButton:sub_absent:kids_unsupported:x53",
+        ),
+      ).note,
+    ).toBe("Window did not settle: focus is private or unknown (tree role: AXUnknown)");
     // An expanded row has only the projected output, which keeps just the outcome.
     expect(
       computerUseResult(settle, "succeeded", {

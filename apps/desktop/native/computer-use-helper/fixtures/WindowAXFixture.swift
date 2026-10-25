@@ -205,6 +205,7 @@ private final class WatchFixture {
   var events: [String] = []
   var received = 0
   var ignored = 0
+  var diagnostics = ""
   var admitted = true
   var duringPermitted: (() -> Void)?
   lazy var watch = WindowAXWatch(pid: 42, windowID: 7, api: api, executor: executor,
@@ -220,7 +221,10 @@ private final class WatchFixture {
       case .received: received += 1
       case .ignored: ignored += 1
       case .destroyed: events.append("destroyed")
-      case .unsupported(let reason): events.append("unsupported:\(reason)")
+      // Refusals end with "seen:" read summaries; events keep the decision, diagnostics the rest.
+      case .unsupported(let reason):
+        diagnostics = reason
+        events.append("unsupported:" + reason.split(separator: ",").filter { !$0.hasPrefix("seen:") }.joined(separator: ","))
       }
     }
     executor.drain()
@@ -566,8 +570,41 @@ private func runObserverFixture(_ scenario: String) {
     hidden.api.childrenMap["window"] = .elements(["keypad", "display"].map { WindowAXElement($0 as NSString) })
     hidden.api.childrenMap["calc-focus"] = .unsupported
     hidden.start()
-    check(hidden.events == ["unsupported:private_or_unknown_focus:focus_not_in_tree"],
-      "an unknown focus the window walk never reaches refuses: \(hidden.events)")
+    check(hidden.events == ["unsupported:private_or_unknown_focus:tree_children_unsupported:AXUnknown"],
+      "an unknown focus the window never lists is walked from itself and still judged: \(hidden.events)")
+    // WS13's third run: button subrole reads error too, and the window does not list the focus.
+    let live = WatchFixture()
+    calculator(live.api)
+    live.api.childrenMap["window"] = .elements((["keypad", "display"] + (0..<6).map { "label-\($0)" }).map { WindowAXElement($0 as NSString) })
+    for i in 0..<53 {
+      live.api.childrenMap["key-\(i)"] = .error(-25204)
+      live.api.childCounts["key-\(i)"] = .count(0)
+      live.api.subroles["key-\(i)"] = .error(-25204)
+    }
+    live.start()
+    check(live.events == ["ready"], "Calculator as WS13 saw it settles: \(live.events) \(live.diagnostics)")
+    // A subrole read error refuses only where the role could be a secure text input.
+    let textField = WatchFixture()
+    calculator(textField.api)
+    textField.api.roles["display"] = "AXTextField"
+    textField.api.subroles["display"] = .error(-25204)
+    textField.start()
+    check(textField.events == ["unsupported:private_or_unknown_focus:tree_subrole_unreadable:AXTextField:err25204"],
+      "a text field whose subrole cannot be read refuses: \(textField.events)")
+    // The focus's own subtree is walked even when the window does not list the focus.
+    let underFocus = WatchFixture()
+    calculator(underFocus.api)
+    underFocus.api.childrenMap["window"] = .elements(["keypad", "display"].map { WindowAXElement($0 as NSString) })
+    underFocus.api.roles["secret"] = "AXTextField"
+    underFocus.api.subroles["secret"] = .string("AXSecureTextField")
+    underFocus.api.childrenMap["calc-focus"] = .elements([WindowAXElement("secret" as NSString)])
+    underFocus.start()
+    check(underFocus.events == ["unsupported:private_or_unknown_focus:tree_subrole:AXTextField"],
+      "a secure field under an unlisted focus refuses: \(underFocus.events)")
+    // A refusal summarizes what each kind of node returned, with roles, codes and counts only.
+    check(textField.diagnostics.contains("seen:AXButton:sub_absent:kids_unsupported:x53")
+      && textField.diagnostics.contains("seen:AXTextField:sub_err25204"),
+      "a refusal carries the read summary: \(textField.diagnostics)")
     let moved = WatchFixture()
     calculator(moved.api)
     moved.start()

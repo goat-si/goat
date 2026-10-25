@@ -254,6 +254,8 @@ function settleReason(reason: string): string {
   const detail = reason
     .slice(split + 1)
     .split(",")
+    // "seen:" entries summarize the helper's reads for diagnosis; the card shows only the problems.
+    .filter((problem) => !problem.startsWith("seen:"))
     .map((problem) => {
       const [check = "", ...names] = problem.split(":");
       return [check.replaceAll("_", " "), ...names].join(": ");
