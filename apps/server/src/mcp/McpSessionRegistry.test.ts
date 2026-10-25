@@ -456,6 +456,143 @@ it.effect("renews an idle credential while its session is attached and expires i
   }),
 );
 
+it.effect("inspect judges a credential as resolve would, without renewing it", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let attached = true;
+    const registry = yield* makeRegistry(() => timestamp);
+    const tokenOf = (issued: { readonly config: { readonly authorizationHeader: string } }) =>
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const plainThread = ThreadId.make("thread-inspect-plain");
+    const plain = tokenOf(
+      yield* registry.issue({
+        threadId: plainThread,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      }),
+    );
+    const attachedThread = ThreadId.make("thread-inspect-attached");
+    const held = tokenOf(
+      yield* registry.issue({
+        threadId: attachedThread,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        isAttached: Effect.sync(() => attached),
+      }),
+    );
+    timestamp += 50;
+    expect(yield* registry.inspect(plain)).toEqual({ threadId: plainThread, recheckAt: 1_101 });
+    // Inspecting is not use: the plain credential still expires a window after its issue.
+    timestamp += 60;
+    expect(yield* registry.inspect(plain)).toBeUndefined();
+    expect(yield* registry.resolve(plain)).toBeUndefined();
+    // An idle credential whose session is attached stays valid, rechecked a window later.
+    expect(yield* registry.inspect(held)).toEqual({
+      threadId: attachedThread,
+      recheckAt: 1_210,
+    });
+    attached = false;
+    expect(yield* registry.inspect(held)).toBeUndefined();
+    expect(yield* registry.resolve(held)).toBeUndefined();
+  }),
+);
+
+it.effect("inspect judges the state after an attachment probe, not the state before it", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const probing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const threadId = ThreadId.make("thread-inspect-probe");
+    const request = {
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Deferred.succeed(probing, undefined).pipe(
+        Effect.andThen(Deferred.await(release)),
+        Effect.as(true),
+      ),
+    };
+    const issued = yield* registry.issue(request);
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    // A revocation during a probe that answers attached: the token is refused.
+    const revoked = yield* registry
+      .inspect(token)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(probing);
+    yield* registry.revokeThread(threadId);
+    yield* Deferred.succeed(release, undefined);
+    expect(yield* Fiber.join(revoked)).toBeUndefined();
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("inspect sees a renewal made while its probe answered detached", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let probes = 0;
+    const registry = yield* makeRegistry(() => timestamp);
+    const probing = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const threadId = ThreadId.make("thread-inspect-renewed");
+    const first = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      // Only inspect's probe waits; the renewal's own detached sweep must not block on it.
+      isAttached: Effect.suspend(() =>
+        probes++ === 0
+          ? Deferred.succeed(probing, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(false),
+            )
+          : Effect.succeed(false),
+      ),
+    });
+    const token = first.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    const judged = yield* registry
+      .inspect(token)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(probing);
+    yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Effect.succeed(true),
+      renew: {
+        authorizationHeader: first.config.authorizationHeader,
+        providerSessionId: first.config.providerSessionId,
+      },
+    });
+    yield* Deferred.succeed(release, undefined);
+    expect((yield* Fiber.join(judged))?.threadId).toBe(threadId);
+    expect((yield* registry.resolve(token))?.thread.threadId).toBe(threadId);
+  }),
+);
+
+it.effect("inspect prunes as resolve does before judging an expired attached credential", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let attached = false;
+    const registry = yield* makeRegistry(() => timestamp);
+    const held = yield* registry.issue({
+      threadId: ThreadId.make("thread-inspect-pruned"),
+      providerInstanceId: ProviderInstanceId.make("pi"),
+      isAttached: Effect.sync(() => attached),
+    });
+    const token = held.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp += 1_000;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+    attached = true;
+    // A full tombstone list of idle records, pruned on the next judgment, evicts the expired one.
+    for (let index = 0; index < 512; index += 1)
+      yield* registry.issue({
+        threadId: ThreadId.make("thread-idle-" + index),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      });
+    timestamp += 1_000;
+    expect(yield* registry.inspect(token)).toBeUndefined();
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
 it.effect(
   "gives concurrently started threads different TMPDIRs that end with the server (#1206)",
   () =>
