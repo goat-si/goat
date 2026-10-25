@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ProviderThreadId, ThreadId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
@@ -647,6 +649,168 @@ describe("Codex native subagents as their thread's background work", () => {
           });
           yield* replay.startTurn(2);
           yield* replay.terminal;
+          assert.isFalse(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "Stop of another thread that swept a child leaves its sibling's next turn running (#1643)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "swept-sibling";
+          const other = root + "-other-root";
+          const child = root + "-child";
+          const grandchild = root + "-grandchild";
+          const sibling = root + "-sibling";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          const goalPaused = (thread: string, turnId: string) => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method: "thread/goal/updated",
+              params: {
+                threadId: thread,
+                turnId,
+                goal: {
+                  threadId: thread,
+                  objective: turnId,
+                  status: "paused",
+                  tokenBudget: null,
+                  tokensUsed: 1,
+                  timeUsedSeconds: 1,
+                  createdAt: 1782622440,
+                  updatedAt: 1782622450,
+                },
+              },
+            },
+          });
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, child);
+          spawnChild(f, root, sibling);
+          // The child spawns a grandchild that never starts a turn; the sibling keeps working.
+          f.entries.push(childTurn(child, "child-1", "inProgress"), {
+            type: "emit_inbound",
+            frame: {
+              method: "item/completed",
+              params: {
+                item: {
+                  type: "subAgentActivity",
+                  id: "spawn-" + grandchild,
+                  kind: "started",
+                  agentThreadId: grandchild,
+                  agentPath: "/root/child/grandchild",
+                },
+                threadId: child,
+                turnId: "child-1",
+                completedAtMs: 1782622441500,
+              },
+            },
+          });
+          f.entries.push(
+            childTurn(child, "child-1", "completed"),
+            childTurn(sibling, "sibling-1", "inProgress"),
+          );
+          f.turnCompleted(1);
+          f.entries.push(goalPaused(root, "turn-1"));
+          // An independent root thread sends the child work, then a person stops that thread.
+          const otherParams = f.threadParams();
+          Object.assign(otherParams.config, {
+            "shell_environment_policy.set.GOAT_ACP_MCP_ENDPOINT": f.config.endpoint,
+            "shell_environment_policy.set.GOAT_ACP_MCP_AUTHORIZATION": f.config.authorizationHeader,
+            "shell_environment_policy.set.T3_ACP_MCP_ENDPOINT": f.config.endpoint,
+            "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": f.config.authorizationHeader,
+          });
+          f.resume(4, otherParams, undefined, other);
+          yield* f.turnStart(5, 2, false, false, other);
+          f.entries.push({
+            type: "emit_inbound",
+            frame: {
+              method: "item/started",
+              params: {
+                threadId: other,
+                turnId: "turn-2",
+                item: {
+                  type: "collabAgentToolCall",
+                  id: "other-to-child",
+                  tool: "sendInput",
+                  status: "inProgress",
+                  senderThreadId: other,
+                  receiverThreadIds: [child],
+                  agentsStates: {},
+                },
+                startedAtMs: 1782622443000,
+              },
+            },
+          });
+          f.turnCompleted(2, other);
+          // The sibling, still the first root's work, starts its next turn after that Stop.
+          yield* f.turnStart(6, 3, false, false, other);
+          f.entries.push(
+            childTurn(sibling, "sibling-1", "completed"),
+            childTurn(sibling, "sibling-2", "inProgress"),
+            childTurn(sibling, "sibling-2", "completed"),
+            goalPaused(other, "turn-3"),
+          );
+          f.turnCompleted(3, other);
+          // The replay answers outbound requests in order: a late interrupt of the sibling would
+          // reach it before this turn's start and fail the run.
+          yield* f.turnStart(7, 4, false, false, other);
+          f.turnCompleted(4, other);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.goalTokens;
+          const rootRef = replay.providerThread.nativeThreadRef;
+          assert.isNotNull(rootRef);
+          const otherThread = {
+            ...replay.providerThread,
+            id: ProviderThreadId.make("provider-thread-" + other),
+            appThreadId: ThreadId.make("thread-" + other),
+            nativeThreadRef: { ...rootRef, nativeId: other },
+          };
+          yield* sessions.set({ ...f.config, threadId: otherThread.appThreadId });
+          yield* replay.runtime.resumeThread({
+            threadId: otherThread.appThreadId,
+            providerThread: otherThread,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          yield* replay.startTurn(2, "turn-2", {
+            threadId: otherThread.appThreadId,
+            providerThread: otherThread,
+          });
+          yield* replay.terminal;
+          yield* replay.terminal;
+          const allocator = yield* IdAllocator.IdAllocatorV2;
+          yield* replay.runtime.interruptTurn({
+            providerThread: otherThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-2",
+            }),
+            requestRuntimeRestart: true,
+          });
+          yield* replay.startTurn(3, "turn-3", {
+            threadId: otherThread.appThreadId,
+            providerThread: otherThread,
+          });
+          yield* replay.goalTokens;
+          yield* replay.startTurn(4, "turn-4", {
+            threadId: otherThread.appThreadId,
+            providerThread: otherThread,
+          });
+          yield* replay.terminal;
+          yield* replay.terminal;
+          // The sweep interrupted only the grandchild; the sibling's turn ran to completion.
+          assert.deepStrictEqual(
+            replay.subagentStatuses.filter((status) => status === "interrupted"),
+            ["interrupted"],
+          );
           assert.isFalse(
             yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
           );

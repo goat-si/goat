@@ -46,13 +46,17 @@ function* turnsUp(turn: TurnLike): Generator<TurnLike> {
 
 /**
  * Registered subagents that are still active but run no known turn, under a turn that "stops"
- * matches. They are marked endedByStop so that their first real turn reopens them.
+ * matches. They are marked endedByStop so that their first real turn reopens them, and
+ * workStopped so that a late turn of the work they had is interrupted. The mark stays on the
+ * child: its ancestors may still run other work, such as a sibling under another thread's
+ * root, which this Stop does not own.
  */
 interface Stoppable<T> {
   readonly parentContext: T;
   readonly nativeTurnIds: ReadonlySet<string>;
   readonly task: { readonly status: string };
   endedByStop?: boolean;
+  workStopped?: boolean;
 }
 
 const stopped = <T extends TurnLike, S extends Stoppable<T>>(
@@ -64,7 +68,7 @@ const stopped = <T extends TurnLike, S extends Stoppable<T>>(
     if (subagent.task.status !== "running" && subagent.task.status !== "pending") return false;
     if ([...subagent.nativeTurnIds].some((turnId) => activeTurns.has(turnId))) return false;
     for (const parent of turnsUp(subagent.parentContext))
-      if (stops(parent as T)) return (subagent.endedByStop = true);
+      if (stops(parent as T)) return (subagent.endedByStop = subagent.workStopped = true);
     return false;
   });
 
@@ -114,14 +118,19 @@ export const reparent = <T extends TurnLike>(subagent: { parentContext: T }, tur
  * (#1643). Waiting on a child gives it no work, and a child's own descendant never takes it over.
  */
 export const assign = <T extends TurnLike>(
-  subagents: ReadonlyMap<string, { parentContext: T; workLineage: ReadonlyArray<string> }>,
+  subagents: ReadonlyMap<
+    string,
+    { parentContext: T; workLineage: ReadonlyArray<string>; workStopped?: boolean }
+  >,
   item: { readonly tool: string; readonly receiverThreadIds: ReadonlyArray<string> },
   turn: T,
 ) => {
   if (item.tool !== "sendInput" && item.tool !== "resumeAgent") return;
   for (const childThreadId of item.receiverThreadIds) {
     const subagent = subagents.get(childThreadId);
-    if (subagent !== undefined && reparent(subagent, turn)) subagent.workLineage = lineage(turn);
+    if (subagent === undefined || !reparent(subagent, turn)) continue;
+    subagent.workLineage = lineage(turn);
+    subagent.workStopped = false;
   }
 };
 

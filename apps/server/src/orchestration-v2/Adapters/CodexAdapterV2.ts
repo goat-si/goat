@@ -1289,6 +1289,8 @@ interface CodexSubagentThreadContext {
   task: OrchestrationV2Subagent;
   /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
   endedByStop?: boolean;
+  /** A Stop swept its work before it started; new work given to it clears this (#1643). */
+  workStopped?: boolean;
   /** The turns its work was given under, fixed then; a later move of a parent leaves it (#1643). */
   workLineage: ReadonlyArray<string>;
 }
@@ -3141,6 +3143,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.get(terminalizedNonCompletedNativeTurns),
               ) ||
               // Work given under a turn Stop ended is stopped, however late it starts (#1643).
+              subagent.workStopped === true ||
               subagent.workLineage.some((turnId) => stoppedNativeTurns.has(turnId))
             )
               // Forked: notifications are handled on the input reader, which must stay free to
@@ -8280,11 +8283,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     subagentThreads,
                     activeTurns,
                     requestedInput.providerThread.id,
-                    // Its work lineage is stopped too, even under a root that had already ended.
-                    (subagent) => {
-                      for (const turnId of subagent.workLineage) stoppedNativeTurns.add(turnId);
-                      return emitSubagentTaskUpdate({ subagent, status: "interrupted" });
-                    },
+                    (subagent) => emitSubagentTaskUpdate({ subagent, status: "interrupted" }),
                   ),
                 ),
                 Effect.mapError(
