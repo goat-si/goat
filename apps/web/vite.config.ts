@@ -88,7 +88,10 @@ const unitTestProject = {
       "../../packages/shared/src/testing/providerEnv.ts",
       "../../packages/shared/src/testing/gitEnv.setup.ts",
     ],
-    globalSetup: ["../../packages/shared/src/testing/gitConfigGuard.ts"],
+    globalSetup: [
+      "../../scripts/lib/node-runtime.ts",
+      "../../packages/shared/src/testing/gitConfigGuard.ts",
+    ],
   },
 } satisfies TestProjectInlineConfiguration;
 
@@ -152,6 +155,7 @@ const browserTestProject = {
     maxWorkers: Math.max(1, Math.min(8, NodeOS.availableParallelism() - 1)),
     sequence: { groupOrder: 1 },
     setupFiles: ["./src/test/browserNoMotion.ts", "./test/browserSetup.ts"],
+    globalSetup: ["../../scripts/lib/node-runtime.ts"],
     api: { port: browserTestApiPort, strictPort: false },
     browser: {
       enabled: true,

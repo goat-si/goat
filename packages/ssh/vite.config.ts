@@ -14,6 +14,6 @@ export default defineConfig({
       "../shared/src/testing/providerEnv.ts",
       "../shared/src/testing/gitEnv.setup.ts",
     ],
-    globalSetup: ["../shared/src/testing/gitConfigGuard.ts"],
+    globalSetup: ["../../scripts/lib/node-runtime.ts", "../shared/src/testing/gitConfigGuard.ts"],
   },
 });
