@@ -1,8 +1,5 @@
 import { assert, it } from "@effect/vitest";
 import {
-  AuthSessionId,
-  type AuthClientSession,
-  type ComputerUseCapabilities,
   type ComputerUseRequestInput,
   EnvironmentId,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
@@ -10,7 +7,6 @@ import {
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
-import * as HostProcess from "@goat/shared/HostProcess";
 import { cuaRequestableApps } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,147 +16,18 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
-import * as Environment from "../environment/ServerEnvironment.ts";
-import * as Handoffs from "../handoffs/Handoffs.ts";
-import {
-  durableHandoffs,
-  instanceId,
-  threadId,
-  withHarness,
-} from "../handoffs/Handoffs.testkit.ts";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
+import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { requestComputerUse } from "./ComputerUseRequests.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
-type Signals = ComputerUseCapabilities["signals"];
-const supported = { humanInput: "supported", privateMode: "supported" } satisfies Signals;
-
-/**
- * The real leases, on a host whose helper's accepted readiness reported these signals;
- * undefined: a host whose helper never reported.
- */
-const leasesDetecting = (signals: Signals | undefined) =>
-  ComputerUseLeases.layer.pipe(
-    Layer.provide(
-      DesktopTelemetryReceiver.layerTest({
-        cuaReadiness: Effect.succeed(
-          signals === undefined
-            ? Option.none()
-            : Option.some({
-                version: 1,
-                type: "cuaReadiness",
-                generation: 1,
-                readiness: {
-                  grants: { accessibility: "granted", screenCapture: "granted" },
-                  helper: "authenticated",
-                  capture: "ready",
-                  tree: "ready",
-                  input: "background",
-                  blockers: [],
-                  reasons: [],
-                },
-                signals,
-              } as const),
-        ),
-      }),
-    ),
-  );
-
-const purpose = "Check the build status window";
-const sessionId = AuthSessionId.make("person:request-tests");
-const requestWithHandoffs =
-  (handoffs: Handoffs.Handoffs["Service"]) =>
-  (request: Partial<ComputerUseRequestInput> = {}) =>
-    requestComputerUse({
-      threadId,
-      providerInstanceId: instanceId,
-      request: { purpose, minutes: 30, ...request },
-    }).pipe(Effect.provideService(Handoffs.Handoffs, handoffs));
-
-const withRequests = <A, E, R>(
-  orchestrator: Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"],
-  signals: Signals | undefined,
-  body: (input: {
-    request: ReturnType<typeof requestWithHandoffs>;
-    handoffs: Handoffs.Handoffs["Service"];
-    leases: ComputerUseLeases.ComputerUseLeases["Service"];
-  }) => Effect.Effect<A, E, R>,
-  beforeCompletion?: (
-    leases: ComputerUseLeases.ComputerUseLeases["Service"],
-  ) => Effect.Effect<void>,
-  failure: Option.Option<CuaDriver.CuaDriverError> = Option.none(),
-  // The failure a fresh start reports; acquire records each start it is asked for.
-  retry: { after: Option.Option<CuaDriver.CuaDriverError>; starts: number } = {
-    after: failure,
-    starts: 0,
-  },
-  listedApps: Option.Option<ReadonlyArray<string>> = Option.none(),
-) => {
-  let current = failure;
-  return Effect.gen(function* () {
-    const environmentId = EnvironmentId.make("test-environment");
-    const now = yield* DateTime.now;
-    const person: AuthClientSession = {
-      sessionId,
-      subject: "desktop-bootstrap",
-      method: "browser-session-cookie",
-      scopes: ["orchestration:operate", "settings:write"],
-      client: { label: "Test person", deviceType: "desktop" },
-      issuedAt: now,
-      expiresAt: DateTime.add(now, { days: 1 }),
-      lastConnectedAt: now,
-      connected: true,
-      current: true,
-    };
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    const { start } = yield* durableHandoffs(
-      {
-        ...orchestrator,
-        dispatch: (command) =>
-          command.type === "handoff.transition" &&
-          command.state === "completed" &&
-          beforeCompletion !== undefined
-            ? beforeCompletion(leases).pipe(Effect.andThen(orchestrator.dispatch(command)))
-            : orchestrator.dispatch(command),
-      },
-      {
-        environmentId,
-        sessions: Effect.succeed([person]),
-      },
-    );
-    const handoffs = yield* start;
-    return yield* body({
-      request: requestWithHandoffs(handoffs),
-      handoffs,
-      leases,
-    });
-  }).pipe(
-    Effect.provide(
-      Layer.mergeAll(
-        leasesDetecting(signals),
-        Layer.mock(CuaDriver.CuaDriver)({
-          enabled: Effect.succeed(true),
-          listedApps: Effect.succeed(listedApps),
-          block: Effect.sync(() => CuaDriver.agentBlock(current)),
-          acquire: Effect.sync(() => {
-            retry.starts += 1;
-            current = retry.after;
-            return Option.none();
-          }),
-        }),
-        Layer.mock(Environment.ServerEnvironment)({
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
-        }),
-        Layer.mock(ThreadManagement.ThreadManagementService)({
-          getThreadSnapshot: orchestrator.getThreadSnapshot,
-        }),
-      ),
-    ),
-    Effect.provideService(HostProcess.Hostname, "test-host"),
-  );
-};
+import {
+  leasesDetecting,
+  purpose,
+  sessionId,
+  supported,
+  type Signals,
+  withRequests,
+} from "./ComputerUseRequests.testkit.ts";
 
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",
@@ -257,7 +124,17 @@ it.effect(
           { humanInput: "unsupported", privateMode: "unsupported" },
           { humanInput: "supported", privateMode: "unsupported" },
         ] satisfies ReadonlyArray<Signals | undefined>) {
-          const result = yield* withRequests(orchestrator, signals, ({ request }) => request());
+          const result = yield* withRequests(
+            orchestrator,
+            signals,
+            ({ request }) => request(),
+            undefined,
+            undefined,
+            undefined,
+            Option.none(),
+            undefined,
+            true,
+          );
           assert.equal(result.kind, "refused", JSON.stringify(signals));
           if (result.kind === "refused") assert.equal(result.reason, "detection_unsupported");
         }
@@ -266,6 +143,12 @@ it.effect(
             orchestrator,
             { humanInput, privateMode: "supported" },
             ({ request }) => request(),
+            undefined,
+            undefined,
+            undefined,
+            Option.none(),
+            undefined,
+            true,
           );
           assert.equal(allowed.kind, "needs_human");
         }
