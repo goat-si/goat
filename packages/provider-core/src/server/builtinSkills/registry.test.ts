@@ -189,6 +189,14 @@ describe("computer use skill against what agents receive today", () => {
     for (const tool of ["run_steps", "run_script"]) expect(codeSpans).not.toContain(tool);
   });
 
+  it("reports an action as done only after a read showed its effect (#1599)", () => {
+    // An agent that calls an unconfirmed send or purchase done misleads the person about what
+    // happened on their screen; the skill makes it say the effect is unconfirmed instead.
+    const finish = builtInSkillSections(["computer-use"], "darwin").join("\n");
+    expect(finish).toContain("Call an action done only when a later read showed its effect.");
+    expect(finish).toContain("say you could not confirm whether it happened");
+  });
+
   it("treats input as unsent only for an explicit refusal or a pre-send code without an effect", () => {
     // delivery_failed can follow a key that already went down, and background_unavailable can
     // come with an unverifiable or partial effect; resending either could submit twice.
