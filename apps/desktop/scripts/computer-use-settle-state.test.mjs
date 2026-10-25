@@ -30,6 +30,10 @@ describe("production window-settle reducer with a manual clock", () => {
   it.each([
     ["freshness", "settles only from a fresh sample started after subscription and quiet"],
     ["dirty-final", "waits for a fresh quiet interval after a change during the final read"],
+    [
+      "attribution",
+      "holds a final sample while a received notification is unattributed, then releases or discards it",
+    ],
     ["deadline", "bounds setup and in-flight reads without returning a stale baseline"],
     ["budget", "does not dispatch with less than 100ms or report pending early"],
     [

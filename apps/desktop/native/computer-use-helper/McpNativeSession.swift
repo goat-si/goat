@@ -346,7 +346,9 @@ final class McpNativeSession {
             guard let self, let op, op.observation.isActive else { return }
             switch event {
             case .ready(let coverage): self.event(.ready(coverage: coverage), operation: op)
+            case .received: self.event(.received, operation: op)
             case .changed: self.event(.changed, operation: op)
+            case .ignored: self.event(.ignored, operation: op)
             case .destroyed: self.event(.destroyed, operation: op)
             case .unsupported(let reason): self.event(.unsupported(reason), operation: op)
             }

@@ -39,6 +39,7 @@ describe.skipIf(platform !== "darwin")("window observer with injected accessibil
   it.each([
     "manifest",
     "filter",
+    "attribution",
     "destruction",
     "coverage",
     "privacy",

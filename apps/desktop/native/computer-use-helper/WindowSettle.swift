@@ -22,7 +22,9 @@ enum SettleSampleResult {
 
 enum SettleEvent {
   case ready(coverage: [String])
+  case received
   case changed
+  case ignored
   case destroyed
   case unsupported(String)
   case quiet(Int)
@@ -79,6 +81,10 @@ struct WindowSettleState {
   private var lastChangeAt: Int64?
   private var pendingSample: PendingSample?
   private var latestSample: CompletedSample?
+  // AX callbacks are serial, so at most one received notification awaits attribution. While it
+  // does, quiet cannot start the final read and a final sample waits for the verdict.
+  private var attributing = false
+  private var heldFinal: (sample: CompletedSample, epoch: Int)?
   private var invalidated: [String] = []
   private var invalidatedSet: Set<String> = []
   private(set) var isFinished = false
@@ -124,7 +130,23 @@ struct WindowSettleState {
       coverage = readyCoverage
       let effects = resetQuiet(now: now)
       return effects + dispatchSample(final: false, now: now)
+    case .received:
+      guard subscribed else { return [] }
+      attributing = true
+      return []
+    case .ignored:
+      guard attributing else { return [] }
+      attributing = false
+      if let held = heldFinal {
+        heldFinal = nil
+        if held.epoch == quietEpoch {
+          return finish("settled", reason: "quiet_window", now: now, sample: held.sample)
+        }
+      }
+      return sampleAfterQuiet(now: now)
     case .changed:
+      attributing = false
+      heldFinal = nil
       guard subscribed else { return [] }
       return [.cancelQuiet] + resetQuiet(now: now)
     case .destroyed:
@@ -154,6 +176,10 @@ struct WindowSettleState {
             return finish("unsupported", reason: "degraded_final_sample", now: now)
           }
           if pending.epoch == quietEpoch {
+            if attributing {
+              heldFinal = (completed, pending.epoch)
+              return []
+            }
             return finish("settled", reason: "quiet_window", now: now, sample: completed)
           }
         }
@@ -176,7 +202,7 @@ struct WindowSettleState {
   }
 
   private mutating func sampleAfterQuiet(now: Int64) -> [SettleEffect] {
-    guard subscribed && observedQuiet(now: now) >= request.quietMs else { return [] }
+    guard subscribed && !attributing && observedQuiet(now: now) >= request.quietMs else { return [] }
     let effects = dispatchSample(final: true, now: now)
     return effects.isEmpty ? [] : [.cancelQuiet] + effects
   }

@@ -21,6 +21,7 @@ export interface ComputerUseRun {
 
 const OBSERVATION_TOOLS: ReadonlySet<string> = new Set([
   "get_window_state",
+  "wait_for_window_settle",
   "get_desktop_state",
   "zoom",
   "verify_state",
@@ -37,6 +38,7 @@ const SUMMARIES: Readonly<Record<string, string>> = {
   bring_to_front: "Bring a window to the front",
   set_window_frame: "Move a window",
   get_window_state: "Look at a window",
+  wait_for_window_settle: "Wait for a window to settle",
   get_desktop_state: "Look at the desktop",
   zoom: "Zoom in",
   verify_state: "Check a window",

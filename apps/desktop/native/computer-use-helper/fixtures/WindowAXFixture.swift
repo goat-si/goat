@@ -126,6 +126,8 @@ private final class WatchFixture {
   let api = FakeAX()
   let executor = ManualAXExecutor()
   var events: [String] = []
+  var received = 0
+  var ignored = 0
   var admitted = true
   lazy var watch = WindowAXWatch(pid: 42, windowID: 7, api: api, executor: executor,
     permitted: { [weak self] in self?.admitted == true })
@@ -137,6 +139,8 @@ private final class WatchFixture {
         check(coverage.contains("AXUIElementDestroyed"), "coverage includes destruction")
         events.append("ready")
       case .changed: events.append("changed")
+      case .received: received += 1
+      case .ignored: ignored += 1
       case .destroyed: events.append("destroyed")
       case .unsupported(let reason): events.append("unsupported:\(reason)")
       }
@@ -174,6 +178,18 @@ private func runObserverFixture(_ scenario: String) {
     cycle.api.childParent = cycle.api.child
     cycle.send(cycle.api.child)
     cycle.unsupported("ancestry cycle fails closed")
+  case "attribution":
+    let f = WatchFixture()
+    f.start()
+    // The first blocking query of a callback must find the coordinator already fenced.
+    var fencedAtFirstQuery: Bool?
+    f.api.duringAttribute = { if fencedAtFirstQuery == nil { fencedAtFirstQuery = f.received == 1 } }
+    f.send(f.api.window)
+    check(fencedAtFirstQuery == true, "receipt reaches the coordinator before attribution queries")
+    check(f.events == ["ready", "changed"] && f.ignored == 0, "exact target change resolves the receipt")
+    f.send(f.api.foreignChild)
+    check(f.received == 2 && f.ignored == 1 && f.events == ["ready", "changed"],
+      "other-window notification releases its receipt without a change")
   case "destruction":
     let f = WatchFixture()
     f.start()

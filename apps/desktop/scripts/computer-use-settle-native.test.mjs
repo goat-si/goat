@@ -62,6 +62,10 @@ describe.skipIf(platform !== "darwin")("injected production MCP window-settle se
       "reports unavailable at startup or outstanding-read deadline and never reuses a stale baseline",
     ],
     [
+      "attribution",
+      "holds the final reply until a received notification resolves, then settles or reads again",
+    ],
+    [
       "deadline-recovery",
       "privately drains expired reads before allowing metadata and forced full same-target recovery",
     ],

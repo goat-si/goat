@@ -5,7 +5,9 @@ import Foundation
 
 enum SettleWatchEvent {
   case ready([String])
+  case received
   case changed
+  case ignored
   case destroyed
   case unsupported(String)
 }
@@ -304,6 +306,9 @@ final class WindowAXWatch: SettleWatch {
       return
     }
     guard Self.required.contains(notification) else { return refuse("notification_unknown") }
+    // Fence settlement before the blocking privacy and ancestry queries below; every
+    // non-terminal path resolves this receipt as changed or ignored.
+    deliver(.received)
     guard privacyIsKnownSafe(app) else { if isActive { refuse("private_or_unknown_focus") }; return }
     var node = element
     var seen: [WindowAXElement] = []
@@ -321,7 +326,7 @@ final class WindowAXWatch: SettleWatch {
         guard isAdmitted else { return }
         guard let id = api.windowID(node) else { return refuse("event_window_unknown") }
         if id == windowID { return refuse("event_target_identity_changed") }
-        return
+        return deliver(.ignored)
       }
       guard isAdmitted else { return }
       guard case .element(let parent) = api.attribute(node, "AXParent") else {

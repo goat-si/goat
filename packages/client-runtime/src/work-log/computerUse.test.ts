@@ -37,6 +37,15 @@ describe("computerUseRun", () => {
         observes: true,
       },
     );
+    // A settled wait returns its fresh final sample's screenshot, like a window look.
+    expect(
+      computerUseRun(call("cua-driver.wait_for_window_settle", { pid: 501, window_id: 7 })),
+    ).toEqual({
+      tool: "wait_for_window_settle",
+      summary: "Wait for a window to settle",
+      target: "Process 501, window 7",
+      observes: true,
+    });
     expect(computerUseRun(call("cua-driver.click", { pid: 501, x: 10, y: 20 }))?.summary).toBe(
       "Click at 10, 20",
     );

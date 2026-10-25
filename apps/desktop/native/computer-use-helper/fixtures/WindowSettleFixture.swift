@@ -111,6 +111,7 @@ enum WindowSettleFixture {
     switch name {
     case "freshness": try freshness()
     case "dirty-final": try dirtyFinal()
+    case "attribution": try attribution()
     case "deadline": try deadline()
     case "budget": try budget()
     case "failures": try failures()
@@ -172,6 +173,45 @@ enum WindowSettleFixture {
     try require(result.sampleStartedAt == 420 && result.observedQuietMs == 210,
       "fresh quiet interval was not required")
     try h.assertTerminalIsSilent()
+  }
+
+  private static func attribution() throws {
+    // A received notification is unattributed until the observer resolves it.
+    var held = try Harness()
+    try held.send(.ready(coverage: ["window"]), at: 0)
+    try held.send(.sampled(snapshot("baseline")), at: 10)
+    try held.fireQuiet(at: 200)
+    try held.send(.received, at: 210)
+    try held.send(.sampled(snapshot("held")), at: 220)
+    try require(held.completions.isEmpty, "final sample settled during unresolved attribution")
+    try held.send(.ignored, at: 230)
+    let released = try held.completion("settled")
+    try require(released.sample?.result == Data("held".utf8) && released.sampleCompletedAt == 220,
+      "ignored notification must release the held sample unchanged")
+    try held.assertTerminalIsSilent()
+
+    var dirty = try Harness()
+    try dirty.send(.ready(coverage: ["window"]), at: 0)
+    try dirty.send(.sampled(snapshot("baseline")), at: 10)
+    try dirty.fireQuiet(at: 200)
+    try dirty.send(.received, at: 210)
+    try dirty.send(.sampled(snapshot("dirty")), at: 220)
+    try dirty.send(.changed, at: 230)
+    try require(dirty.completions.isEmpty && dirty.dispatches.count == 2, "held dirty sample escaped")
+    try dirty.fireQuiet(at: 430)
+    try dirty.send(.sampled(snapshot("fresh")), at: 440)
+    let fresh = try dirty.completion("settled")
+    try require(fresh.sample?.result == Data("fresh".utf8), "a resolved change needs a fresh quiet read")
+
+    var waiting = try Harness()
+    try waiting.send(.ready(coverage: ["window"]), at: 0)
+    try waiting.send(.sampled(snapshot("baseline")), at: 10)
+    try waiting.send(.received, at: 150)
+    try waiting.fireQuiet(at: 200)
+    try require(waiting.dispatches.count == 1, "quiet started a final read during unresolved attribution")
+    try waiting.send(.ignored, at: 210)
+    try require(waiting.dispatches.count == 2 && waiting.dispatches[1].final && waiting.dispatches[1].at == 210,
+      "release after quiet starts the final read")
   }
 
   private static func deadline() throws {

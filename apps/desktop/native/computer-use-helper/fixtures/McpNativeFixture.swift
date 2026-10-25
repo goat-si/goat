@@ -3,7 +3,7 @@ import Foundation
 // The production AX adapter is deliberately absent from this executable. Any accidental
 // default-runtime use must fail rather than inspect the host or request TCC permission.
 enum SettleWatchEvent {
-  case ready([String]), changed, destroyed, unsupported(String)
+  case ready([String]), received, changed, ignored, destroyed, unsupported(String)
 }
 protocol SettleWatch: AnyObject {
   func start(_ emit: @escaping (SettleWatchEvent) -> Void)
@@ -261,6 +261,32 @@ private func dirtyFinal() throws {
   try h.expectOutcome("settled", unavailable: false)
   try require(try h.detail()["snapshot_id"] as? String == "clean", "Dirty sample must never escape")
   try require(object(try h.detail()["sample"])["started_after_ms"] as? Int == 450, "Final freshness must use the new quiet interval")
+}
+
+private func attribution() throws {
+  // The observer reports receipt before its blocking attribution queries; the final reply waits.
+  let h = Harness()
+  try h.call(); h.ready(); try h.reply(0, token: "baseline")
+  try h.clock.advance(200)
+  h.watch.send(.received)
+  try h.clock.advance(210); try h.reply(1, token: "held")
+  try require(h.provider.frames.isEmpty, "A final reply cannot settle while a received notification is unattributed")
+  h.watch.send(.ignored)
+  try h.expectOutcome("settled", unavailable: false)
+  try require(try h.detail()["snapshot_id"] as? String == "held", "An ignored notification releases the held final sample")
+  let changed = Harness()
+  try changed.call(); changed.ready(); try changed.reply(0, token: "baseline")
+  try changed.clock.advance(200)
+  changed.watch.send(.received)
+  try changed.clock.advance(210); try changed.reply(1, token: "dirty")
+  changed.watch.send(.changed)
+  try require(changed.provider.frames.isEmpty && changed.driver.frames.count == 2,
+    "A target change resolved after the final reply discards it")
+  try changed.clock.advance(410)
+  try require(changed.driver.frames.count == 3, "The change needs a new quiet interval and read")
+  try changed.clock.advance(420); try changed.reply(2, token: "clean")
+  try changed.expectOutcome("settled", unavailable: false)
+  try require(try changed.detail()["snapshot_id"] as? String == "clean", "The dirty sample never escapes")
 }
 
 private func deadline() throws {
@@ -645,6 +671,7 @@ private struct McpNativeFixture {
       switch name {
       case "fresh": try fresh()
       case "dirty-final": try dirtyFinal()
+      case "attribution": try attribution()
       case "deadline": try deadline()
       case "deadline-recovery": try recovery(cancel: false)
       case "cancel-recovery": try recovery(cancel: true)
