@@ -83,7 +83,17 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   // An approval would not help: the desktop will not start the driver until macOS allows it, or
   // until the Windows helper can use the desktop. A block newer readiness has cleared no longer
   // refuses.
-  const block = yield* cua.value.block;
+  const cached = yield* cua.value.block;
+  // A Windows desktop can recover with nothing reporting it (the person unlocks the screen), so
+  // the desktop's block is checked again with one bounded start before it refuses. Only a person
+  // changes a macOS grant, so that block refuses as it is.
+  const block =
+    cached?.reason === "desktopUnavailable"
+      ? yield* cua.value.acquire.pipe(
+          Effect.timeoutOption("35 seconds"),
+          Effect.andThen(cua.value.block),
+        )
+      : cached;
   if (block !== undefined)
     return {
       kind: "refused",

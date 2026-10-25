@@ -90,8 +90,14 @@ const withRequests = <A, E, R>(
     leases: ComputerUseLeases.ComputerUseLeases["Service"],
   ) => Effect.Effect<void>,
   failure: Option.Option<CuaDriver.CuaDriverError> = Option.none(),
-) =>
-  Effect.gen(function* () {
+  // The failure a fresh start reports; acquire records each start it is asked for.
+  retry: { after: Option.Option<CuaDriver.CuaDriverError>; starts: number } = {
+    after: failure,
+    starts: 0,
+  },
+) => {
+  let current = failure;
+  return Effect.gen(function* () {
     const environmentId = EnvironmentId.make("test-environment");
     const now = yield* DateTime.now;
     const person: AuthClientSession = {
@@ -134,7 +140,12 @@ const withRequests = <A, E, R>(
         leasesDetecting(signals),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
-          block: Effect.succeed(CuaDriver.agentBlock(failure)),
+          block: Effect.sync(() => CuaDriver.agentBlock(current)),
+          acquire: Effect.sync(() => {
+            retry.starts += 1;
+            current = retry.after;
+            return Option.none();
+          }),
         }),
         Layer.mock(Environment.ServerEnvironment)({
           getEnvironmentId: Effect.succeed(EnvironmentId.make("test-environment")),
@@ -146,6 +157,7 @@ const withRequests = <A, E, R>(
     ),
     Effect.provideService(HostProcess.Hostname, "test-host"),
   );
+};
 
 it.effect(
   "work that runs on its own is refused unless the helper reports both safety signals supported",
@@ -178,13 +190,17 @@ it.effect(
           missing: ["screenRecording"],
           holder: "helper",
         } as const;
+        const retry = { after: Option.none<CuaDriver.CuaDriverError>(), starts: 0 };
         const result = yield* withRequests(
           orchestrator,
           supported,
           ({ request }) => request(),
           undefined,
           Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+          retry,
         );
+        // Only a person changes a macOS grant, so asking again does not restart the driver.
+        assert.equal(retry.starts, 0);
         assert.deepEqual(result, {
           kind: "refused",
           reason: "not_granted",
@@ -207,12 +223,17 @@ it.effect(
           detail:
             "The screen is locked or showing a Windows security prompt. Unlock it, then try again.",
         } as const;
+        const locked = Option.some(
+          new CuaDriver.CuaDriverHostError({ operation: "desktop", block }),
+        );
+        const retry = { after: locked, starts: 0 };
         const result = yield* withRequests(
           orchestrator,
           supported,
           ({ request }) => request(),
           undefined,
-          Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+          locked,
+          retry,
         );
         assert.deepEqual(result, {
           kind: "refused",
@@ -221,6 +242,35 @@ it.effect(
           message:
             "Computer use cannot start: The screen is locked or showing a Windows security prompt. Unlock it, then try again.",
         });
+        // Still locked when asked again: one fresh start, and the refusal stands.
+        assert.equal(retry.starts, 1);
+      }),
+    ),
+);
+
+it.effect(
+  "after the person unlocks Windows, asking again in the same turn goes through (#1516)",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "desktopUnavailable",
+          blocker: "screenLocked",
+          detail:
+            "The screen is locked or showing a Windows security prompt. Unlock it, then try again.",
+        } as const;
+        // Nothing reports the unlock; only a fresh start can find the desktop usable again.
+        const retry = { after: Option.none<CuaDriver.CuaDriverError>(), starts: 0 };
+        const result = yield* withRequests(
+          orchestrator,
+          supported,
+          ({ request }) => request(),
+          undefined,
+          Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+          retry,
+        );
+        assert.equal(result.kind, "needs_human");
+        assert.equal(retry.starts, 1);
       }),
     ),
 );
