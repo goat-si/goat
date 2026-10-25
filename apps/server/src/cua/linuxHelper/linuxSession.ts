@@ -201,7 +201,16 @@ export interface ReadinessFacts {
   readonly uinputWritable: boolean;
   /** Why a window capture here would not be the window's own pixels (#1328). */
   readonly captureRefused: string | undefined;
+  /**
+   * Cua Driver could not read this Wayland desktop's screen layout. Its consent scopes listing
+   * windows to that layout, so it refuses to list them for agents (#1610), while readiness's
+   * own reads still answer.
+   */
+  readonly listingRefused: boolean;
 }
+
+const LISTING_REFUSED =
+  "Cua Driver cannot read this Wayland desktop's screen layout, so it does not list windows for agents here. Use an X11 or XWayland session.";
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const { session } = facts;
@@ -223,8 +232,11 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     };
   const reasons: string[] = [];
   const wayland = session.displayServer === "wayland";
-  const tree = facts.driver.atspi ? facts.tree : "unavailable";
-  if (tree === "unavailable")
+  // AT-SPI itself, as readiness read it; the grant says only this.
+  const atspiTree = facts.driver.atspi ? facts.tree : "unavailable";
+  const tree = facts.listingRefused ? "unavailable" : atspiTree;
+  if (facts.listingRefused) reasons.push(LISTING_REFUSED);
+  else if (tree === "unavailable")
     reasons.push(
       facts.driver.atspi && facts.capture === "noWindow"
         ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
@@ -250,17 +262,26 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
       "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
     );
   if (capture === "unavailable")
-    reasons.push(facts.captureRefused ?? "The driver could not capture a window.");
+    reasons.push(
+      // Where the driver will not list windows, app controls do not work either (#1610).
+      facts.listingRefused
+        ? (facts.captureRefused ?? "The driver could not capture a window.").replace(
+            "; app controls still work.",
+            ".",
+          )
+        : (facts.captureRefused ?? "The driver could not capture a window."),
+    );
   const input = wayland ? "foregroundOnly" : facts.uinputWritable ? "background" : "foregroundOnly";
   if (input === "foregroundOnly")
     reasons.push(
-      wayland
-        ? "Wayland cannot send pointer or key input to a window in the background; controls still work through AT-SPI."
-        : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices; controls still work through AT-SPI.",
+      (wayland
+        ? "Wayland cannot send pointer or key input to a window in the background"
+        : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices") +
+        (facts.listingRefused ? "." : "; controls still work through AT-SPI."),
     );
   return {
     grants: {
-      accessibility: tree === "unavailable" ? "unknown" : "granted",
+      accessibility: atspiTree === "unavailable" ? "unknown" : "granted",
       // No consent can make a cropped capture one window's own, so nothing is pending on it.
       screenCapture: !wayland
         ? "granted"
