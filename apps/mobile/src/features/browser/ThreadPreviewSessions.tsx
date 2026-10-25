@@ -341,6 +341,8 @@ function DesktopThumbnail(props: {
       <Image
         source={{ uri: shown }}
         resizeMode="contain"
+        // Android fades every new source in for 300ms by default; at 2fps that is constant repaint.
+        fadeDuration={0}
         style={[{ flex: 1 }, props.stopped && { opacity: 0.5 }]}
       />
     );
