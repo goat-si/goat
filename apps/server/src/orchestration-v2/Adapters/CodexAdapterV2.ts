@@ -98,6 +98,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -6774,27 +6775,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 });
               }
               if (input.context.subagent !== null) {
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
+                for (const node of CodexSubagents.terminalNodes({
+                  subagent: input.context.subagent,
+                  status: input.status,
+                  completedAt: input.completedAt,
+                  root: {
                     id: input.context.providerNodeId,
                     threadId: input.context.projectionThreadId,
-                    runId: null,
-                    parentNodeId: null,
                     rootNodeId: input.context.rootNodeId,
-                    kind: "root_turn",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
                     providerTurnId: input.context.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
                     startedAt: input.context.providerNodeStartedAt,
-                    completedAt: input.completedAt,
                   },
-                });
+                }))
+                  yield* emitProviderEvent({ type: "node.updated", driver: CODEX_PROVIDER, node });
                 yield* emitProviderEvent({
                   type: "provider_thread.updated",
                   driver: CODEX_PROVIDER,
@@ -6802,27 +6795,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     ...input.context.providerThread,
                     status: "idle",
                     updatedAt: input.completedAt,
-                  },
-                });
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.subagent.subagentNodeId,
-                    threadId: input.context.subagent.parentContext.projectionThreadId,
-                    runId: input.context.subagent.parentContext.projectionRunId,
-                    parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
-                    rootNodeId: input.context.subagent.parentContext.rootNodeId,
-                    kind: "subagent",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.subagent.parentContext.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.subagent.startedAt,
-                    completedAt: input.completedAt,
                   },
                 });
                 yield* emitSubagentTaskUpdate({
@@ -8279,12 +8251,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             (effect, requestedInput) =>
               effect.pipe(
                 // Then the thread's subagents that never started a turn end too (#1636, #1645).
-                Effect.andThen(
+                Effect.onExit((exit) =>
                   CodexSubagents.endStopped(
                     subagentThreads,
                     activeTurns,
                     requestedInput.providerThread.id,
                     (subagent) => emitSubagentTaskUpdate({ subagent, status: "interrupted" }),
+                    (node) =>
+                      emitProviderEvent({ type: "node.updated", driver: CODEX_PROVIDER, node }),
+                    Exit.isSuccess(exit) ? undefined : stoppedNativeTurns,
                   ),
                 ),
                 Effect.mapError(

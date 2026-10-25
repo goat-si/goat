@@ -128,17 +128,23 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   });
   const terminals = yield* Queue.unbounded<void>();
   const goalTokens = yield* Queue.unbounded<number>();
+  const subagentUpdates = yield* Queue.unbounded<string>();
   // Every status a subagent task was given, in order.
   const subagentStatuses: Array<string> = [];
+  const nodes: Array<M.OrchestrationV2ExecutionNode> = [];
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
         : event.type === "subagent.updated"
-          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
-          : event.type === "provider_thread.updated" && event.providerThread.goal
-            ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-            : Effect.void,
+          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status)).pipe(
+              Effect.andThen(Queue.offer(subagentUpdates, event.subagent.status)),
+            )
+          : event.type === "node.updated"
+            ? Effect.sync(() => void nodes.push(event.node))
+            : event.type === "provider_thread.updated" && event.providerThread.goal
+              ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+              : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -166,6 +172,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
     subagentStatuses,
+    subagentStatus: Queue.take(subagentUpdates),
+    nodes,
     runtime,
     providerThread,
   };

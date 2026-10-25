@@ -7,7 +7,12 @@
  *
  * @module codexSubagents
  */
-import type { OrchestrationV2Subagent } from "@goat/contracts";
+import type {
+  OrchestrationV2ExecutionNode,
+  OrchestrationV2ProviderThread,
+  OrchestrationV2Subagent,
+} from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -59,6 +64,69 @@ interface Stoppable<T> {
   workStopped?: boolean;
 }
 
+interface NodeOwner {
+  readonly parentContext: {
+    readonly projectionThreadId: OrchestrationV2ExecutionNode["threadId"];
+    readonly projectionRunId: OrchestrationV2ExecutionNode["runId"];
+    readonly itemParentNodeId: OrchestrationV2ExecutionNode["id"];
+    readonly rootNodeId: OrchestrationV2ExecutionNode["id"];
+    readonly providerTurnId: OrchestrationV2ExecutionNode["providerTurnId"];
+  };
+  readonly providerThread: OrchestrationV2ProviderThread;
+  readonly subagentNodeId: OrchestrationV2ExecutionNode["id"];
+  readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
+  readonly childThreadId: OrchestrationV2ExecutionNode["threadId"];
+  readonly startedAt: DateTime.Utc;
+  readonly task: OrchestrationV2Subagent;
+}
+
+/** A child's current root and its parent's subagent node share the same terminal outcome. */
+export function terminalNodes(input: {
+  readonly subagent: NodeOwner;
+  readonly status: OrchestrationV2ExecutionNode["status"];
+  readonly completedAt: DateTime.Utc;
+  readonly root?: Pick<
+    OrchestrationV2ExecutionNode,
+    "id" | "threadId" | "rootNodeId" | "providerTurnId" | "startedAt"
+  >;
+}): ReadonlyArray<OrchestrationV2ExecutionNode> {
+  const { subagent, status, completedAt } = input;
+  const shared = {
+    status,
+    countsForRun: false,
+    providerThreadId: subagent.providerThread.id,
+    nativeItemRef: subagent.task.nativeTaskRef,
+    runtimeRequestId: null,
+    checkpointScopeId: null,
+    completedAt,
+  };
+  return [
+    {
+      ...shared,
+      id: subagent.childRootNodeId,
+      threadId: subagent.childThreadId,
+      runId: null,
+      parentNodeId: null,
+      rootNodeId: subagent.childRootNodeId,
+      kind: "root_turn",
+      providerTurnId: null,
+      startedAt: subagent.startedAt,
+      ...input.root,
+    },
+    {
+      ...shared,
+      id: subagent.subagentNodeId,
+      threadId: subagent.parentContext.projectionThreadId,
+      runId: subagent.parentContext.projectionRunId,
+      parentNodeId: subagent.parentContext.itemParentNodeId,
+      rootNodeId: subagent.parentContext.rootNodeId,
+      kind: "subagent",
+      providerTurnId: subagent.parentContext.providerTurnId,
+      startedAt: subagent.startedAt,
+    },
+  ];
+}
+
 const stopped = <T extends TurnLike, S extends Stoppable<T>>(
   subagents: ReadonlyMap<string, S>,
   stops: (turn: T) => boolean,
@@ -78,17 +146,30 @@ const stopped = <T extends TurnLike, S extends Stoppable<T>>(
  */
 export const endStopped = Effect.fn("CodexAdapterV2.endStoppedSubagents")(function* <
   T extends TurnLike,
-  S extends Stoppable<T>,
+  S extends Stoppable<T> & NodeOwner,
   A,
 >(
   subagents: Ref.Ref<Map<string, S>>,
   activeTurns: Ref.Ref<Map<string, A>>,
   providerThreadId: string,
   end: (subagent: S) => Effect.Effect<void>,
+  emitNode: (node: OrchestrationV2ExecutionNode) => Effect.Effect<void>,
+  stoppedTurns?: ReadonlySet<string>,
 ) {
-  const owned = (turn: T) => turn.subagent === null && turn.providerThread.id === providerThreadId;
-  for (const subagent of stopped(yield* Ref.get(subagents), owned, yield* Ref.get(activeTurns)))
+  // On error, only terminalized turns with recorded Stop intent can own a sweep.
+  const owned = (turn: T) =>
+    turn.subagent === null &&
+    turn.providerThread.id === providerThreadId &&
+    (stoppedTurns === undefined || stoppedTurns.has(turn.nativeTurnId));
+  for (const subagent of stopped(yield* Ref.get(subagents), owned, yield* Ref.get(activeTurns))) {
     yield* end(subagent);
+    for (const node of terminalNodes({
+      subagent,
+      status: "interrupted",
+      completedAt: subagent.task.completedAt ?? (yield* DateTime.now),
+    }))
+      yield* emitNode(node);
+  }
 });
 
 /** The native turn ids from this turn up through every parent turn it runs under. */

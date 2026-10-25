@@ -58,7 +58,7 @@ describe("Codex native subagents as their thread's background work", () => {
   );
 
   it.effect(
-    "Stop ends a subagent that registered before its first turn started, so it stops counting as work (#1636)",
+    "Stop ends an initializing subagent's task and both execution nodes (#1636, #1654)",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -129,6 +129,136 @@ describe("Codex native subagents as their thread's background work", () => {
             yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
           );
           assert.isFalse(yield* replay.runtime.hasPendingBackgroundWork!);
+          const spawnId = `spawn-${root}-agent:${root}-agent`;
+          for (const nativeItemId of [spawnId, `${spawnId}:thread-root`]) {
+            const id = allocator.derive.nodeFromProviderItem({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeItemId,
+            });
+            const updates = replay.nodes.filter((node) => node.id === id);
+            assert.equal(updates[0]?.status, "running");
+            assert.equal(updates.at(-1)?.status, "interrupted");
+            assert.isNotNull(updates.at(-1)?.completedAt);
+          }
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("Stop still sweeps when its interrupt errors after the root terminalized (#1654)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "stop-late-interrupt-error";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, root + "-agent");
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "turn/interrupt",
+              params: { threadId: root, turnId: "turn-1" },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: root,
+                turn: makeCodexReplayTurn({ id: "turn-1", status: "interrupted" }),
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: { id: 4, error: { code: -32600, message: "turn is not active" } },
+          },
+        );
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        const error = yield* replay.runtime
+          .interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-1",
+            }),
+            requestRuntimeRestart: true,
+          })
+          .pipe(Effect.flip);
+        yield* replay.terminal;
+        assert.equal(error._tag, "ProviderAdapterInterruptError");
+        assert.isFalse(
+          yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "a rejected interrupt with no Stop intent leaves the running root's child alone (#1654)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "stop-unrelated-interrupt-error";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, root + "-agent");
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: { threadId: root, turnId: "turn-1" },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 4, result: {} } },
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: root,
+                  turn: makeCodexReplayTurn({ id: "turn-1", status: "interrupted" }),
+                },
+              },
+            },
+          );
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          assert.equal(yield* replay.subagentStatus, "running");
+          const allocator = yield* IdAllocator.IdAllocatorV2;
+          const turnId = (nativeTurnId: string) =>
+            allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId,
+            });
+          const error = yield* replay.runtime
+            .interruptTurn({
+              providerThread: replay.providerThread,
+              providerTurnId: turnId("absent"),
+            })
+            .pipe(Effect.flip);
+          assert.equal(error._tag, "ProviderAdapterInterruptError");
+          assert.isTrue(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+          );
+          // This must still send the root's interrupt: the rejected call did not terminalize it.
+          yield* replay.runtime.interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: turnId("turn-1"),
+            requestRuntimeRestart: true,
+          });
+          yield* replay.terminal;
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
