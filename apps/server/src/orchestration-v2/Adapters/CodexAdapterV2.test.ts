@@ -71,6 +71,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import {
   makeCodexReplayTurn,
   codexReplayPreamble,
+  codexTurnReportedIdle,
   makeCodexReplayTranscript,
 } from "./CodexReplay.testkit.ts";
 
@@ -2209,18 +2210,37 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           entries.push(
             {
               type: "expect_outbound",
-              frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+              frame: { id, method: "thread/goal/get", params: { threadId: nativeThreadId } },
             },
-            { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
+            { type: "emit_inbound", frame: { id, result: { goal: null } } },
+            // A new limit, like any change but a driver, waits for background terminals (#1569).
             {
               type: "expect_outbound",
               frame: {
                 id: id + 1,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: nativeThreadId },
+              },
+            },
+            { type: "emit_inbound", frame: { id: id + 1, result: { data: [], nextCursor: null } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: id + 2,
+                method: "thread/unsubscribe",
+                params: { threadId: nativeThreadId },
+              },
+            },
+            { type: "emit_inbound", frame: { id: id + 2, result: { status: "unsubscribed" } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: id + 3,
                 method: "thread/resume",
                 params: { threadId: nativeThreadId, excludeTurns: true, ...threadParams(limits) },
               },
             },
-            withReplayRequestId(threadResult, id + 1),
+            withReplayRequestId(threadResult, id + 3),
           );
         const turn = (id: number, ordinal: number) =>
           Effect.gen(function* () {
@@ -2243,6 +2263,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                   },
                 },
               },
+              ...codexTurnReportedIdle(nativeThreadId, `turn-${ordinal}`),
               {
                 type: "emit_inbound",
                 frame: {
@@ -2257,14 +2278,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           });
         // Turn 1 runs on the limit thread/start applied.
         yield* turn(3, 1);
-        // Turn 2: the profile dropped to no lanes, so the idle thread is rebuilt first.
+        // Turn 2: the profile dropped to no lanes, so the quiet thread is rebuilt first.
         reload(4, none);
-        yield* turn(6, 2);
+        yield* turn(8, 2);
         // Turn 3: unchanged limit, no reload.
-        yield* turn(7, 3);
+        yield* turn(9, 3);
         // Turn 4: goatclaw turned off; the thread returns to Codex's own limits.
-        reload(8, {});
-        yield* turn(10, 4);
+        reload(10, {});
+        yield* turn(14, 4);
         const terminals = yield* Queue.unbounded<void>();
         const harness = yield* makeCodexReplayHarness(
           makeCodexReplayTranscript({ scenario: "subagent-limits", entries }),
@@ -6317,90 +6338,99 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  const grandchildThread = "native-codex-resume-grandchild-thread";
+  const grandchildTurn = "native-codex-resume-grandchild-turn";
+  // The root finishes while its child and the child's own subagent still run. The descendants then
+  // finish 30 seconds apart, the grandchild first unless childFirst.
+  const lateGrandchildTranscript = (childFirst = false) => {
+    const { spawned, rootFinished } = lateChildPrefix();
+    const grandchildDone: CodexReplay.CodexAppServerReplayEntry[] = [
+      {
+        type: "emit_inbound",
+        label: "item/completed/grandchild-answer",
+        afterMs: 30_000,
+        frame: {
+          method: "item/completed",
+          params: {
+            item: {
+              type: "agentMessage",
+              id: "grandchild-answer",
+              text: "GRANDCHILD_DONE",
+              phase: "final_answer",
+              memoryCitation: null,
+            },
+            threadId: grandchildThread,
+            turnId: grandchildTurn,
+            completedAtMs: 1782622470000,
+          },
+        },
+      },
+      {
+        type: "emit_inbound",
+        label: "turn/completed/grandchild",
+        frame: {
+          method: "turn/completed",
+          params: {
+            threadId: grandchildThread,
+            turn: makeCodexReplayTurn({ id: grandchildTurn, status: "completed" }),
+          },
+        },
+      },
+    ];
+    const childDone = [
+      childAgentMessage({
+        id: "child-late-answer",
+        text: "LATE_CHILD_DONE",
+        turnId: RESUME_CHILD_TURN_1,
+        completedAtMs: 1782622500000,
+        afterMs: 30_000,
+      }),
+      childTurnCompleted(RESUME_CHILD_TURN_1),
+    ];
+    return makeCodexReplayTranscript({
+      scenario: RESUME_SCENARIO,
+      entries: [
+        ...spawned,
+        {
+          type: "emit_inbound",
+          label: "item/completed/grandchild-spawn",
+          frame: {
+            method: "item/completed",
+            params: {
+              item: {
+                type: "subAgentActivity",
+                id: "call-codex-grandchild-spawn",
+                kind: "started",
+                agentThreadId: grandchildThread,
+                agentPath: "/root/resume_agent/grandchild",
+              },
+              threadId: RESUME_CHILD_THREAD,
+              turnId: RESUME_CHILD_TURN_1,
+              completedAtMs: 1782622441500,
+            },
+          },
+        },
+        {
+          type: "emit_inbound",
+          label: "turn/started/grandchild",
+          frame: {
+            method: "turn/started",
+            params: {
+              threadId: grandchildThread,
+              turn: makeCodexReplayTurn({ id: grandchildTurn, status: "inProgress" }),
+            },
+          },
+        },
+        ...rootFinished,
+        ...(childFirst ? [...childDone, ...grandchildDone] : [...grandchildDone, ...childDone]),
+      ],
+    });
+  };
+
   it.effect("wakes the root only when its direct child finishes, not a grandchild", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const grandchildThread = "native-codex-resume-grandchild-thread";
-        const grandchildTurn = "native-codex-resume-grandchild-turn";
-        const { spawned, rootFinished } = lateChildPrefix();
-        const harness = yield* makeCodexReplayHarness(
-          makeCodexReplayTranscript({
-            scenario: RESUME_SCENARIO,
-            entries: [
-              ...spawned,
-              {
-                type: "emit_inbound",
-                label: "item/completed/grandchild-spawn",
-                frame: {
-                  method: "item/completed",
-                  params: {
-                    item: {
-                      type: "subAgentActivity",
-                      id: "call-codex-grandchild-spawn",
-                      kind: "started",
-                      agentThreadId: grandchildThread,
-                      agentPath: "/root/resume_agent/grandchild",
-                    },
-                    threadId: RESUME_CHILD_THREAD,
-                    turnId: RESUME_CHILD_TURN_1,
-                    completedAtMs: 1782622441500,
-                  },
-                },
-              },
-              {
-                type: "emit_inbound",
-                label: "turn/started/grandchild",
-                frame: {
-                  method: "turn/started",
-                  params: {
-                    threadId: grandchildThread,
-                    turn: makeCodexReplayTurn({ id: grandchildTurn, status: "inProgress" }),
-                  },
-                },
-              },
-              ...rootFinished,
-              {
-                type: "emit_inbound",
-                label: "item/completed/grandchild-answer",
-                afterMs: 30_000,
-                frame: {
-                  method: "item/completed",
-                  params: {
-                    item: {
-                      type: "agentMessage",
-                      id: "grandchild-answer",
-                      text: "GRANDCHILD_DONE",
-                      phase: "final_answer",
-                      memoryCitation: null,
-                    },
-                    threadId: grandchildThread,
-                    turnId: grandchildTurn,
-                    completedAtMs: 1782622470000,
-                  },
-                },
-              },
-              {
-                type: "emit_inbound",
-                label: "turn/completed/grandchild",
-                frame: {
-                  method: "turn/completed",
-                  params: {
-                    threadId: grandchildThread,
-                    turn: makeCodexReplayTurn({ id: grandchildTurn, status: "completed" }),
-                  },
-                },
-              },
-              childAgentMessage({
-                id: "child-late-answer",
-                text: "CHILD_AFTER_GRANDCHILD",
-                turnId: RESUME_CHILD_TURN_1,
-                completedAtMs: 1782622500000,
-                afterMs: 30_000,
-              }),
-              childTurnCompleted(RESUME_CHILD_TURN_1),
-            ],
-          }),
-        );
+        const harness = yield* makeCodexReplayHarness(lateGrandchildTranscript());
 
         yield* harness.runtime.startTurn(
           makeCodexTestTurnInput({
@@ -6427,9 +6457,60 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           "replay condition",
         );
         assert.lengthOf(harness.continuationRequests, 1);
-        assert.include(harness.continuationRequests[0]?.detail, "CHILD_AFTER_GRANDCHILD");
+        assert.include(harness.continuationRequests[0]?.detail, "LATE_CHILD_DONE");
       }).pipe(Effect.provide(layerAdapterTest)),
     ),
+  );
+
+  it.effect.each([false, true])(
+    "keeps a completed root's thread pending while any descendant still runs (#1571, child first: %s)",
+    (childFirst) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeCodexReplayHarness(lateGrandchildTranscript(childFirst));
+          const pendingFor = (id = harness.providerThread.id) =>
+            harness.runtime.hasPendingBackgroundWorkForThread!({ ...harness.providerThread, id });
+          // The child is a parent too: its thread stays pending while the grandchild runs.
+          const childThread = (yield* IdAllocator.IdAllocatorV2).derive.providerThread({
+            driver: harness.providerThread.driver,
+            nativeThreadId: RESUME_CHILD_THREAD,
+          });
+          const finished = () =>
+            new Set(
+              harness
+                .subagentUpdates()
+                .filter((event) => event.subagent.status === "completed")
+                .map((event) => event.subagent.id),
+            ).size;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make("attempt-codex-pending-descendants"),
+              text: RESUME_PROMPT,
+            }),
+          );
+          yield* harness.awaitUntil(() => harness.terminalEvents().length >= 1, "root terminal");
+          // The root turn kept no work of its own, so only its running descendants hold it.
+          assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          assert.isTrue(yield* pendingFor());
+          assert.isTrue(yield* pendingFor(childThread));
+          assert.isFalse(yield* pendingFor(ProviderThreadId.make("unrelated-provider-thread")));
+
+          yield* TestClock.adjust("30 seconds");
+          yield* harness.awaitUntil(() => finished() === 1, "first descendant finished");
+          assert.isTrue(yield* harness.hasPendingBackgroundWork);
+          assert.isTrue(yield* pendingFor());
+          assert.isTrue(yield* pendingFor(childThread));
+
+          yield* TestClock.adjust("30 seconds");
+          yield* harness.awaitUntil(() => finished() === 2, "both descendants finished");
+          assert.isFalse(yield* harness.hasPendingBackgroundWork);
+          assert.isFalse(yield* pendingFor());
+          assert.isFalse(yield* pendingFor(childThread));
+        }).pipe(Effect.provide(layerAdapterTest)),
+      ),
   );
 
   it.effect("leaves a late child's result to the root's next turn when one is running", () =>
