@@ -11,8 +11,33 @@ export interface CaptureLockHolder {
 const notDrawnInTime = () =>
   new ServerBrowserOperationError(
     "PreviewAutomationTimeoutError",
-    "The browser did not draw the page for a capture in time. Take another snapshot in a moment.",
+    "The browser did not draw the page for a capture in time. Try again in a moment.",
   );
+
+/**
+ * Answers the caller by its deadline while the work itself goes on; onExpire runs when the
+ * deadline wins.
+ */
+export const answerBy = <A>(
+  work: Promise<A>,
+  deadlineMs: number,
+  onExpire: () => void = constVoid,
+): Promise<A> => {
+  if (deadlineMs === Number.POSITIVE_INFINITY) return work;
+  return new Promise<A>((resolve, reject) => {
+    const timer = setTimeout(
+      () => {
+        onExpire();
+        reject(notDrawnInTime());
+      },
+      Math.max(0, deadlineMs - performance.now()),
+    );
+    work.then(
+      (value) => (clearTimeout(timer), resolve(value)),
+      (cause: unknown) => (clearTimeout(timer), reject(cause)),
+    );
+  });
+};
 
 /**
  * One capture at a time per tab. The lock follows the capture itself, which CDP cannot cancel,
@@ -34,18 +59,13 @@ export const withCaptureLock = <A>(
     return operation();
   });
   tab.captureLock = run.then(constVoid, constVoid);
-  if (deadlineMs === Number.POSITIVE_INFINITY) return run;
-  return new Promise<A>((resolve, reject) => {
-    const timer = setTimeout(
-      () => {
-        expired = true;
-        reject(notDrawnInTime());
-      },
-      Math.max(0, deadlineMs - performance.now()),
-    );
-    run.then(
-      (value) => (clearTimeout(timer), resolve(value)),
-      (cause: unknown) => (clearTimeout(timer), reject(cause)),
-    );
+  return answerBy(run, deadlineMs, () => {
+    expired = true;
   });
 };
+
+/** withCaptureLock with its deadline first, for callers whose operation is a long block. */
+export const captureLockBy =
+  (deadlineMs = Number.POSITIVE_INFINITY) =>
+  <A>(tab: CaptureLockHolder, operation: () => Promise<A>): Promise<A> =>
+    withCaptureLock(tab, operation, deadlineMs);

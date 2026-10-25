@@ -230,3 +230,37 @@ it.live("a snapshot that gave up keeps its capture's place until Chromium answer
     }),
   ).pipe(Effect.provide(layer)),
 );
+it.live(
+  "a recording start behind a capture Chromium never answers answers on its own deadline",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* Broker.PreviewAutomationBroker;
+        yield* Effect.yieldNow;
+        const opened = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+        const tabId = PreviewTabId.make(opened.tabId!);
+        const cdp = contexts.at(-1)!.sessions[0]!;
+        const answer = cdp.send.getMockImplementation()!;
+        const drawn = Promise.withResolvers<Record<string, unknown>>();
+        yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+        cdp.send.mockImplementation((method, input) =>
+          method === "Page.captureScreenshot" ? drawn.promise : answer(method, input),
+        );
+        yield* broker
+          .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+          .pipe(Effect.flip);
+        const started = yield* broker
+          .invoke<void>({ scope, tabId, operation: "recordingStart", input: {}, timeoutMs: 200 })
+          .pipe(Effect.flip);
+        // Answered by the server browser, not cut off by the broker with every other agent's tabs.
+        expect(started).toMatchObject({ remoteTag: "PreviewAutomationTimeoutError" });
+        expect(
+          yield* broker.invoke({ scope, tabId, operation: "evaluate", input: { expression: "1" } }),
+        ).toBe("evaluated");
+      }),
+    ).pipe(Effect.provide(layer)),
+);
