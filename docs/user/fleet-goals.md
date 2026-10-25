@@ -14,7 +14,14 @@ stops every goal on the next check without touching running threads.
 
 An agent running inside a GOAT thread declares a goal with `goat_call {path:"goal.apply"}`. The goal then acts as
 that thread: workers never get more access than the thread had when it declared the goal, and later
-updates can only lower that. Workers run on this machine for now.
+updates can only lower that.
+
+Workers run on this machine unless the goal names SSH hosts in `workers.hostSelector.hosts` or puts
+its project on another host (`spec.project.host`). Workers on another host need an owner with full
+access and the project's folder there: `spec.project.cwd`, or a `projectId` on that host. A worker
+on another host whose run fails, or whose host stays unreachable, moves to another host the goal
+allows; until GOAT can tell whether a move started, its slot waits instead of starting a second
+worker. Draining a host does not move goal workers yet.
 
 An agent outside GOAT can declare a goal too, with its MCP sign-in or a
 [client token](outside-agents.md#long-running-orchestrators) approved for more than read-only

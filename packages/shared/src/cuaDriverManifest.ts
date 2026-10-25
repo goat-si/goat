@@ -8,6 +8,11 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Electron main and the standalone server both call this outside an Effect runtime.
 import * as NodeChildProcess from "node:child_process";
 
+import {
+  CUA_DRIVER_PROBED_SESSION_NAMES,
+  cuaDriverListingEnvironment,
+} from "./cuaDriverRelease.ts";
+
 /** Observation, input, batching and session tools agents need for ordinary desktop work. */
 export const CUA_DRIVER_ALLOWED_TOOLS = [
   "check_permissions",
@@ -332,6 +337,8 @@ export function listCuaDriverApplications(input: {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
+  /** Ends the listing and its driver when the asker no longer waits for it. */
+  readonly signal?: AbortSignal;
 }): Promise<ReadonlyArray<CuaDriverListedApp>> {
   return new Promise((resolve, reject) => {
     const child = NodeChildProcess.spawn(
@@ -341,10 +348,13 @@ export function listCuaDriverApplications(input: {
     );
     let settled = false;
     let buffer = "";
+    const onAbort = () => finish(new Error("Cua Driver listing was cancelled."));
     const finish = (error: Error | undefined, apps?: ReadonlyArray<CuaDriverListedApp>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // A caller may reuse one signal for many listings; each listing removes its own handler.
+      input.signal?.removeEventListener("abort", onAbort);
       child.stdin.end();
       child.kill();
       if (error) reject(error);
@@ -357,6 +367,11 @@ export function listCuaDriverApplications(input: {
     );
     const send = (message: object) => child.stdin.write(JSON.stringify(message) + "\n");
     child.on("error", (error) => finish(error));
+    // A driver that exits before reading leaves the pipe closed: that write fails here, not
+    // as an uncaught error in the process that asked for the listing.
+    child.stdin.on("error", (error) => finish(error));
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("exit", (code) =>
       finish(new Error("Cua Driver exited while listing apps (" + code + ").")),
     );
@@ -431,30 +446,73 @@ export async function writeCuaDriverCapabilityManifest(
 }
 
 /** Lists the driver's apps, admits them as above, and writes the agents' manifest. */
-export async function prepareCuaDriverCapabilityManifest(input: {
+interface CuaDriverListingInput {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
   readonly hostBundleIds: ReadonlyArray<string>;
-  readonly path: string;
   /** Lists apps through a helper that verifies the driver first, instead of running it here. */
   readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
-}): Promise<string> {
+  readonly signal?: AbortSignal;
+}
+
+/** The driver's apps with the identities GOAT judges them by, and the host's own to exclude. */
+async function listForHost(input: CuaDriverListingInput) {
   const listed = await (input.listApplications?.() ?? listCuaDriverApplications(input));
   const linux = input.platform === "linux";
   const apps = linux ? await withLinuxExecutables(listed) : listed;
   const { realpath } = await import("node:fs/promises");
   // GOAT's own runtime (node or Electron) is never granted by its executable.
   const self = linux ? await realpath(process.execPath).catch(() => process.execPath) : undefined;
+  return { apps, host: self === undefined ? input.hostBundleIds : [...input.hostBundleIds, self] };
+}
+
+export async function prepareCuaDriverCapabilityManifest(
+  input: CuaDriverListingInput & { readonly path: string },
+): Promise<string> {
+  const { apps, host } = await listForHost(input);
   return writeCuaDriverCapabilityManifest(
     input.path,
-    cuaDriverCapabilityManifest({
-      applications: admittedCuaApplications(
-        apps,
-        self === undefined ? input.hostBundleIds : [...input.hostBundleIds, self],
-      ),
-    }),
+    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, host) }),
   );
+}
+
+/**
+ * The app names an approval request may use on a host whose server runs the driver itself
+ * (#1561): the same listing and identities the manifest is built from, read when asked.
+ */
+export async function listCuaRequestableApplications(
+  input: CuaDriverListingInput,
+): Promise<ReadonlyArray<string>> {
+  const { apps, host } = await listForHost(input);
+  // On Linux the manifest grants only a desktop entry or an attested executable, and never this
+  // process, so a name with neither, or GOAT's own, is not an app a request can be granted.
+  const grantable =
+    input.platform === "linux"
+      ? apps.filter(
+          (app) =>
+            app.pid !== process.pid && Boolean(app.bundle_id?.trim() || app.executable?.trim()),
+        )
+      : apps;
+  return cuaRequestableApps(grantable, host);
+}
+
+/**
+ * The environment a request-time listing runs in: the listing allowlist, then the probed
+ * display. On Linux a session variable the probe left out is passed empty, as the daemon gets
+ * it, so a listing never reaches a session the probe found unusable.
+ */
+export function cuaDriverSessionListingEnvironment(
+  base: Readonly<Record<string, string | undefined>>,
+  display: ReadonlyArray<{ readonly name: string; readonly value: string }>,
+  platform: NodeJS.Platform,
+): Record<string, string> {
+  const environment = cuaDriverListingEnvironment(base);
+  for (const { name, value } of display) environment[name] = value;
+  if (platform === "linux")
+    for (const name of CUA_DRIVER_PROBED_SESSION_NAMES)
+      if (!display.some((variable) => variable.name === name)) environment[name] = "";
+  return environment;
 }
 
 /** What the desktop's macOS grant check calls on GOAT's own window, and nothing else. */

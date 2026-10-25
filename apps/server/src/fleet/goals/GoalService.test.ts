@@ -205,19 +205,16 @@ describe("GoalService", () => {
             ),
           ),
         ),
-      ).toBe("invalid_request");
-      // Workers on other machines are refused for everyone until remote authority lands.
-      expect(
-        yield* codeOf(
-          apply(
-            "thread:owner",
-            input(
-              {},
-              { workers: { ...testSpec().workers, hostSelector: { hosts: [null, "mac-studio"] } } },
-            ),
-          ),
+      ).toBe("capability_denied");
+      // Workers on other hosts need what goat_ssh_thread_launch needs: a full-access owner.
+      const far = yield* apply(
+        "thread:owner",
+        input(
+          {},
+          { workers: { ...testSpec().workers, hostSelector: { hosts: [null, "mac-studio"] } } },
         ),
-      ).toBe("invalid_request");
+      );
+      expect(far.goal.owner.runtimeModeCeiling).toBe("full-access");
       const careful = yield* apply("thread:careful", input());
       expect(careful.goal.owner.runtimeModeCeiling).toBe("auto-accept-edits");
       // Another thread may not rewrite the spec, even with full access.

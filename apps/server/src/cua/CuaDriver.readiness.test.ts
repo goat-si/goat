@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import type { CuaDisplayProbe } from "./CuaDisplayCapability.ts";
@@ -258,6 +259,45 @@ it.effect(
       yield* Ref.set(probe, { capability: "available", reason: "Uses :7.", environment: [] });
       yield* service.acquire.pipe(Effect.forkScoped({ startImmediately: true }));
       expect(yield* before.wanted).toBe(false);
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.scoped,
+    ),
+);
+
+it.effect(
+  "a standalone server lists requestable apps when asked, on the screen a start would use, only while on (#1561)",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const probe = yield* Ref.make<CuaDisplayProbe>({
+        capability: "available",
+        reason: "Uses :7.",
+        environment: [{ name: "DISPLAY", value: ":7" }],
+      });
+      const asked: Array<ReadonlyArray<{ readonly name: string; readonly value: string }>> = [];
+      const service = yield* CuaDriver.make(
+        () => Effect.die("listing never starts the driver"),
+        Ref.get(probe),
+        {
+          requestListing: (display) =>
+            Effect.sync(() => {
+              asked.push(display);
+              return Option.some(["python3", "org.gnome.Calculator"]);
+            }),
+        },
+      );
+      expect(yield* service.listedApps).toEqual(Option.none());
+      expect(asked).toEqual([]);
+      yield* settings.updateSettings({ enableCua: true });
+      expect(yield* service.listedApps).toEqual(Option.some(["python3", "org.gnome.Calculator"]));
+      expect(asked).toEqual([[{ name: "DISPLAY", value: ":7" }]]);
+      // No usable screen: nothing is listed, so the request is judged as with no listing.
+      yield* Ref.set(probe, { capability: "unavailable", reason: "No display.", environment: [] });
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* service.listedApps).toEqual(Option.none());
     }).pipe(
       Effect.provide(ServerSettings.layerTest()),
       Effect.provideService(HostProcess.Platform, "linux"),

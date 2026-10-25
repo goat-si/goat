@@ -30,3 +30,25 @@ export const remoteToolName = (tool: string, serverVersion: string | undefined):
  */
 export const advertisesMemoryTools = (tools: ReadonlyArray<{ readonly name: string }>) =>
   tools.some((tool) => resolveAgentSurfaceEntry(tool.name)?.resource === "memory");
+
+/** Refusals a destination's goat_thread_launch returns before it creates anything. */
+const REFUSED_BEFORE_CREATE = new Set([
+  "invalid_request",
+  "capability_denied",
+  "runtime_mode_escalation_denied",
+  "interaction_mode_escalation_denied",
+  "target_required",
+]);
+
+/**
+ * What a tool's refusal tells the caller. A goat_thread_launch error may come after the thread
+ * was created (its projection reads and bookkeeping run after the create commits), so only a
+ * refusal it raises before creating anything says the launch never started.
+ */
+export const toolRefusal = (tool: string, result: { readonly code?: string | undefined }) => ({
+  ...(result.code === undefined ? {} : { remoteCode: result.code }),
+  ...(tool === "goat_thread_launch" &&
+  (result.code === undefined || !REFUSED_BEFORE_CREATE.has(result.code))
+    ? { launchMayHaveStarted: true }
+    : {}),
+});

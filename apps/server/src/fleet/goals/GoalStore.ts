@@ -617,6 +617,13 @@ const make = Effect.gen(function* () {
             if (request.kind !== "interrupt") {
               if (row.deletion_requested_at !== null) return "deleting" as const;
               if (row.paused === 1) return "paused" as const;
+              // An action already taken spends nothing more, so asking about it again is never
+              // refused by the budget; only one never sent may be taken again, as new work.
+              const [taken] = yield* sql<{ readonly outcome: string | null }>`
+                SELECT outcome FROM fleet_goal_actions WHERE action_id = ${request.actionId}
+              `;
+              if (taken !== undefined && taken.outcome !== NOT_SENT)
+                return "already_claimed" as const;
               const spec = yield* decodeSpecJson(row.spec_json);
               const [spent] = yield* sql<{ readonly turns: number }>`
                 SELECT COUNT(*) AS turns FROM fleet_goal_actions

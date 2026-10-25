@@ -208,7 +208,8 @@ describe("SSH dispatch tool compatibility", () => {
         expect(calls).toEqual(["goat_project_list"]);
         expect(projectsCreated).toBe(0);
         expect(threadsLaunched).toBe(0);
-        expect(fetchEndpoint).toHaveBeenCalledTimes(3);
+        // One session reads the tool catalog for launch admission, then one calls goat_project_list.
+        expect(fetchEndpoint).toHaveBeenCalledTimes(6);
       } finally {
         vi.unstubAllGlobals();
         managerLayer.mockRestore();
@@ -1312,6 +1313,8 @@ const withLaunchRemote = <A, E>(
     registrationAccess?: boolean;
     declaresMemoryCeiling?: boolean;
     beforeSessionIssue?: (scopes: ReadonlyArray<string>) => Effect.Effect<void, SshCommandError>;
+    /** Sees each MCP request before it is answered. */
+    onRequest?: (method: string) => void;
   },
   body: (record: {
     tools: { name: string; args: Record<string, unknown>; authorization: string | null }[];
@@ -1431,6 +1434,7 @@ const withLaunchRemote = <A, E>(
         params?: { name?: string; arguments?: Record<string, unknown> };
       };
       if (options.rejectSession?.()) return new Response(null, { status: 401 });
+      options.onRequest?.(req.method);
       if (req.method === "notifications/initialized") return new Response(null, { status: 202 });
       let result: unknown;
       if (req.method === "initialize")
@@ -1556,6 +1560,24 @@ it.effect("alias launch remains compatible", () =>
       expect(record.targets).toHaveLength(0);
     }),
   ),
+);
+it.effect(
+  "regression #1451: a destination that cannot hold the goatclaw ceiling registers no project",
+  () =>
+    withLaunchRemote({}, (record) =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const error = yield* dispatch
+          .launchThread(
+            { ...launchInput, permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES.worker! },
+            Effect.void,
+          )
+          .pipe(Effect.flip);
+        expect(error).toMatchObject({ remoteCode: "permission_profile_unsupported" });
+        expect(record.tools.map((call) => call.name)).not.toContain("goat_project_create");
+        expect(record.tools.map((call) => call.name)).not.toContain("goat_thread_launch");
+      }),
+    ),
 );
 it.effect("issues independently for concurrent launches with different memory grant keys", () =>
   Effect.gen(function* () {
@@ -1789,6 +1811,61 @@ it.effect.each(
       expect(record.tools.filter((call) => call.name === "goat_thread_launch")).toHaveLength(1);
     }),
   ),
+);
+it.effect("regression #1451: a launch tool error that may follow the create stays uncertain", () =>
+  withLaunchRemote(
+    {
+      refusal: true,
+      launchReply: { code: "orchestration_error", message: "projection read failed" },
+    },
+    () =>
+      Effect.gen(function* () {
+        const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+        const error = yield* dispatch.launchThread(launchInput, Effect.void).pipe(Effect.flip);
+        expect(error).toMatchObject({
+          reason: "remote_refused",
+          remoteCode: "orchestration_error",
+          launchMayHaveStarted: true,
+        });
+      }),
+  ),
+);
+it.effect(
+  "regression #1451: a caller revoked while the project write's session starts registers nothing",
+  () => {
+    let listed = false;
+    let revoked = false;
+    return withLaunchRemote(
+      {
+        onRequest: (method) => {
+          // The project list was read; the next session start is the project create's.
+          if (method === "initialize" && listed) revoked = true;
+          if (method === "tools/call") listed = true;
+        },
+      },
+      (record) =>
+        Effect.gen(function* () {
+          const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
+          const error = yield* dispatch
+            .launchThread(
+              launchInput,
+              Effect.suspend(() =>
+                revoked
+                  ? Effect.fail(
+                      new SshRemoteDispatch.SshRemoteDispatchError({
+                        reason: "caller_changed",
+                        message: "revoked",
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            )
+            .pipe(Effect.flip);
+          expect(error).toMatchObject({ message: "revoked" });
+          expect(record.tools.map((call) => call.name)).not.toContain("goat_project_create");
+        }),
+    );
+  },
 );
 it.effect("structured remote refusal is definite", () =>
   withLaunchRemote(

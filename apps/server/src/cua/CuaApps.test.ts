@@ -1,6 +1,6 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import type { DesktopCuaAppsReport } from "@goat/contracts";
+import type { DesktopCuaAppsReport, DesktopCuaReadinessReport } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -14,7 +14,29 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
-const fixture = Effect.fnUntraced(function* (synchronous = false, failSend = false) {
+/** What a desktop that answers app listing requests says in its helper readiness (#1567). */
+const readiness = (appsListing: boolean | undefined): DesktopCuaReadinessReport => ({
+  version: 1,
+  type: "cuaReadiness",
+  generation: 1,
+  readiness: {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  },
+  signals: { humanInput: "unsupported", privateMode: "supported" },
+  ...(appsListing === undefined ? {} : { appsListing }),
+});
+
+const fixture = Effect.fnUntraced(function* (
+  synchronous = false,
+  failSend = false,
+  advertised: Option.Option<DesktopCuaReadinessReport> = Option.some(readiness(true)),
+) {
   const reports = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const requests = yield* Queue.unbounded<string>();
   const listing = yield* CuaDriver.makeDesktopAppsListing().pipe(
@@ -22,6 +44,7 @@ const fixture = Effect.fnUntraced(function* (synchronous = false, failSend = fal
       Layer.mergeAll(
         NodeCrypto.layer,
         DesktopTelemetryReceiver.layerTest({
+          cuaReadiness: Effect.succeed(advertised),
           cuaApps: Stream.fromPubSub(reports),
           requestCuaApps: (requestId) =>
             Effect.gen(function* () {
@@ -118,4 +141,21 @@ it.effect(
       );
       expect(yield* standalone.listedApps).toEqual(Option.none());
     }).pipe(Effect.provide(ServerSettings.layerTest({ enableCua: false })), Effect.scoped),
+);
+
+it.effect.each([
+  ["a desktop that does not advertise listing", Option.some(readiness(undefined))],
+  ["a desktop with listing turned off", Option.some(readiness(false))],
+  ["a desktop that has not reported readiness", Option.none<DesktopCuaReadinessReport>()],
+] as const)(
+  "%s is not asked for apps, so an approval card does not wait for its deadline (#1567)",
+  ([, advertised]) =>
+    Effect.gen(function* () {
+      const f = yield* fixture(false, false, advertised);
+      // A millisecond of clock is enough: a listing that waited for the desktop is still pending.
+      const pending = yield* f.listing.pipe(Effect.timeoutOption("1 millis"), Effect.forkChild);
+      yield* TestClock.adjust("1 millis");
+      expect(yield* Fiber.join(pending)).toEqual(Option.some(Option.none()));
+      expect(yield* Queue.size(f.requests)).toBe(0);
+    }).pipe(Effect.scoped),
 );

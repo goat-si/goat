@@ -334,11 +334,21 @@ differences a maintainer would otherwise trip on:
   directly with the action id as `commandId`, after checking the worker's modes against the
   goal's authority and under `DispatchModeLimit`, because `goat_thread_send` refuses an owner
   whose turn has ended.
-- Goal workers are local-only for now. Apply refuses a spec that names a remote host, the
-  controller refuses a remote placement before claiming, and the runtime refuses remote launches
-  and follow-ups. The remote paths re-read the owner's current mode instead of the goal's stored
-  ceiling, find a remote thread only by its title marker, and gate project creation on the worker's
-  mode. Each needs a fix before remote workers come back.
+- Goal workers on other hosts (#1451) act through `fleet/goals/GoalRemoteWorkers.ts`, straight
+  over `SshRemoteDispatch`, because the host tools behind `goat_thread_send` read the calling
+  thread's current mode and need it to own a live run. Each remote write's authorize, which dispatch
+  reruns right before the request, re-checks the goal, the owner (whose mode must still cover the
+  session ceiling: the goal's ceiling, the owner now and its goatclaw profile, lowest) and the
+  profile (`require`, then `recheck`), and the profile is forwarded as the destination's ceiling
+  after a sync, as `goat_thread_reschedule` does. The thread runs at the goal's worker mode under that
+  session. Launches and moves need a full-access session, like `goat_ssh_thread_launch`, and a
+  destination that cannot hold the ceiling refuses before a project is registered there.
+- A remote launch is claimed with its host before it is sent, and its thread is found only by a
+  hashed marker at the end of its title. Absence is never proof there, so an unclear remote launch
+  waits instead of moving to its next attempt. A remote worker's model switch becomes a move
+  (`goat_thread_send` cannot change a thread's model), and a remote run held at its usage limit is
+  left to the destination's own recovery, so the slot asks for a person. Goal workers hold no
+  goatclaw lane while they run, like a thread `goat_thread_reschedule` moved; `maxWorkers` bounds them.
 - PR state comes from `PullRequestService.checks` for the goal's repo, not thread PR links.
 - Goal-owned threads are excluded from `UsageLimitRecoveryWorker` through `GoalThreadOwnership`, so
   the controller resumes them itself: once a run failed with `usage_limit` and its reset time has
@@ -368,11 +378,11 @@ differences a maintainer would otherwise trip on:
 **Now.** `apps/server/src/fleet/health/` implements this section. `Health` and `Rescheduler` are
 the tags below; `goat_host_status` returns each host's conditions as the additive `conditions`
 field, and `goat_host_cordon`, `goat_host_uncordon`, `goat_host_drain` and `goat_thread_reschedule`
-live in `apps/server/src/mcp/toolkits/fleet/`. Cordons persist in `fleet_host_states`. The goal
-controller moves no goal attempt to another machine: goal workers run on this machine only (#576),
-so drain only cordons and marks the host Draining. A stalled or failed goal attempt restarts on this
-machine instead, from its replica (below, and `fleet/goals/GoalRecovery.ts`). Moving goal attempts
-between machines waits on goal workers on other machines (#1451). `goat_thread_reschedule` takes the
+live in `apps/server/src/mcp/toolkits/fleet/`. Cordons persist in `fleet_host_states`. A failed,
+stalled or lost goal attempt on another host moves to another SSH host through `Rescheduler`
+(#1451); one on this machine restarts here from its replica (below, and
+`fleet/goals/GoalRecovery.ts`). Drain only cordons and marks the host Draining; moving idle goal
+attempts off a draining host is #1130. `goat_thread_reschedule` takes the
 branch and folder from its caller. Channel tasks still heal through `ChannelRemoteWorkers.ts`; goal
 recovery reuses the replica helpers in `channels/channelReplica.ts` where they are.
 
@@ -387,8 +397,8 @@ Where the code departs from the text below, and why:
   `degraded` or `incompatible` host, with that verdict as its `reason`, and an `incompatible` host
   takes no work. Different builds that are compatible raise no condition.
 - Placement uses `choosePlacement` over Ready, uncordoned hosts until the T3 `Placement` tag lands.
-- Goal workers run on this machine only (#576), so a failed or stalled attempt restarts here and the
-  goal controller never asks `Rescheduler` to move it. After each finished turn, the controller
+- An attempt on this machine restarts here; the goal controller never asks `Rescheduler` to move
+  it. After each finished turn, the controller
   captures the attempt's worktree, uncommitted changes included, into `fleet_replicas`, keyed by
   `goal:<id>:s<slot>` and the attempt number. Each bundle file is named by its commit. Recovery only
   moves the slot to its next attempt, so the old attempt becomes an orphan the plan stops. The next
@@ -396,8 +406,16 @@ Where the code departs from the text below, and why:
   from the newest replica that imports with its recorded commit. Failing that, it starts from the
   newest attempt branch or from `baseRef`, choosing between replica and branch by containment. A
   replica that does not verify blocks the launch with `ResumeRefused` and is checked again on each
-  pass. `Rescheduler` still refuses a replica resume with `no_resume_point`, since importing one on
-  another host waits for remote goal workers.
+  pass. `Rescheduler` still refuses a replica resume with `no_resume_point`: replicas are bundles on this
+  machine.
+- A goal's move is claimed under `goal:<id>:s<slot>:a<attempt>:<runId>:reschedule` and launched
+  under the next attempt's launch id, the Rescheduler's `clientRequestId`, with `holdUnconfirmed`:
+  a launch that may have started comes back `Unconfirmed` and is never relaunched. The receipt
+  settles with the successor's thread, so `repairWorkers` restores the slot after a lost status
+  write. An unsettled receipt holds its slot through `resolve_move`, which `findMove` answers from
+  the destination under the Rescheduler's lock; it takes no turn and is not refused by the budget.
+  The request carries the goal's project folder and repository key, `maxAttemptsPerWorker` as its
+  cap, and the hosts its selector and the owner's profile allow.
 - A retry after a lost answer finds the launched thread by its title (`Resume <branch>`) on the
   candidate hosts instead of launching again; the attempt branch keeps two launches apart as well.
 - `fenceStaleAttempt` interrupts a returning stale attempt with a reason that names the successor.
@@ -425,7 +443,7 @@ traffic.
 | `Unreachable`     | ≥ 3 consecutive failed contacts (`OUTAGE_NOTICE_FAILURES`) across watches or host status | placement refused; attempts there are suspect                                      |
 | `Lost`            | `Unreachable` for ≥ `hostLostAfterMs` (default 300 s, same as `LAUNCH_GRACE_MS`)         | attempts there may be rescheduled                                                  |
 | `Cordoned`        | a person or agent ran `goat_host_cordon`                                                 | placement refused; running work untouched                                          |
-| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | placement refused; goal attempts stay (goal workers are local-only, #1451)         |
+| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | placement refused; goal attempts stay until drain evacuation lands (#1130)         |
 | `VersionMismatch` | `markVersionMismatch` flagged it                                                         | warning only, as today                                                             |
 | `QuotaExhausted`  | per provider instance: a quota window at 100 % before `resetsAt` (`isExhausted` rule)    | that instance is filtered out on that host                                         |
 
@@ -439,9 +457,8 @@ at). Cordon only stops new placement, like `kubectl cordon`. Drain is meant to a
 attempts, but only between runs, one slot per goal at a time (a fixed `maxUnavailable: 1` in
 PodDisruptionBudget terms, [disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)),
 never interrupting a running turn or touching threads that no goal owns. The goal controller does not
-request those moves yet, and cannot: goal workers run only on this machine, and the Rescheduler places
-moved work only on SSH hosts, where the goal could no longer follow up or resume it (#1451). A drained
-host keeps its goal attempts. `goat_thread_reschedule` moves a thread by hand, but a goal keeps
+request those moves yet (#1130); goal workers on other hosts and their moves (#1451) are what it
+builds on. A drained host keeps its goal attempts. `goat_thread_reschedule` moves a thread by hand, but a goal keeps
 following the original thread. `goat_host_uncordon` clears both.
 
 ### Thread health
@@ -878,7 +895,7 @@ input, calls one service method, and maps errors.
 | `goat_goal_pause` / `goat_goal_resume`                | write        | T1    | pause stops actions, never threads                                                 |
 | `goat_goal_delete`                                    | destructive  | T1    | finalizer path above; work is kept                                                 |
 | `goat_host_cordon` / `goat_host_uncordon`             | write        | T2    | persisted per host                                                                 |
-| `goat_host_drain`                                     | write        | T2    | cordon plus Draining; goal attempts stay (goal workers are local-only, #1451)      |
+| `goat_host_drain`                                     | write        | T2    | cordon plus Draining; goal attempts stay until drain evacuation lands (#1130)      |
 | `goat_thread_reschedule`                              | write        | T2    | moves a thread once its source stops; the goal keeps following the original thread |
 | `goat_scheduler_status`                               | read         | T3    | per host: conditions, limits, counts, quota windows, last refusals                 |
 | `goat_fallback_chain_get` / `goat_fallback_chain_set` | read / write | T3    | settings-backed; set validates instances and models                                |
@@ -1001,8 +1018,8 @@ requirement.
   It bounds a disconnected attempt's damage but does not stop it; goals can opt out with
   `onHostLost: "wait"`.
 - **Claims before side effects.** Every action is claimed in one transaction that re-reads
-  generation, pause, deletion, budget and authority. An unclear launch moves to the next attempt
-  instead of being resent.
+  generation, pause, deletion, budget and authority. An unclear launch is never resent: here it moves
+  to the next attempt after its grace, and on another host it waits until its thread is found.
 - **One owner per failed run.** Fallback lives inside the usage-limit recovery sweep for ordinary
   threads, and goal threads belong to the controller, so no two sources act on one run.
 - **T1 ships local-only.** Remote goals wait for real placement and health.
