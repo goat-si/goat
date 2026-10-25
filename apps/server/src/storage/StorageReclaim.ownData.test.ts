@@ -431,4 +431,32 @@ describe("StorageReclaim leaves GOAT's own data alone", () => {
       expect(yield* fs.readFileString(path.join(source, "work.ts"))).toBe("edited\n");
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
+
+  it.live("keeps rotated logs once the GOAT home turns out to be in a checkout", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        storageCleanup: { logsAfterDays: 7 },
+      });
+      const log = path.join(config.logsDir, "evidence.log.1");
+      yield* fs.makeDirectory(config.logsDir, { recursive: true });
+      yield* fs.writeFileString(log, "tracked and edited\n");
+      yield* fs.utimes(log, LONG_AGO, LONG_AGO);
+      const logs = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(Effect.map((report) => report.items.find((item) => item.kind === "rotated_logs")));
+      const offered = (yield* logs())!;
+      expect(offered.state).toBe("removable");
+      // A repository at the home: its logs folder's files can be that repository's work.
+      yield* fs.makeDirectory(path.join(config.baseDir, ".git"));
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.readFileString(log)).toBe("tracked and edited\n");
+      expect(yield* logs()).toMatchObject({ state: "needs_attention" });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
 });

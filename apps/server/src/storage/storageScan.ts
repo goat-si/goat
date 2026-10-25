@@ -639,6 +639,18 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     );
   }
 
+  /** A GOAT folder in a git checkout (a home inside a repository) may hold that checkout's work. */
+  const inCheckout = Effect.fn("storageScan.inCheckout")(function* (folder: string) {
+    const around = yield* withinCheckout(folder);
+    if (around === false) return null;
+    return state(
+      "needs_attention",
+      around === null
+        ? "Its folder could not be checked for a git checkout"
+        : "Its folder is in a git checkout, which may track these files",
+    );
+  });
+
   // Rotated logs past this server's retention.
   const logsAfterDays = settings?.storageCleanup.logsAfterDays ?? null;
   const rotated = yield* rotatedLogFiles(config.logsDir);
@@ -669,6 +681,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           path: config.logsDir,
           label: expired.length + " rotated log files",
           ...(workedIn(config.logsDir) ??
+            (yield* inCheckout(config.logsDir)) ??
             state("removable", "Older than the " + logsAfterDays + " days logs are kept", true)),
           bytes: expired.reduce((sum, file) => sum + file.size, 0),
         },
@@ -736,6 +749,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           path: config.attachmentsDir,
           label: leftovers.removable.length + " files of deleted threads",
           ...(workedIn(config.attachmentsDir) ??
+            (yield* inCheckout(config.attachmentsDir)) ??
             state("removable", "No surviving thread or task mentions their threads" + kept)),
           bytes: leftovers.removable.reduce((sum, file) => sum + file.size, 0),
         },

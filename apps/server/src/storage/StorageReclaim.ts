@@ -536,8 +536,9 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const reason = yield* workedInNow(target.root);
             if (reason !== null) return reason;
+            // A checkout anywhere above a file, its GOAT folder included, may track it.
             for (const file of target.files)
-              if ((yield* insideCheckout(target.root, file.path)) !== false)
+              if ((yield* withinCheckout(path.dirname(file.path))) !== false)
                 return file.path + " is in a git checkout now, or its folder could not be read";
             return yield* removeGroup(item, target, actor);
           }),
