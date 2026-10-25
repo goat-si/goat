@@ -91,7 +91,18 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
           owner.sessionId,
         );
         yield* PubSub.take(wake);
-        yield* leases.control(threadId, yield* leases.active(threadId));
+        const live = yield* leases.control(threadId, yield* leases.active(threadId));
+        // Its agent reads the window, so the thread has a card to stop (#1555).
+        yield* leases.callReservation(threadId, {
+          action: "reserve",
+          controlId: live.controlId,
+          connectionId: "driver:a",
+          callId: "read",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        });
         assert.equal(
           Option.getOrUndefined(yield* leases.holder(otherThread, [app]))?.threadId,
           threadId,

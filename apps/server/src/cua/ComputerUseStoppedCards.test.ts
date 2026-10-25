@@ -52,4 +52,25 @@ describe("a stopped thread keeps exactly one card", () => {
       "control:new:acting",
     ]);
   });
+
+  it("through a Stop all of a newer control that never acted, and the control after it", () => {
+    const cards = makeStoppedCards();
+    cards.replaced({
+      controlId: "control:stopped",
+      threadId,
+      expiresAt,
+      acted: true,
+      ended: "stopped",
+    });
+    // A newer control the agent never acted through is ended by Stop all, then replaced in turn.
+    cards.replaced({ ...fresh, ended: "stopped_all" });
+    const next = { controlId: "control:next", threadId, expiresAt } satisfies ComputerUseControl;
+    const seen = cards
+      .merge([{ control: next, state: active([]) }])
+      .flatMap(({ control, state }) => {
+        const session = desktopSession(base, control, state, detected);
+        return session === undefined ? [] : [`${control.controlId}:${session.status}`];
+      });
+    expect(seen).toEqual(["control:stopped:stopped"]);
+  });
 });
