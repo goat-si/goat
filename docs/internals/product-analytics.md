@@ -86,7 +86,7 @@ which is also why tool events carry no per-thread sequence.
 
 The server sends PostHog-format batches to GOAT's ingest Worker at `ingest.trygoat.ai`
 ([infra/ingest](../../infra/ingest/README.md)), which stores them in GOAT's Cloudflare D1
-and forwards nothing. Builds before it sent to T3 Code's `ingest.t3.codes`, and keep
+and forwards nothing. Builds before it sent to the upstream project's `ingest.t3.codes`, and keep
 doing so until they update. A send can fail after the ingest has stored the batch, so
 every retry is a copy; the ingest stores an identical retry once per UTC day, and the
 event uuid identifies copies across days.

@@ -369,7 +369,7 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists fifteen jobs for a full run: eleven tasks and four server shards", () => {
+  it("lists sixteen jobs for a full run: twelve tasks and four server shards", () => {
     assert.equal(matrixFor(TASKS).include.length, 16);
   });
 

@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import * as NodeSqlite from "node:sqlite";
 
 import { PAGE_SIZE, type IngestDatabase } from "./store.ts";
 
@@ -18,7 +18,7 @@ const MIGRATIONS = NodePath.join(import.meta.dirname, "../migrations");
  * the file the way D1's per-database size limit does.
  */
 export function sqliteD1() {
-  const sqlite = new DatabaseSync(":memory:");
+  const sqlite = new NodeSqlite.DatabaseSync(":memory:");
   sqlite.exec(`PRAGMA page_size = ${PAGE_SIZE}`);
   for (const file of NodeFS.readdirSync(MIGRATIONS)
     .filter((name) => name.endsWith(".sql"))

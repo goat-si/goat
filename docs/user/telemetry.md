@@ -13,7 +13,7 @@ address, user agent, or location, and it forwards nothing to other services. Eac
 within 180 days; deleted data can remain in the database's point-in-time recovery for up to 30 days
 after that. If cleanup is down for more than about a day, deletion waits for it to recover.
 
-GOAT builds released before this endpoint existed send these events to T3 Code's endpoint at
+GOAT builds released before this endpoint existed send these events to the endpoint of the project GOAT was forked from, at
 `ingest.t3.codes`, which forwards them to PostHog, until you update.
 
 Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,

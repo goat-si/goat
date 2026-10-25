@@ -15,7 +15,6 @@
     "@cloudflare/workers-types": "^4.20260601.1",
     "@types/node": "catalog:",
     "typescript": "catalog:",
-    "vite": "catalog:",
     "vite-plus": "catalog:"
   }
 }

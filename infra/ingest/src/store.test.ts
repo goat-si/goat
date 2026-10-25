@@ -128,12 +128,19 @@ describe("storage", () => {
     await fillDay(store, "2026-04-01", () => 3_000);
     store.limitPages(store.pageCount() + 8);
     let failure: unknown;
-    for (let n = 0; failure === undefined; n += 1) {
-      await insertBatch(store.db, row("2026-10-25", id(n), "y".repeat(3_000)), BUDGET).catch(
-        (error) => {
-          failure = error;
-        },
+    for (let n = 0; ; n += 1) {
+      const outcome = await insertBatch(
+        store.db,
+        row("2026-10-25", id(n), "y".repeat(3_000)),
+        BUDGET,
+      ).then(
+        () => undefined,
+        (error: unknown) => error,
       );
+      if (outcome !== undefined) {
+        failure = outcome;
+        break;
+      }
     }
     expect(String(failure)).toMatch(/full/);
     const stored = store.rows().filter((stored) => stored.day === "2026-10-25").length;
