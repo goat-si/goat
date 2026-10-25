@@ -1,3 +1,6 @@
+import * as NodeChildProcessSpawner from "@effect/platform-node/NodeChildProcessSpawner";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, OrchestratorMcpFailure, type HostThreadCounts } from "@goat/contracts";
@@ -404,5 +407,60 @@ it.effect("reads a join's permission after OpenCodex is found, right before ocx 
     admitted = true;
     expect(yield* ocx.homeAdmitted(add, 1_000, permission)).toMatchObject({ code: 1 });
     expect(started).toEqual([add]);
+  }),
+);
+
+it.live("starts an admitted ocx with nothing awaited after its permission is read", () =>
+  Effect.gen(function* () {
+    let checks = 0;
+    let checksAtPermission: number | undefined;
+    // The real spawner checks a working directory on the filesystem before it starts a process.
+    const files = Layer.effect(
+      FileSystem.FileSystem,
+      Effect.gen(function* () {
+        const real = yield* FileSystem.FileSystem;
+        return {
+          ...real,
+          access: (path, options) =>
+            Effect.suspend(() => {
+              checks++;
+              return real.access(path, options);
+            }),
+        } satisfies FileSystem.FileSystem;
+      }),
+    ).pipe(Layer.provide(NodeFileSystem.layer));
+    const platform = Layer.merge(files, NodePath.layer);
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(
+        hubOcxLayer.pipe(
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(
+            ProcessRunner.layer.pipe(
+              Layer.provide(NodeChildProcessSpawner.layer.pipe(Layer.provide(platform))),
+            ),
+          ),
+          Layer.provide(
+            Layer.mock(Inventory.OpenCodexInventory)({
+              read: Effect.succeed({
+                ...fleetSnapshot("home"),
+                binaries: [{ path: "/bin/echo", version: "2.91.0" }],
+              }),
+            }),
+          ),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(platform),
+        ),
+      ),
+    );
+    const output = yield* ocx.homeAdmitted(
+      ["link", "add", "lidge-ts", "--json"],
+      10_000,
+      Effect.sync(() => {
+        checksAtPermission = checks;
+        return true;
+      }),
+    );
+    expect(output).toMatchObject({ code: 0, stdout: "link add lidge-ts --json\n" });
+    expect(checks).toBe(checksAtPermission);
   }),
 );

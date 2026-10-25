@@ -246,12 +246,17 @@ const make = Effect.gen(function* () {
   const environment = yield* HostProcess.Environment;
   const cwd = yield* HostProcess.WorkingDirectory;
 
-  const run = (command: string, args: ReadonlyArray<string>, timeoutMs: number) =>
+  const run = (
+    command: string,
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    workingDirectory: string | null = cwd,
+  ) =>
     runner.run({
       command,
       args,
       env: environment,
-      cwd,
+      cwd: workingDirectory ?? undefined,
       timeout: timeoutMs,
       maxOutputBytes: MAX_BYTES,
       timeoutBehavior: "timedOutResult",
@@ -276,14 +281,17 @@ const make = Effect.gen(function* () {
   ) {
     const binary = yield* homeBinary();
     if (!(yield* admit)) return undefined;
-    return yield* runHome(binary, args, timeoutMs);
+    // No working directory: the spawner awaits a check of one before it starts the process, and
+    // nothing may wait between the permission read and the start. The binary path is absolute.
+    return yield* runHome(binary, args, timeoutMs, null);
   });
   const runHome = Effect.fn("HubOcx.runHome")(function* (
     binary: string,
     args: ReadonlyArray<string>,
     timeoutMs: number,
+    workingDirectory: string | null = cwd,
   ) {
-    const output = yield* run(binary, args, timeoutMs).pipe(
+    const output = yield* run(binary, args, timeoutMs, workingDirectory).pipe(
       Effect.mapError(
         () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       ),
