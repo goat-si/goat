@@ -74,10 +74,15 @@ git reset -q --soft "$MERGED"
   이유를 적은 KEEP 규칙이나 `goat-rename: legacy` 표시로 남긴다. 저장되거나 다른 버전이 읽는 이름(저장 키, wire id, env)은
   `packages/contracts/src/legacyT3Names.ts`에 옛 이름을 두고 둘 다 읽게 한다.
 - 마이그레이션: `Migrations.ts`의 id가 중복 없이 단조 증가하고 결정 카드의 선택이 반영됐는지 본다.
+- Node 고정: 루트 `package.json` `engines.node`는 GOAT의 정확한 버전을 유지한다. upstream이 Node를 올리면 사이클 카드에 적고
+  올릴지 정한다. 올릴 때는 그 값만 바꾸고 SEA·워크플로에 버전 사본을 다시 만들지 않는다. 서버 `apps/server/package.json` `engines.node`와
+  `packages/shared/src/nodeSqliteClient.ts`의 `NODE_SQLITE_RUNTIME_RANGE`는 GOAT 값 `^24.16.0 || >=26.1.0`를 유지한다
+  ([010 `node-pin`](./010_fork_delta.md)). 데스크톱 Electron이 Node를 바꾸면 그 버전이 서버 범위 안인지 확인한다.
 
 ## 5. 검증
 
-- 로컬: 충돌 파일의 focused test (`vp test run <files>`)와 바뀐 패키지 typecheck. `node scripts/goat-rename.ts --check`가 exit 0.
+- 로컬: 루트 `engines.node`의 Node로 돌린다 (`vp env exec node -v`). 시스템 Node가 다르면 `node:sqlite` 검사가 서버 테스트를 멈춘다.
+  충돌 파일의 focused test (`vp test run <files>`)와 바뀐 패키지 typecheck. `node scripts/goat-rename.ts --check`가 exit 0.
   chase PR은 `--admin`으로 랜딩하므로 CI의 이름 검사에만 기대지 않는다. `vp run check:changed`도
   변경 파일 선택과 무관하게 같은 이름 검사를 실행한다.
 - 정본: 머지 head에서 손으로 돌린 goat-ci 전체 실행(`gh workflow run goat-ci.yml --ref <branch>`)의 이름 검사(`goat-scope`), check, typecheck, test, build와 `goat-ci-result`가 모두 green. cancelled는 pass가 아니다.
