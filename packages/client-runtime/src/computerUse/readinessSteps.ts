@@ -124,6 +124,9 @@ const toolsCopy = {
       "The driver is not running or attachable on this host. Start computer use on this computer.",
   },
 } as const satisfies Record<CuaToolsAvailability, { state: ReadinessStepState; detail: string }>;
+// A passing check stops its own helper, so with nothing failed the driver is only idle (#1538).
+const STARTS_WITH_NEXT_TURN =
+  "Starts with the next agent turn. GOAT starts the driver when an agent needs it.";
 
 // The Linux helper reports pending both before a Wayland desktop's consent and when its
 // compositor cannot capture one window, so it is not described as a prompt to answer.
@@ -180,6 +183,7 @@ export function computerUseReadinessSteps({
   signals,
   machine,
   block,
+  failure,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
@@ -189,6 +193,8 @@ export function computerUseReadinessSteps({
   readonly machine?: string | undefined;
   /** Why the desktop gave agents no driver, when it was a grant macOS has not given (#1399). */
   readonly block?: CuaAgentBlock | undefined;
+  /** Why the driver last failed to start on the host, when it did. */
+  readonly failure?: string | undefined;
 }) {
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
@@ -278,12 +284,16 @@ export function computerUseReadinessSteps({
             detail:
               "The driver is running. Whether agents can use computer use is not proven until the helper is confirmed.",
           } as const)
-        : tools
-          ? toolsCopy[tools]
-          : ({
-              state: "unknown",
-              detail: "The server has not reported whether agent tools are available yet.",
-            } as const);
+        : tools === "unavailable" && failure === undefined
+          ? ({ state: "pending", detail: STARTS_WITH_NEXT_TURN } as const)
+          : tools === "unavailable"
+            ? ({ state: "blocked", detail: `${failure} ${toolsCopy.unavailable.detail}` } as const)
+            : tools
+              ? toolsCopy[tools]
+              : ({
+                  state: "unknown",
+                  detail: "The server has not reported whether agent tools are available yet.",
+                } as const);
   const steps: ReadinessStep[] = [
     {
       id: "grants",
@@ -367,6 +377,13 @@ export function computerUseReadinessSteps({
   }
   return {
     ready: readiness !== undefined && computerUseReady(readiness) && tools === "available",
+    // Everything is proven and nothing failed; the driver only waits for an agent's turn.
+    startsWithNextTurn:
+      readiness !== undefined &&
+      computerUseReady(readiness) &&
+      tools === "unavailable" &&
+      failure === undefined &&
+      block === undefined,
     report,
     steps,
     blockers,
