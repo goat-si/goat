@@ -109,9 +109,9 @@ const shellOf = (world: World, threadId: string) => {
 /** The hosts a move reaches: B launches whatever passes the move's own last check. */
 const remoteHosts = (world: World) =>
   ({
-    launchThread: (
+    launchThread: <E>(
       input: SshRemoteDispatch.SshLaunchInput,
-      beforeLaunch: Effect.Effect<void, unknown>,
+      beforeLaunch: Effect.Effect<void, E>,
     ) =>
       Effect.gen(function* () {
         const during = world.duringRemoteLaunch ?? Effect.void;

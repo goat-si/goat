@@ -90,8 +90,8 @@ const scenario = (
   body: (input: {
     readonly world: World;
     readonly fake: Fake;
-    readonly run: <A, E>(effect: Effect.Effect<A, E, Provided>) => Effect.Effect<A, unknown>;
-  }) => Effect.Effect<void, unknown>,
+    readonly run: <A, E>(effect: Effect.Effect<A, E, Provided>) => Effect.Effect<A>;
+  }) => Effect.Effect<void>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -101,7 +101,7 @@ const scenario = (
       yield* body({
         world,
         fake,
-        run: (effect) => effect.pipe(Effect.provide(server(fake, world, path))),
+        run: (effect) => effect.pipe(Effect.provide(server(fake, world, path)), Effect.orDie),
       });
     }),
   );

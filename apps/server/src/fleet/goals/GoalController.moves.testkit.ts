@@ -94,13 +94,13 @@ export const newWorld = (): World => ({
   launchCalls: 0,
 });
 
-export const unavailable = (host: string) =>
+const unavailable = (host: string) =>
   new SshRemoteDispatch.SshRemoteDispatchError({
     reason: "host_unavailable",
     message: host + " did not answer",
   });
 
-export const dispatchOf = (world: World) =>
+const dispatchOf = (world: World) =>
   ({
     callHostTool: (
       call: SshRemoteDispatch.SshHostToolCall,
@@ -227,7 +227,7 @@ export const dispatchOf = (world: World) =>
  * A goal's first worker goes to the first host it lists (A by default, this machine when listed
  * first); a move goes to a reachable host it was not on.
  */
-export const placementOf = (world: World) =>
+const placementOf = (world: World) =>
   Layer.succeed(Placement, {
     place: (request) =>
       Effect.sync(() => {

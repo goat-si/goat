@@ -764,11 +764,7 @@ describe("drain moves attempts idle between runs off a draining host (#1130)", (
   const pair = testGoal("goal_dr", {
     spec: testSpec({ workers: { ...testSpec().workers, count: 2 } }),
   });
-  const idle = (runId: string | null = "run:5") =>
-    seen({
-      runId: runId === null ? null : RunId.make(runId),
-      health: { _tag: "healthy", idle: true },
-    });
+  const idle = () => seen({ runId: RunId.make("run:5"), health: { _tag: "healthy", idle: true } });
   const drainOf = (slot: number) => ({
     type: "drain",
     slot,
@@ -804,7 +800,20 @@ describe("drain moves attempts idle between runs off a draining host (#1130)", (
         planGoal(
           goal,
           [onA],
-          draining(["A"], [[0, { ...idle(null), terminal: false, runStatus: null }]]),
+          draining(
+            ["A"],
+            [
+              [
+                0,
+                seen({
+                  runId: null,
+                  terminal: false,
+                  runStatus: null,
+                  health: { _tag: "healthy", idle: true },
+                }),
+              ],
+            ],
+          ),
         ),
       ),
     ).toEqual([]);
