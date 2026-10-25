@@ -350,6 +350,31 @@ it("stops every agent from the header with the cards hidden, and says when a sto
   );
 });
 
+// #1519: a card's Stop also ends the thread's grant; when it cannot, the app stays held.
+it("says when a card's Stop left the thread's apps held, and points to Stop all", async () => {
+  setup([desktopApp()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  state.control.mockResolvedValue({
+    _tag: "Success",
+    value: { applied: false, reason: "not_allowed" },
+  });
+  using toast = vi.spyOn(toastManager, "add");
+  await userEvent.hover(screen.getByRole("article"));
+  await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+  expect(state.control).toHaveBeenCalledWith({
+    environmentId,
+    input: { sessionId: "desktop-1", control: "stop" },
+  });
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "The agent stopped, but its apps are still reserved" }),
+    ),
+  );
+});
+
 it("keeps the header's Stop all while the only agent tab plays in the thread's mini player", async () => {
   setup([browserTab()]);
   state.routeThread = "thread-1";
