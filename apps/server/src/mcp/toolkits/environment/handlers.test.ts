@@ -12,6 +12,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as AutomationHold from "../../../automationHold.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -92,5 +93,55 @@ it.effect("refuses a preferences update when the caller's turn ends while it wai
         ),
       ),
     );
+  }),
+);
+
+it.effect("tells agents that a copied state's automation is held", () =>
+  Effect.gen(function* () {
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    const layerDependencies = Layer.mergeAll(
+      ThreadCommandExecutor.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId,
+        requestNamespace: "client:read",
+        thread: undefined,
+        client: { sessionId: "client:read", label: "Test", access: "read-only" as const },
+        capabilities: new Set(["orchestration" as const]),
+        issuedAt: 0,
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({}),
+      Layer.mock(Environment.ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId,
+          label: "Test",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0",
+          capabilities: { repositoryIdentity: false },
+        }),
+      }),
+      Layer.mock(Settings.ServerSettingsService)({
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      }),
+    );
+    const read = Effect.gen(function* () {
+      const toolkit = yield* EnvironmentToolkit;
+      const results = yield* toolkit
+        .handle("goat_environment_read", {})
+        .pipe(Stream.unwrap, Stream.runCollect);
+      return results.at(-1)?.result;
+    }).pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+          Layer.provideMerge(layerDependencies),
+        ),
+      ),
+      Effect.provideService(AutomationHold.AutomationHold, hold),
+    );
+    expect(yield* read).toMatchObject({ automationHold: { reason: "channel-copy" } });
+    yield* hold.release;
+    expect(yield* read).toMatchObject({ automationHold: null });
   }),
 );

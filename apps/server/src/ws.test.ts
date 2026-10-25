@@ -235,6 +235,28 @@ it.effect("sends a Defender result that missed the snapshot, once", () =>
   }),
 );
 
+it.effect("tells config subscribers when a held copy's automation is resumed, once", () =>
+  Effect.gen(function* () {
+    const hold = { reason: "channel-copy" as const, heldAt: "2026-10-25T00:00:00.000Z" };
+    const events = yield* withLateEditorConfig(
+      snapshotConfig({ automationHold: hold }),
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.succeed(undefined as never),
+      },
+      Stream.empty,
+      // The hold stream replays the state the snapshot already carries, then the release.
+      Stream.make(hold, null, null),
+    ).pipe(Stream.runCollect);
+
+    const snapshots = Array.from(events).filter((event) => event.type === "snapshot");
+    assert.equal(snapshots.length, 1);
+    const [late] = snapshots;
+    if (late?.type === "snapshot") assert.equal(late.config.automationHold, null);
+  }),
+);
+
 it.effect("SSH workspace handlers delegate once and preserve typed errors", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

@@ -193,6 +193,51 @@ describe("migrateChannelState", () => {
       }
     }));
 
+  it("copies read-only files such as the notes repository's Git objects", () =>
+    withHome((home) => {
+      const stable = seedStable(home);
+      try {
+        const object = NodePath.join(stable.source, "notes", ".git", "objects", "ab", "cdef");
+        write(object, "blob");
+        NodeFS.chmodSync(object, 0o444);
+
+        assert.equal(migrate(stable)._tag, "Copied");
+
+        const copied = NodePath.join(stable.destination, "notes", ".git", "objects", "ab", "cdef");
+        assert.equal(read(copied), "blob");
+        assert.equal(NodeFS.statSync(copied).mode & 0o777, 0o444);
+      } finally {
+        stable.db.close();
+      }
+    }));
+
+  it("never follows a link out of the stable home", () =>
+    withHome((home) => {
+      const stable = seedStable(home);
+      try {
+        const outside = NodePath.join(home, "outside");
+        write(NodePath.join(outside, "private.txt"), "not GOAT's");
+        const userdata = NodePath.join(stable.source, "userdata");
+        NodeFS.rmSync(NodePath.join(userdata, "settings.json"));
+        NodeFS.symlinkSync(
+          NodePath.join(outside, "private.txt"),
+          NodePath.join(userdata, "settings.json"),
+        );
+        NodeFS.symlinkSync(outside, NodePath.join(userdata, "themes"));
+        NodeFS.symlinkSync(outside, NodePath.join(userdata, "attachments", "linked"));
+
+        assert.equal(migrate(stable)._tag, "Copied");
+
+        const copied = listTree(stable.destination);
+        assert.notInclude(copied, "userdata/settings.json");
+        assert.notInclude(copied, "userdata/themes");
+        assert.notInclude(copied, "userdata/attachments/linked");
+        assert.include(copied, "userdata/attachments/thread-1/image.png");
+      } finally {
+        stable.db.close();
+      }
+    }));
+
   it("starts a fresh nightly when stable never ran, and never copies later", () =>
     withHome((home) => {
       const destination = NodePath.join(home, ".goat", "desktop-nightly");

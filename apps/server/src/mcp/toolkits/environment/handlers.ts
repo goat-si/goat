@@ -5,6 +5,7 @@ import {
   type ServerSettings,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as AutomationHold from "../../../automationHold.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
 import * as Settings from "../../../serverSettings.ts";
@@ -84,6 +85,7 @@ export const layer = McpToolAccess.toLayer(EnvironmentToolkit, {
         serverVersion: descriptor.serverVersion,
         platform: descriptor.platform,
         preferences: preferences(current),
+        automationHold: yield* (yield* AutomationHold.AutomationHold).current,
       };
     }),
   ),

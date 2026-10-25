@@ -35,16 +35,27 @@ const USERDATA_FILES = [
   "thread-launch-watches.json",
   "note-work-intents.json",
   "imessage-channel-settings.json",
+  "slack-channel-settings.json",
+  "cloud-machines.json",
   "linux-device-scale-factor",
 ] as const;
 
-/** Directories whose regular files are copied recursively. */
+/**
+ * Directories whose regular files are copied recursively. Replicas, thread recovery, device and
+ * browser state stay behind: they let a server resume another machine's work or are rebuilt.
+ */
 const USERDATA_DIRECTORIES = [
   "secrets",
   "attachments",
   "themes",
   "keybindings-migrations",
+  "goat-bot",
+  "memory-import",
 ] as const;
+/**
+ * Beside userdata. Worktrees, projects, scratch and the GOAT bot workspace are not copied: the
+ * database points at them by absolute path, so both apps keep using the same folders.
+ */
 const BASE_DIRECTORIES = ["notes"] as const;
 
 /** The first database that exists is snapshotted; the server copies V1 only when V2 is absent. */
@@ -176,12 +187,42 @@ const defaultOps: ChannelStateMigrationOps = {
 const fsyncPath = (path: string, directory: boolean) => {
   // Windows cannot open a directory for fsync; NTFS journals the rename itself.
   if (directory && process.platform === "win32") return;
-  const fd = NodeFS.openSync(path, directory ? "r" : "r+");
-  try {
-    NodeFS.fsyncSync(fd);
-  } finally {
-    NodeFS.closeSync(fd);
+  if (process.platform !== "win32") {
+    // POSIX flushes through a read-only descriptor, so read-only files (Git objects) need no mode change.
+    const fd = NodeFS.openSync(path, "r");
+    try {
+      NodeFS.fsyncSync(fd);
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+    return;
   }
+  // Windows flushes only through a writable handle, so a read-only copy is made writable briefly.
+  const { mode } = NodeFS.statSync(path);
+  const writable = (mode & 0o200) !== 0;
+  if (!writable) NodeFS.chmodSync(path, mode | 0o200);
+  try {
+    const fd = NodeFS.openSync(path, "r+");
+    try {
+      NodeFS.fsyncSync(fd);
+    } finally {
+      NodeFS.closeSync(fd);
+    }
+  } finally {
+    if (!writable) NodeFS.chmodSync(path, mode);
+  }
+};
+
+/** Links are never followed, so every byte copied comes from inside the stable home. */
+const regularEntry = (path: string): "file" | "directory" | null => {
+  let stats: NodeFS.Stats;
+  try {
+    stats = NodeFS.lstatSync(path);
+  } catch (cause) {
+    if (errorCode(cause) === "ENOENT") return null;
+    throw cause;
+  }
+  return stats.isFile() ? "file" : stats.isDirectory() ? "directory" : null;
 };
 
 const stagingPrefix = (destinationBaseDir: string) =>
@@ -240,6 +281,7 @@ const copyDirectory = (
   ops: ChannelStateMigrationOps,
   tally: CopyTally,
 ) => {
+  if (regularEntry(source) !== "directory") return;
   let entries: NodeFS.Dirent[];
   try {
     entries = NodeFS.readdirSync(source, { withFileTypes: true });
@@ -285,7 +327,9 @@ export function migrateChannelState(
   try {
     NodeFS.mkdirSync(stagingUserdata, { recursive: true, mode: 0o700 });
 
-    const database = DATABASE_FILES.find((name) => exists(NodePath.join(sourceUserdata, name)));
+    const database = DATABASE_FILES.find(
+      (name) => regularEntry(NodePath.join(sourceUserdata, name)) === "file",
+    );
     if (database !== undefined) {
       const from = NodePath.join(sourceUserdata, database);
       const to = NodePath.join(stagingUserdata, database);
@@ -301,7 +345,9 @@ export function migrateChannelState(
     }
     for (const name of USERDATA_FILES) {
       const from = NodePath.join(sourceUserdata, name);
-      if (exists(from)) copyVerifiedFile(from, NodePath.join(stagingUserdata, name), ops, tally);
+      if (regularEntry(from) === "file") {
+        copyVerifiedFile(from, NodePath.join(stagingUserdata, name), ops, tally);
+      }
     }
     for (const name of USERDATA_DIRECTORIES) {
       copyDirectory(
@@ -360,7 +406,11 @@ export function migrateChannelState(
     if (exists(destination)) return { _tag: "DestinationExists" };
     throw new ChannelStateMigrationError("publish", destination, cause);
   }
-  fsyncPath(parent, true);
+  try {
+    fsyncPath(parent, true);
+  } catch {
+    // Already published: the rename stands, and the next launch finds the copy either way.
+  }
   return { _tag: "Copied", files: tally.files, bytes: tally.bytes };
 }
 

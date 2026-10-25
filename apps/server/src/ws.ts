@@ -117,6 +117,8 @@ import {
   type ScheduledTaskListResult,
   type ServerConfigStreamEvent,
   type ServerWorktreeCheckoutHealth,
+  type AutomationHold as AutomationHoldState,
+  AutomationResumeError,
   type ServerLifecycleStreamEvent,
   type TerminalMetadataStreamEvent,
 } from "@goat/contracts";
@@ -317,6 +319,7 @@ import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import * as AutomationHold from "./automationHold.ts";
 import { isNetworkPath } from "@goat/shared/path";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -368,6 +371,8 @@ export const withLateEditorConfig = <E, R>(
   launcher: EditorDiscovery,
   /** Defender probe results that land after the snapshot; Windows servers only. */
   checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
+  /** The automation hold's current state first, then each change; see AutomationHold. */
+  automationHoldChanges: Stream.Stream<AutomationHoldState | null> = Stream.empty,
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -390,12 +395,24 @@ export const withLateEditorConfig = <E, R>(
   const lateCheckoutHealth = checkoutHealthChanges.pipe(
     Stream.map((health) => ({ type: "checkoutHealthResolved" as const, health })),
   );
+  const lateAutomationHold = automationHoldChanges.pipe(
+    Stream.map((hold) => ({ type: "automationHoldResolved" as const, hold })),
+  );
 
-  return Stream.merge(liveUpdates, Stream.merge(lateEditorConfig, lateCheckoutHealth)).pipe(
+  return Stream.merge(
+    liveUpdates,
+    Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+  ).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "automationHoldResolved": {
+            // A snapshot, so clients built before the field still apply it without a new event.
+            if ((current.automationHold ?? null) === event.hold) return [current, []];
+            const next = { ...current, automationHold: event.hold };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "checkoutHealthResolved": {
             // Every client applies a snapshot, so this reaches ones built before the field.
             const same =
@@ -1495,6 +1512,7 @@ export const layerWsRpc = (
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const worktreeCheckoutHealth = yield* WorktreeCheckoutHealth.WorktreeCheckoutHealth;
+      const automationHold = yield* AutomationHold.AutomationHold;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
@@ -2005,6 +2023,7 @@ export const layerWsRpc = (
         const scratchWorkspaceRoot = yield* managedFolders.scratchRoot;
         const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
         const checkoutHealth = yield* worktreeCheckoutHealth.current;
+        const currentAutomationHold = yield* automationHold.current;
         const editorConfig = yield* resolveEditorConfig(
           yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
           resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
@@ -2064,6 +2083,7 @@ export const layerWsRpc = (
           newProjectsRoot: managedFolders.namedProjectsRoot,
           ...(lastEventLoopStall === undefined ? {} : { lastEventLoopStall }),
           ...(checkoutHealth === null ? {} : { worktreeCheckoutHealth: checkoutHealth }),
+          automationHold: currentAutomationHold,
         };
       });
 
@@ -2864,6 +2884,10 @@ export const layerWsRpc = (
             return { keybindings: keybindingsConfig, issues: [] };
           }),
         [WS_METHODS.serverRunStorageCleanup]: () => storageCleanup.runNow,
+        [WS_METHODS.serverResumeAutomation]: () =>
+          automationHold.release.pipe(
+            Effect.mapError((error) => new AutomationResumeError({ detail: error.message })),
+          ),
         [WS_METHODS.serverGetStorageCleanupReport]: () => storageCleanup.reports,
         [WS_METHODS.serverGetWorktreesDirectoryStatus]: () =>
           serverSettings.getSettings.pipe(
@@ -3567,7 +3591,13 @@ export const layerWsRpc = (
 
               return Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
-                withLateEditorConfig(config, liveUpdates, externalLauncher, checkoutHealthChanges),
+                withLateEditorConfig(
+                  config,
+                  liveUpdates,
+                  externalLauncher,
+                  checkoutHealthChanges,
+                  automationHold.changes,
+                ),
               );
             }),
           ),

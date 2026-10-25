@@ -411,6 +411,40 @@ it.effect("separates host file URLs from readable attachment URLs", () =>
   }).pipe(Effect.scoped),
 );
 
+it.effect("refuses to resume automation before the handler without settings permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverResumeAutomation
+        > => tag !== WS_METHODS.serverResumeAutomation,
+      ),
+    );
+    let resumed = 0;
+    const handler = group.toLayerHandler(WS_METHODS.serverResumeAutomation, () =>
+      Effect.sync(() => {
+        resumed += 1;
+      }),
+    );
+    const viewer = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(Layer.mergeAll(handler, RpcAuthorization.layer([AuthOrchestrationReadScope]))),
+    );
+    expect(yield* viewer[WS_METHODS.serverResumeAutomation]({}).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthSettingsWriteScope,
+    });
+    expect(resumed).toBe(0);
+
+    const admin = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(Layer.mergeAll(handler, RpcAuthorization.layer([AuthSettingsWriteScope]))),
+    );
+    yield* admin[WS_METHODS.serverResumeAutomation]({});
+    expect(resumed).toBe(1);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("denies manual cleanup before the handler without settings permission", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

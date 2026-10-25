@@ -23,3 +23,12 @@ export const encodeAutomationHold = (hold: AutomationHold): string =>
   `${Schema.encodeSync(AutomationHoldJson)(hold)}\n`;
 
 export const decodeAutomationHold = Schema.decodeUnknownSync(AutomationHoldJson);
+
+export class AutomationResumeError extends Schema.TaggedError<AutomationResumeError>()(
+  "AutomationResumeError",
+  { detail: Schema.String },
+) {
+  override get message() {
+    return `Could not resume automation: ${this.detail}`;
+  }
+}

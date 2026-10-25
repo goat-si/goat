@@ -389,8 +389,13 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      // A cached stall would read as a fresh freeze on the next launch.
-      const { lastEventLoopStall: _stall, ...cacheable } = withoutEnvironmentThemes(config);
+      // A cached stall would read as a fresh freeze on the next launch, and a cached hold would
+      // offer to resume automation before the live server says whether it is still held.
+      const {
+        lastEventLoopStall: _stall,
+        automationHold: _hold,
+        ...cacheable
+      } = withoutEnvironmentThemes(config);
       return yield* cache.saveServerConfig(environmentId, cacheable).pipe(
         Effect.as(true),
         Effect.catch((error) =>
@@ -1079,6 +1084,12 @@ export function createServerEnvironmentAtoms<R, E>(
     runStorageCleanup: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:run-storage-cleanup",
       tag: WS_METHODS.serverRunStorageCleanup,
+      concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
+    }),
+    /** Lets a nightly copy of stable's state run its automation; the config stream clears the hold. */
+    resumeAutomation: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:resume-automation",
+      tag: WS_METHODS.serverResumeAutomation,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
     /** Runs that machine's history compaction now; Fleet offers it when storage is over budget. */
