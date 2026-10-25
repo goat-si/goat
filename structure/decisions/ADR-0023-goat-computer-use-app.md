@@ -20,6 +20,10 @@
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
   decision; until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 archives.
+- Amended 2026-10-25, D16 (owner decision, Jun, 2026-10-25 18:15 KST, corrected 18:17; #1617,
+  #1396): every run in full-access runtime mode uses apps without per-app approval, whoever or
+  whatever started it, even when the host setting `cuaFullAccessAutoAdmit` is off. This replaces
+  #1396's off-by-default behavior. The Readiness and approvals bullet below states the decision.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -129,6 +133,15 @@
     authenticated helper, a real capture and tree, and tools available to the model. Apps are
     approved for a conversation or always from a card, the approved target is frozen before the
     action runs, and always-allowed apps can be removed in Settings.
+    A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
+    a schedule, a webhook, Slack or another channel started it, because choosing full access for a
+    thread already gives that trust (D16). The host setting "Full access without approval"
+    (`cuaFullAccessAutoAdmit`) no longer decides anything for full-access runs. Everything else
+    still applies: unattended runs still need private-mode detection (D7), the password-manager
+    exclusions, pause, Stop and stop all, each call's scope, and the screen-sharing, reservation
+    and foreground checks; the physical kill switch is not implemented yet (#1505). Runs in other
+    runtime modes keep the approval flow. Owner decision (Jun, 2026-10-25), implemented in #1617;
+    it replaces #1396's off-by-default setting.
   - **One preview surface.** Native computer use and built-in browser use share one preview session
     contract (owner `agent`, `human` or `private`; status; target; lease; last frame) with the same
     controls (take over, hand back, request handoff, stop, stop all), status chips and private mode
@@ -164,7 +177,8 @@
     handling, and troubleshooting for stale entries and the wrong app. GOAT never runs
     `tccutil reset` or edits the TCC database. Windows and Linux follow the same steps. Requested
     by Jun on 2026-10-24 (lead decision D14).
-  - **Safety.** Per-app approvals and a time-bounded control lease. Unattended origins keep the
+  - **Safety.** Per-app approvals (except full-access runs, D16) and a time-bounded control
+    lease. Unattended origins keep the
     ADR-0022 driver ceiling. Interactive turns also run through the GOAT proxy, so a per-thread
     Stop and the global kill switch end the transport at once. An agent with approved control
     keeps working while a person uses the same desktop; the person's keyboard and pointer input
