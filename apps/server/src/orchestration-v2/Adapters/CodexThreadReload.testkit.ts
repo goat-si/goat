@@ -235,7 +235,7 @@ export const codexReloadFixture = (scenario: string) => {
   // Returns the next request id.
   const reload = (
     first: number,
-    cua: Record<string, unknown>,
+    cua?: Record<string, unknown>,
     threads: ReadonlyArray<string> = [nativeThreadId],
     goalResponse: Record<string, unknown> = { result: { goal: null } },
     params = threadParams(cua),
