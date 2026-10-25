@@ -96,7 +96,6 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
     const blocker = result.blockers[0];
     const remedies = {
       screenLocked: "Unlock the screen",
-      userIntervened: "hands control back",
       noInteractiveDesktop: "Windows Session 0",
       otherUserAtConsole: "Another user",
       restartRequired: "Restart the helper or GOAT",

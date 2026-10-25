@@ -281,7 +281,6 @@ function helperStep(
 
 const BLOCKERS: Record<ComputerUseReadiness["blockers"][number], string> = {
   screenLocked: "The screen is locked. Unlock it to let the agent continue.",
-  userIntervened: "Someone is using this computer. The agent waits until you hand control back.",
   noInteractiveDesktop: "GOAT runs outside a desktop session here, so there is no screen to use.",
   otherUserAtConsole: "Another user is signed in at this computer's screen.",
   restartRequired: "A permission changed. Restart GOAT so its helper sees it.",

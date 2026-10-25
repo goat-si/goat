@@ -103,15 +103,14 @@ export const ComputerUseReadiness = Schema.Struct({
   input: Schema.Literals(["background", "foregroundOnly", "unavailable"]),
   /**
    * What stops computer use right now even when every step above is ready, typed so clients
-   * can choose the remedy: screenLocked (unlock the screen), userIntervened (a person has the
-   * input), noInteractiveDesktop (a service or SSH session with no desktop, such as Windows
-   * Session 0), otherUserAtConsole, restartRequired (a grant changed and the helper must start
-   * again to see it).
+   * can choose the remedy: screenLocked (unlock the screen), noInteractiveDesktop (a service or
+   * SSH session with no desktop, such as Windows Session 0), otherUserAtConsole, restartRequired
+   * (a grant changed and the helper must start again to see it). A person's takeover is not a
+   * host blocker: it pauses that session and shows as its userIntervened stop reason (#1560).
    */
   blockers: Schema.Array(
     Schema.Literals([
       "screenLocked",
-      "userIntervened",
       "noInteractiveDesktop",
       "otherUserAtConsole",
       "restartRequired",
