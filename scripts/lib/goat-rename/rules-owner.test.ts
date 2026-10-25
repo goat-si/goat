@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Reads checked-in policy files, as the rename driver does.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
