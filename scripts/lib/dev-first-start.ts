@@ -69,7 +69,7 @@ export const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(funct
         );
       }
     }
-    // GOAT's live data, or the legacy T3 home when GOAT has none, as migrate-dev-db picks it.
+    // GOAT's live data, or the legacy ~/.t3 home when GOAT has none, as migrate-dev-db picks it.
     const homeDirectory = yield* HostProcess.HomeDirectory;
     let source: string | undefined;
     for (const home of [".goat", ".t3"]) {
