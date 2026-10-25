@@ -88,7 +88,6 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
-import { trackOpenServerRequests } from "./codexOpenServerRequests.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -758,6 +757,9 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
   }
 }
 
+const CUA_DEFERRED_NOTE =
+  "Computer use was stopped and its new connection starts once this conversation and its subagents are idle. Until then its tools refuse with userStoppedSession. Tell the person to send their next message after this turn ends, or to start a new thread, to use the computer again.";
+
 export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTurnStartParams")(
   function* (input: {
     readonly nativeThreadId: string;
@@ -769,6 +771,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly deviceToolsAvailable?: boolean;
     /** The managed `cua-driver` MCP server is attached to this thread. */
     readonly computerUse?: boolean;
+    readonly computerUseDeferred?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly memoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["memoryContext"];
@@ -830,7 +833,15 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               )).renderedText,
             },
           };
-    const additionalContext = { ...goatContext, ...appContext, ...memoryContext };
+    const deferredContext = input.computerUseDeferred
+      ? { goat_computer_use_deferred: { kind: "application" as const, value: CUA_DEFERRED_NOTE } }
+      : {};
+    const additionalContext = {
+      ...goatContext,
+      ...deferredContext,
+      ...appContext,
+      ...memoryContext,
+    };
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -5759,8 +5770,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
-        const requests = yield* trackOpenServerRequests(client);
-        yield* requests.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
+        // What Codex last reported for each native thread; the computer use reload reads it.
+        const threadStatuses = new Map<string, string>();
+        yield* client.handleServerNotification("thread/status/changed", (payload) =>
+          Effect.sync(() => threadStatuses.set(payload.threadId, payload.status.type)),
+        );
+        yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5832,7 +5847,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("item/fileChange/requestApproval", (payload) =>
+        yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5905,7 +5920,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("item/permissions/requestApproval", (payload) =>
+        yield* client.handleServerRequest("item/permissions/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5967,7 +5982,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
           Effect.gen(function* () {
             if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
               yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
@@ -6047,7 +6062,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("execCommandApproval", (payload) =>
+        yield* client.handleServerRequest("execCommandApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -6117,7 +6132,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("applyPatchApproval", (payload) =>
+        yield* client.handleServerRequest("applyPatchApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -6186,7 +6201,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* requests.handleServerRequest("item/tool/requestUserInput", (payload) =>
+        yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -7168,38 +7183,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             }
             // Codex ignores resume overrides on a held thread, so a changed computer use driver (a
-            // new control after Stop, #1564) needs a cold reload, only while nothing of the thread
-            // runs or waits on an open request, subagents included through their root. Fails closed.
-            const ownedHere = (context: ActiveCodexTurnContext) =>
-              approvalOwnerCodexTurn(context).owner.providerThread.id ===
-              turnInput.providerThread.id;
-            const retainedWorkHere = Effect.gen(function* () {
-              const contexts = [
-                ...(yield* Ref.get(activeTurns)).values(),
-                ...(yield* Ref.get(settledTurns)).values(),
-              ];
-              for (const context of contexts) {
-                if (!ownedHere(context)) continue;
-                if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
-              }
-              return false;
+            // new control after Stop, #1564) needs a cold reload. It runs only while Codex reports
+            // this thread and every subagent thread under it idle; an unreported thread defers it.
+            const subagents = Array.from((yield* Ref.get(subagentThreads)).entries());
+            const busy = [
+              threadId,
+              ...subagents
+                .filter(
+                  ([, subagent]) =>
+                    approvalOwnerCodexTurn(subagent.parentContext).owner.providerThread.id ===
+                    turnInput.providerThread.id,
+                )
+                .map(([nativeId]) => nativeId),
+            ].some((nativeId) => {
+              const status = threadStatuses.get(nativeId);
+              return status !== "idle" && status !== "notLoaded";
             });
-            const subagents = yield* Ref.get(subagentThreads);
-            const busy =
-              Array.from((yield* Ref.get(activeTurns)).values()).some(ownedHere) ||
-              Array.from(subagents.values()).some(
-                (subagent) =>
-                  (subagent.task.status === "running" || subagent.task.status === "pending") &&
-                  ownedHere(subagent.parentContext),
-              ) ||
-              requests.openThreads().some((nativeId) => {
-                const subagent = subagents.get(nativeId);
-                return (
-                  nativeId === threadId ||
-                  (subagent !== undefined && ownedHere(subagent.parentContext))
-                );
-              }) ||
-              (yield* retainedWorkHere);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(
@@ -7209,6 +7208,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const applied = credentialsByThread.get(threadId);
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (mcpSession && applied !== next && !(cuaChanged && busy)) {
               // Other authority changes keep the same native conversation; stale credentials are
               // already denied by the registry.
@@ -7266,6 +7266,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 mcpSession !== undefined &&
                 runtime.cuaDriver !== undefined &&
                 McpProviderSession.carriesComputerUseSkill(mcpSession),
+              computerUseDeferred,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
@@ -7575,6 +7576,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       Effect.tap((response) =>
                         Effect.sync(() => {
                           appliedSubagentsByThread.set(response.thread.id, runtime.subagentKey);
+                          threadStatuses.set(response.thread.id, response.thread.status.type);
                           if (!mcpSession) return;
                           credentialsByThread.set(
                             response.thread.id,
