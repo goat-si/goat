@@ -1289,6 +1289,8 @@ interface CodexSubagentThreadContext {
   task: OrchestrationV2Subagent;
   /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
   endedByStop?: boolean;
+  /** The turns its work was given under, fixed then; a later move of a parent leaves it (#1643). */
+  workLineage: ReadonlyArray<string>;
 }
 
 const approvalOwnerCodexTurn = (
@@ -3100,10 +3102,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ) {
             if (subagent.nativeTurnIds.has(turn.nativeTurnId)) return;
             subagent.nativeTurnIds.add(turn.nativeTurnId);
-            // The turn the child was spawned or last given work under. A child whose first turn
-            // starts late, after Stop ended that turn and the parent thread moved on, is still
-            // stopped (#1643).
-            const spawnedUnder = subagent.parentContext;
             const parentNativeThreadId = yield* getNativeThreadId(
               subagent.parentContext.providerThread,
             );
@@ -3114,7 +3112,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 [subagent.parentContext],
                 yield* Ref.get(terminalizedNonCompletedNativeTurns),
               ) ||
-              CodexSubagents.stoppedLineage([spawnedUnder], stoppedNativeTurns)
+              // Work given under a turn Stop ended is stopped, however late it starts (#1643).
+              subagent.workLineage.some((turnId) => stoppedNativeTurns.has(turnId))
             )
               // Forked: notifications are handled on the input reader, which must stay free to
               // read the interrupt's answer.
@@ -3418,6 +3417,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
             const subagent = {
               parentContext: input.context,
+              workLineage: CodexSubagents.lineage(input.context),
               providerThread,
               childThread,
               subagentNodeId,

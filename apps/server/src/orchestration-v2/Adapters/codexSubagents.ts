@@ -55,6 +55,14 @@ export const stopped = <
     return false;
   });
 
+/** The native turn ids from this turn up through every parent turn it runs under. */
+export const lineage = (turn: TurnLike) => {
+  const turnIds: Array<string> = [];
+  for (let at: TurnLike | undefined = turn; at; at = at.subagent?.parentContext)
+    turnIds.push(at.nativeTurnId);
+  return turnIds;
+};
+
 /** Whether any of these lineages runs through a turn that Stop or a failure ended. */
 export const stoppedLineage = (
   starts: ReadonlyArray<TurnLike>,
@@ -71,15 +79,17 @@ export const stoppedLineage = (
  * next turn belongs to that turn, not to the one it was spawned under, which Stop may have ended
  * (#1643). Waiting on a child gives it no work.
  */
-export const assign = <T>(
-  subagents: ReadonlyMap<string, { parentContext: T }>,
+export const assign = <T extends TurnLike>(
+  subagents: ReadonlyMap<string, { parentContext: T; workLineage: ReadonlyArray<string> }>,
   item: { readonly tool: string; readonly receiverThreadIds: ReadonlyArray<string> },
   turn: T,
 ) => {
   if (item.tool !== "sendInput" && item.tool !== "resumeAgent") return;
   for (const childThreadId of item.receiverThreadIds) {
     const subagent = subagents.get(childThreadId);
-    if (subagent !== undefined) subagent.parentContext = turn;
+    if (subagent === undefined) continue;
+    subagent.parentContext = turn;
+    subagent.workLineage = lineage(turn);
   }
 };
 

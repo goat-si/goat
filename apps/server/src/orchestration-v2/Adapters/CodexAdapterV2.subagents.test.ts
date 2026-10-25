@@ -416,4 +416,95 @@ describe("Codex native subagents as their thread's background work", () => {
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
+
+  it.effect("new work for a child leaves its stopped grandchild stopped (#1643)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "stopped-grandchild";
+        const child = root + "-child";
+        const grandchild = root + "-grandchild";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, child);
+        // The child runs a turn that spawns a grandchild, then finishes.
+        f.entries.push(childTurn(child, "child-turn-1", "inProgress"), {
+          type: "emit_inbound",
+          frame: {
+            method: "item/completed",
+            params: {
+              item: {
+                type: "subAgentActivity",
+                id: "spawn-" + grandchild,
+                kind: "started",
+                agentThreadId: grandchild,
+                agentPath: "/root/child/grandchild",
+              },
+              threadId: child,
+              turnId: "child-turn-1",
+              completedAtMs: 1782622441500,
+            },
+          },
+        });
+        f.entries.push(childTurn(child, "child-turn-1", "completed"));
+        // Stop ends the root turn before the grandchild ever started.
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "turn/interrupt",
+              params: { threadId: root, turnId: "turn-1" },
+            },
+          },
+          { type: "emit_inbound", frame: { id: 4, result: {} } },
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: root,
+                turn: makeCodexReplayTurn({ id: "turn-1", status: "interrupted" }),
+              },
+            },
+          },
+        );
+        // Turn 2 sends the child new work; the grandchild's stopped work starts only now.
+        yield* f.turnStart(5, 2, false);
+        f.entries.push(
+          sendInput(root, child),
+          childTurn(grandchild, "grandchild-late", "inProgress"),
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 6,
+              method: "turn/interrupt",
+              params: { threadId: grandchild, turnId: "grandchild-late" },
+            },
+          },
+        );
+        f.entries.push({ type: "emit_inbound", frame: { id: 6, result: {} } });
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        yield* replay.runtime.interruptTurn({
+          providerThread: replay.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId: "turn-1",
+          }),
+          requestRuntimeRestart: true,
+        });
+        yield* replay.terminal;
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.isFalse(
+          yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });
