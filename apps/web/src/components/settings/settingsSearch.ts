@@ -1073,7 +1073,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["Tailscale guide"],
   },
   {
-    id: "t3-connect",
+    id: "goat-connect",
     localEnvironmentOnly: true,
     title: "GOAT Connect",
     to: "/settings/connections",

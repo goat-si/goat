@@ -112,7 +112,6 @@ describe("GOAT Connect copy", () => {
       'kind: "t3-connect"',
       'fetch("/api/t3-connect/mint-credential")',
       'headers["x-t3-relay-delivery-id"]',
-      "t3ConnectTroubleshootingUrl(section)",
       "https://github.com/pingdotgg/t3code/blob/main/docs/user/t3-connect-troubleshooting.md#the-host-runs-an-older-t3-code",
     ]) {
       expect(apply(path, source)).toBe(source);

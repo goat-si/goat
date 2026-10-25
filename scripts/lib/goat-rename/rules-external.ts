@@ -122,7 +122,6 @@ const serviceEndpointPaths = new Set([
   "packages/contracts/src/goatProjectFile.ts",
   "packages/shared/src/connectAuth.ts",
   "packages/shared/src/providerAuthReturnUrl.ts",
-  "packages/source-control-github/src/server/githubStackRebase.ts",
   "scripts/build-desktop-artifact.ts",
   "structure/decisions/ADR-0014-desktop-runtime-identity.md",
 ]);
@@ -247,7 +246,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
       "MIT. [LICENSE](./LICENSE) keeps the original T3 Code copyright notice. Icons: [Solar](https://www.figma.com/community/file/1166831539721848736) by 480 Design, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).",
     ),
   ],
-  ["apps/desktop/package.json", /(?:"productName": "T3 Code \(Alpha\)")/g],
   ["apps/desktop/scripts/electron-launcher.mjs", /(?:"T3 Code \(Dev\)"|"T3 Code \(Alpha\)")/g],
   ["apps/desktop/src/app/DesktopLegacyLocalStorage.ts", /(?:"T3 Code \(Alpha\)")/g],
   [
@@ -275,10 +273,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     exactLines(" * Events go to the T3 Code ingest endpoint, which keeps a copy and forwards"),
   ],
   [
-    "apps/server/src/vcs/GitVcsDriver.ts",
-    /(?:GIT_AUTHOR_NAME: "T3 Code"|GIT_COMMITTER_NAME: "T3 Code")/g,
-  ],
-  [
     "docs/operations/mobile-app-store-screenshots.md",
     exactLines(
       "2. Creates T3 Code, React, and Linux Git repositories with recognizable favicons, feature branches,",
@@ -287,32 +281,14 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     ),
   ],
   ["packages/contracts/src/relay.ts", /(?:"T3 Code Relay API")/g],
-  ["packages/provider-cursor/src/server/adapter.ts", /(?:name: `T3 Code \$\{input\.threadId\}`)/g],
-  [
-    "packages/provider-cursor/src/server/auth.ts",
-    /(?:apiKeyName: `T3 Code - \$\{options\.displayName\}`)/g,
-  ],
   [
     "packages/provider-muse/src/server/sdk.ts",
     /(?:clientInfo: \{ name: "t3_code", title: "T3 Code", version: "1" \})/g,
   ],
-  [
-    "packages/provider-opencode/src/server/textGeneration.ts",
-    /(?:title: `T3 Code \$\{input\.operation\}`)/g,
-  ],
-  [
-    "packages/provider-opencode/src/server/v2/textGeneration.ts",
-    /(?:title: `T3 Code \$\{input\.operation\}`)/g,
-  ],
-  ["packages/provider-testing/src/replayWorkspace.ts", /(?:"T3 Code Test")/g],
   ["packages/shared/src/goatHome.ts", /(?:T3 Code may be using `~\/\.t3` at the same time\.)/g],
   [
     "packages/shared/src/usageLimits.ts",
     /(?:I've reached the limit for using my ChatGPT plan in T3 Code\. Could you increase our workspace's usage limits so I can continue\?)/g,
-  ],
-  [
-    "packages/source-control-github/src/server/githubStackRebase.ts",
-    /(?:GIT_CONFIG_VALUE_1: "T3 Code")/g,
   ],
   [
     "scripts/mobile-showcase-environment.ts",
@@ -661,8 +637,9 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "relay-identities",
     pattern:
-      /T3Connect[A-Za-z]*|T3Connect|t3-(?:env|cloud|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
-    scope: (path) => relayIdentityPaths.has(path),
+      /t3-(?:env|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3-cloud-(?:mint|health)\+jwt|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
+    // Files that move to GoatConnect* keep their relay values under either name.
+    scope: (path) => relayIdentityPaths.has(path.replaceAll("GoatConnect", "T3Connect")),
     reason:
       "T3 Connect account names, public client ids, JWT and hosted routing contracts belong to the upstream relay (D12/D14).",
   },

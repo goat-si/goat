@@ -212,7 +212,7 @@ const stageRuntimeExternals = Effect.fn("stageRuntimeExternals")(function* (inpu
   yield* fs.writeFileString(
     path.join(input.stageDir, "package.json"),
     `${yield* encodeJsonString({
-      name: "t3-runtime",
+      name: "goat-runtime",
       version: input.version,
       private: true,
       packageManager: rootPackageJson.packageManager,

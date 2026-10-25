@@ -41,7 +41,7 @@ function confirmDeregister(environment: RelayClientEnvironmentRecord, onConfirm:
   Dialog.confirm({ title, message, confirmText: "Deregister", destructive: true, onConfirm });
 }
 
-export function T3ConnectProfilePage() {
+export function GoatConnectProfilePage() {
   const environmentsState = useManagedRelayEnvironments();
   const deregisterEnvironment = useAtomCommand(deregisterManagedRelayEnvironmentCommand, {
     reportFailure: false,
@@ -83,7 +83,7 @@ export function T3ConnectProfilePage() {
     const cause = squashAtomCommandFailure(result);
     const message = cause instanceof Error ? cause.message : "Could not deregister the server.";
     const traceId = findErrorTraceId(cause);
-    console.error("[t3-connect] Could not deregister environment", {
+    console.error("[goat-connect] Could not deregister environment", {
       environmentId: environment.environmentId,
       message,
       traceId,

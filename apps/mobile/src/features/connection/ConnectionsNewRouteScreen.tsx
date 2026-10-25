@@ -423,7 +423,7 @@ export function ConnectionsNewRouteScreen({
             ) : null}
           </View>
 
-          {hasCloudPublicConfig() ? <T3ConnectSection /> : null}
+          {hasCloudPublicConfig() ? <GoatConnectSection /> : null}
         </View>
       </ScrollView>
     </SettingsScreen>
@@ -526,7 +526,7 @@ function PairingScanCard(props: {
   );
 }
 
-function T3ConnectSection() {
+function GoatConnectSection() {
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const navigation = useNavigation();
   const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =

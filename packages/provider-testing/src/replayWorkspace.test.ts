@@ -49,7 +49,7 @@ describe("makeCheckpointWorkspace", () => {
       try {
         expect(NodeFS.readFileSync(sharedConfigPath, "utf8")).toBe(sharedConfig);
         expect(git(main, "rev-parse", "lane")).toBe(laneHead);
-        expect(git(workspace, "log", "--format=%an %s")).toBe("T3 Code Test initial");
+        expect(git(workspace, "log", "--format=%an %s")).toBe("GOAT Test initial");
       } finally {
         NodeFS.rmSync(workspace, { recursive: true, force: true });
       }

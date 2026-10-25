@@ -108,6 +108,26 @@ it.effect.each<{ result: string; initial: Record<string, string> }>([
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("copies a key left under the old source productName once the package is named GOAT", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const userDataPath = yield* fs.makeTempDirectoryScoped();
+    const { keys, store } = memoryStore({ "T3 Code (Alpha)": "dev-key" });
+    const migration = yield* makeWith(async () => store, "darwin", "GOAT");
+
+    yield* migration.run({
+      userDataPath,
+      legacyRuntimeName: "T3 Code Dev",
+      runtimeName: "GOAT Dev",
+    });
+
+    assert.equal(keys.get("GOAT Dev"), "dev-key");
+    assert.equal(keys.get("T3 Code (Alpha)"), "dev-key");
+    assert.include(yield* fs.readFileString(path.join(userDataPath, MARKER_FILE_NAME)), "copied");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("marks success, retries after a store failure, and skips unkeyed platforms", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

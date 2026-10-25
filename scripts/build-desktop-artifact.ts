@@ -2833,7 +2833,7 @@ const stageMacIcons = Effect.fn("build-desktop-artifact.stageMacIcons")(function
   }
 
   const tmpRoot = yield* fs.makeTempDirectoryScoped({
-    prefix: "t3code-icon-build-",
+    prefix: "goat-icon-build-",
   });
 
   const iconPngPath = path.join(stageResourcesDir, "icon.png");
@@ -3681,7 +3681,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
     sidecarDependencies,
   );
   const sidecarPackageJson = {
-    name: "t3code-server",
+    name: "goat-server",
     version: input.appVersion,
     private: true,
     packageManager: rootPackageJson.packageManager,
