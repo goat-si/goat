@@ -259,11 +259,15 @@ it.effect(
       // R ends while Q waits in the queue: the control stays for Q, R's foreground does not.
       yield* run("run:Q", "queued", 2);
       yield* run("run:R", "completed", 1);
+      const signals = yield* leases.subscribe;
+      if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
       assert.isFalse(yield* leases.turnEnded(threadId));
       assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      // Proxies learn of the revocation from this update and stop a script already under way.
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
       const state = yield* leases.controlState(threadId, control.controlId);
       assert.equal(state._tag, "active");
       assert.isUndefined(state._tag === "active" ? state.foreground : "not active");
       yield* leases.stopAll;
-    }).pipe(Effect.provide(everyAppLayer)),
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );

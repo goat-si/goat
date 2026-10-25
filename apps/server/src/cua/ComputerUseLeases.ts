@@ -724,10 +724,12 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
-  /** Whether the thread still has work open; see ComputerUseOpenWork. */
+  /** Whether the thread still has work open; see ComputerUseOpenWork. A revocation publishes. */
   const openWork = (threadId: ThreadId) =>
     threadOpenWork(sql, foreground, threadId).pipe(
       Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
+      Effect.tap(({ revoked }) => (revoked ? changed : Effect.void)),
+      Effect.map(({ open }) => open),
     );
 
   const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
