@@ -347,6 +347,13 @@ private func runObserverFixture(_ scenario: String) {
           "privacy gate \(defect) names its check: \(f.events)")
       }
     }
+    // App-supplied role names are reported only when they are standard AX names.
+    let named = WatchFixture()
+    named.api.roles["focus"] = "AXCustomerAliceSecret123"
+    named.api.subroles["focus"] = .failure
+    named.start()
+    check(named.events == ["unsupported:private_or_unknown_focus:focus_subrole_unreadable:other"],
+      "a non-standard role name never reaches the reason: \(named.events)")
     let f = WatchFixture()
     f.start()
     f.api.privateFocus = true
@@ -464,6 +471,32 @@ private func runObserverFixture(_ scenario: String) {
       f.start()
       check(f.events == ["unsupported:private_or_unknown_focus:" + reason], "Calculator with \(name): \(f.events)")
     }
+    // The same focused element can turn secure, or move out of the window, after its node was read.
+    let sameCases: [(String, (FakeAX) -> Void)] = [
+      ("turns secure", { $0.subroles["calc-focus"] = .string("AXSecureTextField") }),
+      ("moves outside the window", { $0.parents["calc-focus"] = "other" }),
+      ("becomes a secure field by role", { $0.roles["calc-focus"] = "AXSecureTextField" }),
+    ]
+    for (name, mutate) in sameCases {
+      let f = WatchFixture()
+      calculator(f.api)
+      f.start()
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "key-52:AXRole" { mutate(f.api) }
+      }
+      var gate: [Bool] = []
+      f.watch.check { gate.append($0) }
+      f.executor.drain()
+      check(gate == [false], "the same focused element that \(name) during the walk refuses: \(gate)")
+    }
+    // A focus whose parent claims the window but which the window never lists cannot be judged.
+    let hidden = WatchFixture()
+    calculator(hidden.api)
+    hidden.api.childrenMap["window"] = .elements(["keypad", "display"].map { WindowAXElement($0 as NSString) })
+    hidden.api.childrenMap["calc-focus"] = .unsupported
+    hidden.start()
+    check(hidden.events == ["unsupported:private_or_unknown_focus:focus_not_in_tree"],
+      "an unknown focus the window walk never reaches refuses: \(hidden.events)")
     let moved = WatchFixture()
     calculator(moved.api)
     moved.start()

@@ -300,11 +300,19 @@ final class WindowAXWatch: SettleWatch {
 
   private static func privacy(_ detail: String) -> String { "private_or_unknown_focus:" + detail }
 
-  /// An app-supplied AX name reduced to letters and digits, so a reason can carry it safely.
-  private static func axName(_ name: String) -> String {
-    let kept = name.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) && $0.isASCII }
-    return kept.isEmpty ? "none" : String(String.UnicodeScalarView(kept.prefix(32)))
-  }
+  /// Standard AX role names a reason may carry. Names are app-supplied, so anything else becomes
+  /// "other": filtering characters alone would still let an app put text into the reason.
+  private static let reportableNames: Set<String> = ["AXApplication", "AXWindow", "AXSheet", "AXDrawer",
+    "AXPopover", "AXGroup", "AXSplitGroup", "AXScrollArea", "AXScrollBar", "AXToolbar", "AXTabGroup",
+    "AXLayoutArea", "AXLayoutItem", "AXTable", "AXOutline", "AXList", "AXBrowser", "AXGrid", "AXRow",
+    "AXColumn", "AXCell", "AXWebArea", "AXMenu", "AXMenuBar", "AXMenuItem", "AXButton", "AXStaticText",
+    "AXTextField", "AXTextArea", "AXSecureTextField", "AXComboBox", "AXImage", "AXCheckBox",
+    "AXRadioButton", "AXMenuButton", "AXPopUpButton", "AXSlider", "AXValueIndicator", "AXIncrementor",
+    "AXProgressIndicator", "AXBusyIndicator", "AXLevelIndicator", "AXDisclosureTriangle", "AXColorWell",
+    "AXSplitter", "AXHandle", "AXRelevanceIndicator", "AXLink", "AXHeading", "AXDateField",
+    "AXTimeField", "AXMatte", "AXRuler", "AXUnknown"]
+
+  private static func axName(_ name: String) -> String { reportableNames.contains(name) ? name : "other" }
 
   /// A focused element with no known role (Calculator reports AXUnknown, #1585) cannot be judged
   /// by its own chain, so it passes only inside the target window and only if that whole window
@@ -321,15 +329,35 @@ final class WindowAXWatch: SettleWatch {
   }
 
   private func unknownFocusRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
+    if let refusal = unknownFocusPlacementRefusal(focused, app: app) { return refusal }
+    if let refusal = windowTreeRefusal(allowing: focused) { return refusal }
+    guard isAdmitted else { return Self.privacy("invalidated") }
+    switch api.attribute(app, "AXFocusedUIElement") {
+    case .absent: return nil
+    // The same element may have turned secure or moved while the window was read; check it again.
+    case .element(let now) where now.same(focused): return unknownFocusPlacementRefusal(focused, app: app)
+    case .element(let now): return focusRefusal(now, app: app, allowUnknown: false)
+    case .unsupported: return Self.privacy("focus_unsupported")
+    default: return Self.privacy("focus_unreadable")
+    }
+  }
+
+  /// The unknown focus is not secure by subrole and sits inside the target window, under no secure
+  /// or unreadable ancestor: the window walk covers only the target window.
+  private func unknownFocusPlacementRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
     guard let target else { return Self.privacy("tree_target_missing") }
     guard isAdmitted else { return Self.privacy("invalidated") }
+    switch api.attribute(focused, "AXRole") {
+    case .string(let role) where role == "AXUnknown" || role.isEmpty: break
+    case .absent: break
+    // A role that became known since the first read is judged by nobody here, so it refuses.
+    default: return Self.privacy("focus_role_changed")
+    }
     switch api.attribute(focused, "AXSubrole") {
     case .string(let subrole): if subrole == "AXSecureTextField" { return Self.privacy("focus_subrole:AXUnknown") }
     case .absent, .unsupported: break
     default: return Self.privacy("focus_subrole_unreadable:AXUnknown")
     }
-    // The walk below covers only the target window, so the focus must sit inside it, under no
-    // secure ancestor.
     var node = focused
     var seen: [WindowAXElement] = []
     var inside = false
@@ -356,15 +384,7 @@ final class WindowAXWatch: SettleWatch {
       }
       node = parent
     }
-    guard inside else { return Self.privacy("focus_chain_limit") }
-    if let refusal = windowTreeRefusal(allowing: focused) { return refusal }
-    guard isAdmitted else { return Self.privacy("invalidated") }
-    switch api.attribute(app, "AXFocusedUIElement") {
-    case .absent: return nil
-    case .element(let now): return now.same(focused) ? nil : focusRefusal(now, app: app, allowUnknown: false)
-    case .unsupported: return Self.privacy("focus_unsupported")
-    default: return Self.privacy("focus_unreadable")
-    }
+    return inside ? nil : Self.privacy("focus_chain_limit")
   }
 
   private func focusChainRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
@@ -415,12 +435,14 @@ final class WindowAXWatch: SettleWatch {
     guard let target else { return Self.privacy("tree_target_missing") }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
     var visited = 0
+    var reachedAllowed = allowed == nil
     while let (node, depth) = pending.popLast() {
       visited += 1
       guard visited <= Self.treeNodeLimit else { return Self.privacy("tree_node_limit") }
       guard depth <= Self.treeDepthLimit else { return Self.privacy("tree_depth_limit") }
       guard isAdmitted else { return Self.privacy("invalidated") }
       let isAllowed = allowed?.same(node) == true
+      if isAllowed { reachedAllowed = true }
       let role: String
       switch api.attribute(node, "AXRole") {
       case .string(let value): role = value.isEmpty && isAllowed ? "AXUnknown" : value
@@ -449,7 +471,9 @@ final class WindowAXWatch: SettleWatch {
       default: return Self.privacy("tree_children_unreadable:" + Self.axName(role))
       }
     }
-    return nil
+    // An unknown focus the walk never reached was never judged by it (its parent and the window's
+    // children disagree), so it refuses.
+    return reachedAllowed ? nil : Self.privacy("focus_not_in_tree")
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {
