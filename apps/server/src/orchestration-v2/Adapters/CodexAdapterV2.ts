@@ -3124,54 +3124,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
           });
 
-        /**
-         * Ends a subagent Stop swept before its first turn: its task, its node in the parent and,
-         * with no turn of its own yet, its thread's root node, as a finished child turn does (#1654).
-         */
+        /** Ends a never-started child Stop swept, its nodes too, as a finished child turn does (#1654). */
         const endSweptSubagent = Effect.fn("CodexAdapterV2.endSweptSubagent")(function* (
           subagent: CodexSubagentThreadContext,
         ) {
           const completedAt = yield* DateTime.now;
-          const parent = subagent.parentContext;
-          const ended = {
-            status: "interrupted" as const,
-            countsForRun: false,
-            providerThreadId: subagent.providerThread.id,
-            nativeItemRef: subagent.task.nativeTaskRef,
-            runtimeRequestId: null,
-            checkpointScopeId: null,
-            startedAt: subagent.startedAt,
-            completedAt,
-          };
-          yield* emitProviderEvent({
-            type: "node.updated",
-            driver: CODEX_PROVIDER,
-            node: {
-              ...ended,
-              id: subagent.subagentNodeId,
-              threadId: parent.projectionThreadId,
-              runId: parent.projectionRunId,
-              parentNodeId: parent.itemParentNodeId,
-              rootNodeId: parent.rootNodeId,
-              kind: "subagent",
-              providerTurnId: parent.providerTurnId,
-            },
-          });
+          const nodes = [CodexSubagents.subagentNode(subagent, "interrupted", completedAt)];
           if (subagent.nativeTurnIds.size === 0)
-            yield* emitProviderEvent({
-              type: "node.updated",
-              driver: CODEX_PROVIDER,
-              node: {
-                ...ended,
-                id: subagent.childRootNodeId,
-                threadId: subagent.childThreadId,
-                runId: null,
-                parentNodeId: null,
-                rootNodeId: subagent.childRootNodeId,
-                kind: "root_turn",
-                providerTurnId: null,
-              },
-            });
+            nodes.push(CodexSubagents.childRootNode(subagent, "interrupted", completedAt));
+          for (const node of nodes)
+            yield* emitProviderEvent({ type: "node.updated", driver: CODEX_PROVIDER, node });
           yield* emitSubagentTaskUpdate({ subagent, status: "interrupted", completedAt });
         });
 
@@ -3256,30 +3218,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 : {}),
             });
             // Stop ended its node with its task; new work it accepted runs under the current parent.
-            if (subagent.endedByStop === true) {
-              const parent = subagent.parentContext;
+            if (subagent.endedByStop === true)
               yield* emitProviderEvent({
                 type: "node.updated",
                 driver: CODEX_PROVIDER,
-                node: {
-                  id: subagent.subagentNodeId,
-                  threadId: parent.projectionThreadId,
-                  runId: parent.projectionRunId,
-                  parentNodeId: parent.itemParentNodeId,
-                  rootNodeId: parent.rootNodeId,
-                  kind: "subagent",
-                  status: "running",
-                  countsForRun: false,
-                  providerThreadId: subagent.providerThread.id,
-                  providerTurnId: parent.providerTurnId,
-                  nativeItemRef: subagent.task.nativeTaskRef,
-                  runtimeRequestId: null,
-                  checkpointScopeId: null,
-                  startedAt: turn.startedAt,
-                  completedAt: null,
-                },
+                node: CodexSubagents.subagentNode(subagent, "running", null),
               });
-            }
             const now = yield* DateTime.now;
             yield* emitProviderEvent({
               type: "provider_thread.updated",
@@ -3576,23 +3520,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* emitProviderEvent({
               type: "node.updated",
               driver: CODEX_PROVIDER,
-              node: {
-                id: childRootNodeId,
-                threadId: childThreadId,
-                runId: null,
-                parentNodeId: null,
-                rootNodeId: childRootNodeId,
-                kind: "root_turn",
-                status: "running",
-                countsForRun: false,
-                providerThreadId: providerThread.id,
-                providerTurnId: null,
-                nativeItemRef: codexNativeItemRef(input.nativeItemId),
-                runtimeRequestId: null,
-                checkpointScopeId: null,
-                startedAt: now,
-                completedAt: null,
-              },
+              node: CodexSubagents.childRootNode(subagent, "running", null),
             });
             yield* emitProviderEvent({
               type: "provider_thread.updated",
@@ -6883,23 +6811,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* emitProviderEvent({
                   type: "node.updated",
                   driver: CODEX_PROVIDER,
-                  node: {
-                    id: input.context.subagent.subagentNodeId,
-                    threadId: input.context.subagent.parentContext.projectionThreadId,
-                    runId: input.context.subagent.parentContext.projectionRunId,
-                    parentNodeId: input.context.subagent.parentContext.itemParentNodeId,
-                    rootNodeId: input.context.subagent.parentContext.rootNodeId,
-                    kind: "subagent",
-                    status: input.status,
-                    countsForRun: false,
-                    providerThreadId: input.context.providerThread.id,
-                    providerTurnId: input.context.subagent.parentContext.providerTurnId,
-                    nativeItemRef: input.context.subagent.task.nativeTaskRef,
-                    runtimeRequestId: null,
-                    checkpointScopeId: null,
-                    startedAt: input.context.subagent.startedAt,
-                    completedAt: input.completedAt,
-                  },
+                  node: CodexSubagents.subagentNode(
+                    input.context.subagent,
+                    input.status,
+                    input.completedAt,
+                  ),
                 });
                 yield* emitSubagentTaskUpdate({
                   subagent: input.context.subagent,
@@ -8082,9 +7998,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const trackedInterruptNativeTurnIds = new Set(
                 interruptTargets.map((target) => target.context.nativeTurnId),
               );
-              // The targets Codex reported ended while Stop waited. A Stop that fails after that
-              // still ends the never-started subagents under them (#1654).
-              const confirmedNativeTurnIds = new Set<string>();
+              // Turns this Stop ended itself; a failed Stop does not count them as stopped (#1654).
+              const forcedNativeTurnIds = new Set<string>();
               const finalizeRemainingInterruptLineage = Effect.gen(function* () {
                 while (true) {
                   const newlyDiscovered: Array<ActiveCodexTurnContext> = [];
@@ -8153,6 +8068,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }
                   const completedAt = yield* DateTime.now;
                   for (const context of activeLineage) {
+                    forcedNativeTurnIds.add(context.nativeTurnId);
                     yield* finalizeCodexTurn({
                       context,
                       nativeTurnId: context.nativeTurnId,
@@ -8297,9 +8213,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ],
                   { concurrency: "unbounded" },
                 );
-                for (const target of interruptTargets)
-                  if (yield* Deferred.isDone(target.completion))
-                    confirmedNativeTurnIds.add(target.context.nativeTurnId);
                 if (Option.isNone(completed)) {
                   for (const target of interruptTargets) {
                     const context = target.context;
@@ -8356,12 +8269,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(
                 Effect.onError(() => finalizeRemainingInterruptLineage),
                 Effect.onError(() =>
-                  CodexSubagents.endStopped(
-                    subagentThreads,
-                    activeTurns,
-                    requestedInput.providerThread.id,
-                    endSweptSubagent,
-                    confirmedNativeTurnIds,
+                  CodexSubagents.failedStop(interruptTargets, forcedNativeTurnIds).pipe(
+                    Effect.flatMap((failed) =>
+                      CodexSubagents.endStopped(
+                        subagentThreads,
+                        activeTurns,
+                        requestedInput.providerThread.id,
+                        endSweptSubagent,
+                        failed,
+                      ),
+                    ),
                   ),
                 ),
                 Effect.ensuring(cleanupInterruptState),

@@ -437,3 +437,12 @@ export const spawnChild = (f: ReturnType<typeof fixture>, root: string, child: s
       },
     },
   });
+
+// What a child spawnChild started shows: its subagent node in the parent and its thread's root node.
+export const childNodes = (allocator: IdAllocator.IdAllocatorV2["Service"], child: string) =>
+  ["", ":thread-root"].map((suffix) =>
+    allocator.derive.nodeFromProviderItem({
+      driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+      nativeItemId: `spawn-${child}:${child}${suffix}`,
+    }),
+  );
