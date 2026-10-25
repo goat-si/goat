@@ -426,14 +426,22 @@ describe("Codex GOAT authority reload (#1569)", () => {
         const now = yield* DateTime.now;
         yield* replay.runtime.rollbackThread({
           providerThread: replay.providerThread,
-          target: { type: "thread_start", checkpointId: CheckpointId.make("checkpoint-rollback") },
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("checkpoint-rollback"),
+            appRunOrdinal: 0,
+          },
           providerThreadTurns: [
             {
               id: ProviderTurnId.make("provider-turn-rollback"),
               providerThreadId: replay.providerThread.id,
               nodeId: NodeId.make("node-rollback"),
               runAttemptId: RunAttemptId.make("attempt-rollback"),
-              nativeTurnRef: { driver: "codex", nativeId: "turn-1", strength: "strong" },
+              nativeTurnRef: {
+                driver: replay.providerThread.driver,
+                nativeId: "turn-1",
+                strength: "strong",
+              },
               ordinal: 1,
               status: "completed",
               startedAt: now,
