@@ -5,10 +5,13 @@ import type {
   ProviderInteractionMode,
   ServerProvider,
   ServerSettings,
-  ThreadId,
-  ThreadPullRequestLink,
 } from "@goat/contracts";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
+import {
+  composerThreadMayRunUnattended,
+  matchComposerCapabilityItems,
+} from "@goat/client-runtime/composerCapabilityItems";
+import { turnCapabilityContextRecord } from "@goat/shared/turnCapabilities";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -45,6 +48,7 @@ import {
   withBuiltInProviderSkills,
 } from "@goat/client-runtime/providerSkills";
 import { useEffect, useRef, useState } from "react";
+import { useNavigation } from "@react-navigation/native";
 
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { serverEnvironment } from "../../state/server";
@@ -52,6 +56,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { useComposerPathSearch, useComposerPullRequestSearch } from "../../state/queries";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
 import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
+import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
 
@@ -171,11 +176,10 @@ export function useComposerCommandMenu({
   ownerKey,
   environmentId,
   threadShells = EMPTY_THREAD_SHELLS,
-  currentThreadId = null,
+  thread = null,
   projectCwd,
   pullRequestProjectId = null,
   pullRequestRepository = null,
-  threadPullRequests,
   selectedProviderStatus,
   serverSettings = null,
   hasThread,
@@ -190,11 +194,11 @@ export function useComposerCommandMenu({
   readonly ownerKey: string | null;
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
-  readonly currentThreadId?: ThreadId | null;
+  /** The composer's thread, with the draft's unsent settings such as plan mode applied. */
+  readonly thread?: Pick<EnvironmentThreadShell, "id" | "pullRequests" | "interactionMode"> | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepository?: string | null;
-  readonly threadPullRequests?: ReadonlyArray<ThreadPullRequestLink>;
   readonly selectedProviderStatus: ServerProvider | null;
   /** Decides which of GOAT's built-in skills the menu lists for this provider. */
   readonly serverSettings?: Pick<ServerSettings, "enableCua" | "disabledBuiltInSkills"> | null;
@@ -206,6 +210,9 @@ export function useComposerCommandMenu({
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
   readonly onUsageLimits?: () => void;
 }) {
+  const navigation = useNavigation();
+  const currentThreadId = thread?.id ?? null;
+  const threadPullRequests = thread?.pullRequests;
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
   const previousOwnerKeyRef = useRef(ownerKey);
   const onSelectionChange = (nextSelection: ComposerEditorSelection) => {
@@ -342,6 +349,16 @@ export function useComposerCommandMenu({
     }
     return detectComposerTrigger(draftMessage, selection.end);
   })();
+  const currentShell = threadShells.find((shell) => shell.id === currentThreadId);
+  const capabilityContext = useComposerCapabilityContext({
+    environmentId,
+    active: trigger?.kind === "path",
+    turn: {
+      interactionMode: thread?.interactionMode ?? "default",
+      providerDrivers: selectedProviderStatus === null ? [] : [selectedProviderStatus.driver],
+      mayRunUnattended: composerThreadMayRunUnattended(currentThreadId, currentShell?.source),
+    },
+  });
   const pathSearch = useComposerPathSearch({
     environmentId,
     cwd: trigger?.kind === "path" ? projectCwd : null,
@@ -507,6 +524,7 @@ export function useComposerCommandMenu({
           })
         : [];
       return [
+        ...matchComposerCapabilityItems(trigger.query, capabilityContext),
         ...threadItems,
         ...pathSearch.entries.map((entry) => {
           const parts = entry.path.split("/");
@@ -527,6 +545,46 @@ export function useComposerCommandMenu({
 
   const onSelect = (item: ComposerCommandItem) => {
     if (!trigger) return;
+    if (item.type === "capability") {
+      if (!ownerKey || trigger.kind !== "path") return;
+      const { availability } = item;
+      // Still checking: the typed text stays until the host answers.
+      if (availability.state === "checking") return;
+      if (availability.state === "unavailable") {
+        if (availability.setup && environmentId !== null) {
+          navigation.navigate("SettingsSheet", {
+            screen: "SettingsContent",
+            params: { screen: "SettingsEnvironmentAgentBehavior", params: { environmentId } },
+          });
+          return;
+        }
+        Dialog.alert(
+          "Computer use isn't ready",
+          availability.setup
+            ? `${availability.reason} Set it up in GOAT on that computer under Settings > Integrations > Computer.`
+            : availability.reason,
+        );
+        return;
+      }
+      const record = turnCapabilityContextRecord(item.capability);
+      const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
+      const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
+      if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {
+        Dialog.alert("Too many context items", "Remove some context from the draft and try again.");
+        return;
+      }
+      const result = replaceTextRange(
+        draftMessage,
+        trigger.rangeStart,
+        trigger.rangeEnd,
+        `${formatComposerContextReference(record)} `,
+      );
+      onChangeDraftMessage(result.text);
+      if (!alreadyAttached)
+        setComposerDraftContext(ownerKey, { version: 1, records: [...existing, record] });
+      setSelection({ start: result.cursor, end: result.cursor });
+      return;
+    }
     if (item.type === "thread") {
       if (!ownerKey || trigger.kind !== "path") return;
       const shell = threadShells.find(

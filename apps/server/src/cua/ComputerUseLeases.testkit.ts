@@ -22,6 +22,7 @@ export const layerInteractive = (input: {
       CuaDriver.CuaDriver.of({
         enabled: input.enabled,
         acquire: input.acquire.pipe(Effect.map(Option.some)),
+        listedApps: Effect.succeedNone,
         lastFailure: Effect.succeed(Option.none()),
         block: Effect.succeed(undefined),
         status: Effect.succeed({ platform: "darwin", running: true }),
@@ -30,6 +31,7 @@ export const layerInteractive = (input: {
       }),
     ),
     Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+      foregroundApprovalEpoch: Effect.die("unused"),
       proxy: { command: "/goat/node", entrypoint: "/goat/bin.mjs" },
       channelOrigin: () => Effect.succeed(undefined),
       active: () => Effect.succeed(Option.none()),
@@ -39,6 +41,8 @@ export const layerInteractive = (input: {
           threadId,
           expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
         }),
+      // Turns here keep their run open.
+      turnEnded: () => Effect.succeed(false),
     }),
   );
 

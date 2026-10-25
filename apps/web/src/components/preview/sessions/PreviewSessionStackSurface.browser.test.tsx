@@ -4,8 +4,10 @@ import type {
 } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+import { useState } from "react";
 
 import { act, render } from "../../../../test/render";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
 
 function setup(poppedOut = false) {
@@ -55,7 +57,11 @@ function setup(poppedOut = false) {
   };
 }
 
-function Stack(props: { readonly hidden?: boolean; readonly content?: boolean }) {
+function Stack(props: {
+  readonly hidden?: boolean;
+  readonly content?: boolean;
+  readonly tooltip?: boolean;
+}) {
   return (
     <PreviewSessionStackSurface
       hasContent={props.content ?? true}
@@ -67,6 +73,12 @@ function Stack(props: { readonly hidden?: boolean; readonly content?: boolean })
           <p>{live ? "Live thumbnails" : "Thumbnails paused"}</p>
           {toggle}
           {captureNotice}
+          {props.tooltip ? (
+            <Tooltip open>
+              <TooltipTrigger render={<span />}>Card name</TooltipTrigger>
+              <TooltipPopup>Card name tooltip</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </section>
       )}
     </PreviewSessionStackSurface>
@@ -115,10 +127,66 @@ it("restores only the persisted popout and keeps it available while the right pa
     .not.toBeInTheDocument();
 });
 
+/** A card's own state, as a stopped card's last frame is (#1518). */
+function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    <button type="button" onClick={() => setCount(count + 1)}>
+      Clicked {count}
+    </button>
+  );
+}
+
+// #1518: Pop out and Dock mounted the stack anew, so every card lost its own state, including
+// the last frame a stopped desktop session no longer sends.
+it("keeps each card's state through Pop out and Dock, and a click counts once in either place", async () => {
+  using fixture = setup();
+  using _open = vi.spyOn(window, "open").mockReturnValue(fixture.child);
+  await using screen = await render(
+    <PreviewSessionStackSurface hasContent dockedHidden={false}>
+      {({ toggle }) => (
+        <section data-stack-interactive aria-label="Session stack">
+          <Counter />
+          {toggle}
+        </section>
+      )}
+    </PreviewSessionStackSurface>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Clicked 0" }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 1" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Pop out" }));
+  await vi.waitFor(() => expect(fixture.child.document.body.textContent).toContain("Clicked 1"));
+  const floating = () =>
+    [...fixture.child.document.querySelectorAll("button")].find((button) =>
+      button.textContent?.startsWith("Clicked"),
+    );
+  await act(() => floating()?.click());
+  await vi.waitFor(() => expect(floating()?.textContent).toBe("Clicked 2"));
+  await act(() => fixture.emit({ poppedOut: false, open: false, visible: false }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 2" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Clicked 2" }));
+  await expect.element(screen.getByRole("button", { name: "Clicked 3" })).toBeVisible();
+});
+
 it("keeps web sessions docked when no Electron bridge exists", async () => {
   using _fixture = setup();
   delete window.desktopBridge;
   await using screen = await render(<Stack />);
   await expect.element(screen.getByText("Docked sessions")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Pop out" })).not.toBeInTheDocument();
+});
+
+it("shows a floating card's tooltip in the floating window, not in GOAT's main window (#1534)", async () => {
+  using fixture = setup();
+  using _open = vi.spyOn(window, "open").mockReturnValue(fixture.child);
+  await using screen = await render(<Stack tooltip />);
+  await userEvent.click(screen.getByRole("button", { name: "Pop out" }));
+  await vi.waitFor(() =>
+    expect(fixture.child.document.body.textContent).toContain("Card name tooltip"),
+  );
+  expect(document.body.textContent).not.toContain("Card name tooltip");
+  // Docking returns the tooltip to the main window with the stack.
+  await userEvent.click(screen.getByRole("button", { name: "Dock", exact: true }));
+  await expect.element(screen.getByText("Card name tooltip")).toBeInTheDocument();
+  expect(fixture.child.document.body.textContent).not.toContain("Card name tooltip");
 });

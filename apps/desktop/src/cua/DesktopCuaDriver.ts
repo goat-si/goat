@@ -6,11 +6,12 @@ import {
   type DesktopCuaGrants,
   type DesktopCuaVerification,
 } from "@goat/contracts";
-import { isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
+import { cuaRequestableApps, isCuaDriverStartupRefusal } from "@goat/shared/cuaDriverManifest";
 import {
   COMPUTER_USE_HELPER_NAME,
   computerUseHelperBundleId,
   cuaDriverHostOptions,
+  cuaDriverListingEnvironment,
   cuaDriverRelease,
 } from "@goat/shared/cuaDriverRelease";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
@@ -40,6 +41,7 @@ import {
 import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
+import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
 import {
   describeDegraded,
@@ -128,6 +130,24 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   // Whether the running helper's agent connections report a person's input.
   let helperReportsInput = false;
   let helperCanFrame = false;
+  /**
+   * What a helper said it can do when it started, read from its hello: an agent turn's start and a
+   * readiness check's both start one (#1532), and either is the build that runs next.
+   */
+  const learnHelper = (
+    session:
+      | {
+          readonly canWatch?: boolean;
+          readonly reportsInput?: boolean;
+          readonly canFrame?: boolean;
+        }
+      | undefined,
+  ) => {
+    helperCanWatch = session?.canWatch === true;
+    // Only macOS agents run through a connection helper that sees a person's input.
+    helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
+    helperCanFrame = session?.canFrame === true;
+  };
   const followers = yield* makeHelperFollowers({
     publisher,
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
@@ -158,10 +178,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    * now, and nothing runs as it.
    */
   const forgetHelper = (chosen: Engine | string | undefined) =>
-    noteHelper((state) =>
-      withoutProof(
-        withRunning(state, false),
-        typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+    Effect.sync(() => learnHelper(undefined)).pipe(
+      Effect.andThen(
+        noteHelper((state) =>
+          withoutProof(
+            withRunning(state, false),
+            typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+          ),
+        ),
       ),
     );
   const forgetCrash = (entry: OwnedHost) =>
@@ -206,7 +230,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     Effect.tap(() => noteHelper((state) => withRunning(state, false))),
     Effect.tap(() => followers.detach),
   );
-  const { report, unavailable, ungranted } = cuaDriverReports(publisher, () => closed);
+  const { report, unavailable, ungranted, desktopUnavailable } = cuaDriverReports(
+    publisher,
+    () => closed,
+  );
 
   const restartHost = Effect.gen(function* () {
     const request = owned ? currentRequest : undefined;
@@ -296,12 +323,64 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ...(engine.kind === "helper" ? [engine.bundle.bundleId] : []),
   ];
 
+  // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
+  const helperListing = (engine: Engine) =>
+    engine.kind === "helper" &&
+    (environment.platform === "darwin" || environment.platform === "win32")
+      ? () => native.helperApps(engine.bundle, environment.platform)
+      : undefined;
+
+  const handleAppsRequest = Effect.fn("desktop.cua.appsRequest")(function* () {
+    const batch = yield* publisher.takeCuaAppsRequests;
+    if (batch.requestIds.length === 0) return;
+    const apps = yield* Effect.gen(function* () {
+      if (
+        closed ||
+        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
+      )
+        return undefined;
+      const selected = yield* engine();
+      if (typeof selected !== "object") return undefined;
+      const listed = yield* Effect.tryPromise(
+        () =>
+          helperListing(selected)?.() ??
+          native.listApps({
+            binaryPath: enginePath(selected),
+            platform: environment.platform,
+            environment: cuaDriverListingEnvironment(process.env),
+          }),
+      );
+      const hosts = yield* Effect.tryPromise(() =>
+        withResolvedWindowsPaths(hostBundleIds(selected), environment.platform),
+      );
+      if (
+        closed ||
+        !(yield* Effect.tryPromise(() => native.computerUseEnabled(environment.serverSettingsPath)))
+      )
+        return undefined;
+      const apps = cuaRequestableApps(listed, hosts);
+      // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
+      return apps.length <= 1000 ? apps : undefined;
+    }).pipe(Effect.orElseSucceed(() => undefined));
+    if (!closed)
+      for (const requestId of batch.requestIds)
+        yield* batch.publish({
+          version: 1,
+          type: "cuaApps",
+          requestId,
+          ...(apps === undefined
+            ? { status: "unavailable" as const }
+            : { status: "listed" as const, apps }),
+        });
+  });
+
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {
     // Which app macOS charges the grants to, so a log shows who held them.
     yield* Effect.logInfo("Starting Cua Driver", {
       scope,
       principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
     });
+    const listApplications = helperListing(engine);
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
@@ -310,10 +389,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       platform: environment.platform,
       // The helper verifies its driver before running it, so it lists the apps too; running
       // the driver here would execute it unchecked, under GOAT's identity (#1241).
-      ...(engine.kind === "helper" &&
-      (environment.platform === "darwin" || environment.platform === "win32")
-        ? { listApplications: () => native.helperApps(engine.bundle, environment.platform) }
-        : {}),
+      ...(listApplications === undefined ? {} : { listApplications }),
     };
     const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;
@@ -447,6 +523,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const request = owned ? currentRequest : undefined;
     currentRequest = undefined;
     const stopped = yield* stop;
+    // The probe's own helper said what this build can do (#1532), on every platform; the
+    // check's own helper may not (the macOS readiness check runs it as an MCP child). It speaks
+    // for this desktop only once the helper running before is gone; a check that stopped
+    // earlier leaves that helper, and what it said, as they were.
+    if (stopped && selected?.kind === "helper") learnHelper(grants.features);
     if (request)
       yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
     const connection: Option.Option<EmbeddedDriverConnection> =
@@ -663,6 +744,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
     yield* Effect.gen(function* () {
       if (!owned) {
+        // A new helper starts: until its hello is read below, nothing it can do is known.
+        if (selected.kind === "helper") learnHelper(undefined);
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
           const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
@@ -684,10 +767,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           helperSeen = true;
           yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
-            yield* report(
+            yield* desktopUnavailable(
               request.requestId,
-              "unavailable",
               ready.detail ?? `${COMPUTER_USE_HELPER_NAME} cannot use this desktop.`,
+              ready.blocker,
             );
             return;
           }
@@ -704,10 +787,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       });
       const session = entry.host.session?.();
       if (entry.helper) {
-        helperCanWatch = session?.canWatch === true;
-        // Only macOS agents run through a connection helper that sees a person's input.
-        helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
-        helperCanFrame = session?.canFrame === true;
+        learnHelper(session);
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* followers.attach(session);
@@ -741,7 +821,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
                   "unavailable",
                   "Cua Driver refused GOAT's capability manifest or launch options. The desktop log has the driver's reason.",
                 )
-              : unavailable(request.requestId),
+              : // On Windows the helper owns the desktop; one that could not start is the reason.
+                environment.platform === "win32" && selected.kind === "helper"
+                ? desktopUnavailable(
+                    request.requestId,
+                    `${COMPUTER_USE_HELPER_NAME} could not start. Restart GOAT on this computer, then try again.`,
+                  )
+                : unavailable(request.requestId),
           ),
         ),
       ),
@@ -778,6 +864,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     grantTarget,
     grants,
     listen: Effect.gen(function* () {
+      yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
+        Effect.forkScoped,
+      );
       yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
       yield* publisher.cuaWatchApps.pipe(
         Stream.runForEach((apps) =>

@@ -23,6 +23,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import * as DesktopTelemetryPublisher from "./DesktopTelemetryPublisher.ts";
 import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
+import { fixture } from "../cua/DesktopCuaDriver.testkit.ts";
 
 const layerHistory = Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
   register: () => Effect.void,
@@ -105,6 +106,216 @@ const collectTelemetry = Effect.fn(function* (stream: Stream.Stream<Uint8Array>)
 });
 
 describe("DesktopTelemetryPublisher", () => {
+  it.effect("coalesces requests during a blocked listing into one fresh follow-up listing", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const started = yield* Deferred.make<void>();
+      const release = Promise.withResolvers<void>();
+      let listings = 0;
+      const test = yield* fixture({
+        platform: "win32",
+        helper: { granted: true },
+        publisher,
+        appListing: async () => {
+          if (++listings === 1) {
+            Deferred.doneUnsafe(started, Exit.void);
+            await release.promise;
+            return [{ name: "Initial app" }];
+          }
+          return [{ name: "Fresh app" }];
+        },
+      });
+      const request = (requestId: string) =>
+        publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaAppsRequest",
+          requestId,
+        });
+      yield* request("initial");
+      yield* Deferred.await(started);
+      const pending = Array.from({ length: 24 }, (_, i) => `pending-${i}`);
+      for (const id of pending) yield* request(id);
+      yield* Effect.sync(() => release.resolve());
+      for (const id of ["initial", ...pending]) {
+        const report = yield* primary.next("cuaApps");
+        assert.deepEqual(report, {
+          version: 1,
+          type: "cuaApps",
+          requestId: id,
+          status: "listed",
+          apps: [id === "initial" ? "Initial app" : "Fresh app"],
+        });
+      }
+      assert.equal(test.helperAppListings.length, 2);
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "bounds pending app requests to the newest 32 and drops the oldest without answering",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const started = yield* Deferred.make<void>();
+        const release = Promise.withResolvers<void>();
+        let listings = 0;
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: true },
+          publisher,
+          appListing: async () => {
+            if (++listings === 1) {
+              Deferred.doneUnsafe(started, Exit.void);
+              await release.promise;
+            }
+            return [{ name: "Editor" }];
+          },
+        });
+        const request = (requestId: string) =>
+          publisher.handleControlForSource("primary", {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("initial");
+        yield* Deferred.await(started);
+        const pending = Array.from({ length: 40 }, (_, i) => `pending-${i}`);
+        for (const id of pending) yield* request(id);
+        yield* Effect.sync(() => release.resolve());
+        const answered: string[] = [];
+        for (let i = 0; i < 33; i++) {
+          const report = yield* primary.next("cuaApps");
+          if (report.type === "cuaApps") answered.push(report.requestId);
+        }
+        assert.deepEqual(answered, ["initial", ...pending.slice(-32)]);
+        assert.equal(test.helperAppListings.length, 2);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "drops a replaced source's queued requests and in-flight answers even when ids repeat",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const started = yield* Deferred.make<void>();
+        const release = Promise.withResolvers<void>();
+        let listings = 0;
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: true },
+          publisher,
+          appListing: async () => {
+            if (++listings === 1) {
+              Deferred.doneUnsafe(started, Exit.void);
+              await release.promise;
+              return [{ name: "Old app" }];
+            }
+            return [{ name: "New app" }];
+          },
+        });
+        const request = (requestId: string) =>
+          publisher.handleControlForSource("primary", {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("reused-id");
+        yield* Deferred.await(started);
+        yield* request("old-pending");
+        const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* request("reused-id");
+        yield* Effect.sync(() => release.resolve());
+        assert.deepEqual(yield* replacement.next("cuaApps"), {
+          version: 1,
+          type: "cuaApps",
+          requestId: "reused-id",
+          status: "listed",
+          apps: ["New app"],
+        });
+        assert.equal(test.helperAppListings.length, 2);
+        assert.isEmpty(primary.received.filter((message) => message.type === "cuaApps"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect("does not list queued requests after their source detaches or is replaced", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const request = (requestId: string) =>
+        publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaAppsRequest",
+          requestId,
+        });
+      yield* request("detached");
+      yield* publisher.removeControlSource("primary");
+      yield* collectTelemetry(publisher.encodedForSource("primary"));
+      yield* request("replaced");
+      const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const test = yield* fixture({ platform: "win32", helper: { granted: true }, publisher });
+      yield* request("fresh");
+      const report = yield* replacement.next("cuaApps");
+      assert.equal(report.type === "cuaApps" && report.requestId, "fresh");
+      assert.equal(test.helperAppListings.length, 1);
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "routes app listings only for attached primary requests and never replays them to another source",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        const request = (source: string, requestId: string) =>
+          publisher.handleControlForSource(source, {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("ssh:remote", "foreign");
+        yield* request("primary", "accepted");
+        yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runDrain);
+        const accepted = yield* publisher.takeCuaAppsRequests;
+        assert.deepEqual(accepted.requestIds, ["accepted"]);
+        const report = {
+          version: 1,
+          type: "cuaApps",
+          requestId: "accepted",
+          status: "listed",
+          apps: ["Editor"],
+        } as const;
+        yield* accepted.publish({ ...report, requestId: "foreign" });
+        yield* accepted.publish(report);
+        assert.deepEqual(yield* primary.next("cuaApps"), report);
+        yield* publisher.removeControlSource("primary");
+        yield* accepted.publish(report);
+        yield* request("primary", "detached");
+        const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* accepted.publish(report);
+        yield* request("primary", "replacement");
+        yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runDrain);
+        const next = yield* publisher.takeCuaAppsRequests;
+        assert.deepEqual(next.requestIds, ["replacement"]);
+        const fresh = { ...report, requestId: "replacement" };
+        yield* next.publish(fresh);
+        assert.deepEqual(yield* replacement.next("cuaApps"), fresh);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaApps"));
+        assert.deepEqual(
+          primary.received.filter((message) => message.type === "cuaApps"),
+          [report],
+        );
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
   it.effect("accepts CUA controls only from the attached primary and disables it on detach", () =>
     Effect.gen(function* () {
       const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
@@ -297,6 +508,61 @@ describe("DesktopTelemetryPublisher", () => {
         yield* Fiber.interrupt(primary.fiber);
         assert.deepEqual((yield* Queue.take(heard)).targets, []);
         assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "sends a ready driver right behind the readiness of the helper that runs it, in one write",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const readiness = {
+          version: 1,
+          type: "cuaReadiness",
+          generation: 4,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { privateMode: "unsupported", humanInput: "unsupported" },
+        } as const;
+        const chunks = yield* Queue.unbounded<string>();
+        const decoder = new TextDecoder();
+        yield* publisher.encodedForSource("primary").pipe(
+          Stream.runForEach((chunk) => Queue.offer(chunks, decoder.decode(chunk))),
+          Effect.forkScoped,
+        );
+        // Attached once its first snapshot arrives, as collectTelemetry waits.
+        let first = yield* Queue.take(chunks);
+        while (!first.includes('"desktopTelemetry"')) first = yield* Queue.take(chunks);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaDriverRequest",
+          requestId: "agent",
+          enabled: true,
+        });
+        // The server admits unattended work on these signals once the driver is ready; the
+        // readiness stream alone could reach it after the report.
+        yield* publisher.publishCuaReadiness(readiness);
+        yield* publisher.publishCuaReport({
+          version: 1,
+          type: "cuaDriverReport",
+          requestId: "agent",
+          status: "ready",
+          mcp: { command: "/native/driver", args: ["mcp"], environment: [] },
+        });
+        let chunk = yield* Queue.take(chunks);
+        while (!chunk.includes('"cuaDriverReport"')) chunk = yield* Queue.take(chunks);
+        const lines = chunk.trim().split("\n");
+        assert.lengthOf(lines, 2);
+        assert.include(lines[0] ?? "", '"cuaReadiness"');
+        assert.include(lines[0] ?? "", '"privateMode":"unsupported"');
+        assert.include(lines[1] ?? "", '"cuaDriverReport"');
       }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
 

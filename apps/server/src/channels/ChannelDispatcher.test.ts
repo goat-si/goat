@@ -265,7 +265,7 @@ it.effect("stopping a workstream stops its launched thread child and settles its
     // The launched child thread is live in the world, so its stop is a real interrupt.
     const childThreadId = ThreadId.make("thread:child-of-worker");
     harness.world.addRun(childThreadId, MessageId.make("child-msg"));
-    yield* childWork.markLaunched(admission.record, { threadId: childThreadId });
+    yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThreadId }));
     yield* gateway.ingest(goatInput("stop", "stop-children-2"), rpcContext);
     yield* runtime.drain;
     yield* runtime.drain;
@@ -303,7 +303,7 @@ it.effect("a stop whose worker thread vanished still stops its recorded thread c
     if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
     const childThreadId = ThreadId.make("thread:child-of-missing-worker");
     harness.world.addRun(childThreadId, MessageId.make("child-msg"));
-    yield* childWork.markLaunched(admission.record, { threadId: childThreadId });
+    yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThreadId }));
     // The worker thread is deleted before the stop lands: its reads fail as missing.
     harness.world.runs.delete(task.worker!.threadId);
     yield* gateway.ingest(goatInput("stop", "stop-missing-worker-2"), rpcContext);

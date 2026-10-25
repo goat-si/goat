@@ -42,11 +42,22 @@ describe("formatGoatBotStamp", () => {
     expect(formatGoatBotStamp(local(2026, 9, 18, 23, 59), now, displayTime)).toContain(
       "Yesterday 11:59 PM",
     );
-    expect(formatGoatBotStamp(local(2026, 9, 16, 9, 41), now, displayTime)).toMatch(
-      /^[A-Za-z]+ 9:41 AM$/,
+    // Weekday and date names follow the device locale; compare with the same formatting.
+    const weekday = new Intl.DateTimeFormat(undefined, { weekday: "long" }).format(
+      // @effect-diagnostics-next-line globalDate:off - compare against the same local date.
+      new Date(local(2026, 9, 16, 9, 41)),
     );
-    expect(formatGoatBotStamp(local(2026, 9, 12, 9, 41), now, displayTime)).toMatch(
-      /^[A-Za-z]+,? Oct 12 at 9:41 AM$/,
+    const older = new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      // @effect-diagnostics-next-line globalDate:off - compare against the same local date.
+    }).format(new Date(local(2026, 9, 12, 9, 41)));
+    expect(formatGoatBotStamp(local(2026, 9, 16, 9, 41), now, displayTime)).toBe(
+      `${weekday} 9:41 AM`,
+    );
+    expect(formatGoatBotStamp(local(2026, 9, 12, 9, 41), now, displayTime)).toBe(
+      `${older} at 9:41 AM`,
     );
   });
 

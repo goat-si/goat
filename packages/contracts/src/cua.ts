@@ -1,6 +1,14 @@
 import * as Schema from "effect/Schema";
+import * as SchemaAST from "effect/SchemaAST";
+import * as SchemaParser from "effect/SchemaParser";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 
-import { ForwardCompatibleOptional, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  ForwardCompatibleOptional,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 import {
   ComputerUseCapabilities,
   ComputerUseHumanInputSource,
@@ -26,6 +34,30 @@ export const DesktopCuaDriverRequest = Schema.Struct({
   enabled: Schema.Boolean,
 });
 export type DesktopCuaDriverRequest = typeof DesktopCuaDriverRequest.Type;
+
+export const DesktopCuaAppsRequest = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaAppsRequest"),
+  requestId: TrimmedNonEmptyString,
+});
+export type DesktopCuaAppsRequest = typeof DesktopCuaAppsRequest.Type;
+
+export const DesktopCuaAppsReport = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaApps"),
+    requestId: TrimmedNonEmptyString,
+    status: Schema.Literal("listed"),
+    apps: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(1000)),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaApps"),
+    requestId: TrimmedNonEmptyString,
+    status: Schema.Literal("unavailable"),
+  }),
+]);
+export type DesktopCuaAppsReport = typeof DesktopCuaAppsReport.Type;
 
 /**
  * Whether any agent controls this host right now; the desktop's helper watches for secret
@@ -110,14 +142,31 @@ export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 const EpochMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /**
- * Proxy -> server, on the same route: a keyboard or pointer event at `at` that the lease
- * proxy's helper saw while the control was live, outside the proxy's own input calls (#1235).
- * The server drops it when another agent's input covers `at`, else every agent pauses. Only the
- * kind of input, never what was typed or where.
+ * Proxy -> server, on the same route: keyboard or pointer events the lease proxy's helper saw
+ * while the control was live (#1235), one or every event that piled up behind the last report
+ * (#1488), in time order. The server judges each: an event another agent's input covers is
+ * dropped, and the first one no agent covers pauses every agent. Only the kind of input and when,
+ * never what was typed or where.
  */
+const ComputerUseHumanInputEvent = Schema.Struct({
+  source: ComputerUseHumanInputSource,
+  at: EpochMillis,
+});
+/**
+ * The most events one report carries; a proxy sends any more in the next one. Large enough that
+ * a 1 kHz pointer behind a report as slow as the proxy's 2 s timeout fits in one.
+ */
+export const COMPUTER_USE_HUMAN_INPUT_BATCH = 4096;
 export const ComputerUseLeaseHumanInput = Schema.Struct({
   controlId: TrimmedNonEmptyString,
-  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource, at: EpochMillis }),
+  // One event is what a proxy from before batching sends.
+  humanInput: Schema.Union([
+    ComputerUseHumanInputEvent,
+    Schema.Array(ComputerUseHumanInputEvent).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(COMPUTER_USE_HUMAN_INPUT_BATCH),
+    ),
+  ]),
 });
 export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
 
@@ -150,9 +199,10 @@ export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 /**
  * Why the desktop would not give agents a driver, in a form every surface can act on: the
  * preview tile, Settings and onboarding, the agent's own computer_use request, and the trace
- * (#1399). Only a grant the helper lacks so far; other refusals keep their message.
+ * (#1399). A grant macOS has not given (permissionsNotGranted), or a Windows desktop the helper
+ * cannot use (desktopUnavailable, #1516); other refusals keep their message.
  */
-export const CuaAgentBlock = Schema.Struct({
+export const CuaAgentPermissionsBlock = Schema.Struct({
   reason: Schema.Literal("permissionsNotGranted"),
   /** The grants macOS has not given the app that holds them, GOAT Computer Use or GOAT. */
   missing: Schema.Array(Schema.Literals(["accessibility", "screenRecording"])).check(
@@ -160,30 +210,69 @@ export const CuaAgentBlock = Schema.Struct({
   ),
   holder: Schema.Literals(["helper", "app"]),
 });
+export type CuaAgentPermissionsBlock = typeof CuaAgentPermissionsBlock.Type;
+
+/**
+ * The Windows helper cannot use this desktop: no interactive desktop (a service, SSH or Session
+ * 0), the lock screen or a security prompt (UAC) holding input, another user at the console, or
+ * the helper itself not starting or answering (no blocker). detail is the helper's own sentence.
+ */
+export const CuaAgentDesktopBlock = Schema.Struct({
+  reason: Schema.Literal("desktopUnavailable"),
+  blocker: Schema.optionalKey(
+    Schema.Literals(["noInteractiveDesktop", "screenLocked", "otherUserAtConsole"]),
+  ),
+  detail: TrimmedNonEmptyString,
+});
+export type CuaAgentDesktopBlock = typeof CuaAgentDesktopBlock.Type;
+
+export const CuaAgentBlock = Schema.Union([CuaAgentPermissionsBlock, CuaAgentDesktopBlock]);
 export type CuaAgentBlock = typeof CuaAgentBlock.Type;
 
 /** The System Settings lists a block names, as macOS titles them. */
-export const cuaAgentBlockLists = (block: CuaAgentBlock): string =>
+export const cuaAgentBlockLists = (block: CuaAgentPermissionsBlock): string =>
   block.missing
     .map((grant) =>
       grant === "accessibility" ? "Accessibility" : "Screen & System Audio Recording",
     )
     .join(" and ");
 
+/** A Windows desktop block's short title, by its cause; the helper's detail says the rest. */
+const desktopTitle = {
+  noInteractiveDesktop: "Start GOAT from the signed-in Windows desktop",
+  screenLocked: "Unlock the screen or answer the Windows security prompt",
+  otherUserAtConsole: "Another user is signed in at this computer's screen",
+} as const;
+
+/** A short title for a block, such as a session card's: what is missing, not the whole sentence. */
+export const cuaAgentBlockTitle = (block: CuaAgentBlock): string =>
+  block.reason === "permissionsNotGranted"
+    ? `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`
+    : block.blocker === undefined
+      ? "GOAT Computer Use cannot use this desktop"
+      : desktopTitle[block.blocker];
+
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
-  `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`;
+  block.reason === "permissionsNotGranted"
+    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`
+    : `Computer use cannot start: ${block.detail}`;
 
 /**
  * What of a block newer readiness still bears out: only the grants it does not report granted,
  * and nothing once every one is back, so no surface keeps naming a grant the person gave.
  * Readiness is the helper's, so it only speaks for a block the helper holds; a block on GOAT
- * itself stays as it was.
+ * itself stays as it was. A Windows desktop block ends once the helper reports an authenticated
+ * helper with nothing blocking.
  */
 export const cuaAgentBlockUnder = (
   block: CuaAgentBlock,
   readiness: typeof ComputerUseReadiness.Type,
 ): CuaAgentBlock | undefined => {
+  if (block.reason === "desktopUnavailable")
+    return readiness.helper === "authenticated" && readiness.blockers.length === 0
+      ? undefined
+      : block;
   if (block.holder !== "helper") return block;
   const missing = block.missing.filter(
     (grant) =>
@@ -336,6 +425,16 @@ export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
 export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
+export const ComputerUseForegroundGrant = Schema.Struct({
+  handoffId: TurnItemId,
+  purpose: TrimmedNonEmptyString,
+  target: Schema.Literal("desktop"),
+  expiresAtMillis: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+});
+export type ComputerUseForegroundGrant = typeof ComputerUseForegroundGrant.Type;
+
 /**
  * What the computer use proxy hears from its own server about the control it was started for,
  * one JSON object per line. "active" carries the apps the thread may control, absent when every
@@ -348,6 +447,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
@@ -383,6 +483,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "control_idle",
   "app_not_approved",
   "desktop_not_approved",
+  "foreground_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
   "desktop_capture_off",
   "waiting_for_human",
@@ -424,6 +525,27 @@ const ComputerUseCallOwner = {
   connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
 };
 
+// Validation carries only ticket identity; replacement call authority is never accepted.
+const ticketValidation = Schema.Struct({
+  ...ComputerUseCallOwner,
+  action: Schema.Literal("validate"),
+  reservationId: TrimmedNonEmptyString,
+});
+const strictTicketValidation = Schema.declareConstructor<
+  typeof ticketValidation.Type,
+  typeof ticketValidation.Encoded
+>()(
+  [ticketValidation],
+  ([codec]) => {
+    const decode = SchemaParser.decodeUnknownEffect(codec);
+    return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
+  },
+  {
+    toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
+    toCodecJson: () => undefined,
+  },
+);
+
 /** A proxy reserves execution before dispatch, and closes a driver generation after cutoff. */
 export const ComputerUseCallReservation = Schema.Union([
   Schema.Struct({
@@ -434,7 +556,9 @@ export const ComputerUseCallReservation = Schema.Union([
     idleEpoch: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     name: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
     args: Schema.Unknown,
+    foregroundGrantId: Schema.optionalKey(TurnItemId),
   }),
+  strictTicketValidation,
   Schema.Struct({
     ...ComputerUseCallOwner,
     action: Schema.Literal("release"),
@@ -448,6 +572,16 @@ export const ComputerUseCallAdmission = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("admitted"),
     reservationId: Schema.NullOr(Schema.String),
+    /** Scope at atomic admission; streamed updates may still be in transit. */
+    permissions: Schema.optionalKey(
+      Schema.Struct({
+        apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+        validUntilMillis: Schema.Int.check(
+          Schema.isGreaterThanOrEqualTo(0),
+          Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+        ),
+      }),
+    ),
   }),
   Schema.Struct({ status: Schema.Literal("released") }),
   Schema.Struct({
@@ -519,6 +653,12 @@ const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLen
 );
 
 export const ComputerUseRequestInput = Schema.Struct({
+  foreground: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Ask to bring apps forward and take keyboard or pointer focus for this purpose. Default false (background-only). Requires whole-desktop approval: omit apps. Pause, Stop or control replacement requires approval again.",
+    }),
+  ),
   purpose: TrimmedNonEmptyString.check(Schema.isMaxLength(500)).annotate({
     description:
       "What you will do on the screen and why, in one or two sentences. The person sees it before approving.",
@@ -526,7 +666,7 @@ export const ComputerUseRequestInput = Schema.Struct({
   apps: Schema.optional(
     ComputerUseApps.annotate({
       description:
-        "The apps you will control, by the bundle_id list_apps reports (its name where there is none). The person approves exactly these. Omit only when the work needs the whole screen.",
+        "The apps you will control, by the bundle_id list_apps reports (on Windows usually the executable path), or by its listed name when it has no bundle_id; never a window title. If the app is not open, open it first. The person approves exactly these. Omit only when the work needs the whole screen.",
     }),
   ),
   minutes: Schema.optional(
@@ -555,10 +695,15 @@ export const ComputerUseRequestResult = Schema.Union([
       "not_unattended",
       /** The host cannot tell when a person types a secret or uses the desktop (#1235). */
       "detection_unsupported",
-      /** macOS has not granted what computer use needs; a person allows it in System Settings. */
+      /**
+       * The host cannot run computer use until a person acts: macOS has not granted what it
+       * needs, or the Windows helper cannot use the desktop (block says which).
+       */
       "not_granted",
+      "unknown_app",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
+    unknownApps: Schema.optionalKey(Schema.Array(Schema.String)),
     block: Schema.optionalKey(CuaAgentBlock),
     message: Schema.String,
   }),
