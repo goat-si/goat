@@ -109,6 +109,12 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     ".goat",
   ),
   rule(
+    "dev-runner-home-flag",
+    at("scripts/dev-runner.ts"),
+    /(?<=Explicit )T3 Code(?= data directory)/g,
+    "GOAT",
+  ),
+  rule(
     "observability-home-paths",
     at("docs/operations/observability.md"),
     /(?<=`~\/|\$HOME\/|`<worktree>\/|\$WORKTREE\/)\.t3(?=[/}])/g,
@@ -427,10 +433,16 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Text rules run before path moves, so a test file that the identifier rules move also matches its upstream path.
+const UPSTREAM_PATHS: Readonly<Record<string, string>> = {
+  "packages/shared/src/goatMcpToolPresentation.test.ts":
+    "packages/shared/src/t3McpToolPresentation.test.ts",
+};
+
 export const TITLE_TEXT_RULES: readonly TextRule[] = TEST_TITLES.map(([path, from, to]) =>
   rule(
     `test-title:${path}:${to}`,
-    at(path),
+    UPSTREAM_PATHS[path] === undefined ? at(path) : at(path, UPSTREAM_PATHS[path]),
     new RegExp("(?<=[\"'`])" + escapeRegExp(from) + "(?=[\"'`])", "g"),
     to,
   ),
