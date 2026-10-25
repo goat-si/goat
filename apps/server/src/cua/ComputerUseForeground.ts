@@ -68,7 +68,7 @@ export const makeForegroundApprovals = () => {
         if (binding.threadId === threadId) return true;
       return false;
     },
-    /** Whether this dropped an earlier run's grant, which proxies must hear of. */
+    /** Whether this added a grant or dropped an earlier run's, either of which proxies must hear of. */
     imply(threadId: ThreadId, controlId: string, runId: RunId, expiresAt: DateTime.Utc) {
       if (revokedRuns.get(threadId)?.has(runId) === true) return false;
       const before = implied.size;
@@ -79,13 +79,15 @@ export const makeForegroundApprovals = () => {
         threadId,
         new Set([...(revokedRuns.get(threadId) ?? [])].filter((run) => run === runId)),
       );
-      implied.set(TurnItemId.make(`full-access:${controlId}:${runId}`), {
+      const id = TurnItemId.make(`full-access:${controlId}:${runId}`);
+      const added = !implied.has(id);
+      implied.set(id, {
         threadId,
         controlId,
         runId,
         expiresAtMillis: DateTime.toEpochMillis(expiresAt),
       });
-      return dropped;
+      return dropped || added;
     },
     approve(input: {
       readonly handoff: Handoff;
