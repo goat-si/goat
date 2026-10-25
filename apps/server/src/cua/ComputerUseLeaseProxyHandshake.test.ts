@@ -121,4 +121,31 @@ describe("handshake answers while computer use is paused (#1622)", () => {
       assert.deepEqual(s.sent, [{ jsonrpc: "2.0", id: 3, result: { tools: [{ name: "new" }] } }]);
     }),
   );
+
+  it.effect("of two borrowed tool lists answering at once, the later answer stands", () =>
+    Effect.gen(function* () {
+      let calls = 0;
+      const s = yield* setup(() => ({ tools: [{ name: "list " + ++calls }] }));
+      s.hold();
+      const first = yield* s.answerer
+        .answer(2, "tools/list", TOOLS, Effect.void)
+        .pipe(Effect.forkChild);
+      const second = yield* s.answerer
+        .answer(4, "tools/list", TOOLS.replace('"id":2', '"id":4'), Effect.void)
+        .pipe(Effect.forkChild);
+      yield* Deferred.succeed(s.gate, undefined);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      const replies = s.sent.map((line) => [line.id, line.result]);
+      assert.deepEqual(replies, [
+        [2, { tools: [{ name: "list 1" }] }],
+        [4, { tools: [{ name: "list 2" }] }],
+      ]);
+      s.sent.length = 0;
+      yield* s.answerer.answer(5, "tools/list", TOOLS, Effect.void);
+      assert.deepEqual(s.sent, [
+        { jsonrpc: "2.0", id: 5, result: { tools: [{ name: "list 2" }] } },
+      ]);
+    }),
+  );
 });

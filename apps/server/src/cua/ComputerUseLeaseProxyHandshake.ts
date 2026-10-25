@@ -44,7 +44,10 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
     Deferred.await(options.ended).pipe(
       Effect.flatMap((reason) => options.output(options.endAnswer(id, method, reason))),
     );
-  /** The tool-list answers taken so far; a borrowed one older than the last is not kept. */
+  /**
+   * Tool lists a live child gave (a resumed child's answer or a recheck). A borrowed list that
+   * began before one of these is older and is not kept; borrowed lists never outrank each other.
+   */
   let listings = 0;
   const answers = new Map<string, unknown>();
   /** The provider holds a tool list this module gave it, which the next child must confirm. */
@@ -127,7 +130,6 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
     if (Deferred.isDoneUnsafe(options.ended)) return yield* whenEnded(id, method);
     // A newer list, from a resumed child, came in while this child answered: it stands.
     if (method !== "tools/list" || listed === listings) answers.set(method, answer.result);
-    if (method === "tools/list") listings++;
     yield* reply(id, answers.get(method) ?? answer.result);
   });
 
