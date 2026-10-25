@@ -47,7 +47,7 @@ export const scope: McpInvocationScope = {
   thread: undefined,
   client: { sessionId: "agent", label: "Agent", access: "full-access" },
 };
-export const asking = ThreadId.make("thread:hub-agent");
+const asking = ThreadId.make("thread:hub-agent");
 export const threadScope: McpInvocationScope = {
   ...scope,
   client: undefined,
