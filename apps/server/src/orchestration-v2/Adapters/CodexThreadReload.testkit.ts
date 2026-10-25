@@ -137,12 +137,18 @@ const openReplay = Effect.fn("CodexReloadTest.openReplay")(function* (
     ),
     Effect.forkScoped,
   );
-  const startTurn = (ordinal: number, text = `turn-${ordinal}`) =>
+  const startTurn = (
+    ordinal: number,
+    text = `turn-${ordinal}`,
+    target: { readonly threadId: ThreadId; readonly providerThread: typeof providerThread } = {
+      threadId,
+      providerThread,
+    },
+  ) =>
     Effect.gen(function* () {
       yield* runtime.startTurn(
         makeCodexTestTurnInput({
-          threadId,
-          providerThread,
+          ...target,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make(`${transcript.scenario}-${ordinal}`),
           text,
@@ -234,19 +240,30 @@ export const codexReloadFixture = (scenario: string) => {
   // Codex ignores resume overrides on a thread a client holds: a reload unsubscribes first.
   // Returns the next request id.
   // A thread/resume Codex answers with the idle thread; `error` answers it with that failure.
-  const resume = (id: number, params: Record<string, unknown>, error?: Record<string, unknown>) =>
+  // Codex's answer to a request that loads a thread: the idle thread it names.
+  const answer = (id: number, thread = nativeThreadId): CodexReplay.CodexAppServerReplayEntry => {
+    const entry = withReplayRequestId(threadResult, id);
+    if (entry.type !== "emit_inbound" || thread === nativeThreadId) return entry;
+    const frame = entry.frame as { result: { thread: Record<string, unknown> } };
+    const named = { ...frame.result.thread, id: thread, sessionId: thread };
+    return { ...entry, frame: { ...frame, result: { ...frame.result, thread: named } } };
+  };
+  const resume = (
+    id: number,
+    params: Record<string, unknown>,
+    error?: Record<string, unknown>,
+    thread = nativeThreadId,
+  ) =>
     entries.push(
       {
         type: "expect_outbound",
         frame: {
           id,
           method: "thread/resume",
-          params: { threadId: nativeThreadId, excludeTurns: true, ...params },
+          params: { threadId: thread, excludeTurns: true, ...params },
         },
       },
-      error === undefined
-        ? withReplayRequestId(threadResult, id)
-        : { type: "emit_inbound", frame: { id, error } },
+      error === undefined ? answer(id, thread) : { type: "emit_inbound", frame: { id, error } },
     );
   const reload = (
     first: number,
@@ -255,23 +272,31 @@ export const codexReloadFixture = (scenario: string) => {
     goalResponse: Record<string, unknown> = { result: { goal: null } },
     params = threadParams(cua),
     error?: Record<string, unknown>,
+    thread = threads[0] ?? nativeThreadId,
   ) => {
     threads.forEach((threadId, index) => goalGet(first + index, threadId, goalResponse));
     const id = first + threads.length;
     entries.push(
       {
         type: "expect_outbound",
-        frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+        frame: { id, method: "thread/unsubscribe", params: { threadId: thread } },
       },
       { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
     );
-    resume(id + 1, params, error);
+    resume(id + 1, params, error, thread);
     return id + 2;
   };
-  const turnStart = (id: number, ordinal: number, computerUse: boolean, deferred = false) =>
+  // Each helper below drives the fixture's thread unless given another native thread.
+  const turnStart = (
+    id: number,
+    ordinal: number,
+    computerUse: boolean,
+    deferred = false,
+    thread = nativeThreadId,
+  ) =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
-        nativeThreadId,
+        nativeThreadId: thread,
         codexInput: [{ type: "text", text: `turn-${ordinal}` }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
@@ -289,13 +314,13 @@ export const codexReloadFixture = (scenario: string) => {
         },
       });
       // Codex answers turn/start before its task reports the thread active and the turn started.
-      status(nativeThreadId, "active");
+      status(thread, "active");
       entries.push({
         type: "emit_inbound",
         frame: {
           method: "turn/started",
           params: {
-            threadId: nativeThreadId,
+            threadId: thread,
             turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
           },
         },
@@ -317,14 +342,14 @@ export const codexReloadFixture = (scenario: string) => {
         },
       },
     });
-  const turnCompleted = (ordinal: number) => {
-    status(nativeThreadId, "idle");
+  const turnCompleted = (ordinal: number, thread = nativeThreadId) => {
+    status(thread, "idle");
     entries.push({
       type: "emit_inbound",
       frame: {
         method: "turn/completed",
         params: {
-          threadId: nativeThreadId,
+          threadId: thread,
           turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
         },
       },
@@ -344,6 +369,7 @@ export const codexReloadFixture = (scenario: string) => {
     entries,
     start,
     goalGet,
+    answer,
     resume,
     reload,
     turnStart,

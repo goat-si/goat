@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ThreadId } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import { TestClock } from "effect/testing";
 
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 import {
   codexReloadFixture as fixture,
@@ -546,5 +548,71 @@ describe("Codex computer use attachment", () => {
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "switches off a fork's managed driver when computer use is removed, after the held fork was resumed (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("cua-fork");
+          const forked = "cua-fork-copy";
+          const target = ThreadId.make(`thread-${forked}`);
+          const attachment = (threadId: ThreadId, control?: string) => ({
+            ...f.config,
+            threadId,
+            ...(control === undefined
+              ? {}
+              : { cuaDriver: f.driver(control), cuaDriverOverridesUserConfig: true }),
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(attachment(f.config.threadId, "control:a"));
+          yield* sessions.set(attachment(target, "control:a"));
+          f.start(f.managed("control:a"));
+          const params = f.threadParams(f.managed("control:a"));
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 3,
+                method: "thread/fork",
+                params: { threadId: f.nativeThreadId, ...params },
+              },
+            },
+            f.answer(3, forked),
+          );
+          // Resuming the fork this client holds changes nothing in Codex.
+          f.resume(4, params, undefined, forked);
+          // With computer use removed, the quiet fork reloads with the managed driver switched off.
+          const off = f.threadParams({ ...f.managed("control:a"), enabled: false });
+          const turn = f.reload(5, undefined, [forked], undefined, off);
+          yield* f.turnStart(turn, 1, false, false, forked);
+          f.turnCompleted(1, forked);
+          const replay = yield* f.open;
+          const fork = yield* replay.runtime.forkThread({
+            sourceProviderThread: replay.providerThread,
+            targetThreadId: target,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          yield* replay.runtime.resumeThread({
+            threadId: target,
+            providerThread: fork,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          yield* sessions.set(attachment(target));
+          yield* replay.startTurn(1, "turn-1", { threadId: target, providerThread: fork });
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [
+              f.managed("control:a"),
+              f.managed("control:a"),
+              { ...f.managed("control:a"), enabled: false },
+            ],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 });

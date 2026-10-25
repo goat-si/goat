@@ -8503,8 +8503,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (threadInput) {
               const threadId = yield* getNativeThreadId(threadInput.sourceProviderThread);
               const boundary = yield* resolveCodexForkBoundary(threadInput);
+              const forkMcp = yield* mcpSessions.read(threadInput.targetThreadId);
               const forkRuntime = yield* threadRuntimeParams({
-                mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
+                mcpSession: forkMcp,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
               });
@@ -8528,7 +8529,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 ),
               );
               let forkedThread = response.thread;
-              appliedSubagentsByThread.set(response.thread.id, forkRuntime.subagentKey);
+              threadStatuses.record(response.thread.id, response.thread.status.type);
+              recordLoaded(response.thread.id, forkRuntime, forkMcp);
               if (boundary.rollbackTurnCount > 0) {
                 const { historyMode } = yield* ensureInitialized.pipe(
                   Effect.andThen(readCodexThreadHistoryMetadata(client.raw, response.thread.id)),
