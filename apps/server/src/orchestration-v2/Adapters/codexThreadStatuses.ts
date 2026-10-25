@@ -34,7 +34,9 @@ export function makeCodexThreadStatuses() {
       client: CodexClient.CodexAppServerClient["Service"],
       threadIds: ReadonlyArray<string>,
     ) =>
-      threadIds.every(quiet)
+      // Codex resumes a thread cold only from idle: a root left in systemError keeps its old
+      // configuration through unsubscribe and resume, so it waits for its next turn (#1569).
+      statuses.get(threadIds[0] ?? "") !== "systemError" && threadIds.every(quiet)
         ? codexGoalsActive(
             client,
             threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
@@ -42,6 +44,28 @@ export function makeCodexThreadStatuses() {
             // pausing or clearing its goal does not stop it.
           ).pipe(Effect.map((active) => active || !threadIds.every(quiet)))
         : Effect.succeed(true),
+    /**
+     * Whether a loaded thread keeps a background terminal, such as a dev server, which a reload
+     * would stop. Asked of Codex; only an older Codex without the method counts as none.
+     */
+    terminalsRunning: (
+      client: CodexClient.CodexAppServerClient["Service"],
+      threadIds: ReadonlyArray<string>,
+    ) =>
+      Effect.forEach(
+        threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
+        (threadId) =>
+          client.raw.request("thread/backgroundTerminals/list", { threadId }).pipe(
+            Effect.map((page) => {
+              const data = (page as { readonly data?: unknown } | null)?.data;
+              return !Array.isArray(data) || data.length > 0;
+            }),
+            Effect.catchTags({
+              CodexAppServerRequestError: (error) => Effect.succeed(error.code !== -32601),
+            }),
+            Effect.catch(() => Effect.succeed(true)),
+          ),
+      ).pipe(Effect.map((running) => running.includes(true))),
     record: (threadId: string, status: string) => void statuses.set(threadId, status),
     turnStarted: (threadId: string, turnId: string) => {
       lastStarted.set(threadId, turnId);

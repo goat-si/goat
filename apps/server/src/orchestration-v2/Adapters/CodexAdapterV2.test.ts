@@ -1844,7 +1844,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  it.effect.each(["availability", "resume-rotation"] as const)(
+  it.effect.each(["availability", "background-terminal", "resume-rotation"] as const)(
     "replays successful native attachment authority (%s)",
     (mode) =>
       Effect.scoped(
@@ -1928,11 +1928,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           };
           // Codex ignores resume overrides on a held thread, so new authority reloads it once
           // the conversation is quiet and has no active goal (#1569).
-          const reload = (
-            id: number,
-            attachment: McpProviderSession.McpProviderSessionConfig,
-            disabledTools: readonly string[] = [],
-          ) => {
+          // A background terminal, such as a dev server, would die with the reload: it waits.
+          const quietCheck = (id: number, terminals: ReadonlyArray<object> = []) =>
             entries.push(
               {
                 type: "expect_outbound",
@@ -1943,13 +1940,33 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 type: "expect_outbound",
                 frame: {
                   id: id + 1,
+                  method: "thread/backgroundTerminals/list",
+                  params: { threadId: nativeThreadId },
+                },
+              },
+              {
+                type: "emit_inbound",
+                frame: { id: id + 1, result: { data: terminals, nextCursor: null } },
+              },
+            );
+          const reload = (
+            id: number,
+            attachment: McpProviderSession.McpProviderSessionConfig,
+            disabledTools: readonly string[] = [],
+          ) => {
+            quietCheck(id);
+            entries.push(
+              {
+                type: "expect_outbound",
+                frame: {
+                  id: id + 2,
                   method: "thread/unsubscribe",
                   params: { threadId: nativeThreadId },
                 },
               },
-              { type: "emit_inbound", frame: { id: id + 1, result: { status: "unsubscribed" } } },
+              { type: "emit_inbound", frame: { id: id + 2, result: { status: "unsubscribed" } } },
             );
-            resume(id + 2, attachment, undefined, disabledTools);
+            resume(id + 3, attachment, undefined, disabledTools);
           };
           const status = (type: "active" | "idle") => ({
             type: "emit_inbound" as const,
@@ -2009,13 +2026,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           if (mode === "availability") {
             yield* turn(3, 1);
             reload(4, stale, GOAT_MEMORY_TOOLS);
-            yield* turn(7, 2);
-            reload(8, config);
+            yield* turn(8, 2);
+            reload(9, config);
+            yield* turn(13, 3);
+          } else if (mode === "background-terminal") {
+            yield* turn(3, 1);
+            quietCheck(4, [{ processId: "dev-server" }]);
+            yield* turn(6, 2);
+            reload(7, stale, GOAT_MEMORY_TOOLS);
             yield* turn(11, 3);
           } else {
             resume(3, config, "delayed-resume");
             reload(4, next);
-            yield* turn(7, 1);
+            yield* turn(8, 1);
           }
           const entered = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
@@ -2058,8 +2081,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             yield* Deferred.succeed(release, undefined);
             yield* Fiber.join(resumed);
           }
-          for (let ordinal = 1; ordinal <= (mode === "availability" ? 3 : 1); ordinal++) {
-            valid = ordinal !== 2;
+          for (let ordinal = 1; ordinal <= (mode === "resume-rotation" ? 1 : 3); ordinal++) {
+            valid = mode === "background-terminal" ? ordinal === 1 : ordinal !== 2;
             yield* harness.runtime.startTurn(
               makeCodexTestTurnInput({
                 threadId,
