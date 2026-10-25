@@ -73,8 +73,8 @@ layer("ComputerUseLeases controls", (it) => {
         assert.isTrue((yield* listed())?.control.idle);
         // Its proxy keeps the control, so the next turn needs no respawn.
         assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
-        // A person typing between turns pauses nothing.
-        yield* leases.pause("human_input");
+        // An idle control has no agent input to pause; it remains active for the next turn.
+        yield* leases.pause("takeover");
         assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
 
         const next = yield* leases.control(turnThread, Option.none());
@@ -220,26 +220,26 @@ layer("ComputerUseLeases controls", (it) => {
   );
 
   it.effect(
-    "pauses agents for a person's input only while one holds the screen, and the kill switch ends them all",
+    "an explicit takeover pause holds the screen, and the kill switch ends every agent",
     () =>
       Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         yield* leases.stopAll;
-        // Someone typing with no agent on the screen pauses nothing to come.
-        yield* leases.pause("human_input");
+        // A takeover with no agent on the screen pauses nothing to come.
+        yield* leases.pause("takeover");
         const mine = yield* leases.control(thread, Option.none());
         assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
 
         const bots = yield* leases.control(other, Option.none());
-        yield* leases.pause("human_input");
+        yield* leases.pause("takeover");
         for (const [id, control] of [
           [thread, mine],
           [other, bots],
         ] as const)
           assert.deepEqual(yield* leases.controlState(id, control.controlId), {
             _tag: "paused",
-            reason: "human_input",
+            reason: "takeover",
           });
         yield* leases.resume;
         assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
@@ -360,7 +360,7 @@ it.effect(
         yield* TestClock.adjust("30 minutes");
         const control = yield* leases.control(thread, Option.none());
         assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
-        yield* leases.pause("human_input");
+        yield* leases.pause("takeover");
         assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
         yield* TestClock.adjust("31 minutes");
         assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });

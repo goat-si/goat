@@ -302,7 +302,7 @@ it("uses host-specific names and reports the Linux display server", () => {
   }
 });
 
-it("shows detection support separately and explains the unattended requirement", () => {
+it("shows detection support separately and explains private-mode and human-input policy", () => {
   for (const support of ComputerUseCapabilities.fields.signals.fields.humanInput.literals) {
     const result = computerUseReadinessSteps({
       readiness: ready,
@@ -316,7 +316,12 @@ it("shows detection support separately and explains the unattended requirement",
         `Private mode detection: ${support}.`,
       ]),
     );
-    expect(result.steps[1]?.detail.join(" ")).toContain("Unattended turns require both signals");
+    expect(result.steps[1]?.detail.join(" ")).toContain(
+      "Unattended turns require private mode detection",
+    );
+    expect(result.steps[1]?.detail.join(" ")).toContain(
+      "a person typing does not pause admitted work",
+    );
     expect(result.ready).toBe(true);
   }
   expect(view(ready).steps[1]?.detail).toContain("Human input detection: not reported.");

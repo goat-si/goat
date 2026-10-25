@@ -103,9 +103,10 @@ const AFTER_MS = 500;
 export const KEEP_MS = 10_000;
 /**
  * An open call covers events for at most this long, and so does an unbroken run of calls of one
- * kind. Past it, a person's input of that kind pauses the agents even while calls keep coming: a
- * call that never answers, a lost end report, or back-to-back calls must not hide a person for
- * long. Agent input that really runs longer then pauses the agents, which errs toward the person.
+ * kind. Past it, a person's input of that kind is distinguished from a covered agent's input even
+ * while calls keep coming. Inputs older than the retained log are refused too, so an agent cannot
+ * masquerade as a person by sending an old click. Human input never pauses admitted work; these
+ * classifications remain useful for input arbitration and reports.
  */
 const OPEN_MS = 10_000;
 

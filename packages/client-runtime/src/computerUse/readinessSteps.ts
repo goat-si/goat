@@ -362,7 +362,7 @@ export function computerUseReadinessSteps({
       detail: [
         ...helperStep.detail,
         ...signalDetail,
-        "Interactive turns may proceed without both detection signals. Unattended turns require both signals to be supported.",
+        "Interactive turns may proceed without both detection signals. Unattended turns require private mode detection; a person typing does not pause admitted work.",
       ],
     };
   }
