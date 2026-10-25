@@ -42,30 +42,30 @@ export const answerBy = <A>(
 /**
  * One capture at a time per tab. The lock follows the capture itself, which CDP cannot cancel,
  * so the next capture never overlaps one still in flight. A deadline bounds only how long the
- * caller waits: it is answered then, and a capture whose turn comes after it never runs. A
- * desktop guest that is not drawing answers no screenshot (#1084), and without this an agent's
- * snapshot waited behind a viewer's still until the broker cut the whole host off.
+ * caller waits: `answer` settles by then, while `run` is the capture itself, for state that must
+ * follow it. A capture whose turn comes after its deadline never runs. A desktop guest that is
+ * not drawing answers no screenshot (#1084), and without this an agent's snapshot waited behind a
+ * viewer's still until the broker cut the whole host off.
  */
+export const queueCaptureBy =
+  (deadlineMs = Number.POSITIVE_INFINITY) =>
+  <A>(tab: CaptureLockHolder, operation: () => Promise<A>) => {
+    let expired = false;
+    const run = tab.captureLock.then(() => {
+      if (tab.closing) throw new Error("The preview tab closed.");
+      // Its turn can come before the timer that marks it expired has run.
+      if (expired || performance.now() >= deadlineMs) throw notDrawnInTime();
+      return operation();
+    });
+    tab.captureLock = run.then(constVoid, constVoid);
+    const answer = answerBy(run, deadlineMs, () => {
+      expired = true;
+    });
+    return { run, answer };
+  };
+
 export const withCaptureLock = <A>(
   tab: CaptureLockHolder,
   operation: () => Promise<A>,
   deadlineMs = Number.POSITIVE_INFINITY,
-): Promise<A> => {
-  let expired = false;
-  const run = tab.captureLock.then(() => {
-    if (tab.closing) throw new Error("The preview tab closed.");
-    // Its turn can come before the timer that marks it expired has run.
-    if (expired || performance.now() >= deadlineMs) throw notDrawnInTime();
-    return operation();
-  });
-  tab.captureLock = run.then(constVoid, constVoid);
-  return answerBy(run, deadlineMs, () => {
-    expired = true;
-  });
-};
-
-/** withCaptureLock with its deadline first, for callers whose operation is a long block. */
-export const captureLockBy =
-  (deadlineMs = Number.POSITIVE_INFINITY) =>
-  <A>(tab: CaptureLockHolder, operation: () => Promise<A>): Promise<A> =>
-    withCaptureLock(tab, operation, deadlineMs);
+): Promise<A> => queueCaptureBy(deadlineMs)(tab, operation).answer;

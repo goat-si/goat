@@ -88,7 +88,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { answerBy, captureLockBy, withCaptureLock } from "./CaptureLock.ts";
+import { answerBy, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1405,7 +1405,7 @@ const make = Effect.gen(function* () {
   };
 
   const startRecording = (tab: ServerTab, deadlineMs?: number): Promise<Recording> => {
-    const started = captureLockBy(deadlineMs)(tab, async () => {
+    const { run, answer } = queueCaptureBy(deadlineMs)(tab, async () => {
       if (tab.recording) return tab.recording;
       const encoder = await contexts.scratchPage();
       let session: CDPSession | null = null;
@@ -1465,11 +1465,13 @@ const make = Effect.gen(function* () {
         await session?.detach().catch(constVoid);
         throw cause;
       }
-    }).finally(() => {
+    });
+    // A stop waits for the real start, which can outlive its caller's deadline.
+    const started = run.finally(() => {
       if (tab.recordingStart === started) tab.recordingStart = null;
     });
-    tab.recordingStart = started;
-    return started;
+    (tab.recordingStart = started).catch(constVoid);
+    return answer;
   };
 
   // Scaled captures repaint every screencast; pause them to avoid leaking that frame. The
@@ -1827,10 +1829,9 @@ const make = Effect.gen(function* () {
         }
         // A stop cannot act twice (a retry finds no recording);
         // dropping a late one would leave capture running.
-        // Only the answer is bounded; the stop itself still runs late.
-        return tab.control.agent(request.agentSessionId ?? "", () =>
-          answerBy(stopRecording(tab), deadlineMs),
-        );
+        // Only the answers are bounded, the queue wait included; the stop itself still runs late.
+        const stop = () => answerBy(stopRecording(tab), deadlineMs);
+        return answerBy(tab.control.agent(request.agentSessionId ?? "", stop), deadlineMs);
       }
     }
     const tab = await requireTab(request);

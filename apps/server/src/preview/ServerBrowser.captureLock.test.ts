@@ -36,8 +36,9 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       contexts.push(context);
       return context as unknown as BrowserContext;
     }
-    async scratchPage(): Promise<Page> {
-      throw new Error("no recordings here");
+    // The recording encoder page: it accepts every frame.
+    async scratchPage() {
+      return { evaluate: async () => true, close: async () => {} } as unknown as Page;
     }
     async connectDesktopPage(): Promise<never> {
       throw new Error("no desktop here");
@@ -263,4 +264,38 @@ it.live(
         ).toBe("evaluated");
       }),
     ).pipe(Effect.provide(layer)),
+);
+it.live("a recording start that outlives its caller's deadline can still be stopped", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
+      const cdp = contexts.at(-1)!.sessions[0]!;
+      const answer = cdp.send.getMockImplementation()!;
+      const drawn = Promise.withResolvers<Record<string, unknown>>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+      // The start seeds the recording with a frame the page never draws.
+      cdp.send.mockImplementation((method, input) =>
+        method === "Page.captureScreenshot" ? drawn.promise : answer(method, input),
+      );
+      const call = (operation: "recordingStart" | "recordingStop") =>
+        broker
+          .invoke<void>({ scope, tabId, operation, input: {}, timeoutMs: 200 })
+          .pipe(Effect.flip);
+      expect(yield* call("recordingStart")).toMatchObject({
+        remoteTag: "PreviewAutomationTimeoutError",
+      });
+      // The start is still on its way, so the stop waits behind it instead of finding nothing to
+      // stop and leaving the recording to begin once the frame arrives.
+      expect(yield* call("recordingStop")).toMatchObject({
+        remoteTag: "PreviewAutomationTimeoutError",
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );
