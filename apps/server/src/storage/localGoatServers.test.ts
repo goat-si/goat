@@ -224,7 +224,7 @@ describe("local GOAT server discovery", () => {
       });
       const folder = yield* fs.stat(home);
       // Linux names a deleted file a process still holds as "<path> (deleted)".
-      const linuxProc: FileSystem.FileSystem["Service"] = {
+      const linuxProc: FileSystem.FileSystem = {
         ...fs,
         readDirectory: (target, options) =>
           target === "/proc"
