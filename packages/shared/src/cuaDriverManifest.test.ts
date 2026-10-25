@@ -256,21 +256,30 @@ describe("cuaDriverManifest", () => {
 });
 
 describe("cuaDriverManifest app listing", () => {
-  /** A stand-in driver that only leaves a mark when something runs it. */
+  /**
+   * A stand-in driver that only leaves a mark when something runs it. The driver is spawned
+   * without a shell, so the stand-in is this Node binary with a preload that marks and exits:
+   * a script with a shebang would not run on Windows (#1378).
+   */
   const trap = (onTestFinished: (cleanup: () => void) => void) => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-manifest-"));
     onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
     const marker = NodePath.join(directory, "ran");
-    const binaryPath = NodePath.join(directory, "cua-driver");
-    NodeFS.writeFileSync(binaryPath, "#!/bin/sh\ntouch '" + marker + "'\nexit 3\n", {
-      mode: 0o755,
-    });
+    const preload = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(
+      preload,
+      "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", '');\nprocess.exit(3);\n",
+    );
     return {
       ran: () => NodeFS.existsSync(marker),
       input: {
-        binaryPath,
+        binaryPath: process.execPath,
         platform: "darwin" as const,
-        environment: { PATH: "/usr/bin:/bin" },
+        // NODE_OPTIONS reads a backslash inside quotes as an escape, so the path uses slashes.
+        environment: {
+          PATH: "/usr/bin:/bin",
+          NODE_OPTIONS: "--require " + JSON.stringify(preload.replaceAll("\\", "/")),
+        },
         hostBundleIds: ["si.goat.desktop"],
         path: NodePath.join(directory, "manifest.yaml"),
       },
