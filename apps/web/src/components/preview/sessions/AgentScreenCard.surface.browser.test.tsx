@@ -251,4 +251,6 @@ it("a tab this desktop draws opens no stream, which would wait on a page that is
   await expect.element(screen.getByText("Open to watch")).toBeVisible();
   expect(state.created).toBe(0);
   expect(screen.container.querySelector("canvas")).toBeNull();
+  // No stream means nothing to take control through; it would do nothing.
+  expect(screen.container.querySelector('[aria-label="Take over"]')).toBeNull();
 });

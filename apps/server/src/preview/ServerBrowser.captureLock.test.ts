@@ -82,11 +82,17 @@ function makeContext() {
     isClosed: () => false,
     close: async () => {},
   };
+  const sessions: Array<ReturnType<typeof makeSession>> = [];
   const context = {
     page,
+    sessions,
     newPage: async () => page as unknown as Page,
     grantPermissions: async () => {},
-    newCDPSession: async (_target: unknown) => makeSession(),
+    newCDPSession: async (_target: unknown) => {
+      const session = makeSession();
+      sessions.push(session);
+      return session;
+    },
     close: async () => {},
   };
   return context;
@@ -191,4 +197,36 @@ it.live(
         yield* broker.invoke<PreviewAutomationLogs>({ scope, tabId, operation: "logs", input: {} });
       }),
     ).pipe(Effect.provide(layer)),
+);
+it.live("a snapshot that gave up keeps its capture's place until Chromium answers it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
+      const cdp = contexts.at(-1)!.sessions[0]!;
+      const answer = cdp.send.getMockImplementation()!;
+      const drawn = Promise.withResolvers<Record<string, unknown>>();
+      yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+      cdp.send.mockImplementation((method, input) =>
+        method === "Page.captureScreenshot" ? drawn.promise : answer(method, input),
+      );
+      const snapshot = broker
+        .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+        .pipe(Effect.flip);
+      expect(yield* snapshot).toMatchObject({ remoteTag: "PreviewAutomationTimeoutError" });
+      // The first capture is still in flight; a second one beside it is what crashes a guest
+      // whose renderer exits mid-copy, so the next snapshot waits and answers on its deadline.
+      expect(yield* snapshot).toMatchObject({ remoteTag: "PreviewAutomationTimeoutError" });
+      const captures = cdp.send.mock.calls.filter(
+        ([method]) => method === "Page.captureScreenshot",
+      );
+      expect(captures).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(layer)),
 );

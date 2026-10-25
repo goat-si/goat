@@ -264,15 +264,17 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     (control) => control === "takeover" || control === "handBack",
   );
   const youControl = browser && large && stream?.controller === "you";
-  const takeover = stopped
-    ? null
-    : browser
-      ? youControl
-        ? "browser-release"
-        : "browser-take"
-      : desktopTakeover === undefined
-        ? null
-        : "desktop";
+  // A tab this desktop draws has no stream to take control through; the floating player shows it.
+  const takeover =
+    stopped || props.drawnHere
+      ? null
+      : browser
+        ? youControl
+          ? "browser-release"
+          : "browser-take"
+        : desktopTakeover === undefined
+          ? null
+          : "desktop";
   const takeoverLabel =
     takeover === "browser-release" || (takeover === "desktop" && desktopTakeover === "handBack")
       ? "Hand back"
@@ -284,7 +286,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const runTakeover = () => {
     if (takeover === "browser-release") surface.current?.releaseControl();
     else if (takeover === "browser-take") {
-      if (large && !props.drawnHere) takeBrowserControl();
+      if (large) takeBrowserControl();
       else props.onExpand({ takeOver: true });
     } else if (takeover === "desktop" && desktopTakeover !== undefined)
       props.onControl(desktopTakeover);

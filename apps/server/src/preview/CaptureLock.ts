@@ -29,7 +29,8 @@ export const withCaptureLock = <A>(
   let expired = false;
   const run = tab.captureLock.then(() => {
     if (tab.closing) throw new Error("The preview tab closed.");
-    if (expired) throw notDrawnInTime();
+    // Its turn can come before the timer that marks it expired has run.
+    if (expired || performance.now() >= deadlineMs) throw notDrawnInTime();
     return operation();
   });
   tab.captureLock = run.then(constVoid, constVoid);
