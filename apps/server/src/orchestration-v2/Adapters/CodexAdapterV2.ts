@@ -7191,10 +7191,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // Codex ignores resume overrides on a thread a client still holds, so a changed computer
             // use driver (a new control after Stop, #1564) needs a cold reload. A thread with a turn
             // or background work still running keeps its subscription; the next idle turn reloads.
+            // A subagent turn counts through its root, which may already have completed.
+            const ownedHere = (context: ActiveCodexTurnContext) =>
+              approvalOwnerCodexTurn(context).owner.providerThread.id ===
+              turnInput.providerThread.id;
             const busy =
-              Array.from((yield* Ref.get(activeTurns)).values()).some(
-                (active) => active.providerThread.id === turnInput.providerThread.id,
-              ) || (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));
+              Array.from((yield* Ref.get(activeTurns)).values()).some(ownedHere) ||
+              Array.from((yield* Ref.get(subagentThreads)).values()).some(
+                (subagent) =>
+                  subagent.task.status === "running" && ownedHere(subagent.parentContext),
+              ) ||
+              (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(

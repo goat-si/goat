@@ -25,6 +25,7 @@ import {
   CODEX_TEST_RUNTIME_POLICY,
   makeCodexTestTurnInput,
   makeReplayServerConfig,
+  withCodexReplayChildMetadata,
   withReplayRequestId,
 } from "./CodexAdapterV2.testkit.ts";
 import {
@@ -70,8 +71,9 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   const threadConfigs: Array<Record<string, unknown>> = [];
   const record = (method: string, params: unknown) =>
     Effect.sync(() => {
-      if (method === "thread/start" || method === "thread/resume")
-        threadConfigs.push((params as { config: Record<string, unknown> }).config);
+      const config = (params as { config?: Record<string, unknown> } | undefined)?.config;
+      if ((method === "thread/start" || method === "thread/resume") && config !== undefined)
+        threadConfigs.push(config);
     });
   const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
     instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
@@ -83,6 +85,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
           Effect.flatMap((context) =>
             Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context)),
           ),
+          // Answers the adapter's reads of a spawned subagent thread's metadata.
+          Effect.map((client) => withCodexReplayChildMetadata(client, transcript)),
           Effect.map(
             (client) =>
               ({
@@ -124,9 +128,14 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
   const terminals = yield* Queue.unbounded<void>();
+  const childDone = yield* Queue.unbounded<void>();
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
-      event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+      event.type === "turn.terminal"
+        ? Queue.offer(terminals, undefined)
+        : event.type === "subagent.updated" && event.subagent.status === "completed"
+          ? Queue.offer(childDone, undefined)
+          : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -142,7 +151,12 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
         }),
       );
     });
-  return { threadConfigs, startTurn, terminal: Queue.take(terminals) };
+  return {
+    threadConfigs,
+    startTurn,
+    terminal: Queue.take(terminals),
+    childDone: Queue.take(childDone),
+  };
 });
 
 /** The replayed Codex thread every test drives, with the frames it expects in order. */
@@ -394,6 +408,79 @@ describe("Codex computer use attachment", () => {
           yield* replay.startTurn(2);
           yield* replay.terminal;
           yield* replay.terminal;
+          yield* replay.startTurn(3);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a"), f.managed("control:b")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+  it.effect(
+    "keeps the reload deferred while a completed turn's subagent is still running (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("cua-running-child");
+          const childThread = "cua-running-child-agent";
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          // Turn 1 spawns a subagent and completes while the subagent keeps running.
+          yield* f.turnStart(3, 1, true);
+          const childTurn = (status: "inProgress" | "completed") => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method: status === "inProgress" ? "turn/started" : "turn/completed",
+              params: {
+                threadId: childThread,
+                turn: makeCodexReplayTurn({ id: "child-turn", status }),
+              },
+            },
+          });
+          f.entries.push(
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "item/completed",
+                params: {
+                  item: {
+                    type: "subAgentActivity",
+                    id: "spawn-child",
+                    kind: "started",
+                    agentThreadId: childThread,
+                    agentPath: "/root/child",
+                  },
+                  threadId: "cua-running-child",
+                  turnId: "turn-1",
+                  completedAtMs: 1782622441000,
+                },
+              },
+            },
+            childTurn("inProgress"),
+          );
+          f.turnCompleted(1);
+          // Turn 2 under a new control: the subagent still runs, so nothing is reloaded.
+          yield* f.turnStart(4, 2, true);
+          f.turnCompleted(2);
+          f.entries.push(childTurn("completed"));
+          // Once the subagent is done, the next turn reloads with the new control.
+          f.reload(5, f.managed("control:b"));
+          yield* f.turnStart(7, 3, true);
+          f.turnCompleted(3);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          yield* replay.childDone;
           yield* replay.startTurn(3);
           yield* replay.terminal;
           assert.deepEqual(
