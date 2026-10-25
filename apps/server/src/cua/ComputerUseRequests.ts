@@ -111,7 +111,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
           kind: "refused",
           reason: "unknown_app",
           unknownApps,
-          message: `This host does not list these app ids: ${unknownApps.join(", ")}. Apps must be named by the id list_apps reports: the bundle id on macOS, or the listed name (the executable name on Windows) elsewhere. A window title is not an app id. Call list_apps and ask again with its ids; if the app is not open, open it first.`,
+          message: `This host does not list these app ids: ${unknownApps.join(", ")}. Name apps by the bundle_id list_apps reports (on Windows usually the executable path), or by its listed name when it has no bundle_id. Never use a window title. Call list_apps and ask again with its ids; if the app is not open, open it first.`,
         } satisfies ComputerUseRequestResult;
     }
   }

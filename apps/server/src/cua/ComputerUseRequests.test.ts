@@ -183,8 +183,8 @@ it.effect(
               "list_apps",
               "window title",
               "open it first",
-              "bundle id",
-              "executable name",
+              "bundle_id",
+              "executable path",
             ])
               assert.include(result.message, guidance);
           }),

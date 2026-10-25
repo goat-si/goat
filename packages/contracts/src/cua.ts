@@ -666,7 +666,7 @@ export const ComputerUseRequestInput = Schema.Struct({
   apps: Schema.optional(
     ComputerUseApps.annotate({
       description:
-        "The apps you will control, by the ids list_apps reports: bundle_id, or its listed name (the executable name on Windows) where there is none, never a window title. If the app is not open, open it first. The person approves exactly these. Omit only when the work needs the whole screen.",
+        "The apps you will control, by the bundle_id list_apps reports (on Windows usually the executable path), or by its listed name when it has no bundle_id; never a window title. If the app is not open, open it first. The person approves exactly these. Omit only when the work needs the whole screen.",
     }),
   ),
   minutes: Schema.optional(

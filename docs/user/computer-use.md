@@ -38,9 +38,11 @@ them do at that keyboard.
 ## Approving apps
 
 An agent in a thread you run asks before it uses an app. The request appears in
-the thread and names app ids, such as `com.apple.Notes` or `notepad.exe`, never window titles, and says until when;
-approve it in a GOAT app and the agent may use those apps' windows in that
-thread until then. Until it has an approval, the agent can list apps and
+the thread and names apps by the `bundle_id` that `list_apps` reports (on Windows
+usually the executable path), or by the listed name when it has no `bundle_id`,
+never a window title. It also says when the approval expires. Approve it in a GOAT
+app and the agent may use those apps' windows in that thread until then.
+Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
 says so; approving it lets the agent act on anything the screen shows. Agents
 cannot screenshot the whole display; they look at one window at a time. On
