@@ -5,6 +5,7 @@ import {
   type ProviderDriverKind,
   type ServerProvider,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 function humanizeSlug(slug: string): string {
@@ -154,6 +155,11 @@ const isHandoffError = Schema.is(HandoffError);
  * failed, or may have landed, says which, so nobody approves a half-applied change again; a
  * conflict the server explained, such as another thread holding an app, says what is in the way.
  */
+/** When a pending handoff expires, in the reader's own time: hour and minute, as cards show it. */
+export function handoffExpiryLabel(expiresAt: DateTime.Utc): string {
+  return `Expires ${DateTime.toDate(expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
 export function handoffRespondErrorMessage(error: unknown): string {
   return isHandoffError(error) &&
     (error.outcome !== undefined || (error.reason === "conflict" && error.detail !== undefined))
