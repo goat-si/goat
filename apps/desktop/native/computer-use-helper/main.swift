@@ -320,6 +320,11 @@ final class DriverService {
           throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
         }
         result = try frames.frames(params)
+      case "captureCheck":
+        guard frameCaptureAvailable else {
+          throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
+        }
+        result = try frames.captureCheck(params)
       default: throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
       }
       emit(["id": id, "result": result])
@@ -661,7 +666,7 @@ func runService() -> Never {
     // Agent connections already report a person's input (InputActivity), but "humanInput" is
     // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
     // advertising it lets unattended turns run.
-    "features": frameCaptureAvailable ? ["watch", "frames"] : ["watch"],
+    "features": frameCaptureAvailable ? ["watch", "frames", "captureCheck"] : ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])

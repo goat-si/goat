@@ -119,6 +119,11 @@ export const fixture = Effect.fn(function* (
     updatedHelper?: boolean;
     /** How the helper answers when started the way agents start it (macOS). */
     agentRoute?: AgentRouteOutcome;
+    /**
+     * The helper's hello lists captureCheck, and how its capture check of a GOAT window ends:
+     * a picture, an error it answers, or the helper process dying (as CGS_REQUIRE_INIT did).
+     */
+    captureCheck?: "pictured" | { readonly error: string } | "crashed";
     publisher?: DesktopTelemetryPublisher["Service"];
     appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
@@ -177,6 +182,10 @@ export const fixture = Effect.fn(function* (
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
   /** The helper executables started the way agents start them. */
   const agentRouteProbes: string[] = [];
+  /** The windows a readiness check asked the helper to capture. */
+  const captureChecks: Array<{ bundleId: string; pid: number; windowId: number }> = [];
+  /** Power and session events, as Electron's powerMonitor raises them. */
+  const powerListeners = new Map<string, Set<() => void>>();
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
@@ -222,11 +231,19 @@ export const fixture = Effect.fn(function* (
         features: {
           canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
           reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
-          canFrame: false,
+          canFrame: options.captureCheck !== undefined,
+          canCheckCapture: options.captureCheck !== undefined,
         },
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
+    },
+    captureCheck: async (bundle, target) => {
+      captureChecks.push({ bundleId: bundle.bundleId, ...target });
+      const outcome = options.captureCheck ?? "pictured";
+      if (outcome === "pictured") return { kind: "pictured", width: 64, height: 40 };
+      if (outcome === "crashed") return { kind: "failed", reason: "exited (code 134)" };
+      return { kind: "failed", reason: outcome.error };
     },
     agentRoute: async (mcp) => {
       agentRouteProbes.push(mcp.command);
@@ -536,7 +553,20 @@ export const fixture = Effect.fn(function* (
       ),
     ),
   );
-  const driver = yield* make(dependencies).pipe(
+  const powerHandled = yield* Queue.unbounded<void>();
+  const powerMonitor = {
+    handled: () => Queue.offerUnsafe(powerHandled, undefined),
+    on: (event: "resume" | "unlock-screen", listener: () => void) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          const set = powerListeners.get(event) ?? new Set();
+          set.add(listener);
+          powerListeners.set(event, set);
+        }),
+        () => Effect.sync(() => void powerListeners.get(event)?.delete(listener)),
+      ),
+  };
+  const driver = yield* make(dependencies, powerMonitor).pipe(
     Effect.provideService(DesktopTelemetryPublisher, options.publisher ?? publisher),
     Effect.provide(environment),
   );
@@ -604,6 +634,12 @@ export const fixture = Effect.fn(function* (
     launches,
     helperProbes,
     agentRouteProbes,
+    captureChecks,
+    /** The machine wakes or its screen unlocks. */
+    power: (event: "resume" | "unlock-screen") =>
+      Effect.sync(() => {
+        for (const listener of powerListeners.get(event) ?? []) listener();
+      }).pipe(Effect.andThen(Queue.take(powerHandled))),
     manifestListings,
     helperAppListings,
     helperLaunches,

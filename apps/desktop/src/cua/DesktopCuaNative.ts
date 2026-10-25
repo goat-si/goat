@@ -15,6 +15,8 @@ import {
   makeHelperHost,
   listHelperApplications,
   probeHelperGrants,
+  checkHelperCapture,
+  type CaptureCheckOutcome,
   spawnHelperProcess,
   type DaemonMetadata,
   type HelperBundle,
@@ -107,6 +109,14 @@ export interface DesktopCuaDriverDependencies {
     platform: NodeJS.Platform,
   ) => Promise<Grants>;
   /**
+   * One capture of GOAT's own window by a fresh helper, the way live pictures capture (macOS);
+   * only its size comes back.
+   */
+  readonly captureCheck: (
+    bundle: HelperBundle,
+    target: { readonly pid: number; readonly windowId: number },
+  ) => Promise<CaptureCheckOutcome>;
+  /**
    * The helper bundle this build ships. absent: packaged macOS stays off; other builds may run
    * the driver in-process. unusable: it should be there and cannot be used, so computer use stays
    * off rather than run under another principal. note: something to log.
@@ -194,6 +204,8 @@ export const dependencies: DesktopCuaDriverDependencies = {
     platform === "win32"
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
+  captureCheck: (bundle, target) =>
+    checkHelperCapture(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId, target),
   helperBundlePath: resolveHelperBundle,
   agentRoute: probeAgentRoute,
   helperHost: ({ platform, verify, ...options }) =>

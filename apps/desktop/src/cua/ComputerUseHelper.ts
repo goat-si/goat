@@ -114,6 +114,11 @@ export interface HelperProcess {
   readonly stdout: NodeJS.ReadableStream;
   readonly kill: (signal: NodeJS.Signals) => void;
   readonly exited: Promise<void>;
+  /**
+   * The launcher's exit code once it exits (it exits with its service's code), null for a signal.
+   * Absent where the process was not spawned here.
+   */
+  readonly exitCode?: Promise<number | null>;
 }
 
 export const spawnHelperProcess = (
@@ -127,12 +132,13 @@ export const spawnHelperProcess = (
       stdio: ["pipe", "pipe", "inherit"],
       windowsHide: true,
     });
-    const exited = new Promise<void>((resolve) => {
-      child.once("exit", () => resolve());
-      child.once("error", () => resolve());
+    const exitCode = new Promise<number | null>((resolve) => {
+      child.once("exit", (code) => resolve(code));
+      child.once("error", () => resolve(null));
     });
+    const exited = exitCode.then(() => undefined);
     child.stdin.on("error", () => undefined);
-    return { stdin: child.stdin, stdout: child.stdout, kill: () => child.kill(), exited };
+    return { stdin: child.stdin, stdout: child.stdout, kill: () => child.kill(), exited, exitCode };
   }
   // Its own process group: the launcher, the service it re-execs and the driver all join it, so
   // a forced stop reaches the whole tree even when the service is stuck.
@@ -140,10 +146,11 @@ export const spawnHelperProcess = (
     stdio: ["pipe", "pipe", "inherit"],
     detached: true,
   });
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("error", () => resolve());
+  const exitCode = new Promise<number | null>((resolve) => {
+    child.once("exit", (code) => resolve(code));
+    child.once("error", () => resolve(null));
   });
+  const exited = exitCode.then(() => undefined);
   // A helper that died leaves a closed pipe; the exit promise reports it instead.
   child.stdin.on("error", () => undefined);
   const kill = (signal: NodeJS.Signals) => {
@@ -154,7 +161,7 @@ export const spawnHelperProcess = (
       // The group is already gone.
     }
   };
-  return { stdin: child.stdin, stdout: child.stdout, kill, exited };
+  return { stdin: child.stdin, stdout: child.stdout, kill, exited, exitCode };
 };
 
 export interface HelperSession {
@@ -190,6 +197,8 @@ export interface HelperSession {
   readonly onEvent: (listener: (event: HelperEvent["event"]) => void) => () => void;
   /** Whether this helper captures single windows for the live picture (#1370). */
   readonly canFrame: boolean;
+  /** Whether it answers captureCheck: one capture of GOAT's own window, size only. */
+  readonly canCheckCapture: boolean;
   /**
    * Replaces the windows the helper captures; none stops it. Frames and no-picture answers
    * carry framesId, and those of an earlier request never reach onFrame once this one is sent.
@@ -345,6 +354,7 @@ export async function openHelperSession(
       return () => eventListeners.delete(listener);
     },
     canFrame: hello.features?.includes("frames") === true,
+    canCheckCapture: hello.features?.includes("captureCheck") === true,
     frames: async (framesId, targets) => {
       // In force as it is sent: an older request's frames still in the pipe are dropped.
       framing = framesId;
@@ -387,12 +397,65 @@ export async function probeHelperGrants(
 }
 
 /** What a helper said in its hello it can do, beyond protocol 1's first set. */
-export type HelperFeatures = Pick<HelperSession, "canWatch" | "reportsInput" | "canFrame">;
+export type HelperFeatures = Pick<
+  HelperSession,
+  "canWatch" | "reportsInput" | "canFrame" | "canCheckCapture"
+>;
 export const helperFeatures = (session: HelperFeatures): HelperFeatures => ({
   canWatch: session.canWatch,
   reportsInput: session.reportsInput,
   canFrame: session.canFrame,
+  canCheckCapture: session.canCheckCapture,
 });
+
+export type CaptureCheckOutcome =
+  | { readonly kind: "pictured"; readonly width: number; readonly height: number }
+  | { readonly kind: "failed"; readonly reason: string };
+const decodeCaptureSize = Schema.decodeUnknownOption(
+  Schema.Struct({ width: Schema.Int, height: Schema.Int }),
+);
+
+/**
+ * Captures one of GOAT's own windows in a fresh helper, through the lookup and capture every live
+ * picture uses, and reads only its size. A helper whose capture aborts its process (the
+ * CGS_REQUIRE_INIT crash, exit 134) fails here instead of on the first live picture.
+ */
+export async function checkHelperCapture(
+  process: HelperProcess,
+  expectedBundleId: string,
+  target: { readonly pid: number; readonly windowId: number },
+): Promise<CaptureCheckOutcome> {
+  let session: HelperSession;
+  try {
+    session = await openHelperSession(process, expectedBundleId);
+  } catch (error) {
+    return { kind: "failed", reason: helperFailure(error) };
+  }
+  try {
+    const size = decodeCaptureSize(await session.request("captureCheck", target));
+    return size._tag === "Some"
+      ? { kind: "pictured", ...size.value }
+      : { kind: "failed", reason: "it answered without a picture" };
+  } catch (error) {
+    // The service process died mid-capture: say how it ended, as the proxy would see it.
+    const code = await Promise.race([
+      process.exitCode ?? Promise.resolve("unknown" as const),
+      timeout(1_000),
+    ]);
+    return {
+      kind: "failed",
+      reason:
+        typeof code === "number" || code === null
+          ? `it exited while capturing (${code === null ? "a signal" : "code " + code})`
+          : helperFailure(error),
+    };
+  } finally {
+    await session.close();
+  }
+}
+
+const helperFailure = (error: unknown) =>
+  error instanceof ComputerUseHelperError ? error.message : String(error);
 
 export interface HelperBundle {
   readonly bundlePath: string;

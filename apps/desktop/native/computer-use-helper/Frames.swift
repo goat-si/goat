@@ -172,17 +172,7 @@ final class FrameCapture {
 
   @available(macOS 14.0, *)
   private func capture(_ window: SCWindow, _ target: FrameTarget, framesId: Int) {
-    let filter = SCContentFilter(desktopIndependentWindow: window)
-    let configuration = SCStreamConfiguration()
-    let frame = window.frame
-    let width = max(1, min(target.maxWidth, Int(frame.width * 2)))
-    let height = max(1, Int((Double(width) * frame.height / max(frame.width, 1)).rounded()))
-    configuration.width = width
-    configuration.height = height
-    configuration.showsCursor = false
-    configuration.ignoreShadowsSingleWindow = true
-    SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) {
-      [weak self] image, _ in
+    captureImage(window, maxWidth: target.maxWidth) { [weak self] image in
       guard let self else { return }
       let data = image.flatMap(jpeg)
       self.queue.async {
@@ -201,6 +191,68 @@ final class FrameCapture {
         ])
       }
     }
+  }
+
+  /// One window on its own, the way every live picture and the readiness check take it.
+  @available(macOS 14.0, *)
+  private func captureImage(
+    _ window: SCWindow, maxWidth: Int, _ completion: @escaping (CGImage?) -> Void
+  ) {
+    let filter = SCContentFilter(desktopIndependentWindow: window)
+    let configuration = SCStreamConfiguration()
+    let frame = window.frame
+    let width = max(1, min(maxWidth, Int(frame.width * 2)))
+    let height = max(1, Int((Double(width) * frame.height / max(frame.width, 1)).rounded()))
+    configuration.width = width
+    configuration.height = height
+    configuration.showsCursor = false
+    configuration.ignoreShadowsSingleWindow = true
+    SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) {
+      image, _ in completion(image)
+    }
+  }
+
+  /// The readiness check's capture: one of GOAT's own windows, through the lookup and capture
+  /// every live picture uses, in this process. A capture that would abort the helper (the
+  /// CGS_REQUIRE_INIT crash, exit 134) aborts the check instead of the first live picture. Only
+  /// the size leaves this process; GOAT's windows are never pictured (#1321), so another app's
+  /// window is refused here.
+  func captureCheck(_ params: [String: Any]) throws -> [String: Any] {
+    guard let pid = params["pid"] as? Int, pid > 0, let windowId = params["windowId"] as? Int,
+      windowId >= 0
+    else { throw HelperError(code: "bad_request", message: "captureCheck needs a pid and windowId.") }
+    guard #available(macOS 14.0, *) else {
+      throw HelperError(code: "unsupported", message: "This macOS cannot capture windows.")
+    }
+    if !CGPreflightScreenCaptureAccess() {
+      throw HelperError(code: "screenRecordingNotGranted", message: "Screen Recording is off.")
+    }
+    final class Answer: @unchecked Sendable { var value: Result<[String: Any], HelperError>? }
+    let answer = Answer()
+    let done = DispatchSemaphore(value: 0)
+    let fail = { (code: String, message: String) in
+      answer.value = .failure(HelperError(code: code, message: message))
+      done.signal()
+    }
+    SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) {
+      [weak self] content, _ in
+      guard let self else { return fail("internal", "The capture check ended.") }
+      guard let window = content?.windows.first(where: { Int($0.windowID) == windowId }),
+        let owner = window.owningApplication, Int(owner.processID) == pid
+      else { return fail("windowGone", "The window is gone.") }
+      guard self.goatOwns(pid: pid, bundleId: owner.bundleIdentifier) else {
+        return fail("appNotApproved", "The capture check only takes GOAT's own windows.")
+      }
+      self.captureImage(window, maxWidth: 64) { image in
+        guard let image else { return fail("captureFailed", "The capture returned no image.") }
+        answer.value = .success(["width": image.width, "height": image.height])
+        done.signal()
+      }
+    }
+    guard done.wait(timeout: .now() + 10) == .success, let result = answer.value else {
+      throw HelperError(code: "timeout", message: "The capture check did not finish.")
+    }
+    return try result.get()
   }
 
   private func unavailable(_ target: FrameTarget, _ reason: String, framesId: Int) {
