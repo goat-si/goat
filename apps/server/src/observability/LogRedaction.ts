@@ -17,13 +17,19 @@ import { isCredentialKey, MASK, redactLogText } from "./LogTextRedaction.ts";
  * - Masked whole: GOAT MCP credentials; bare JWT and JWE tokens; Authorization header values
  *   (Bearer, Basic or any scheme); Cookie and Set-Cookie headers; and the values of JSON fields,
  *   structured log fields and key=value assignments whose name is in the fixed CREDENTIAL_KEY list
- *   (LogTextRedaction.ts), plus URL userinfo written on one line and a few provider token shapes.
+ *   (LogTextRedaction.ts), an authorization= or cookie= value up to the end of its line; plus URL
+ *   userinfo written on one line, PEM private-key blocks, and these provider token shapes: GitHub,
+ *   OpenAI-style sk-, AWS access key ids, Slack, Stripe secret and restricted keys, Google API keys.
+ *   A text cut at the scan bound hides a recognized credential the cut leaves unfinished.
  * - Errors keep their name, message, stack and Error cause chain and lose every other field.
  * - Logging never fails, runs no getter, hook or method of a logged value (apart from an Error's
  *   name/message/stack/cause, read as Effect reads them, and a Redactable's own hook), and costs
  *   time linear in its input, also on adversarial input.
  * Secrets of any other shape are outside it. Memory text is redacted separately, before its
  * operation digest (memory/MemorySecretScanner.ts).
+ * Also outside it, tracked in #1529: field names in JSON escaped more than once, URL userinfo split
+ * across lines, the cause of a failed span exported to traces (packages/shared observability.ts),
+ * direct console writes, and memories stored or received signed before a shape was recognized.
  */
 
 const DEFECT_SUMMARY_MAX_CHARS = 2_000;
