@@ -123,6 +123,10 @@ it.effect(
         expect(body).toMatchObject({ code: "invalid_request" });
         for (const field of fields) expect(body.message).toContain(field);
         expect(body.message).toContain("goat_memory_sync_status");
+        expect(yield* Fixture.callThroughGoatCall(name, input)).toMatchObject({
+          status: "error",
+          error: { code: "invalid_request", reason: "invalid_request", retryable: false },
+        });
       }
       const rejected = "not-a-space-synthetic-value";
       const { body } = yield* Fixture.call("goat_memory_list", {
