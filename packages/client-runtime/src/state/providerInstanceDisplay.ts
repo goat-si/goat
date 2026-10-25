@@ -155,9 +155,28 @@ const isHandoffError = Schema.is(HandoffError);
  * failed, or may have landed, says which, so nobody approves a half-applied change again; a
  * conflict the server explained, such as another thread holding an app, says what is in the way.
  */
-/** When a pending handoff expires, in the reader's own time: hour and minute, as cards show it. */
-export function handoffExpiryLabel(expiresAt: DateTime.Utc): string {
-  return `Expires ${DateTime.toDate(expiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+/**
+ * When a pending handoff expires, in the reader's own time to the minute. A wall time that also
+ * comes an hour earlier or later, as when clocks fall back, names its zone, so the hour is clear.
+ * Locale and zone default to the reader's; tests pin them.
+ */
+export function handoffExpiryLabel(
+  expiresAt: DateTime.Utc,
+  options: { readonly locale?: string; readonly timeZone?: string } = {},
+): string {
+  const at = DateTime.toEpochMillis(expiresAt);
+  const clock = (zone: boolean) =>
+    new Intl.DateTimeFormat(options.locale, {
+      hour: "numeric",
+      minute: "2-digit",
+      ...(options.timeZone === undefined ? {} : { timeZone: options.timeZone }),
+      ...(zone ? { timeZoneName: "short" } : {}),
+    });
+  const text = clock(false).format(at);
+  const repeats = [at - 3_600_000, at + 3_600_000].some(
+    (other) => clock(false).format(other) === text,
+  );
+  return `Expires ${repeats ? clock(true).format(at) : text}`;
 }
 
 export function handoffRespondErrorMessage(error: unknown): string {

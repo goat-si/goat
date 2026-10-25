@@ -1,4 +1,3 @@
-import { handoffExpiryLabel } from "@goat/client-runtime/state/provider-instance-display";
 import { fakeTimers } from "../../../test/render";
 import { RegistryContext } from "@effect/atom-react";
 import {
@@ -332,7 +331,8 @@ it.each([
       expiresAt,
       target: { ...handoff.target, path },
     });
-    expect(container.textContent).toContain(handoffExpiryLabel(expiresAt));
+    // The reader's local time to the minute, never with seconds.
+    expect(container.textContent).toMatch(/Expires \d{1,2}:\d{2}(?!:\d)/);
     expect(container.textContent).not.toContain(`${kind.replaceAll("_", " ")} · pending`);
     expect(container.textContent).not.toContain("Cancel request");
     expect(harness.refresh).not.toHaveBeenCalled();

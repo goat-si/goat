@@ -1,4 +1,5 @@
 import { HandoffError, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -6,6 +7,7 @@ import {
   openCodexRouteSummary,
   openCodexHomeHandoff,
   codexRouteErrorMessage,
+  handoffExpiryLabel,
   handoffRespondErrorMessage,
   normalizeProviderAccentColor,
   providerAccentForegroundColor,
@@ -157,5 +159,22 @@ describe("handoffRespondErrorMessage", () => {
     expect(handoffRespondErrorMessage(new HandoffError({ reason: "conflict" }))).toBe(
       "Could not update this handoff. It may already be resolved or expired.",
     );
+  });
+});
+
+describe("handoffExpiryLabel", () => {
+  // Intl may join the time and day period with a narrow no-break space.
+  const label = (iso: string, locale: string, timeZone: string) =>
+    handoffExpiryLabel(DateTime.makeUnsafe(iso), { locale, timeZone }).replaceAll("\u202f", " ");
+
+  it("shows the reader's time to the minute, in their locale", () => {
+    expect(label("2026-10-25T01:12:45Z", "en-US", "Asia/Seoul")).toBe("Expires 10:12 AM");
+    expect(label("2026-10-25T01:12:45Z", "en-GB", "Asia/Seoul")).toBe("Expires 10:12");
+  });
+
+  it("names the zone when clocks fall back and the same wall time comes twice", () => {
+    expect(label("2026-11-01T05:30:45Z", "en-US", "America/New_York")).toBe("Expires 1:30 AM EDT");
+    expect(label("2026-11-01T06:30:45Z", "en-US", "America/New_York")).toBe("Expires 1:30 AM EST");
+    expect(label("2026-11-01T08:30:45Z", "en-US", "America/New_York")).toBe("Expires 3:30 AM");
   });
 });
