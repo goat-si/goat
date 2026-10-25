@@ -9,8 +9,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import { resolveGoatHome } from "./goatHome.ts";
+import * as HostProcess from "./HostProcess.ts";
 
 /**
  * The common dir is not necessarily named `.git`: a worktree of a bare repo
@@ -78,3 +80,43 @@ export const resolveWorktreeHome = Effect.fn("devHome.resolveWorktreeHome")(func
   // The dev runner hands this home to the server as an explicit base dir, which reads userdata.
   return yield* resolveGoatHome(worktreePath, "userdata");
 });
+
+export class DevStateDirectorySymlinkError extends Schema.TaggedError<DevStateDirectorySymlinkError>()(
+  "DevStateDirectorySymlinkError",
+  { directory: Schema.String },
+) {
+  override get message(): string {
+    return `${this.directory} is a symlink. Dev state must be a real directory; replace the link with a directory.`;
+  }
+}
+
+/**
+ * Creates a dev state directory without group or other access, or removes
+ * group and other write from an existing one, and returns the mode change.
+ * The server keeps an existing state directory's mode and its memory import
+ * rejects one others can write (#1648), so a home created under umask 002
+ * would stay broken. A symlink (or Windows junction) is refused rather than
+ * followed: callers rebuild what is inside it.
+ */
+export const ensurePrivateDevDirectory = Effect.fn("devHome.ensurePrivateDevDirectory")(function* (
+  directory: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  // A recursive mkdir applies the mode to every directory it creates.
+  yield* fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 });
+  if (yield* Effect.isSuccess(fileSystem.readLink(directory))) {
+    return yield* new DevStateDirectorySymlinkError({ directory });
+  }
+  if ((yield* HostProcess.Platform) === "win32") return undefined;
+  const { mode } = yield* fileSystem.stat(directory);
+  if ((mode & 0o022) === 0) return undefined;
+  const privateMode = mode & 0o7755;
+  yield* fileSystem.chmod(directory, privateMode);
+  return { from: mode & 0o7777, to: privateMode };
+});
+
+export const describePrivateDevDirectoryChange = (
+  directory: string,
+  change: { readonly from: number; readonly to: number },
+): string =>
+  `Removed group and other write permission from ${directory} (${change.from.toString(8)} -> ${change.to.toString(8)}); the GOAT server's memory import rejects a state directory others can write.`;

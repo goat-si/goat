@@ -878,7 +878,7 @@ it.live.skipIf(isWindows)(
       const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
 
       assert.notEqual(child.status, 0);
-      assert.include(child.stderr, "is a symlink");
+      assert.include(child.stdout + child.stderr, "is a symlink");
       assert.deepEqual(NodeFS.readFileSync(target), targetBefore);
     }).pipe(Effect.provide(NodeServices.layer)),
 );

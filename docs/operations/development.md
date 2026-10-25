@@ -3,9 +3,14 @@
 ## First checkout
 
 Install `vp` using the [root README](../../README.md#install-vp). The checkout pins the exact Node 26
-release in the root `package.json` `engines.node`, and `vp` installs and uses it. CI and the standalone
-`goat` executable use the same version, so change it there and nowhere else. The server's own `engines.node`
-stays wider because the desktop app runs it on Electron's Node 24. Bun is optional. From the repository root:
+release in the root `package.json` `engines.node`, and `vp` installs and uses it in its default managed mode.
+CI and the standalone `goat` executable use the same version, so change it there and nowhere else. The server's
+own `engines.node` stays wider because the desktop app runs it on Electron's Node 24. Bun is optional.
+
+When `vp env current` reports `Mode system_first`, `vp` runs the `node` on `PATH` instead. If that is
+another major or older than the pin, `vp run dev` and `vp test` stop with a message naming the pinned release.
+Run `vp env on node` to let `vp` manage Node again, or prefix one command with
+`vp env exec --node <pinned version> --`. From the repository root:
 
 ```sh
 vp i

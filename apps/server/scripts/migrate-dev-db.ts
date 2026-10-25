@@ -4,7 +4,11 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
-import { resolveWorktreeHome } from "@goat/shared/devHome";
+import {
+  describePrivateDevDirectoryChange,
+  ensurePrivateDevDirectory,
+  resolveWorktreeHome,
+} from "@goat/shared/devHome";
 import { GOAT_HOME_DIR_NAME } from "@goat/shared/goatHome";
 import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
 import * as Console from "effect/Console";
@@ -735,6 +739,21 @@ const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
   }
 });
 
+// The nearest existing ancestor resolved, plus the missing tail, so a --base-dir
+// that does not exist yet still resolves through a symlinked parent.
+const canonicalPath = Effect.fn("migrateDevDb.canonicalPath")(function* (target: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const tail: Array<string> = [];
+  let existing = target;
+  while (!(yield* fs.exists(existing)) && path.dirname(existing) !== existing) {
+    tail.unshift(path.basename(existing));
+    existing = path.dirname(existing);
+  }
+  const resolved = yield* fs.realPath(existing).pipe(Effect.orElseSucceed(() => existing));
+  return path.join(resolved, ...tail);
+});
+
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   input: RunMigrateDevDbInput,
   options: RunMigrateDevDbOptions = {},
@@ -781,10 +800,14 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const canonicalBaseDir = yield* fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => baseDir));
+  const canonicalBaseDir = yield* canonicalPath(baseDir);
   for (const home of protectedHomes) {
-    const canonicalHome = yield* fs.realPath(home).pipe(Effect.orElseSucceed(() => home));
-    if (canonicalBaseDir === canonicalHome) {
+    const canonicalHome = yield* canonicalPath(home);
+    // A sibling of the live userdata, such as <home>/dev, is a dev home.
+    const liveState = path.relative(path.join(canonicalHome, "userdata"), canonicalBaseDir);
+    const insideLiveState =
+      liveState !== ".." && !liveState.startsWith(`..${path.sep}`) && !path.isAbsolute(liveState);
+    if (canonicalBaseDir === canonicalHome || insideLiveState) {
       return yield* new MigrateDevDbSharedHomeError();
     }
   }
@@ -803,7 +826,11 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     }
   }
 
-  yield* fs.makeDirectory(stateDir, { recursive: true });
+  // Only userdata: --base-dir may be any directory, so its mode is left alone.
+  const modeChange = yield* ensurePrivateDevDirectory(stateDir);
+  if (modeChange !== undefined) {
+    yield* Console.log(describePrivateDevDirectoryChange(stateDir, modeChange));
+  }
   yield* ensureNotInUse(databasePath);
 
   const wrapPhase =
