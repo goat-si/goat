@@ -73,7 +73,7 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
         .pipe(Effect.exit);
     });
   // A failed Stop keeps the error that failed it.
-  const stopCause = (exit: Exit.Exit<void, ProviderAdapter.ProviderAdapterInterruptError>) => {
+  const stopCause = (exit: Exit.Exit<void, unknown>) => {
     assert.isTrue(Exit.isFailure(exit));
     const error = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
     assert.instanceOf(error, ProviderAdapter.ProviderAdapterInterruptError);
@@ -253,9 +253,9 @@ describe("Codex Stop that fails after it ended the turn (#1654)", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const root = "stop-refused-by-child";
-        const [sibling, child, grandchild] = ["-sibling", "-child", "-grandchild"].map(
-          (suffix) => root + suffix,
-        );
+        const sibling = root + "-sibling";
+        const child = root + "-child";
+        const grandchild = root + "-grandchild";
         const f = fixture(root);
         const sessions = yield* McpProviderSessions.McpProviderSessions;
         yield* sessions.set(f.config);
