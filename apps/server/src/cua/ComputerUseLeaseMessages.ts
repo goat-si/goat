@@ -37,7 +37,8 @@ export const reservationRefusal = (detail: string, holder: string | undefined) =
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
   revoked: "A person ended computer use for this thread.",
-  replaced: "A newer turn of this thread took over computer use; this connection is closed.",
+  replaced:
+    "A newer control of this thread took over computer use. Computer use is not available for this turn; a new approval or turn restores it.",
   disabled: "Computer use was turned off on this host.",
   unauthorized:
     "GOAT could not confirm this thread's computer use approval, so computer use stopped.",

@@ -115,15 +115,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
-  /** Another thread holds apps on this screen; see takesScreen. */
   let shared = false;
-  /**
-   * What the latest active update taken says, applied or not: an older update applied after it
-   * must not lift a newer update's restriction, so a call is judged by both (sharedNow).
-   */
+  // An older applied update cannot lift the latest receipt's restriction (sharedNow).
   let sharedTaken = false;
   const sharedNow = () => shared || sharedTaken;
-  /** Lease updates taken but not applied yet, and what each holds back. */
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -154,6 +149,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
+    onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const listed = new Map<number, ListedApp>();
   const sessions = new Set<string>();
@@ -217,7 +213,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const latest = outstanding.get(key);
       if (latest?.connectionId !== request.connectionId) continue;
       outstanding.delete(key);
-      if (latest.cancelled) continue;
+      if (latest.cancelled) {
+        options.onCancelledRequestSettled?.(key);
+        continue;
+      }
       const refuse = options.output(
         request.method === "tools/call"
           ? cutOff(request.id, request.tool, cause)
@@ -293,6 +292,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               )
                 return;
               outstanding.delete(key);
+              options.onCancelledRequestSettled?.(key);
               return;
             }
             const session = message.result?.structuredContent?.session;
@@ -337,7 +337,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               )
                 return;
               outstanding.delete(key);
-              if (latest.cancelled) return;
+              if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
               if (verdict === "other") {
                 yield* options.output(
                   offScreenAnswer(request.id, request.method, request.tool, "other"),
@@ -527,9 +527,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ),
       )
       .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
-  // The server is the authority: the first word for this control confirms it, anything else
-  // ends. Updates are taken here as they arrive and applied in order by one fiber, so a waiting
-  // update never keeps a later one's fence from going up. The stream ending applies as lost.
+  // Receipt raises fences independently of the ordered application fiber and its lifecycle lock.
+  // The stream ending applies as lost.
   const applying = yield* Queue.unbounded<{
     readonly update: ComputerUseLeaseUpdate | undefined;
     readonly fence: ReturnType<typeof fences.take>;
@@ -541,14 +540,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
-  const take = (update: ComputerUseLeaseUpdate | undefined) =>
-    Effect.suspend(() => {
-      // Another thread's grant only denies, so it counts as soon as it is taken.
-      if (update?.state === "active" && update.controlId === options.controlId)
-        sharedTaken = update.shared === true;
-      const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
-      return Queue.offer(applying, { update, fence });
-    });
+  const receive = (update: ComputerUseLeaseUpdate | undefined) => {
+    // Another thread's grant only denies, so it counts as soon as it is taken.
+    if (update?.state === "active" && update.controlId === options.controlId)
+      sharedTaken = update.shared === true;
+    const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
+    Queue.offerUnsafe(applying, { update, fence });
+  };
+  options.onLeaseUpdateReceiver?.(receive);
+  const take = (update: ComputerUseLeaseUpdate | undefined) => Effect.sync(() => receive(update));
   yield* options.leaseUpdates.pipe(
     Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
