@@ -24,7 +24,7 @@ import type {
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
-import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -1266,7 +1266,7 @@ const make = Effect.fnUntraced(function* (
         );
         let payload: M.MemoryPayload = yield* normalizeMemoryDependencies(
           value.memorySpaceId,
-          value.payload,
+          redactMemoryText(value.payload),
         ).pipe(Effect.provideService(SqlClient.SqlClient, sql));
         if (lineage) {
           payload = yield* decode(

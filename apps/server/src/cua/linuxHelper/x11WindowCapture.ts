@@ -24,6 +24,8 @@ import { localDisplayNumber, x11SetupRequest, xauthorityCookie } from "../CuaDis
 export type X11WindowCapture =
   | {
       readonly png: Uint8Array;
+      /** The same pixels as packed RGB, for another encoding. */
+      readonly rgb: Uint8Array;
       readonly width: number;
       readonly height: number;
     }
@@ -325,7 +327,7 @@ export async function captureX11Window(
    * The driver's screenshot of this window, which its points and frames are in: the size to
    * deliver, and the window size it was taken at.
    */
-  size: DriverShot,
+  size: DriverShot | ((windowWidth: number, windowHeight: number) => DriverShot),
   options: {
     /** For tests: a scripted server's socket. */
     readonly socketPath?: string;
@@ -700,7 +702,7 @@ async function exchange(
   cookie: Uint8Array | null,
   screen: number,
   windowId: number,
-  size: DriverShot,
+  size: DriverShot | ((windowWidth: number, windowHeight: number) => DriverShot),
   hold: { readonly onGrab: ((ms: number) => void) | undefined; readonly limitMs: number },
 ): Promise<X11WindowCapture | undefined> {
   const setupReply = await x.start(x11SetupRequest(cookie));
@@ -728,6 +730,8 @@ async function exchange(
   const first = await getGeometry(x, windowId);
   if (!first) return undefined;
   if (u16(first, 16) * u16(first, 18) > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
+  // A live frame asks for a size from the window's own (#1370); a screenshot gives the driver's.
+  const shot = typeof size === "function" ? size(u16(first, 16), u16(first, 18)) : size;
   const chain = [windowId];
   for (let hops = 0; hops < 32; hops++) {
     const tree = await queryTree(x, chain.at(-1) ?? windowId);
@@ -779,7 +783,7 @@ async function exchange(
     const height = u16(geometry, 18);
     // The window may have grown since it was first read; the reply is never larger than this.
     if (width * height > MAX_WINDOW_PIXELS) return { refused: UNREADABLE };
-    if (width !== size.windowWidth || height !== size.windowHeight)
+    if (width !== shot.windowWidth || height !== shot.windowHeight)
       return { refused: RESIZED_CAPTURE, transient: true };
     const inFrame = await translate(x, windowId, topLevel);
     const onScreen = await translate(x, windowId, setup.root);
@@ -842,8 +846,8 @@ async function exchange(
   const data = image.subarray(32);
   if (data.length < stride * height) return { refused: UNREADABLE };
   // Delivered at the driver's screenshot size, so its points and frames are this image's.
-  const toWidth = Math.min(width, size.width);
-  const toHeight = Math.min(height, size.height);
+  const toWidth = Math.min(width, shot.width);
+  const toHeight = Math.min(height, shot.height);
   const rgb = shrinkRgb(
     zpixmapToRgb(data, width, height, stride, visual),
     width,
@@ -851,5 +855,5 @@ async function exchange(
     toWidth,
     toHeight,
   );
-  return { png: rgbToPng(rgb, toWidth, toHeight), width: toWidth, height: toHeight };
+  return { png: rgbToPng(rgb, toWidth, toHeight), rgb, width: toWidth, height: toHeight };
 }

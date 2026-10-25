@@ -18,6 +18,33 @@ import {
  * helper unsafely.
  */
 
+/**
+ * The session's variables: all the driver may see of the helper's environment, and all the
+ * server passes the helper it starts (#1223), never its own credentials.
+ */
+export const SESSION_NAMES = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "LANG",
+  "LC_ALL",
+  "TMPDIR",
+  "DISPLAY",
+  "XAUTHORITY",
+  "WAYLAND_DISPLAY",
+  // The driver captures a Hyprland window by its own export only when it sees this.
+  "HYPRLAND_INSTANCE_SIGNATURE",
+  "XDG_RUNTIME_DIR",
+  "XDG_SESSION_TYPE",
+  "XDG_CURRENT_DESKTOP",
+  "XDG_DATA_DIRS",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "DBUS_SESSION_BUS_ADDRESS",
+] as const;
+
 export type LinuxDisplayServer = "x11" | "xwayland" | "wayland" | "none";
 
 export interface LinuxSessionFacts {

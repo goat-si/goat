@@ -74,14 +74,23 @@ const releases = [
 
 const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   fixture: (typeof releases)[number],
-  options: { archive?: string; bytes?: number; sha256?: string } = {},
+  options: {
+    archive?: string;
+    bytes?: number;
+    sha256?: string;
+    archiveName?: string;
+    baseDir?: string;
+  } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const crypto = yield* Crypto.Crypto;
-  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-install-test-" });
+  const baseDir =
+    options.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-install-test-" }));
   const installRoot = path.join(baseDir, "tools", "cua-driver");
-  const destination = path.join(installRoot, "0.34.1");
+  const archiveName = options.archiveName ?? `cua-driver-fixture.${fixture.format}`;
+  const destination = path.join(installRoot, "0.34.1", archiveName);
+  const versionDirectory = path.dirname(destination);
   const outside = path.join(baseDir, "tools", "outside");
   yield* fs.makeDirectory(outside, { recursive: true });
   yield* fs.writeFileString(path.join(outside, "sentinel"), "untouched");
@@ -89,9 +98,9 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   const archive = Buffer.from(options.archive ?? fixture.complete, "base64");
   const release = {
     version: "0.34.1",
-    archiveName: `cua-driver-fixture.${fixture.format}`,
+    archiveName,
     format: fixture.format,
-    url: `https://example.invalid/cua-driver-0.34.1.${fixture.format}`,
+    url: `https://example.invalid/${archiveName}`,
     bytes: options.bytes ?? archive.byteLength,
     sha256: options.sha256 ?? Hex.encode(yield* crypto.digest("SHA-256", archive)),
     executable: fixture.executable,
@@ -139,7 +148,7 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   const expectUnpublished = Effect.gen(function* () {
     expect(publications).toEqual([]);
     expect(yield* fs.exists(destination)).toBe(false);
-    expect(yield* fs.readDirectory(installRoot)).toEqual([]);
+    expect(yield* fs.readDirectory(path.dirname(destination))).toEqual([]);
     expect(yield* fs.readFileString(path.join(outside, "sentinel"))).toBe("untouched");
     expect(yield* fs.readDirectory(outside)).toEqual(["sentinel"]);
     expect((yield* fs.readDirectory(path.join(baseDir, "tools"))).sort()).toEqual([
@@ -150,9 +159,11 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   return {
     installation,
     makeInstallation,
+    baseDir,
     fs,
     path,
     installRoot,
+    versionDirectory,
     destination,
     release,
     requests,
@@ -162,6 +173,25 @@ const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
 });
 
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
+  it.effect("does not reuse another release archive's driver at the same version", () =>
+    Effect.gen(function* () {
+      const fixture = releases[0];
+      const first = yield* makeHarness(fixture);
+      yield* first.installation.executable;
+
+      const next = yield* makeHarness(fixture, {
+        archiveName: "cua-driver-fixture-arm64.tar.gz",
+        baseDir: first.baseDir,
+      });
+      const executable = yield* next.installation.executable;
+
+      expect(executable).toBe(next.path.join(next.destination, fixture.executable));
+      expect(next.requests).toEqual([next.release.url]);
+      expect(yield* next.fs.exists(first.destination)).toBe(true);
+      expect(yield* next.fs.exists(next.destination)).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect.each(releases)(
     "publishes a complete $format release in T3 home and reuses it across installer instances",
     (fixture) =>

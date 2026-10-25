@@ -103,15 +103,15 @@ export const ComputerUseReadiness = Schema.Struct({
   input: Schema.Literals(["background", "foregroundOnly", "unavailable"]),
   /**
    * What stops computer use right now even when every step above is ready, typed so clients
-   * can choose the remedy: screenLocked (unlock the screen), userIntervened (a person has the
-   * input), noInteractiveDesktop (a service or SSH session with no desktop, such as Windows
-   * Session 0), otherUserAtConsole, restartRequired (a grant changed and the helper must start
-   * again to see it).
+   * can choose the remedy: screenLocked (unlock the screen), noInteractiveDesktop (a service or
+   * SSH session with no desktop, such as Windows Session 0), otherUserAtConsole, restartRequired
+   * (a grant changed and the helper must start again to see it). A person's takeover is not a
+   * readiness blocker: it pauses every agent on the host until they hand control back, and
+   * shows as the userIntervened stop reason on each card (#1560).
    */
   blockers: Schema.Array(
     Schema.Literals([
       "screenLocked",
-      "userIntervened",
       "noInteractiveDesktop",
       "otherUserAtConsole",
       "restartRequired",
@@ -586,7 +586,9 @@ export type ComputerUseReplyFrame = typeof ComputerUseReplyFrame.Type;
  *   under the new watchId.
  * - The client switches to the new watchId when the answer arrives, never when it sends the
  *   request (admitComputerUseEvent takes the watch in force).
- * A helper that exits clears every target of its generation.
+ * A helper that exits ends every target of its generation: nothing more is heard for them. That
+ * is not a sign a secure field lost focus, so the server keeps a target that was private held
+ * until a later observation (a new watch's initial state, or the window gone) clears it.
  */
 export const ComputerUseWatchRequest = Schema.Struct({
   watchId: TrimmedNonEmptyString,

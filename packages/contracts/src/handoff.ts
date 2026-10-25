@@ -49,6 +49,9 @@ export const Handoff = Schema.Struct({
   actor: HandoffActor,
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  computerUseForeground: Schema.optionalKey(
+    Schema.Struct({ purpose: TrimmedNonEmptyString, target: Schema.Literal("desktop") }),
+  ),
 });
 export type Handoff = typeof Handoff.Type;
 
@@ -184,7 +187,7 @@ export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffErr
    * did. A field beside reason, so older clients still decode the error as invalid_request.
    */
   outcome: Schema.optionalKey(Schema.Literals(["apply_failed", "apply_unknown"])),
-  /** The change's own message, built by the server, for an outcome. */
+  /** The change's own message, built by the server, for an outcome or a conflict. */
   detail: Schema.optionalKey(Schema.String),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
@@ -195,6 +198,7 @@ export class HandoffError extends Schema.TaggedError<HandoffError>()("HandoffErr
         : `GOAT could not apply this change: ${this.detail}`;
     if (this.outcome === "apply_unknown")
       return `This change may have been applied${this.detail === undefined ? "" : ` (${this.detail})`}. Check the provider with Diagnose before you approve it again.`;
+    if (this.reason === "conflict" && this.detail !== undefined) return this.detail;
     return {
       not_found: "This handoff no longer exists.",
       expired: "This handoff expired. Ask for a new one.",

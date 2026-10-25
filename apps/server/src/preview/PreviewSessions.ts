@@ -13,6 +13,8 @@ import {
   type AuthSessionId,
   WS_METHODS,
   type ComputerUseRefusalReason,
+  type CuaAgentBlock,
+  cuaAgentBlockTitle,
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
@@ -31,8 +33,13 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
+import { hasCard } from "../cua/ComputerUseControl.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import { makeComputerUseRpcHandlers, stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
+import {
+  makeComputerUseRpcHandlers,
+  stopAllComputerUse,
+  stopComputerUse,
+} from "../cua/ComputerUseRpcHandlers.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as DesktopFrames from "./DesktopFrames.ts";
@@ -69,6 +76,35 @@ const parseBrowserId = (id: string) => {
 };
 
 type Base = Pick<PreviewSession, "environmentId" | "host" | "platform">;
+
+/**
+ * A running turn the desktop gave no driver: a grant macOS has not given (#1399), or a Windows
+ * desktop the helper cannot use (#1516). It holds no control, so there is nothing to stop or take
+ * over; the tile says what a person must do.
+ */
+export const blockedSession = (
+  base: Base,
+  threadId: ThreadId,
+  block: CuaAgentBlock,
+): PreviewSession => ({
+  id: `${DESKTOP_PREFIX}blocked:${threadId}`,
+  kind: "desktop",
+  ...base,
+  threadId,
+  target: {
+    kind: "desktop",
+    title: cuaAgentBlockTitle(block),
+  },
+  owner: "agent",
+  status: "permission-needed",
+  reason:
+    block.reason === "permissionsNotGranted"
+      ? "permissionsNotGranted"
+      : block.blocker === "screenLocked"
+        ? "screenLocked"
+        : "helperUnavailable",
+  capabilities: { controls: [], frames: false, privateMode: false, humanInput: false },
+});
 
 /** An agent's browser tab as a session; a person's own tab is not one. */
 export const browserSession = (
@@ -110,9 +146,9 @@ export const desktopSession = (
   state: ComputerUseLeases.ComputerUseControlState,
   detection: ComputerUseLeases.ComputerUseDetection,
 ): PreviewSession | undefined => {
-  if (state._tag === "ended" && state.reason !== "stopped" && state.reason !== "stopped_all")
-    return undefined;
-  if (state._tag !== "ended" && control.idle === true) return undefined;
+  // A turn's provider gets a control whether or not its agent touches the screen; one that only
+  // opened a browser tab would otherwise show a second, empty card beside it.
+  if (!hasCard(control, state)) return undefined;
   const reason: ComputerUseRefusalReason | undefined =
     state._tag === "ended"
       ? "userStoppedSession"
@@ -200,6 +236,8 @@ const make = Effect.gen(function* () {
         const session = desktopSession(base, control, state, detection);
         if (session) sessions.push(session);
       }
+      for (const { threadId, block } of yield* leases.value.blockedTurns)
+        sessions.push(blockedSession(base, threadId, block));
     }
     return { sessions };
   }).pipe(Effect.withSpan("PreviewSessions.snapshot"));
@@ -262,7 +300,12 @@ const make = Effect.gen(function* () {
     // The pause is the host's: a person on the desktop holds every agent there.
     if (input.control === "takeover") yield* leases.value.pause("takeover");
     else if (input.control === "handBack") yield* leases.value.resume;
-    else yield* leases.value.stop(ThreadId.make(live.control.threadId));
+    else {
+      const threadId = ThreadId.make(live.control.threadId);
+      const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);
+      // A grant left alive keeps the thread's apps from every other thread until it ends.
+      if (failed > 0) return { applied: false, reason: "not_allowed" } as const;
+    }
     return { applied: true };
   });
 

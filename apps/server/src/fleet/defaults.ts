@@ -15,5 +15,6 @@ export const layerRescheduler = Layer.succeed(
         reason: "unsupported_remote",
         message: "This layer does not reschedule.",
       }),
+    findMove: () => Effect.succeed({ _tag: "NotLaunched" }),
   }),
 );

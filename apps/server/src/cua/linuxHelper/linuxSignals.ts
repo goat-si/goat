@@ -16,8 +16,8 @@ import type { HumanInputSource } from "./humanInputSource.ts";
  *
  * Human input comes from the person's own input devices (humanInputSource.ts), which already
  * leaves out the helper's own input, so nothing here guesses by timing. If that source breaks,
- * the watch cannot see a person any more: it reports human input once, which pauses agents,
- * and tells the helper, which ends so a restart reports the signal unsupported.
+ * the watch cannot see a person any more: it reports human input once and tells the helper,
+ * which ends so a restart reports the signal unsupported. The server does not pause agents.
  */
 
 const PRIVATE_MODE_EVERY_MS = 500;
@@ -25,7 +25,7 @@ const HUMAN_INPUT_EVERY_MS = 250;
 /** A focus probe slower than this counts as unreadable, which is private. */
 const FOCUS_PROBE_LIMIT_MS = 3_000;
 const UNREADABLE: SecureFocus = { known: false, secure: false, windows: 0 };
-/** At most one human input event per this long; the server pauses on the first anyway. */
+/** At most one human input event per this long; the server classifies events without pausing. */
 const HUMAN_INPUT_QUIET_MS = 1_000;
 
 export interface SignalMonitorDependencies {
@@ -53,8 +53,12 @@ export interface SignalMonitor {
     watchId: string,
     targets: ReadonlyArray<ComputerUseWindowTarget>,
   ) => Promise<void>;
-  /** Clears every active target, then stops reading. */
-  readonly unwatch: () => Promise<void>;
+  /**
+   * Clears every active target, then stops reading. A helper shutting down stops without the
+   * clearing events: it has not seen the secrets go, and its exit already ends every target of
+   * its generation for the client, which then holds them until a later helper sees them clear.
+   */
+  readonly unwatch: (options?: { readonly announce?: boolean }) => Promise<void>;
   readonly watching: () => ReadonlyArray<ComputerUseWindowTarget>;
 }
 
@@ -160,7 +164,7 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
     if (input.lost()) {
       if (lostReported) return;
       lostReported = true;
-      // Unable to see a person, the watch fails closed: agents pause until someone hands back.
+      // Unable to see a person: report the lost input source before restarting the helper.
       deps.emit(id, { type: "humanInput", source: "unknown" });
       deps.inputLost();
       return;
@@ -209,10 +213,13 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
         await Promise.all(initial);
       });
     },
-    unwatch: async () => {
+    unwatch: async (options) => {
       stop();
       incarnation++;
-      if (watchId !== undefined) for (const target of targets) release(watchId, target);
+      if (watchId !== undefined)
+        for (const target of targets)
+          if (options?.announce === false) active.delete(keyOf(target));
+          else release(watchId, target);
       watchId = undefined;
       targets = [];
     },

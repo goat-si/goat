@@ -23,7 +23,7 @@ import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Maintenance from "./MemoryFtsMaintenance.ts";
 import * as Hold from "./MemoryGenerationHold.ts";
-import { MEMORY_SCANNER_POLICY_VERSION, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
 
 export class MemoryWorkerError extends Schema.TaggedError<MemoryWorkerError>()(
   "MemoryWorkerError",
@@ -690,7 +690,7 @@ const make = Effect.gen(function* () {
             yield* renewClaim;
             const generate = generation.generateMemorySummary;
             const output = yield* hold
-              .guard(yield* hold.keyFor(meta.modelSelection), generate(input))
+              .guard(yield* hold.keyFor(meta.modelSelection), redacted(generate(input)))
               .pipe(
                 Effect.mapError((cause) =>
                   cause._tag === "MemoryGenerationHeld"

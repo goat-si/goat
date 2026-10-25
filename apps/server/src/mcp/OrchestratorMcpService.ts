@@ -2562,7 +2562,12 @@ const make = Effect.gen(function* () {
             })
             .pipe(Effect.mapError(threadManagementFailure));
         });
-        yield* launchRemoteChildWork(channelChildWork, admission, host);
+        // A refused claim launched nothing, so the lane claimed above returns.
+        const claimLaunch = launchRemoteChildWork(channelChildWork, admission, host).pipe(
+          Effect.onError(() =>
+            admitted.enabled ? permissions.release(taskId).pipe(Effect.ignore) : Effect.void,
+          ),
+        );
         const launched = yield* remoteDispatch
           .launch(
             {
@@ -2598,7 +2603,12 @@ const make = Effect.gen(function* () {
             },
             register,
           )
-          .pipe(Effect.result);
+          .pipe(
+            Effect.result,
+            // The claim holds the launch in flight until its row and remote write finish.
+            (launch) => Effect.andThen(claimLaunch, launch),
+            Effect.scoped,
+          );
         if (launched._tag === "Failure") {
           // The coordinator wraps a failure it proved happened before any remote write
           // (stage "authorize"); the task key it deleted frees this lane and slot too.
@@ -2807,9 +2817,6 @@ const make = Effect.gen(function* () {
       const requestedRuntimeMode = prepared.requestedRuntimeMode;
       const interactionMode = prepared.interactionMode;
       const workspaceStrategy = prepared.workspaceStrategy;
-      yield* launchChildWork(channelChildWork, admission, {
-        threadId: derive.delegatedTaskThread({ commandId }),
-      });
       const admitted = yield* permissions
         .claim(scope, {
           id: commandId,
@@ -2818,6 +2825,14 @@ const make = Effect.gen(function* () {
           worktree: input.isolation === "worktree",
         })
         .pipe(Effect.onError(() => releaseChildWork(channelChildWork, admission)));
+      // A refused claim launched nothing, so the lane claimed above returns.
+      const claimLaunch = launchChildWork(channelChildWork, admission, {
+        threadId: derive.delegatedTaskThread({ commandId }),
+      }).pipe(
+        Effect.onError(() =>
+          admitted.enabled ? permissions.release(commandId).pipe(Effect.ignore) : Effect.void,
+        ),
+      );
       const runtimeMode = admitted.runtimeMode;
       const result = yield* threadManagement
         .dispatch({
@@ -2872,6 +2887,9 @@ const make = Effect.gen(function* () {
                   `Unable to create delegated task: ${errorMessage(error)}`,
                 ),
           ),
+          // The claim holds the launch in flight until the delegation commits.
+          (dispatch) => Effect.andThen(claimLaunch, dispatch),
+          Effect.scoped,
         );
       if (admitted.enabled) yield* permissions.complete(commandId);
       const taskEvent = result.storedEvents.find(

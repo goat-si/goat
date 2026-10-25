@@ -394,7 +394,7 @@ import {
 } from "./hostStatus.ts";
 import { OrchestratorMcpFailure } from "./orchestratorMcpFailure.ts";
 import { GoatHubDeviceVerifyInput, GoatHubDeviceVerifyResult } from "./hubParity.ts";
-import { OpenCodexUpdateStatus } from "./opencodex.ts";
+import { OpenCodexSyncReport, OpenCodexUpdateStatus } from "./opencodex.ts";
 import { HubDeviceOperationInput, HubDeviceOperationResult } from "./hubDevice.ts";
 import {
   UsageLimitSourceError,
@@ -646,6 +646,9 @@ export const WS_METHODS = {
   hubDeviceLeave: "hub.deviceLeave",
   hubDeviceRepair: "hub.deviceRepair",
   serverCheckOpenCodexUpdate: "server.checkOpenCodexUpdate",
+  serverPlanOpenCodexSync: "server.planOpenCodexSync",
+  serverSyncOpenCodex: "server.syncOpenCodex",
+  serverSubscribeOpenCodexSync: "server.subscribeOpenCodexSync",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetResourceTelemetryHistory: "server.getResourceTelemetryHistory",
   serverRetryResourceTelemetry: "server.retryResourceTelemetry",
@@ -1172,6 +1175,28 @@ const WsServerCheckOpenCodexUpdateRpc = Rpc.make(WS_METHODS.serverCheckOpenCodex
   payload: Schema.Struct({}),
   success: Schema.NullOr(OpenCodexUpdateStatus),
   error: EnvironmentAuthorizationError,
+});
+
+/** What `ocx sync` would do on this machine and, on a Home, each linked Child. Reads only. */
+const WsServerPlanOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverPlanOpenCodexSync, {
+  payload: Schema.Struct({}),
+  success: OpenCodexSyncReport,
+  error: EnvironmentAuthorizationError,
+});
+
+/** Runs `ocx sync` on this machine, then each Child; progress streams on the subscription. */
+const WsServerSyncOpenCodexRpc = Rpc.make(WS_METHODS.serverSyncOpenCodex, {
+  payload: Schema.Struct({}),
+  success: OpenCodexSyncReport,
+  error: EnvironmentAuthorizationError,
+});
+
+/** The latest sync report, then every change while a sync runs. Null before the first one. */
+const WsServerSubscribeOpenCodexSyncRpc = Rpc.make(WS_METHODS.serverSubscribeOpenCodexSync, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(OpenCodexSyncReport),
+  error: EnvironmentAuthorizationError,
+  stream: true,
 });
 
 /** The same operations as goat_hub_device_join, _leave and _repair, for a person in a client. */
@@ -2449,6 +2474,9 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerGetHostStatusRpc,
   WsHubDeviceVerifyRpc,
   WsServerCheckOpenCodexUpdateRpc,
+  WsServerPlanOpenCodexSyncRpc,
+  WsServerSyncOpenCodexRpc,
+  WsServerSubscribeOpenCodexSyncRpc,
   WsHubDeviceJoinRpc,
   WsHubDeviceLeaveRpc,
   WsHubDeviceRepairRpc,

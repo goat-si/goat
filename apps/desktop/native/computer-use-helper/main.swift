@@ -1,17 +1,10 @@
 // GOAT Computer Use helper (macOS).
 //
-// GOAT's desktop host launches this bundle's executable with stdio pipes. The helper becomes its
-// own TCC principal, then owns exactly one embedded Cua Driver daemon per launch:
-//
-// 1. Launcher: verify the parent is signed by this helper's team (dev builds skip this), then
-//    re-exec this executable with TCC responsibility disclaimed. Upstream Cua Driver's standalone
-//    mode uses the same disclaim pattern; Chromium and LLDB use it for their helpers too.
-// 2. Service: speak line-delimited JSON on the inherited stdin/stdout and spawn the bundled
-//    "cua-driver serve --embedded" as a direct child, so Accessibility and Screen Recording are
-//    attributed to this bundle id instead of GOAT.app or a terminal.
-//
-// The service only runs the driver inside its own bundle with arguments it builds itself; the
-// host chooses the socket path, the capability manifest and a fixed set of environment knobs.
+// GOAT's desktop host launches this bundle's executable with stdio pipes. Its launcher
+// verifies the parent and re-execs with TCC responsibility disclaimed. The service answers
+// grant, app-listing and observation requests, or runs the bundled driver's direct MCP server
+// on inherited stdio. The driver is this service's child, so macOS attributes its grants to
+// this bundle. The host supplies the capability manifest and a fixed set of tuning knobs.
 
 import ApplicationServices
 import CoreGraphics
@@ -103,8 +96,13 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 /// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
 /// serves an unpackaged Electron or a terminal.
 ///
-/// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
-/// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
+/// This is not enough on its own: GOAT's signed executable runs any JavaScript under
+/// ELECTRON_RUN_AS_NODE, NODE_OPTIONS or Node inspect arguments (its Electron fuses are on, since
+/// GOAT's backend, CLI and lease proxy run it as Node), so any same-user program can pass this
+/// check by running its own code as GOAT. The helper does not read the parent's fuses at launch:
+/// a check of the framework on disk cannot be tied to the image the parent loaded without copying
+/// the whole framework, and could only refuse every signed GOAT today. Closing this (a separate
+/// runtime for those, the fuses off, checked when the app is packaged) is #1352.
 func parentRefusal(_ parent: pid_t) -> String? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
@@ -202,6 +200,8 @@ func runLauncher() -> Never {
   let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
   var environment = ProcessInfo.processInfo.environment
   environment[disclaimedVariable] = "1"
+  // Whatever the inherited environment says: the service learns GOAT's pid only from here.
+  environment[HostIdentity.hostPidVariable] = String(parent)
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
   // The service gets this launch's arguments: --mcp selects the agent connection mode.
   let argv = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
@@ -268,9 +268,6 @@ final class DriverService {
   let privateMode = PrivateModeWatch()
   let frames = FrameCapture()
   let bundleId = Bundle.main.bundleIdentifier ?? ""
-  var driver: Process?
-  var liveness: Pipe?
-  var socketIdentity: (dev: dev_t, ino: ino_t, path: String)?
 
   var driverPath: String? {
     Bundle.main.resourceURL?.appendingPathComponent("cua-driver/cua-driver").path
@@ -338,7 +335,6 @@ final class DriverService {
       let result: [String: Any]
       switch method {
       case "permissions": result = permissions(prompt: params["prompt"] as? Bool == true)
-      case "start": result = try start(params)
       case "listApps": result = try listApps()
       case "watch": result = try privateMode.watch(params)
       case "unwatch": result = try privateMode.unwatch(params)
@@ -347,9 +343,6 @@ final class DriverService {
           throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
         }
         result = try frames.frames(params)
-      case "stop":
-        stop()
-        result = [:]
       default: throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
       }
       emit(["id": id, "result": result])
@@ -371,92 +364,7 @@ final class DriverService {
     return ["accessibility": accessibility, "screenRecording": screenRecording]
   }
 
-  func start(_ params: [String: Any]) throws -> [String: Any] {
-    if driver != nil {
-      throw HelperError(code: "already_running", message: "The driver is already running.")
-    }
-    guard let driverPath, FileManager.default.isExecutableFile(atPath: driverPath) else {
-      throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.")
-    }
-    if let refusal = driverRefusal(driverPath) {
-      throw HelperError(code: "driver_untrusted", message: refusal)
-    }
-    guard let socketPath = params["socketPath"] as? String, socketPath.hasPrefix("/"),
-      socketPath.utf8.count < 104
-    else {
-      throw HelperError(
-        code: "bad_request", message: "socketPath must be an absolute path under 104 bytes.")
-    }
-    var existing = stat()
-    if lstat(socketPath, &existing) == 0 {
-      throw HelperError(
-        code: "socket_in_use", message: "Something already exists at the socket path.")
-    }
-    var arguments = [
-      "serve", "--embedded", "--parent-liveness-stdio", "--no-permissions-gate",
-      "--socket", socketPath, "--host-bundle-id", bundleId, "--permission-mode", "standard",
-    ]
-    if let manifest = params["capabilityManifestPath"] as? String {
-      guard manifest.hasPrefix("/") else {
-        throw HelperError(code: "bad_request", message: "capabilityManifestPath must be absolute.")
-      }
-      arguments += ["--capability-manifest", manifest, "--approve-capability-manifest"]
-    }
-    if params["noOverlay"] as? Bool == true { arguments.append("--no-overlay") }
-
-    let environment = driverEnvironment(params["environment"] as? [[String: Any]] ?? [])
-
-    let process = Process()
-    let pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: driverPath)
-    process.arguments = arguments
-    process.environment = environment
-    process.standardInput = pipe
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.standardError
-    process.terminationHandler = { [weak self] finished in
-      self?.queue.async { self?.driverExited(finished) }
-    }
-    do { try process.run() } catch {
-      throw HelperError(code: "spawn_failed", message: "Could not start Cua Driver: \(error).")
-    }
-    driver = process
-    liveness = pipe
-
-    // Ready once the daemon has bound a private 0600 socket owned by this user; the host then
-    // confirms the daemon's own metadata over it.
-    let deadline = Date().addingTimeInterval(20)
-    while Date() < deadline {
-      if !process.isRunning {
-        let code = process.terminationStatus
-        cleanUp()
-        throw HelperError(
-          code: "exited_before_ready", message: "Cua Driver exited during startup (\(code)).")
-      }
-      var info = stat()
-      if lstat(socketPath, &info) == 0 {
-        guard (info.st_mode & S_IFMT) == S_IFSOCK, (info.st_mode & 0o777) == 0o600,
-          info.st_uid == getuid()
-        else {
-          stop()
-          throw HelperError(
-            code: "socket_untrusted",
-            message: "The driver socket is not a private socket owned by this user.")
-        }
-        socketIdentity = (info.st_dev, info.st_ino, socketPath)
-        return [
-          "socketPath": socketPath, "driverPid": Int(process.processIdentifier),
-          "hostBundleId": bundleId,
-        ]
-      }
-      usleep(50_000)
-    }
-    stop()
-    throw HelperError(
-      code: "startup_timeout", message: "Cua Driver did not become ready within 20 seconds.")
-  }
-
-/// What every driver this helper runs inherits: the allowlisted names, the host's tuning
+  /// What every driver this helper runs inherits: the allowlisted names, the host's tuning
   /// knobs, privacy switches forced off, and embedded mode under this process.
   func driverEnvironment(_ settable: [[String: Any]]) -> [String: String] {
     var environment: [String: String] = [:]
@@ -477,7 +385,7 @@ final class DriverService {
   }
 
   /// The apps the driver can see, for the host's capability manifest. The driver runs only
-  /// after the same seal check as start, as a short-lived socket-free process in this helper's
+  /// after the same seal check as MCP, as a short-lived socket-free process in this helper's
   /// responsibility chain (#1241); listing reads LaunchServices and needs no grant.
   ///
   /// Spawned and reaped here, not through Process: one thread reads with poll() against an
@@ -507,7 +415,7 @@ final class DriverService {
     posix_spawn_file_actions_adddup2(&actions, fromDriver[1], 1)
     posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0)
     // Only the three descriptors above reach the driver: not this helper's channel to the
-    // desktop, nor a running daemon's liveness pipe.
+    // desktop.
     var attributes: posix_spawnattr_t?
     posix_spawnattr_init(&attributes)
     defer { posix_spawnattr_destroy(&attributes) }
@@ -623,52 +531,10 @@ final class DriverService {
     return ["apps": apps]
   }
 
-  /// Closing the liveness pipe is the daemon's orderly shutdown signal; a daemon that ignores
-  /// it is terminated, then killed.
-  func stop() {
-    guard let process = driver else { return }
-    driver = nil
-    try? liveness?.fileHandleForWriting.close()
-    let deadline = Date().addingTimeInterval(3)
-    while process.isRunning && Date() < deadline { usleep(20_000) }
-    if process.isRunning { process.terminate() }
-    let killDeadline = Date().addingTimeInterval(2)
-    while process.isRunning && Date() < killDeadline { usleep(20_000) }
-    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-    process.waitUntilExit()
-    cleanUp()
-  }
-
-  func cleanUp() {
-    if let identity = socketIdentity {
-      var info = stat()
-      if lstat(identity.path, &info) == 0 && info.st_dev == identity.dev
-        && info.st_ino == identity.ino
-      {
-        unlink(identity.path)
-      }
-    }
-    socketIdentity = nil
-    try? liveness?.fileHandleForWriting.close()
-    liveness = nil
-    driver = nil
-  }
-
-  /// A crash the host did not ask for. Orderly stops clear "driver" first and stay silent.
-  func driverExited(_ process: Process) {
-    guard driver === process else { return }
-    cleanUp()
-    emit([
-      "type": "driverExited", "driverPid": Int(process.processIdentifier),
-      "code": Int(process.terminationStatus),
-    ])
-  }
-
   func shutDown() -> Never {
     queue.sync {
       privateMode.end()
       frames.end()
-      stop()
     }
     exit(0)
   }
@@ -892,6 +758,16 @@ func runMcp() -> Never {
   posix_spawnattr_init(&attributes)
   defer { posix_spawnattr_destroy(&attributes) }
   posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+  // stdout belongs to MCP, so this service names itself on stderr. Written before the driver
+  // starts: the driver shares stderr, and the first hello the host reads is this one.
+  // Readiness binds the driver's reported parent to this pid.
+  let greeting: [String: Any] = [
+    "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
+    "bundleId": service.bundleId,
+  ]
+  if let data = try? JSONSerialization.data(withJSONObject: greeting) {
+    FileHandle.standardError.write(data + Data([0x0A]))
+  }
   let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
   argv.forEach { free($0) }
   envp.forEach { free($0) }

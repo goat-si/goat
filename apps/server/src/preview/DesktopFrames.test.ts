@@ -1,6 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
-import { type DesktopCuaFrame, type DesktopCuaFrames, ThreadId } from "@goat/contracts";
-import * as Context from "effect/Context";
+import {
+  type DesktopCuaFrame,
+  type DesktopCuaFrames,
+  type DesktopCuaReadinessReport,
+  ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -15,6 +19,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import * as LinuxFrameSource from "../cua/linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import {
   admitFrame,
@@ -61,8 +66,40 @@ const frame = (seq: number, data = "QUJD"): Extract<DesktopCuaFrame, { type: "cu
   data,
 });
 
+/** A desktop helper's readiness report, saying whether it sends window frames itself. */
+const readinessReport = (frames: boolean): DesktopCuaReadinessReport => ({
+  version: 1,
+  type: "cuaReadiness",
+  generation: 1,
+  readiness: {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  },
+  signals: { privateMode: "supported", humanInput: "supported" },
+  frames,
+});
+
 /** The service over a control whose state a test changes, and a desktop that records requests. */
-const fixture = Effect.fnUntraced(function* () {
+const fixture = Effect.fnUntraced(function* (
+  options: {
+    /** A Linux server's own capture beside the desktop pipe (#1370). */
+    readonly linux?: boolean;
+    /** The desktop host's helper says it captures frames itself. */
+    readonly desktopCaptures?: boolean;
+  } = {},
+) {
+  const linuxRequests = yield* Queue.unbounded<{
+    readonly seq: number;
+    readonly targets: DesktopCuaFrames["targets"];
+  }>();
+  const fromLinux = yield* PubSub.unbounded<DesktopCuaFrame>();
+  const desktopCaptures = yield* Ref.make(options.desktopCaptures === true);
+  const safety = yield* PubSub.unbounded<DesktopCuaReadinessReport>();
   const state = yield* Ref.make<ComputerUseLeases.ComputerUseControlState>(active);
   const signals = yield* PubSub.unbounded<void>();
   const requests = yield* Queue.unbounded<DesktopCuaFrames["targets"]>();
@@ -75,6 +112,8 @@ const fixture = Effect.fnUntraced(function* () {
   >(Option.none());
   const unused = Effect.die("unused");
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    blocked: () => unused,
+    blockedTurns: unused,
     active: () => unused,
     holder: () => unused,
     channelOrigin: () => unused,
@@ -85,6 +124,10 @@ const fixture = Effect.fnUntraced(function* () {
     controlState: () => unused,
     stop: () => unused,
     setTarget: () => unused,
+    callReservation: () => unused,
+    foregroundApprovalEpoch: unused,
+    approveForeground: () => unused,
+    foregroundAvailable: () => unused,
     humanInput: () => unused,
     agentInput: () => unused,
     stopAll: unused,
@@ -92,6 +135,7 @@ const fixture = Effect.fnUntraced(function* () {
     settle: unused,
     disable: unused,
     grants: unused,
+    release: () => unused,
     pause: () => unused,
     detection: Effect.succeed(detects),
     resume: unused,
@@ -110,6 +154,10 @@ const fixture = Effect.fnUntraced(function* () {
     proxy: undefined,
   });
   const desktop = DesktopTelemetryReceiver.layerTest({
+    cuaReadiness: Ref.get(desktopCaptures).pipe(
+      Effect.map((frames) => Option.some(readinessReport(frames))),
+    ),
+    cuaSafety: Stream.fromPubSub(safety),
     cuaFrames: Stream.fromPubSub(fromDesktop),
     setCuaFrames: (targets) =>
       Queue.offer(requests, targets).pipe(
@@ -146,6 +194,18 @@ const fixture = Effect.fnUntraced(function* () {
     layer.pipe(
       Layer.provide(Layer.succeed(ComputerUseLeases.ComputerUseLeases, leases)),
       Layer.provide(desktop),
+      Layer.provide(
+        options.linux
+          ? Layer.succeed(
+              LinuxFrameSource.LinuxFrameSource,
+              LinuxFrameSource.LinuxFrameSource.of({
+                supported: Effect.succeed(true),
+                setTargets: (seq, targets) => Queue.offer(linuxRequests, { seq, targets }),
+                frames: Stream.fromPubSub(fromLinux),
+              }),
+            )
+          : Layer.empty,
+      ),
     ),
   ).pipe(
     Effect.map((context) => context.mapUnsafe.get(DesktopFrames.key) as DesktopFrames["Service"]),
@@ -156,6 +216,13 @@ const fixture = Effect.fnUntraced(function* () {
     unrequested: Queue.size(requests),
     seq: Ref.get(seq),
     send: (message: DesktopCuaFrame) => PubSub.publish(fromDesktop, message),
+    linuxRequested: Queue.take(linuxRequests),
+    sendFromLinux: (message: DesktopCuaFrame) => PubSub.publish(fromLinux, message),
+    /** The desktop's helper reports, with nothing else changing, whether it captures frames. */
+    reportDesktopCaptures: (frames: boolean) =>
+      Ref.set(desktopCaptures, frames).pipe(
+        Effect.andThen(PubSub.publish(safety, readinessReport(frames))),
+      ),
     set: (next: ComputerUseLeases.ComputerUseControlState) =>
       Ref.set(state, next).pipe(Effect.andThen(leases.changed)),
     /** A change nothing signals, such as a control reaching its expiry. */
@@ -208,6 +275,53 @@ describe("DesktopFrames", () => {
         yield* f.set({ _tag: "ended", reason: "stopped" });
         assert.deepEqual(yield* f.requested, []);
         assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a Linux server captures its own windows: the same targets and seq, its frames shown, withdrawn on Stop",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture({ linux: true });
+        const next = yield* watch(f.service);
+        assert.deepEqual(yield* f.requested, [target]);
+        const asked = yield* f.linuxRequested;
+        assert.deepEqual(asked, { seq: yield* f.seq, targets: [target] });
+        yield* f.sendFromLinux(frame(asked.seq));
+        assert.deepInclude(yield* next, { type: "frame", seq: 1, data: "QUJD" });
+        yield* f.set({ _tag: "ended", reason: "stopped" });
+        assert.deepEqual((yield* f.linuxRequested).targets, []);
+        assert.deepEqual(yield* next, { type: "unavailable", reason: "stopped" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a desktop host whose helper captures frames leaves the Linux source idle", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture({ linux: true, desktopCaptures: true });
+      yield* Effect.asVoid(watch(f.service));
+      assert.deepEqual(yield* f.requested, [target]);
+      assert.deepEqual((yield* f.linuxRequested).targets, []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a helper that starts or stops sending frames takes the targets over from the Linux source, or hands them back",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture({ linux: true });
+        const next = yield* watch(f.service);
+        assert.deepEqual(yield* f.requested, [target]);
+        const asked = yield* f.linuxRequested;
+        assert.deepEqual(asked.targets, [target]);
+        // Same targets and seq; only the helper's readiness changes.
+        yield* f.reportDesktopCaptures(true);
+        assert.deepEqual(yield* f.linuxRequested, { seq: asked.seq, targets: [] });
+        // A late Linux frame for the same seq is not shown; the helper's is.
+        yield* f.sendFromLinux(frame(asked.seq, "TElOVVg="));
+        yield* f.send(frame(asked.seq, "REVTSw=="));
+        assert.deepInclude(yield* next, { type: "frame", data: "REVTSw==" });
+        yield* f.reportDesktopCaptures(false);
+        assert.deepEqual(yield* f.linuxRequested, { seq: asked.seq, targets: [target] });
       }).pipe(Effect.scoped),
   );
 

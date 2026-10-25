@@ -112,6 +112,9 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { layerCommandReadiness } from "./commandReadiness.ts";
 import * as ServerConfig from "./config.ts";
 import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
+import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
+import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
 import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
@@ -342,6 +345,15 @@ const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
 const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
   Layer.provide(layerServerSettings),
+  Layer.provide(LinuxHelperReport.layer),
+);
+
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
+
+// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
+const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
+  Layer.provide(layerCuaDriver),
+  Layer.provide(LinuxHelperReport.layer),
 );
 
 const layerBackground = BackgroundPolicy.layer.pipe(
@@ -829,7 +841,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       ProjectStore.layer,
       ThreadSearch.layer,
       layerCuaDriver,
-      ComputerUseLeases.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
+      layerLinuxFrameSource,
+      ComputerUseLeases.layer.pipe(
+        Layer.provide(layerDesktopTelemetryReceiver),
+        Layer.provide(layerLinuxFrameSource),
+        Layer.provide(layerLinuxHelperHost),
+      ),
       CloudProviderAutoSetup.layer,
     ),
   ),

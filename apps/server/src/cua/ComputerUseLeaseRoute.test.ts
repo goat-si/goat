@@ -1,8 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
-import { type ComputerUsePauseReason, ThreadId } from "@goat/contracts";
+import {
+  type ComputerUsePauseReason,
+  type ComputerUseCallReservation,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { HttpRouter } from "effect/http";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -11,7 +19,10 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
+import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
@@ -23,6 +34,8 @@ const fixture = Effect.fnUntraced(function* () {
   const paused = yield* Ref.make<ComputerUsePauseReason | undefined>(undefined);
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    blocked: () => Effect.die("unused"),
+    blockedTurns: Effect.die("unused"),
     active: () => Effect.succeed(Option.none()),
     holder: () => Effect.succeed(Option.none()),
     channelOrigin: () => Effect.succeed(undefined),
@@ -47,6 +60,10 @@ const fixture = Effect.fnUntraced(function* () {
       }),
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
+    callReservation: () => Effect.die("unused"),
+    foregroundApprovalEpoch: Effect.die("unused"),
+    approveForeground: () => Effect.die("unused"),
+    foregroundAvailable: () => Effect.die("unused"),
     humanInput: () => Effect.die("unused"),
     agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
@@ -54,6 +71,7 @@ const fixture = Effect.fnUntraced(function* () {
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
+    release: () => Effect.die("unused"),
     pause: () => Effect.die("unused"),
     detection: Effect.succeed({ humanInput: true, privateMode: true, frames: false }),
     resume: Effect.die("unused"),
@@ -100,6 +118,95 @@ const active = {
 } as const;
 
 describe("computer use lease route", () => {
+  it.effect(
+    "authenticates call reservations, rejects malformed requests and binds the credential's thread",
+    () =>
+      Effect.gen(function* () {
+        const received: Array<{ threadId: ThreadId; call: ComputerUseCallReservation }> = [];
+        const invocation: McpThreadInvocationScope = {
+          environmentId: EnvironmentId.make("environment:test"),
+          capabilities: new Set(),
+          issuedAt: 0,
+          requestNamespace: "test",
+          client: undefined,
+          thread: {
+            threadId,
+            providerSessionId: "provider:test",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+        };
+        const routes = LeaseRoute.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              ServerSettings.layerTest(),
+              Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+                resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
+              }),
+              Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+                foregroundApprovalEpoch: Effect.die("unused"),
+                proxy: undefined,
+                callReservation: (owner, call) =>
+                  Effect.sync(() => {
+                    received.push({ threadId: owner, call });
+                    return { status: "admitted", reservationId: "reservation:test" } as const;
+                  }),
+              }),
+            ),
+          ),
+        );
+        const app = yield* Effect.acquireRelease(
+          Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
+          (web) => Effect.promise(() => web.dispose()),
+        );
+        const request = (body: object, authorization?: string) =>
+          Effect.promise(() =>
+            app.handler(
+              new Request("http://goat.test/api/computer-use/lease/calls", {
+                method: "POST",
+                body: JSON.stringify(body),
+                headers: {
+                  "content-type": "application/json",
+                  ...(authorization ? { authorization } : {}),
+                },
+              }),
+            ),
+          );
+        assert.equal((yield* request({})).status, 401);
+        assert.equal((yield* request({}, "Bearer fixture")).status, 400);
+        const call = {
+          action: "reserve",
+          controlId,
+          connectionId: "driver:1",
+          callId: "one",
+          name: "type_text",
+          args: { pid: 42, window_id: 7 },
+          interruptions: 0,
+          idleEpoch: 0,
+        } as const;
+        const response = yield* request({ ...call, threadId: "thread:forged" }, "Bearer fixture");
+        assert.equal(response.status, 200);
+        assert.deepEqual(received, [{ threadId, call }]);
+        const validation = {
+          action: "validate" as const,
+          controlId,
+          connectionId: "driver:1",
+          reservationId: "reservation:test",
+        };
+        assert.equal((yield* request(validation)).status, 401);
+        for (const invalid of [
+          { ...validation, reservationId: "" },
+          { ...validation, reservationId: null },
+          { ...validation, threadId: "thread:forged" },
+          { ...validation, name: "list_apps", args: {} },
+        ])
+          assert.equal((yield* request(invalid, "Bearer fixture")).status, 400);
+        assert.equal((yield* request(validation, "Bearer fixture")).status, 200);
+        assert.deepEqual(received, [
+          { threadId, call },
+          { threadId, call: validation },
+        ]);
+      }).pipe(Effect.scoped),
+  );
   it.layer(ServerSettings.layerTest())("streams", (it) => {
     it.effect("pushes a revocation as soon as it is recorded", () =>
       Effect.gen(function* () {

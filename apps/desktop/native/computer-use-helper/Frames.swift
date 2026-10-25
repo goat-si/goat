@@ -3,10 +3,12 @@
 // The host names the windows to capture; the server decides those (apps/server/src/preview/
 // DesktopFrames.ts) and checks every frame again, so this file only refuses what it can see
 // itself: no Screen Recording grant, a window that is gone or belongs to another app, an app the
-// control did not approve, or a secure text field focused in the window's app. Each capture is
-// one window on its own (SCContentFilter(desktopIndependentWindow:)), so GOAT's windows and the
-// agent cursor overlay never appear in it (#1321).
+// control did not approve, a window of GOAT's own, or a secure text field focused in the window's
+// app. Each capture is one window on its own (SCContentFilter(desktopIndependentWindow:)), so
+// GOAT's windows and the agent cursor overlay never appear behind or over it; a window GOAT owns
+// is refused outright, whatever the control approved (#1321).
 
+import AppKit
 import CoreGraphics
 import Foundation
 import ImageIO
@@ -64,6 +66,20 @@ final class FrameCapture {
   private var timers: [String: DispatchSourceTimer] = [:]
   private var busy: Set<String> = []
   private var told: [String: String] = [:]
+  /// GOAT's own processes: the app that launched this helper, its launcher, and this service.
+  private let goatPids: Set<Int> = Set(
+    [
+      Int(ProcessInfo.processInfo.environment[HostIdentity.hostPidVariable] ?? ""),
+      Int(getppid()), Int(getpid()),
+    ].compactMap { $0 }.filter { $0 > 1 })
+
+  private func goatOwns(pid: Int, bundleId: String?) -> Bool {
+    HostIdentity.ownsWindow(
+      ownerPid: pid,
+      ownerBundleId: bundleId
+        ?? NSRunningApplication(processIdentifier: pid_t(clamping: pid))?.bundleIdentifier,
+      goatPids: goatPids)
+  }
 
   func frames(_ params: [String: Any]) throws -> [String: Any] {
     guard let framesId = params["framesId"] as? Int,
@@ -102,6 +118,10 @@ final class FrameCapture {
 
   private func tick(_ target: FrameTarget, framesId: Int) {
     guard self.framesId == framesId, !busy.contains(target.key) else { return }
+    // Before anything else, so no grant or lookup is ever spent on GOAT's own windows.
+    if goatOwns(pid: target.pid, bundleId: nil) {
+      return unavailable(target, "appNotApproved", framesId: framesId)
+    }
     if !CGPreflightScreenCaptureAccess() {
       return unavailable(target, "screenRecordingNotGranted", framesId: framesId)
     }
@@ -122,7 +142,9 @@ final class FrameCapture {
           self.busy.remove(target.key)
           return self.unavailable(target, "windowGone", framesId: framesId)
         }
-        if let apps = target.apps, !apps.contains(owner.bundleIdentifier) {
+        if self.goatOwns(pid: target.pid, bundleId: owner.bundleIdentifier)
+          || target.apps.map({ !$0.contains(owner.bundleIdentifier) }) == true
+        {
           self.busy.remove(target.key)
           return self.unavailable(target, "appNotApproved", framesId: framesId)
         }

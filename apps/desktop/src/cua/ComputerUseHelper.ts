@@ -1,9 +1,8 @@
 // @effect-diagnostics globalTimers:off -- Startup and shutdown deadlines run at child-process callback boundaries outside Effect fibers.
-// @effect-diagnostics nodeBuiltinImport:off -- This desktop-only module owns the helper's child process and socket directory.
+// @effect-diagnostics nodeBuiltinImport:off -- This desktop-only module owns the helper's child process.
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
@@ -378,14 +377,22 @@ export async function probeHelperGrants(
   process: HelperProcess,
   expectedBundleId: string,
   prompt: boolean,
-): Promise<typeof HelperGrants.Type> {
+): Promise<typeof HelperGrants.Type & { readonly features: HelperFeatures }> {
   const session = await openHelperSession(process, expectedBundleId);
   try {
-    return await session.permissions(prompt);
+    return { ...(await session.permissions(prompt)), features: helperFeatures(session) };
   } finally {
     await session.close();
   }
 }
+
+/** What a helper said in its hello it can do, beyond protocol 1's first set. */
+export type HelperFeatures = Pick<HelperSession, "canWatch" | "reportsInput" | "canFrame">;
+export const helperFeatures = (session: HelperFeatures): HelperFeatures => ({
+  canWatch: session.canWatch,
+  reportsInput: session.reportsInput,
+  canFrame: session.canFrame,
+});
 
 export interface HelperBundle {
   readonly bundlePath: string;
@@ -499,12 +506,11 @@ export interface HelperHostOptions {
   /**
    * Agent connections: start no daemon. Each connection's proxy runs the helper itself with
    * --mcp, which runs the driver as its direct child on stdio, so no socket exists (#1210).
-   * The checks that read the driver here (verify) still use the daemon.
+   * macOS readiness uses its own MCP pair through McpHelperHost.
    */
   readonly direct?: boolean;
   /**
-   * Where this generation's driver listens. Defaults to a socket in a fresh private directory;
-   * Windows names a pipe instead.
+   * The Windows generation's named pipe. macOS creates no socket directory.
    */
   readonly socket?: () => Promise<{ readonly path: string; readonly release: () => Promise<void> }>;
   /**
@@ -513,15 +519,6 @@ export interface HelperHostOptions {
    */
   readonly mcpThroughHelper?: boolean;
 }
-
-const privateSocket = async () => {
-  // A short private directory: Unix socket paths stop at 104 bytes.
-  const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cu-"));
-  return {
-    path: NodePath.join(directory, "driver.sock"),
-    release: () => NodeFSP.rm(directory, { recursive: true, force: true }),
-  };
-};
 
 export function makeHelperHost(options: HelperHostOptions) {
   let session: HelperSession | undefined;
@@ -534,7 +531,7 @@ export function makeHelperHost(options: HelperHostOptions) {
     session = undefined;
     connection = undefined;
     if (current) {
-      await current.stop().catch(() => undefined);
+      if (!options.direct) await current.stop().catch(() => undefined);
       await current.close();
     }
     await releaseSocket?.();
@@ -568,7 +565,12 @@ export function makeHelperHost(options: HelperHostOptions) {
         return connection;
       }
       try {
-        const socket = await (options.socket ?? privateSocket)();
+        if (!options.socket)
+          throw new ComputerUseHelperError(
+            "missing_pipe",
+            "The Windows helper needs a named pipe.",
+          );
+        const socket = await options.socket();
         releaseSocket = socket.release;
         const started = await session.start({
           socketPath: socket.path,

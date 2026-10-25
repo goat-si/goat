@@ -5,6 +5,8 @@ import * as NodeNet from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
+  type DesktopCuaWatch,
+  type DesktopCuaAppsReport,
   type DesktopCuaDriverReport,
   type DesktopCuaFrame,
   type DesktopCuaFrames,
@@ -195,6 +197,10 @@ export class DesktopTelemetryReceiver extends Context.Service<
       never,
       Scope.Scope
     >;
+    readonly cuaApps: Stream.Stream<DesktopCuaAppsReport>;
+    readonly requestCuaApps: (
+      requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError | DesktopTelemetryDescriptorUnavailable>;
     readonly cuaReports: Stream.Stream<DesktopCuaDriverReport>;
     /**
      * The helper's safety reports: a person's input, a secret field, and its readiness with what
@@ -212,7 +218,10 @@ export class DesktopTelemetryReceiver extends Context.Service<
      * call writes: a change with the next seq, a repeat (a retry after a failed write) with the
      * same one. The current value also goes out again when the desktop reconnects.
      */
-    readonly setCuaWatch: (active: boolean) => Effect.Effect<void, DesktopTelemetryControlError>;
+    readonly setCuaWatch: (
+      active: boolean,
+      apps?: ReadonlyArray<string>,
+    ) => Effect.Effect<void, DesktopTelemetryControlError>;
     /** Frames and no-picture answers from the desktop helper, for the targets last sent. */
     readonly cuaFrames: Stream.Stream<DesktopCuaFrame>;
     /**
@@ -231,11 +240,19 @@ const decodeMessage = Schema.decodeUnknownEffect(DesktopHostTelemetryMessage);
  * The watch state after the server decides agents do or do not control the host: a change
  * takes the next seq, the same value keeps the current one. seq 0 means nothing was sent yet.
  */
+type CuaWatchState = Pick<DesktopCuaWatch, "seq" | "active" | "apps">;
 export const nextCuaWatch = (
-  current: { readonly seq: number; readonly active: boolean },
+  current: CuaWatchState,
   active: boolean,
-): { readonly seq: number; readonly active: boolean } =>
-  current.seq > 0 && current.active === active ? current : { seq: current.seq + 1, active };
+  apps?: ReadonlyArray<string>,
+): CuaWatchState => {
+  const sorted = apps === undefined ? undefined : [...new Set(apps)].sort();
+  return current.seq > 0 &&
+    current.active === active &&
+    JSON.stringify(current.apps) === JSON.stringify(sorted)
+    ? current
+    : { seq: current.seq + 1, active, ...(sorted === undefined ? {} : { apps: sorted }) };
+};
 
 /**
  * Whether a readiness report replaces the one held: same or later helper launch. The desktop
@@ -395,19 +412,18 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const healthChanges = yield* PubSub.sliding<DesktopTelemetryReceiverHealth>(4);
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
+  const cuaApps = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const cuaReports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
   // Every report counts: a dropped private-mode change would leave agents watching a secret.
   const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
   const cuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   const controlMutex = yield* Semaphore.make(1);
-  const cuaWatch = yield* Ref.make<{ readonly seq: number; readonly active: boolean }>({
+  const cuaWatch = yield* Ref.make<CuaWatchState>({
     seq: 0,
     active: false,
   });
   const sendCuaWatch = Ref.get(cuaWatch).pipe(
-    Effect.flatMap(({ seq, active }) =>
-      sendControlMessage({ version: 1, type: "cuaWatch", seq, active }),
-    ),
+    Effect.flatMap((state) => sendControlMessage({ version: 1, type: "cuaWatch", ...state })),
   );
   // Only the newest frame matters to a viewer; an older one is never worth queueing.
   const cuaFrameMessages = yield* PubSub.sliding<DesktopCuaFrame>(8);
@@ -619,6 +635,13 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        if (message.type === "cuaApps") {
+          return recordContact.pipe(
+            Effect.andThen(PubSub.publish(cuaApps, message)),
+            Effect.asVoid,
+          );
+        }
+
         if (message.type === "cuaDriverReport") {
           return recordContact.pipe(
             Effect.andThen(PubSub.publish(cuaReports, message)),
@@ -749,6 +772,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   }
 
   return DesktopTelemetryReceiver.of({
+    cuaApps: Stream.fromPubSub(cuaApps),
+    requestCuaApps: (requestId) =>
+      config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
+        ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
+        : sendControlMessage({ version: 1, type: "cuaAppsRequest", requestId }),
     cuaReports: Stream.fromPubSub(cuaReports),
     cuaSafety: Stream.fromPubSub(cuaSafety),
     cuaReadiness: Ref.get(cuaReadiness),
@@ -756,11 +784,9 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
         : sendControlMessage({ version: 1, type: "cuaDriverRequest", requestId, enabled }),
-    setCuaWatch: (active) =>
-      Ref.updateAndGet(cuaWatch, (current) => nextCuaWatch(current, active)).pipe(
-        Effect.flatMap(({ seq }) =>
-          sendControlMessage({ version: 1, type: "cuaWatch", seq, active }),
-        ),
+    setCuaWatch: (active, apps) =>
+      Ref.update(cuaWatch, (current) => nextCuaWatch(current, active, apps)).pipe(
+        Effect.andThen(sendCuaWatch),
       ),
     cuaFrames: Stream.fromPubSub(cuaFrameMessages),
     setCuaFrames: (targets) =>
@@ -844,6 +870,9 @@ export const layerTest = (
       requestDesktopUpdate: () => Effect.void,
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
+      cuaApps: Stream.empty,
+      requestCuaApps: () =>
+        Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
       cuaReports: Stream.empty,
       cuaSafety: overrides.cuaSafety ?? Stream.empty,
       cuaReadiness: Effect.succeedNone,

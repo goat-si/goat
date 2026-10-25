@@ -8,6 +8,11 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Electron main and the standalone server both call this outside an Effect runtime.
 import * as NodeChildProcess from "node:child_process";
 
+import {
+  CUA_DRIVER_PROBED_SESSION_NAMES,
+  cuaDriverListingEnvironment,
+} from "./cuaDriverRelease.ts";
+
 /** Observation, input, batching and session tools agents need for ordinary desktop work. */
 export const CUA_DRIVER_ALLOWED_TOOLS = [
   "check_permissions",
@@ -103,43 +108,137 @@ const EXCLUDED_BUNDLE_IDS = new Set([
 ]);
 const EXCLUDED_NAME =
   /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|keychain access|passwords)\b/iu;
-/** The driver and GOAT's helper on Windows, named by their executables. */
-const EXCLUDED_EXECUTABLE = /(^|[\\/])(cua-driver|GOAT Computer Use)\.exe$/iu;
+/** The driver, and GOAT's helper on Windows, named by their executables. */
+const EXCLUDED_EXECUTABLE = /(^|[\\/])((cua-driver|GOAT Computer Use)\.exe|cua-driver)$/iu;
 
 export interface CuaDriverListedApp {
   readonly bundle_id?: string | null;
   readonly name?: string | null;
-  /** A running app's executable path, added by the Windows helper (the driver gives none). */
+  /**
+   * A running app's executable path, added by the Windows helper or read from /proc on Linux
+   * (the driver gives none).
+   */
   readonly executable?: string | null;
+  readonly pid?: number | null;
+  readonly windows?: ReadonlyArray<unknown> | null;
 }
+
+/**
+ * A Linux app with no desktop entry, granted by the executable the driver attests for a window
+ * (/proc/<pid>/exe, session_manifest.rs resource_matches_application). `names` are the list_apps
+ * names approvals use for it; the manifest keeps them in a comment so a refresh can find them.
+ */
+export interface CuaDriverExecutableApp {
+  readonly executable: string;
+  readonly names: ReadonlyArray<string>;
+}
+
+export type CuaDriverAdmittedApp = string | CuaDriverExecutableApp;
 
 /**
  * Bundle ids GOAT admits for general desktop control: every app the driver itself lists (its
  * list_apps result is what it attests a window's app identity against), minus the host GOAT runs
  * in and the exclusions above. On Windows a running program with no Start menu entry has no
  * bundle id; its executable path stands in, which the driver matches against the executable it
- * attests for the window (#1368). Apps with neither stay out, so an app installed or started
- * after the driver started needs a restart of computer use.
+ * attests for the window (#1368). On Linux an app with no desktop entry gets an executable grant
+ * instead (#1513): the driver only compares Windows paths given as bundle ids. Apps with neither
+ * stay out. Desktop hosts refresh this list when an approval names a missing app; standalone
+ * servers still list only at host start.
  */
 export function admittedCuaApplications(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
-): ReadonlyArray<string> {
+): ReadonlyArray<CuaDriverAdmittedApp> {
   const host = new Set(hostBundleIds.map(identityKey));
   const admitted = new Set<string>();
+  const executables = new Map<string, Set<string>>();
   for (const app of apps) {
-    const id = (app.bundle_id?.trim() || app.executable?.trim()) ?? "";
+    const bundle = app.bundle_id?.trim() ?? "";
+    const id = bundle || (app.executable?.trim() ?? "");
     if (!id) continue;
-    if (host.has(identityKey(id)) || EXCLUDED_BUNDLE_IDS.has(id.toLowerCase())) continue;
-    if (
-      EXCLUDED_NAME.test(app.name ?? "") ||
-      EXCLUDED_NAME.test(id) ||
-      EXCLUDED_EXECUTABLE.test(id)
-    )
-      continue;
-    admitted.add(id);
+    if (excludedCuaApplication(app, id, host)) continue;
+    if (!bundle && id.startsWith("/")) {
+      const names = executables.get(id) ?? new Set<string>();
+      const name = app.name?.trim();
+      if (name) names.add(name);
+      executables.set(id, names);
+    } else admitted.add(id);
   }
-  return [...admitted].sort();
+  const entries: Array<CuaDriverAdmittedApp> = [...admitted];
+  for (const [executable, names] of executables)
+    entries.push({ executable, names: [...names].sort() });
+  const key = (entry: CuaDriverAdmittedApp) =>
+    typeof entry === "string" ? entry : entry.executable;
+  return entries.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+}
+
+function excludedCuaApplication(
+  app: CuaDriverListedApp,
+  id: string,
+  host: ReadonlySet<string>,
+): boolean {
+  return (
+    host.has(identityKey(id)) ||
+    EXCLUDED_BUNDLE_IDS.has(id.toLowerCase()) ||
+    EXCLUDED_NAME.test(app.name ?? "") ||
+    EXCLUDED_NAME.test(id) ||
+    EXCLUDED_EXECUTABLE.test(id)
+  );
+}
+
+/**
+ * Listings are best effort: absence must be judged against every identity the host attests,
+ * including the executable when an installed-app lookup loses its bundle id.
+ */
+export function cuaRequestableApps(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+  hostBundleIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const host = new Set(hostBundleIds.map(identityKey));
+  const requestable = new Set<string>();
+  for (const app of apps) {
+    const bundle = app.bundle_id?.trim() ?? "";
+    const ids = [bundle || app.name?.trim() || "", app.executable?.trim() || ""].filter(Boolean);
+    if (ids.some((id) => excludedCuaApplication(app, id, host))) continue;
+    for (const id of ids) requestable.add(id);
+  }
+  return [...requestable].sort();
+}
+
+/**
+ * Adds the executable of every Linux app that shows a window and has no desktop entry, read
+ * from /proc the way the driver attests it. Windowless processes (shells, servers) stay out, as
+ * does this process: GOAT's own windows are never granted.
+ */
+async function withLinuxExecutables(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+): Promise<ReadonlyArray<CuaDriverListedApp>> {
+  const { readlink } = await import("node:fs/promises");
+  return Promise.all(
+    apps.map(async (app) => {
+      const pid = app.pid;
+      if (
+        app.bundle_id?.trim() ||
+        app.executable?.trim() ||
+        typeof pid !== "number" ||
+        !Number.isInteger(pid) ||
+        pid <= 0 ||
+        pid === process.pid ||
+        !Array.isArray(app.windows) ||
+        app.windows.length === 0
+      )
+        return app;
+      const executable = await readlink("/proc/" + pid + "/exe").catch(() => undefined);
+      // A replaced binary reads as "<path> (deleted)", which no longer names a file to grant.
+      if (
+        executable === undefined ||
+        !executable.startsWith("/") ||
+        executable.endsWith(" (deleted)")
+      )
+        return app;
+      return { ...app, executable };
+    }),
+  );
 }
 
 /**
@@ -159,13 +258,58 @@ function identityKey(id: string): string {
   return ((unc ? "\\\\" : "") + parts.join("\\")).toLowerCase();
 }
 
+const EXECUTABLE_LINE = /^ {4}- executable: ("(?:[^"\\]|\\.)*")(?: # names: (\[.*\]))?$/u;
+
+/**
+ * Reads only the JSON-quoted app lines written by cuaDriverCapabilityManifest: each bundle id,
+ * and each executable grant's path followed by the names its comment records.
+ */
+export function cuaDriverManifestApplications(text: string): ReadonlyArray<string> {
+  const prefix = "    - bundle_id: ";
+  const ids: Array<string> = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith(prefix)) {
+      const id: unknown = JSON.parse(line.slice(prefix.length));
+      if (typeof id !== "string") throw new Error("Invalid capability manifest app id.");
+      ids.push(id);
+      continue;
+    }
+    if (!line.startsWith("    - executable: ")) continue;
+    const match = EXECUTABLE_LINE.exec(line);
+    if (match === null) throw new Error("Invalid capability manifest executable.");
+    const executable: unknown = JSON.parse(match[1] ?? "");
+    const names: unknown = match[2] === undefined ? [] : JSON.parse(match[2]);
+    if (
+      typeof executable !== "string" ||
+      !Array.isArray(names) ||
+      !names.every((name) => typeof name === "string")
+    )
+      throw new Error("Invalid capability manifest executable.");
+    ids.push(executable, ...names);
+  }
+  return ids;
+}
+
+/** Approved identities not yet admitted by the manifest, with driver path normalization. */
+export function missingCuaDriverApplications(
+  approved: ReadonlyArray<string>,
+  admitted: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const present = new Set(admitted.map(identityKey));
+  return approved.filter((id) => !present.has(identityKey(id)));
+}
+
 /** v3 manifest text. JSON strings are valid YAML scalars, so every value is JSON-quoted. */
 export function cuaDriverCapabilityManifest(input: {
-  readonly applications: ReadonlyArray<string>;
+  readonly applications: ReadonlyArray<CuaDriverAdmittedApp>;
   readonly tools?: ReadonlyArray<string>;
 }): string {
   const q = (value: string) => JSON.stringify(value);
   const tools = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
+  const app = (entry: CuaDriverAdmittedApp) =>
+    typeof entry === "string"
+      ? "    - bundle_id: " + q(entry)
+      : "    - executable: " + q(entry.executable) + " # names: " + JSON.stringify(entry.names);
   return [
     "# Written by GOAT at each driver start. See ADR-0022.",
     "version: 3",
@@ -174,7 +318,7 @@ export function cuaDriverCapabilityManifest(input: {
     "    display: true",
     ...(input.applications.length === 0
       ? ["  apps: []"]
-      : ["  apps:", ...input.applications.map((id) => "    - bundle_id: " + q(id))]),
+      : ["  apps:", ...input.applications.map(app)]),
     "allow:",
     "  tools:",
     ...tools.map((tool) => "    - " + q(tool)),
@@ -189,10 +333,12 @@ const LIST_APPS_TIMEOUT_MS = 15_000;
  * the manifest. macOS needs --direct to own the runtime in this process instead of reaching for a
  * daemon; listing apps reads LaunchServices and needs no grant.
  */
-function listCuaDriverApplications(input: {
+export function listCuaDriverApplications(input: {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
+  /** Ends the listing and its driver when the asker no longer waits for it. */
+  readonly signal?: AbortSignal;
 }): Promise<ReadonlyArray<CuaDriverListedApp>> {
   return new Promise((resolve, reject) => {
     const child = NodeChildProcess.spawn(
@@ -202,10 +348,13 @@ function listCuaDriverApplications(input: {
     );
     let settled = false;
     let buffer = "";
+    const onAbort = () => finish(new Error("Cua Driver listing was cancelled."));
     const finish = (error: Error | undefined, apps?: ReadonlyArray<CuaDriverListedApp>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // A caller may reuse one signal for many listings; each listing removes its own handler.
+      input.signal?.removeEventListener("abort", onAbort);
       child.stdin.end();
       child.kill();
       if (error) reject(error);
@@ -218,6 +367,11 @@ function listCuaDriverApplications(input: {
     );
     const send = (message: object) => child.stdin.write(JSON.stringify(message) + "\n");
     child.on("error", (error) => finish(error));
+    // A driver that exits before reading leaves the pipe closed: that write fails here, not
+    // as an uncaught error in the process that asked for the listing.
+    child.stdin.on("error", (error) => finish(error));
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("exit", (code) =>
       finish(new Error("Cua Driver exited while listing apps (" + code + ").")),
     );
@@ -271,35 +425,94 @@ function listCuaDriverApplications(input: {
   });
 }
 
-/** Writes the manifest owner-only and returns its path for the driver to load at startup. */
+/** Replaces the manifest owner-only; direct agent connections can read it during refresh. */
 export async function writeCuaDriverCapabilityManifest(
   path: string,
   text: string,
 ): Promise<string> {
-  const { mkdir, writeFile } = await import("node:fs/promises");
-  const { dirname } = await import("node:path");
+  const { mkdir, mkdtemp, rename, rm, writeFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, text, { mode: 0o600 });
+  const temporary = await mkdtemp(join(dirname(path), ".manifest-"));
+  try {
+    const contents = join(temporary, "contents.yaml");
+    await writeFile(contents, text, { mode: 0o600 });
+    // The desktop mutex cannot fence a direct helper connection in another process.
+    await rename(contents, path);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
   return path;
 }
 
 /** Lists the driver's apps, admits them as above, and writes the agents' manifest. */
-export async function prepareCuaDriverCapabilityManifest(input: {
+interface CuaDriverListingInput {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
   readonly hostBundleIds: ReadonlyArray<string>;
-  readonly path: string;
   /** Lists apps through a helper that verifies the driver first, instead of running it here. */
   readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
-}): Promise<string> {
-  const apps = await (input.listApplications?.() ?? listCuaDriverApplications(input));
+  readonly signal?: AbortSignal;
+}
+
+/** The driver's apps with the identities GOAT judges them by, and the host's own to exclude. */
+async function listForHost(input: CuaDriverListingInput) {
+  const listed = await (input.listApplications?.() ?? listCuaDriverApplications(input));
+  const linux = input.platform === "linux";
+  const apps = linux ? await withLinuxExecutables(listed) : listed;
+  const { realpath } = await import("node:fs/promises");
+  // GOAT's own runtime (node or Electron) is never granted by its executable.
+  const self = linux ? await realpath(process.execPath).catch(() => process.execPath) : undefined;
+  return { apps, host: self === undefined ? input.hostBundleIds : [...input.hostBundleIds, self] };
+}
+
+export async function prepareCuaDriverCapabilityManifest(
+  input: CuaDriverListingInput & { readonly path: string },
+): Promise<string> {
+  const { apps, host } = await listForHost(input);
   return writeCuaDriverCapabilityManifest(
     input.path,
-    cuaDriverCapabilityManifest({
-      applications: admittedCuaApplications(apps, input.hostBundleIds),
-    }),
+    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, host) }),
   );
+}
+
+/**
+ * The app names an approval request may use on a host whose server runs the driver itself
+ * (#1561): the same listing and identities the manifest is built from, read when asked.
+ */
+export async function listCuaRequestableApplications(
+  input: CuaDriverListingInput,
+): Promise<ReadonlyArray<string>> {
+  const { apps, host } = await listForHost(input);
+  // On Linux the manifest grants only a desktop entry or an attested executable, and never this
+  // process, so a name with neither, or GOAT's own, is not an app a request can be granted.
+  const grantable =
+    input.platform === "linux"
+      ? apps.filter(
+          (app) =>
+            app.pid !== process.pid && Boolean(app.bundle_id?.trim() || app.executable?.trim()),
+        )
+      : apps;
+  return cuaRequestableApps(grantable, host);
+}
+
+/**
+ * The environment a request-time listing runs in: the listing allowlist, then the probed
+ * display. On Linux a session variable the probe left out is passed empty, as the daemon gets
+ * it, so a listing never reaches a session the probe found unusable.
+ */
+export function cuaDriverSessionListingEnvironment(
+  base: Readonly<Record<string, string | undefined>>,
+  display: ReadonlyArray<{ readonly name: string; readonly value: string }>,
+  platform: NodeJS.Platform,
+): Record<string, string> {
+  const environment = cuaDriverListingEnvironment(base);
+  for (const { name, value } of display) environment[name] = value;
+  if (platform === "linux")
+    for (const name of CUA_DRIVER_PROBED_SESSION_NAMES)
+      if (!display.some((variable) => variable.name === name)) environment[name] = "";
+  return environment;
 }
 
 /** What the desktop's macOS grant check calls on GOAT's own window, and nothing else. */

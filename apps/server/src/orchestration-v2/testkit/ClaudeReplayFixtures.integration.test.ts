@@ -9,7 +9,10 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-import { ClaudeOrchestratorReplayHarness } from "../Adapters/ClaudeAdapterV2.testkit.ts";
+import {
+  ClaudeOrchestratorReplayHarness,
+  makeClaudeTempReplayHarness,
+} from "../Adapters/ClaudeAdapterV2.testkit.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Orchestrator from "../Orchestrator.ts";
 import { userFacingDispatchErrorMessage } from "../UserFacingErrors.ts";
@@ -45,6 +48,25 @@ function runClaudeReplayFixture(input: ReplayFixtureCase) {
 
 describe("Claude Agent SDK replay fixtures", () => {
   itRunsReplayFixtures("claudeAgent", runClaudeReplayFixture);
+
+  const streamingFixture = findReplayFixture("command_output_streaming");
+  const streamingClaude = streamingFixture?.providers.find(
+    (provider) => provider.driver === "claudeAgent",
+  );
+  if (streamingFixture !== undefined && streamingClaude !== undefined) {
+    // A Windows host without CLAUDE_CODE_TMPDIR: Claude Code keeps task files under
+    // os.tmpdir(), which the server's TEMP, then TMP, decides.
+    it.effect.each(["TEMP", "TMP"] as const)(
+      "streams a Bash call's output live from the Windows %s directory without CLAUDE_CODE_TMPDIR",
+      (tempVariable) =>
+        runReplayFixture({
+          fixtureName: streamingFixture.name,
+          buildInput: streamingFixture.buildInput,
+          driver: streamingClaude,
+          harness: makeClaudeTempReplayHarness(tempVariable),
+        }),
+    );
+  }
 
   it.effect("refuses messages to a native subagent thread without touching it", () =>
     Effect.gen(function* () {

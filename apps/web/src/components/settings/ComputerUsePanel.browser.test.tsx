@@ -70,6 +70,7 @@ function setup(options: { granted?: boolean; enabled?: boolean; status?: CuaHost
     // Each test is its own host, so no save queue carries over between tests.
     host: expect.getState().currentTestName ?? "host",
     localMac: true,
+    localCheck: true,
     status: options.status ?? idleMac,
     disabledSkills: [] as string[],
     save: vi.fn(
@@ -116,6 +117,7 @@ function Harness({ f }: { f: Fixture }) {
       status={f.status}
       error={null}
       localMac={f.localMac}
+      localCheck={f.localCheck}
       disabledSkills={f.disabledSkills}
       fullAccessAutoAdmit={false}
       save={f.save}
@@ -159,6 +161,16 @@ it("turning the switch on saves, reads the grants and verifies the helper in tha
   expect(f.save).not.toHaveBeenCalledWith(
     expect.objectContaining({ disabledBuiltInSkills: expect.anything() }),
   );
+});
+
+it("on the Windows desktop that runs the host, turning on saves and proves capture with no macOS grant read (#1520)", async () => {
+  const f = setup({ status: { platform: "win32", running: false, tools: "unavailable" } });
+  f.localMac = false;
+  await using _screen = await render(panel(f));
+  await clickSwitch("Computer use");
+  await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
+  expect(f.calls).toEqual(['save:{"enableCua":true}', "verify"]);
+  await vi.waitFor(() => expect(statusText()).toBe("Ready. Starts with the next agent turn."));
 });
 
 it("asks for one missing grant at a time and resumes setup once a new read shows it on", async () => {
@@ -320,12 +332,29 @@ it("tells a remote Mac's person what to grant there, with nothing to open here",
     },
   });
   f.localMac = false;
+  f.localCheck = false;
   await using _screen = await render(panel(f));
   await vi.waitFor(() =>
     expect(statusText()).toMatch(/^this Mac needs Accessibility and Screen Recording/),
   );
   expect(f.checkGrants).not.toHaveBeenCalled();
   expect(buttonLabels().filter((label) => label?.startsWith("Open"))).toEqual([]);
+});
+
+it("names the grant that kept agents from computer use in the readiness list (#1399)", async () => {
+  const f = setup({
+    enabled: true,
+    status: {
+      ...idleMac,
+      tools: "unavailable",
+      block: { reason: "permissionsNotGranted", missing: ["screenRecording"], holder: "helper" },
+    },
+  });
+  await using screen = await render(panel(f));
+  await screen.getByRole("button", { name: "Details" }).click();
+  await expect
+    .element(screen.getByText(/has not allowed GOAT Computer Use in Screen/))
+    .toBeVisible();
 });
 
 it("keeps the readiness list and skill switch in Advanced, closed by default and remembered", async () => {

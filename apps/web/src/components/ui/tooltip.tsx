@@ -45,6 +45,9 @@ function createTooltipHoverTracker() {
 type TooltipHoverTracker = ReturnType<typeof createTooltipHoverTracker>;
 const TooltipHoverContext = createContext<TooltipActionsRef | null>(null);
 const TooltipScrollContext = createContext<TooltipHoverTracker | null>(null);
+// Base UI portals into the global document.body; a subtree rendered into another
+// window (the floating agents stack) names its own document's container here.
+const TooltipContainerContext = createContext<HTMLElement | null>(null);
 
 function TooltipScrollDismissArea({ onScrollCapture, ...props }: ComponentProps<"div">) {
   const [tracker] = useState(createTooltipHoverTracker);
@@ -133,8 +136,9 @@ function TooltipPopup({
   variant?: "default" | "glass" | "code";
   anchor?: TooltipPrimitive.Positioner.Props["anchor"];
 }) {
+  const container = use(TooltipContainerContext);
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={container ?? undefined}>
       <TooltipPositioner align={align} anchor={anchor} side={side} sideOffset={sideOffset}>
         <TooltipPrimitive.Popup
           className={cn(
@@ -162,4 +166,11 @@ function TooltipPopup({
   );
 }
 
-export { TooltipProvider, Tooltip, TooltipTrigger, TooltipPopup, TooltipScrollDismissArea };
+export {
+  TooltipProvider,
+  Tooltip,
+  TooltipTrigger,
+  TooltipPopup,
+  TooltipScrollDismissArea,
+  TooltipContainerContext,
+};

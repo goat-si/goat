@@ -14,12 +14,14 @@ import {
   type ComponentType,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useRef,
   useState,
 } from "react";
 
 import type { ServerBrowserHandle } from "~/browser/ServerBrowserSurface";
+import { useRendersServerTabNatively } from "~/browser/previewRuntime";
 import { useFaviconForThreadUrl } from "~/browserFaviconStore";
 import {
   GlobeIcon,
@@ -35,6 +37,7 @@ import {
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
+import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
@@ -42,8 +45,12 @@ import { useEnvironmentScope } from "~/state/session";
 
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 type Chip = ReturnType<typeof previewSessionChip>;
+
+/** Agent sessions list only server tabs; this asks whether this client draws one natively. */
+const SERVER_TAB = { runtime: "server" } as const;
 
 /** Who holds the session, said by the dot beside the name and the picture's outline. */
 const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
@@ -148,6 +155,8 @@ export interface AgentScreenCardViewProps {
   readonly canControl: boolean;
   /** Taking over a browser tab: the preview grant, checked by the tab's stream. */
   readonly canOperateBrowser: boolean;
+  /** A browser tab this desktop draws itself; see PreviewSessionThumbnail. */
+  readonly drawnHere?: boolean | undefined;
   readonly focused: boolean;
   readonly focusRequest: number;
   /** Take control of the browser stream as soon as the large view connects. */
@@ -191,10 +200,12 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   // A tap that reveals the controls must not also open the preview under them.
   const swallowClick = useRef(false);
   const shown = revealed;
+  const stackDocument = useContext(StackDocumentContext);
 
   useEffect(() => {
     if (!revealed) return;
-    const doc = card.current?.ownerDocument;
+    // The stack can move the card to the floating window's document while it stays mounted.
+    const doc = stackDocument ?? card.current?.ownerDocument;
     if (!doc) return;
     const hide = (event: PointerEvent) => {
       if (event.target instanceof Node && card.current?.contains(event.target)) return;
@@ -202,7 +213,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     };
     doc.addEventListener("pointerdown", hide);
     return () => doc.removeEventListener("pointerdown", hide);
-  }, [revealed]);
+  }, [revealed, stackDocument]);
 
   // Each request scrolls again, even to the card already focused.
   const focusRequest = props.focused ? props.focusRequest : 0;
@@ -257,15 +268,17 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     (control) => control === "takeover" || control === "handBack",
   );
   const youControl = browser && large && stream?.controller === "you";
-  const takeover = stopped
-    ? null
-    : browser
-      ? youControl
-        ? "browser-release"
-        : "browser-take"
-      : desktopTakeover === undefined
-        ? null
-        : "desktop";
+  // A tab this desktop draws has no stream to take control through; the floating player shows it.
+  const takeover =
+    stopped || props.drawnHere
+      ? null
+      : browser
+        ? youControl
+          ? "browser-release"
+          : "browser-take"
+        : desktopTakeover === undefined
+          ? null
+          : "desktop";
   const takeoverLabel =
     takeover === "browser-release" || (takeover === "desktop" && desktopTakeover === "handBack")
       ? "Hand back"
@@ -288,6 +301,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       session={session}
       live={props.live}
       size={large ? "large" : "card"}
+      drawnHere={props.drawnHere}
       surfaceRef={surface}
       onStreamControl={onStreamControl}
     />
@@ -452,6 +466,16 @@ export function AgentScreenCard(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),
   );
   const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
+  const drawnHere =
+    useRendersServerTabNatively(session.environmentId, SERVER_TAB) && browserTab !== null;
+  // The floating player shows the webview this desktop draws the tab in, which paints.
+  const watchHere =
+    drawnHere && threadRef !== null && browserTab !== null
+      ? () => {
+          void navigate({ to: "/$environmentId/$threadId", params: threadRef });
+          usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(browserTab));
+        }
+      : null;
   return (
     <AgentScreenCardView
       session={session}
@@ -466,11 +490,12 @@ export function AgentScreenCard(
       live={props.live}
       canControl={canControl}
       canOperateBrowser={canOperateBrowser}
+      drawnHere={drawnHere}
       focused={props.focused}
       focusRequest={props.focusRequest}
       takeOverOnOpen={props.takeOverOnOpen}
       onTakeOverStarted={props.onTakeOverStarted}
-      onExpand={props.onExpand}
+      onExpand={watchHere ?? props.onExpand}
       onCollapse={props.onCollapse}
       onOpenInPanel={openInPanel}
       onControl={props.onControl}

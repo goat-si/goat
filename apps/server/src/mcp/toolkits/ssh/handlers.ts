@@ -541,7 +541,12 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     ...(admitted.enabled ? { permissionProfileCeiling: admitted.profile } : {}),
                   };
                   const authorize = check.pipe(
-                    Effect.andThen(permissions.recheck(scope, admitted, { host: input.host })),
+                    Effect.andThen(
+                      permissions.recheck(scope, admitted, {
+                        host: input.host,
+                        ...(role === undefined ? {} : { role }),
+                      }),
+                    ),
                   );
                   const result = yield* Effect.gen(function* () {
                     if (scope.thread === undefined) {
@@ -551,7 +556,14 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       );
                       return { ...value, correlationId: null };
                     }
-                    yield* launchRemoteChildWork(channelChildWork, admission, input.host);
+                    // A refused claim launched nothing, so the lane claimed above returns.
+                    yield* launchRemoteChildWork(channelChildWork, admission, input.host).pipe(
+                      Effect.onError(() =>
+                        admitted.enabled
+                          ? permissions.release(laneId).pipe(Effect.ignore)
+                          : Effect.void,
+                      ),
+                    );
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",
@@ -570,6 +582,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     });
                     return { ...value.launch, correlationId: value.correlationId };
                   }).pipe(
+                    // The child-work claim holds the launch in flight until its row and remote
+                    // write finish.
+                    Effect.scoped,
                     Effect.tapError((error) => {
                       // The coordinator wraps a failure it proved happened before any remote
                       // write (stage "authorize"); the launcher's slot returns for those too.

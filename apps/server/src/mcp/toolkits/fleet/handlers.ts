@@ -56,28 +56,26 @@ export const layer = McpToolAccess.toLayer(FleetToolkit, {
       return { policy: yield* sync.value.receive(policy) };
     }),
   ),
-  goat_goal_apply: McpToolAccess.writesAsCaller((input) =>
+  // A goal acts as its owner, a GOAT thread or an outside client; GoalService keeps each owner's
+  // goals to that owner, and `writes` holds a write to the caller's approved access.
+  goat_goal_apply: McpToolAccess.writes((input) =>
     withGoals((goals, scope) => goals.apply(scope, input)),
   ),
-  goat_goal_get: McpToolAccess.readsAsCaller(({ id }) =>
-    withGoals((goals, scope) => goals.get(scope, id)),
-  ),
-  goat_goal_list: McpToolAccess.readsAsCaller((input) =>
+  goat_goal_get: McpToolAccess.reads(({ id }) => withGoals((goals, scope) => goals.get(scope, id))),
+  goat_goal_list: McpToolAccess.reads((input) =>
     withGoals((goals, scope) => goals.list(scope, input)),
   ),
-  goat_goal_pause: McpToolAccess.writesAsCaller(({ id }) =>
+  goat_goal_pause: McpToolAccess.writes(({ id }) =>
     withGoals((goals, scope) => goals.setPaused(scope, id, true)).pipe(
       Effect.map((goal) => ({ goal })),
     ),
   ),
-  goat_goal_resume: McpToolAccess.writesAsCaller(({ id }) =>
+  goat_goal_resume: McpToolAccess.writes(({ id }) =>
     withGoals((goals, scope) => goals.setPaused(scope, id, false)).pipe(
       Effect.map((goal) => ({ goal })),
     ),
   ),
   goat_goal_delete: McpToolAccess.destructive(
-    McpToolAccess.writesAsCaller((input) =>
-      withGoals((goals, scope) => goals.remove(scope, input)),
-    ),
+    McpToolAccess.writes((input) => withGoals((goals, scope) => goals.remove(scope, input))),
   ),
 });

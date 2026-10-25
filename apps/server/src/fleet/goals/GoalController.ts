@@ -5,17 +5,13 @@
  * that never confirmed is looked up by its title marker and never resent under the same attempt.
  * Placement, health, rescheduling and fallback come from the fleet service tags.
  */
-import {
-  type FleetGoal,
-  type FleetGoalEvent,
-  FleetOwnerKey,
-  type ModelSelection,
-} from "@goat/contracts";
+import { type FleetGoalEvent, FleetOwnerKey, type ModelSelection } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import { HubDown, type PausedGoalWork } from "../../hub/HubDown.ts";
 import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
@@ -33,7 +29,6 @@ import {
   fallbackActionId,
   type GoalAction,
   type GoalObservation,
-  launchActionId,
   MAX_ACTIONS_PER_TICK,
   MAX_GOALS_PER_TICK,
   nextAttempt,
@@ -42,25 +37,26 @@ import {
   repairWorkers,
   type PullRequestObservation,
   type SlotObservation,
-  targetKey,
 } from "./goalPlan.ts";
+import { makeGoalMoves } from "./GoalMoves.ts";
+import { GoalRecovery } from "./GoalRecovery.ts";
+import { followedUp, launchSelector, pendingMoves } from "./goalWorkers.ts";
 import {
+  type ClaimRefusal,
   type GoalRecord,
   GoalStore,
+  type GoalStoreError,
   type LaunchClaim,
   NOT_SENT,
   publicWorker,
   type WorkerRecord,
 } from "./GoalStore.ts";
-import {
-  effectiveRuntimeMode,
-  GoalWorkerRuntime,
-  REMOTE_WORKERS_DISABLED,
-  workerTitle,
-} from "./GoalWorkerRuntime.ts";
-import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import { actionAuthority, isLost, OWNER_REFUSED, refusedBeforeCreate } from "./GoalAuthority.ts";
+import { renderPrompt } from "./goalPrompt.ts";
+import { GoalWorkerRuntime, RemoteLaunchUnconfirmed, workerTitle } from "./GoalWorkerRuntime.ts";
 
 const SOON_MS = 5_000;
+const isUnconfirmed = Schema.is(RemoteLaunchUnconfirmed);
 const PULL_REQUESTS_PER_PASS = 60;
 
 const isoAt = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
@@ -75,38 +71,6 @@ export class GoalController extends Context.Service<
   }
 >()("goat/fleet/goals/GoalController") {}
 
-const renderPrompt = (goal: FleetGoal, worker: WorkerRecord, branch: string) => {
-  const target = goal.spec.workers.perTarget ? goal.spec.targets[worker.slot] : undefined;
-  const targetText =
-    target === undefined
-      ? goal.spec.targets.map(targetKey).join(", ")
-      : target.type === "prompt"
-        ? target.text
-        : target.type === "issue"
-          ? "issue #" + target.number
-          : target.type === "pull_request"
-            ? "pull request #" + target.number
-            : "branch " + target.name;
-  const body = goal.spec.workers.promptTemplate
-    .replaceAll("{{target}}", targetText)
-    .replaceAll("{{branch}}", branch)
-    .replaceAll("{{attempt}}", String(worker.attempt))
-    .replaceAll(
-      "{{previousAttempt}}",
-      worker.attempt > 1 ? branchFor(goal, worker.slot, worker.attempt - 1) : "",
-    );
-  return (
-    body +
-    "\n\nYou are slot " +
-    worker.slot +
-    " (attempt " +
-    worker.attempt +
-    ") of GOAT goal " +
-    goal.id +
-    `. When you finish, report with ${goatCallText("thread.report_result")}, including any pull request you opened.`
-  );
-};
-
 const make = Effect.gen(function* () {
   const store = yield* GoalStore;
   const runtime = yield* GoalWorkerRuntime;
@@ -116,6 +80,7 @@ const make = Effect.gen(function* () {
   const fallback = yield* Fallback;
   const settings = yield* ServerSettings.ServerSettingsService;
   const hubDown = yield* HubDown;
+  const recovery = yield* GoalRecovery;
   // Goal work the hub-down policy paused since the last tick settled it.
   let pausedSinceSettle: Array<PausedGoalWork> = [];
 
@@ -131,12 +96,33 @@ const make = Effect.gen(function* () {
           record.workers.filter((worker) => worker.threadId !== null && worker.state !== "failed"),
           (worker) =>
             Effect.gen(function* () {
+              const threadId = worker.threadId;
+              if (threadId === null) return;
               const reading = yield* runtime.observeWorker(owner, goal, worker);
+              yield* recovery.capture(goal, worker, reading);
+              if (reading.kind === "unknown" && worker.host !== null) {
+                // A host that stopped answering is judged by its health, so a Lost one moves.
+                const lost = yield* health.threadHealth({
+                  host: worker.host,
+                  threadId,
+                  watchId: worker.watchId,
+                });
+                if (lost._tag === "host_lost")
+                  return workers.set(worker.slot, {
+                    kind: "seen",
+                    terminal: false,
+                    runId: worker.lastRunId,
+                    runStatus: null,
+                    lastActivityAt: worker.lastActivityAt,
+                    result: null,
+                    health: lost,
+                  });
+              }
               if (reading.kind !== "seen") return workers.set(worker.slot, reading);
               if (reading.result?.pullRequest != null) reported.add(reading.result.pullRequest);
               const threadHealth = yield* health.threadHealth({
                 host: worker.host,
-                threadId: worker.threadId!,
+                threadId,
                 watchId: worker.watchId,
               });
               return workers.set(worker.slot, { ...reading, health: threadHealth });
@@ -146,12 +132,16 @@ const make = Effect.gen(function* () {
       // Every launch claim, from the records that outlive status writes. A claim never sent counts
       // as none, so the launch is claimed and sent again.
       const launchClaims = new Map<string, { claimedAt: number; settled: boolean } | null>();
-      for (const launch of launches)
+      const unmovedReschedules = new Set<string>();
+      for (const launch of launches) {
         if (launch.outcome !== NOT_SENT)
           launchClaims.set(launch.actionId, {
             claimedAt: Date.parse(launch.claimedAt),
             settled: launch.settledAt !== null,
           });
+        if (launch.actionId.endsWith(":reschedule") && launch.outcome !== "rescheduled")
+          unmovedReschedules.add(launch.actionId);
+      }
       const wanted = new Set<number>([
         ...goal.spec.targets.flatMap((target) =>
           target.type === "pull_request" ? [target.number] : [],
@@ -188,6 +178,9 @@ const make = Effect.gen(function* () {
             : { available: true },
         workers,
         launchClaims,
+        unmovedReschedules,
+        pendingMoves: pendingMoves(goal, launches),
+        switchedFallbacks: new Set(yield* store.switchedFallbacks(goal.id)),
         pullRequests,
         issues,
         turns: yield* store.turns(goal.id),
@@ -257,6 +250,9 @@ const make = Effect.gen(function* () {
             // the clientRequestId for a remote send, the next attempt's launch id for a reschedule.
             // An interrupt may always repeat; stopping a stopped run is a no-op. A launch is never
             // resent: it is resolved by looking its thread up.
+            // A remote host dedupes a send only within the session it came in on, and this process
+            // has a new one: what an earlier process may have sent there is settled "uncertain"
+            // here, before any other check can mark it unsent, and is never sent again.
             Effect.flatMap((refusal) =>
               refusal !== "already_claimed"
                 ? Effect.succeed(refusal)
@@ -264,13 +260,29 @@ const make = Effect.gen(function* () {
                   ? Effect.succeed(null)
                   : kind === "launch"
                     ? Effect.succeed(refusal)
-                    : store
-                        .claimOf(actionId)
-                        .pipe(
-                          Effect.map((receipt) =>
-                            receipt !== null && receipt.settledAt === null ? null : refusal,
-                          ),
+                    : store.claimOf(actionId).pipe(
+                        Effect.flatMap(
+                          (
+                            receipt,
+                          ): Effect.Effect<ClaimRefusal | "consumed" | null, GoalStoreError> =>
+                            receipt === null
+                              ? Effect.succeed(refusal)
+                              : receipt.settledAt !== null
+                                ? // Sent, or maybe sent, and its slot write may have been lost.
+                                  Effect.succeed(
+                                    kind === "followup" &&
+                                      (receipt.outcome === "sent" ||
+                                        receipt.outcome === "uncertain")
+                                      ? "consumed"
+                                      : refusal,
+                                  )
+                                : kind === "followup" && host !== null
+                                  ? store
+                                      .settle(actionId, "uncertain", nowIso)
+                                      .pipe(Effect.as("consumed" as const))
+                                  : Effect.succeed(null),
                         ),
+                      ),
             ),
             Effect.tap((refusal) =>
               refusal === null
@@ -282,7 +294,7 @@ const make = Effect.gen(function* () {
                         reason: "BudgetExhausted",
                         message: "The goal spent its budget.",
                       });
-                    if (refusal !== "already_claimed")
+                    if (refusal !== "already_claimed" && refusal !== "consumed")
                       note(
                         "Normal",
                         "ActionRefused",
@@ -294,22 +306,28 @@ const make = Effect.gen(function* () {
             ),
           );
 
-      /**
-       * Re-reads the owner after a claim. When the owner can no longer act, the claim is settled
-       * as never sent, so a later pass may claim and send it again, and the goal is blocked.
-       */
-      const authorityAfterClaim = (actionId: string) =>
-        Effect.gen(function* () {
-          const latest = yield* runtime.owner(goal);
-          if (!("unavailable" in latest)) return latest;
-          yield* store.settle(actionId, NOT_SENT, nowIso);
-          issues.push({
-            condition: "Blocked",
-            reason: "OwnerAuthorityLost",
-            message: latest.unavailable,
-          });
-          return null;
-        });
+      const authority = actionAuthority({
+        store,
+        runtime,
+        goal,
+        nowIso,
+        block: (issue) => issues.push(issue),
+      });
+      const moves = makeGoalMoves({
+        store,
+        runtime,
+        rescheduler,
+        goal,
+        nowIso,
+        authority,
+        claim,
+        setWorker: (next) => void workers.set(next.slot, next),
+        note,
+        issue: (issue) => void issues.push(issue),
+        fail: () => {
+          failed = true;
+        },
+      });
 
       /**
        * Whether provider work for this worker may start while the hub is down. Asked before the
@@ -340,6 +358,7 @@ const make = Effect.gen(function* () {
       const perform = (action: GoalAction) =>
         Effect.gen(function* () {
           if (action.type === "delete_row") {
+            yield* recovery.forget(goal.id);
             yield* store.remove(goal.id);
             return "deleted" as const;
           }
@@ -371,7 +390,12 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              if (found.success !== null) {
+              const refused = (yield* store.claimOf(action.actionId))?.outcome === OWNER_REFUSED;
+              if (refused && found.success === null) {
+                yield* store.settle(action.actionId, NOT_SENT, nowIso);
+                return void workers.set(worker.slot, refusedBeforeCreate(goal, worker));
+              }
+              if (found.success !== null && !refused) {
                 const thread = found.success;
                 yield* store.settle(action.actionId, "adopted", nowIso, {
                   host: thread.host,
@@ -381,6 +405,7 @@ const make = Effect.gen(function* () {
                   ...worker,
                   host: thread.host,
                   threadId: thread.threadId,
+                  branch: worker.branch ?? branchFor(goal, worker.slot, worker.attempt),
                   lastRunId: thread.runId,
                   state: "running",
                 });
@@ -391,20 +416,22 @@ const make = Effect.gen(function* () {
                   worker,
                   action.actionId,
                 );
-              } else if (action.expired) {
-                yield* store.settle(action.actionId, "unknown", nowIso);
+              } else if (action.expired || refused) {
+                if (!refused) yield* store.settle(action.actionId, "unknown", nowIso);
+                const why = refused ? "first message was refused" : "launch was never confirmed";
                 // A dropped slot just ends; a wanted one moves to its next attempt.
                 const dropped = worker.slot >= desiredSlots(goal).length;
                 const next = dropped
                   ? { ...worker, state: "superseded" as const }
-                  : nextAttempt(goal, worker, "Launch was never confirmed.");
+                  : nextAttempt(goal, worker, "The " + why + ".");
                 workers.set(worker.slot, next);
                 note(
                   "Warning",
                   "LaunchUnknown",
                   "Slot " +
                     worker.slot +
-                    " launch was never confirmed" +
+                    " " +
+                    why +
                     (dropped ? "." : "; moving to attempt " + next.attempt + "."),
                   worker,
                   action.actionId,
@@ -417,7 +444,7 @@ const make = Effect.gen(function* () {
                 owner,
                 modelSelection: worker.modelSelection,
                 fallbackChain: goal.spec.workers.fallbackChain,
-                hostSelector: goal.spec.workers.hostSelector,
+                hostSelector: launchSelector(goal),
                 project: goal.spec.project,
                 avoidHosts: [],
               });
@@ -433,14 +460,21 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
-              if (placed.host !== null) {
-                // Remote goal workers are off until remote authority is carried end to end.
+              // A later attempt here starts from the work the one before it left, once that
+              // stopped. Replicas and branches live on this machine, so another host starts fresh.
+              const resume =
+                placed.host === null
+                  ? yield* recovery.resume(goal, worker.slot, worker.attempt)
+                  : ({ _tag: "Start", workspace: null, note: null } as const);
+              if (resume._tag !== "Start") {
                 failed = true;
-                issues.push({
-                  condition: "Blocked",
-                  reason: "RemoteWorkersDisabled",
-                  message: placed.host + ": " + REMOTE_WORKERS_DISABLED,
-                });
+                if (resume._tag === "Refused")
+                  issues.push({
+                    condition: "Blocked",
+                    reason: "ResumeRefused",
+                    message: resume.message,
+                  });
+                workers.set(worker.slot, { ...worker, note: resume.message });
                 return;
               }
               const work = yield* hubGate(placed.host, placed.modelSelection);
@@ -448,21 +482,28 @@ const make = Effect.gen(function* () {
               if ((yield* claim(action.actionId, "launch", worker, placed.host)) !== null) return;
               // The owner's authority as it is now, after placement and the claim, is what the
               // launch runs with.
-              const current = yield* authorityAfterClaim(action.actionId);
+              const current = yield* authority.afterClaim(action.actionId, "launch");
               if (current === null) return;
               startedAt ??= nowIso;
               const branch = branchFor(goal, worker.slot, worker.attempt);
               const launched = yield* runtime
-                .launch(current, {
-                  goal,
-                  slot: worker.slot,
-                  actionId: action.actionId,
-                  host: placed.host,
-                  title: workerTitle(goal.title, worker.slot, worker.attempt),
-                  message: renderPrompt(goal, worker, branch),
-                  branch,
-                  modelSelection: work._tag === "Hop" ? work.selection : placed.modelSelection,
-                })
+                .launch(
+                  current,
+                  {
+                    goal,
+                    slot: worker.slot,
+                    actionId: action.actionId,
+                    host: placed.host,
+                    title: workerTitle(goal.title, worker.slot, worker.attempt),
+                    message:
+                      renderPrompt(goal, worker, branch) +
+                      (resume.note === null ? "" : "\n\n" + resume.note),
+                    branch,
+                    modelSelection: work._tag === "Hop" ? work.selection : placed.modelSelection,
+                    ...(resume.workspace === null ? {} : { workspace: resume.workspace }),
+                  },
+                  authority.confirm("launch", authority.planned(current)),
+                )
                 .pipe(Effect.result);
               if (launched._tag === "Success") {
                 // Recorded on the claim, outside the status write, so a spec change that drops
@@ -503,10 +544,18 @@ const make = Effect.gen(function* () {
                 return;
               }
               failed = true;
-              // The thread may exist even though the call failed after creating it.
-              const created = yield* runtime
-                .findLaunched(current, goal, action.actionId, placed.host)
-                .pipe(Effect.result);
+              // A refusal is recorded before the lookup that may fail (see OWNER_REFUSED).
+              if (isLost(launched.failure))
+                yield* store.settle(action.actionId, OWNER_REFUSED, nowIso);
+              // The thread may exist even though the call failed after creating it. Another host is
+              // never searched then: only a launch flagged as possibly started stays unclear there.
+              const failure = launched.failure;
+              const created = yield* Effect.gen(function* () {
+                if (placed.host === null)
+                  return yield* runtime.findLaunched(current, goal, action.actionId, placed.host);
+                if (isUnconfirmed(failure)) return yield* failure;
+                return null;
+              }).pipe(Effect.result);
               if (created._tag === "Failure") {
                 // Unclear: the claim stays open and the next pass resolves it.
                 workers.set(worker.slot, {
@@ -522,6 +571,21 @@ const make = Effect.gen(function* () {
                   worker,
                   action.actionId,
                 );
+                return;
+              }
+              const lost = isLost(launched.failure) ? launched.failure : null;
+              if (lost !== null && created.success === null) {
+                yield* authority.lost(action.actionId, lost);
+                return;
+              }
+              if (lost !== null) {
+                // Created, but its first message was refused: the next pass moves the slot on.
+                if (!lost.goalChanged)
+                  issues.push({
+                    condition: "Blocked",
+                    reason: "OwnerAuthorityLost",
+                    message: lost.message,
+                  });
                 return;
               }
               if (created.success !== null) {
@@ -560,8 +624,11 @@ const make = Effect.gen(function* () {
             case "followup": {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
-              if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
-              const current = yield* authorityAfterClaim(action.actionId);
+              const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken === "consumed")
+                return void workers.set(worker.slot, followedUp(worker, action.runId));
+              if (taken !== null) return;
+              const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;
               const sent = yield* runtime
                 .followUp(
@@ -570,9 +637,12 @@ const make = Effect.gen(function* () {
                   worker,
                   action.message,
                   action.actionId,
+                  authority.confirm("followup", authority.planned(current)),
                   work._tag === "Hop" ? work.selection : undefined,
                 )
                 .pipe(Effect.result);
+              if (sent._tag === "Failure" && isLost(sent.failure))
+                return yield* authority.lost(action.actionId, sent.failure);
               yield* store.settle(
                 action.actionId,
                 sent._tag === "Success" ? "sent" : "failed",
@@ -591,12 +661,7 @@ const make = Effect.gen(function* () {
               }
               if (work._tag === "Hop")
                 yield* hubDown.notice(worker.threadId!, action.actionId, work.notice);
-              workers.set(worker.slot, {
-                ...worker,
-                followUps: worker.followUps + 1,
-                followedUpRunId: action.runId,
-                steeredRunId: worker.state === "stalled" ? action.runId : worker.steeredRunId,
-              });
+              workers.set(worker.slot, followedUp(worker, action.runId));
               note(
                 "Normal",
                 "FollowUpSent",
@@ -609,8 +674,11 @@ const make = Effect.gen(function* () {
             case "resume": {
               const work = yield* hubGate(worker.host, worker.modelSelection);
               if (work._tag === "Paused") return;
-              if ((yield* claim(action.actionId, "followup", worker, worker.host)) !== null) return;
-              const current = yield* authorityAfterClaim(action.actionId);
+              const taken = yield* claim(action.actionId, "followup", worker, worker.host);
+              if (taken === "consumed")
+                return void workers.set(worker.slot, { ...worker, resumedRunId: action.runId });
+              if (taken !== null) return;
+              const current = yield* authority.afterClaim(action.actionId, "followup");
               if (current === null) return;
               const sent = yield* runtime
                 .followUp(
@@ -619,9 +687,12 @@ const make = Effect.gen(function* () {
                   worker,
                   "Your usage limit has reset. Continue where you left off.",
                   action.actionId,
+                  authority.confirm("followup", authority.planned(current)),
                   work._tag === "Hop" ? work.selection : undefined,
                 )
                 .pipe(Effect.result);
+              if (sent._tag === "Failure" && isLost(sent.failure))
+                return yield* authority.lost(action.actionId, sent.failure);
               yield* store.settle(
                 action.actionId,
                 sent._tag === "Success" ? "sent" : "failed",
@@ -654,6 +725,7 @@ const make = Effect.gen(function* () {
               const handled = {
                 ...worker,
                 followedUpRunId: action.runId ?? worker.followedUpRunId,
+                recoveredRunId: action.runId ?? worker.recoveredRunId,
               };
               // A run that failed while the hub was down spends no fallback hop or attempt.
               const work = yield* hubGate(worker.host, worker.modelSelection);
@@ -671,7 +743,7 @@ const make = Effect.gen(function* () {
                   action.runId +
                   ":hub-hop";
                 if ((yield* claim(id, "fallback", worker, worker.host)) !== null) return;
-                const current = yield* authorityAfterClaim(id);
+                const current = yield* authority.afterClaim(id, "fallback");
                 if (current === null) return;
                 const sent = yield* runtime
                   .followUp(
@@ -680,9 +752,12 @@ const make = Effect.gen(function* () {
                     worker,
                     "Continue where you left off.",
                     id,
+                    authority.confirm("fallback", authority.planned(current)),
                     work.selection,
                   )
                   .pipe(Effect.result);
+                if (sent._tag === "Failure" && isLost(sent.failure))
+                  return yield* authority.lost(id, sent.failure);
                 yield* store.settle(id, sent._tag === "Success" ? "switched" : "failed", nowIso);
                 if (sent._tag === "Failure") {
                   failed = true;
@@ -699,7 +774,7 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              const step = yield* fallback.next({
+              const offered = yield* fallback.next({
                 chain: goal.spec.workers.fallbackChain,
                 selection: worker.modelSelection,
                 failure: action.failureClass,
@@ -707,6 +782,11 @@ const make = Effect.gen(function* () {
                 host: worker.host,
                 threadId: worker.threadId,
               });
+              // goat_thread_send cannot switch a remote thread's model, so the worker moves instead.
+              const step =
+                offered._tag === "SwitchInThread" && worker.host !== null
+                  ? ({ _tag: "Relaunch", selection: offered.selection, hop: offered.hop } as const)
+                  : offered;
               if (step._tag === "SwitchInThread" && action.runId !== null) {
                 const id = fallbackActionId(
                   goal,
@@ -716,7 +796,7 @@ const make = Effect.gen(function* () {
                   step.hop,
                 );
                 if ((yield* claim(id, "fallback", worker, worker.host)) !== null) return;
-                const current = yield* authorityAfterClaim(id);
+                const current = yield* authority.afterClaim(id, "fallback");
                 if (current === null) return;
                 const sent = yield* runtime
                   .followUp(
@@ -725,9 +805,12 @@ const make = Effect.gen(function* () {
                     worker,
                     "Continue where you left off.",
                     id,
+                    authority.confirm("fallback", authority.planned(current)),
                     step.selection,
                   )
                   .pipe(Effect.result);
+                if (sent._tag === "Failure" && isLost(sent.failure))
+                  return yield* authority.lost(id, sent.failure);
                 yield* store.settle(id, sent._tag === "Success" ? "switched" : "failed", nowIso);
                 if (sent._tag === "Success") {
                   workers.set(worker.slot, {
@@ -764,88 +847,53 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
-              const nextId = launchActionId(goal, worker.slot, worker.attempt + 1);
               const selection = step._tag === "Relaunch" ? step.selection : worker.modelSelection;
-              // One reschedule per run: the claim names the run; the next attempt's launch id is the
-              // receiver's dedupe key.
-              const rescheduleId =
-                "goal:" +
-                goal.id +
-                ":s" +
-                worker.slot +
-                ":a" +
-                worker.attempt +
-                ":" +
-                (action.runId ?? action.reason) +
-                ":reschedule";
-              if ((yield* claim(rescheduleId, "launch", worker, worker.host)) !== null) return;
-              const rescheduleAuthority = yield* authorityAfterClaim(rescheduleId);
-              if (rescheduleAuthority === null) return;
-              const branch = branchFor(goal, worker.slot, worker.attempt + 1);
-              const moved = yield* rescheduler.reschedule({
-                ref: { host: worker.host, threadId: worker.threadId, watchId: worker.watchId },
-                owner,
-                attempt: worker.attempt,
-                reason: step._tag === "Relaunch" ? "fallback_relaunch" : action.reason,
-                modelSelection: selection,
-                workspace: {
-                  baseRef: goal.spec.workers.workspace.baseRef,
-                  branch,
-                  startFromOrigin: goal.spec.workers.workspace.startFromOrigin,
-                },
-                previousBranch: worker.branch,
-                replica: null,
-                prompt: renderPrompt(goal, { ...worker, attempt: worker.attempt + 1 }, branch),
-                runtimeMode: effectiveRuntimeMode(rescheduleAuthority, goal),
-                clientRequestId: nextId,
-              });
-              if (moved._tag === "Rescheduled") {
-                yield* store.settle(rescheduleId, "rescheduled", nowIso);
+              if (worker.host === null) {
+                // Attempts on this machine restart here: the next attempt's launch resumes from this
+                // one's work once it stops, and its launch record makes this one an orphan to stop.
                 workers.set(worker.slot, {
-                  ...nextAttempt(goal, worker, "Rescheduled after " + action.reason + "."),
-                  host: moved.host,
-                  threadId: moved.threadId,
-                  branch: moved.branch,
+                  ...nextAttempt(
+                    goal,
+                    worker,
+                    "Restarts on this machine after " + action.reason + ".",
+                  ),
                   modelSelection: selection,
-                  state: "running",
                 });
                 note(
                   "Normal",
                   "Rescheduled",
-                  "Slot " +
-                    worker.slot +
-                    " moved to attempt " +
-                    (worker.attempt + 1) +
-                    " on " +
-                    (moved.host ?? "this machine") +
-                    ".",
+                  "Slot " + worker.slot + " restarts as attempt " + (worker.attempt + 1) + " here.",
                   worker,
-                  rescheduleId,
+                  null,
                 );
                 return;
               }
-              yield* store.settle(rescheduleId, "refused", nowIso);
-              workers.set(worker.slot, { ...handled, note: moved.message });
-              issues.push({
-                condition: "Degraded",
-                reason: "RescheduleRefused",
-                message: "Slot " + worker.slot + ": " + moved.message,
-              });
-              note(
-                "Warning",
-                "RescheduleRefused",
-                "Slot " + worker.slot + " (" + action.reason + "): " + moved.message,
+              return yield* moves.move({
                 worker,
-                rescheduleId,
-              );
-              return;
+                handled,
+                reason: step._tag === "Relaunch" ? "fallback_relaunch" : action.reason,
+                runId: action.runId,
+                selection,
+              });
             }
+            case "resolve_move":
+              return yield* moves.resolve(worker, action, access);
             case "interrupt": {
               if ((yield* claim(action.actionId, "interrupt", worker, worker.host)) !== null)
                 return;
+              // Stopping work is an action too: it runs with the owner's authority after the claim.
+              const current = yield* authority.afterClaim(action.actionId, "interrupt");
+              if (current === null) return;
               const stopped = yield* runtime
-                .interrupt(access, worker, action.actionId)
+                .interrupt(
+                  current,
+                  worker,
+                  action.actionId,
+                  authority.confirm("interrupt", current.runtimeMode),
+                )
                 .pipe(Effect.result);
+              if (stopped._tag === "Failure" && isLost(stopped.failure))
+                return yield* authority.lost(action.actionId, stopped.failure);
               yield* store.settle(
                 action.actionId,
                 stopped._tag === "Success" ? "interrupted" : "failed",
@@ -878,6 +926,7 @@ const make = Effect.gen(function* () {
       // A finished goal keeps its passes while it still has slots to stop or launches to resolve.
       const cleanup =
         plan.truncated ||
+        plan.actions.some((action) => action.type === "resolve_move") ||
         [...workers.values()].some(
           (worker) =>
             worker.slot >= desiredSlots(goal).length &&

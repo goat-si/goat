@@ -1,20 +1,19 @@
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as ErrorReporter from "effect/ErrorReporter";
 
+import { logErrorRedacted, redactedDefects } from "./LogRedaction.ts";
+
 /**
  * RpcServer reports every failed handler exit; typed failures are expected responses, so only
- * dies are logged.
+ * dies are logged. Effect's McpServer reports a dying tool handler here too. Each defect is logged
+ * redacted, without its fields, and with the reporting fiber's log annotations and spans redacted,
+ * whichever logger receives it; the reported cause is read without running its code (#1388).
  */
 const reporter: ErrorReporter.ErrorReporter = {
   [ErrorReporter.TypeId]: ErrorReporter.TypeId,
   report: ({ cause, fiber }) => {
-    for (const reason of cause.reasons) {
-      if (reason._tag !== "Die" || ErrorReporter.isIgnored(reason.defect)) continue;
-      Effect.runForkWith(fiber.context)(
-        Effect.logError("Unhandled defect", Cause.fromReasons([reason])),
-      );
-    }
+    for (const defect of redactedDefects(cause))
+      Effect.runForkWith(fiber.context)(logErrorRedacted("Unhandled defect", defect));
   },
 };
 

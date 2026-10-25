@@ -31,6 +31,7 @@ const reactTests = [
   "src/features/notes/NoteLinkedThread.test.tsx",
   "src/features/notes/NoteRouteScreen.test.tsx",
   "src/features/notes/NoteStartWorkRouteScreen.test.tsx",
+  "src/features/settings/ProjectActionsSettings.test.tsx",
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",

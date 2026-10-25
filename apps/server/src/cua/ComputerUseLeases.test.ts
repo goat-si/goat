@@ -1,93 +1,33 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  COMPUTER_USE_GRANT_HANDOFF_PATH,
-  type DesktopCuaReadinessReport,
-  type DesktopCuaSafetyReport,
-  EnvironmentId,
-  Handoff,
-  ProviderInstanceId,
-  ThreadId,
-  TurnItemId,
-} from "@goat/contracts";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
-import * as DateTime from "effect/DateTime";
+import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
-import * as Ref from "effect/Ref";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import {
+  database,
+  thread,
+  other,
+  appsThread,
+  turnThread,
+  offThread,
+  run,
+  grant,
+} from "./ComputerUseLeases.projection.testkit.ts";
 
-const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const layer = it.layer(
   Layer.merge(
     database,
     ComputerUseLeases.layer.pipe(Layer.provide(Layer.merge(database, NodeServices.layer))),
   ),
 );
-
-const encodeHandoff = Schema.encodeSync(Schema.fromJsonString(Schema.toCodecJson(Handoff)));
-// The layer is shared across tests, so each test keeps to its own threads.
-const thread = ThreadId.make("thread-person");
-const other = ThreadId.make("thread-bot");
-const appsThread = ThreadId.make("thread-apps");
-const turnThread = ThreadId.make("thread-turn");
-const offThread = ThreadId.make("thread-off");
-
-/** A run of `threadId` in the projection, at `status`. */
-const run = (threadId: ThreadId, id: string, ordinal: number, status: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      INSERT INTO orchestration_v2_projection_runs
-        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
-      VALUES (${id}, ${threadId}, ${ordinal}, 'codex', ${status}, '2026-01-01', '{}')
-    `;
-  });
-
-/** An approved grant for `threadId`, live for an hour. */
-const grant = (threadId: ThreadId, id: string, apps?: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const now = yield* DateTime.now;
-    const handoff: Handoff = {
-      handoffId: TurnItemId.make(id),
-      kind: "approval",
-      title: "Allow computer use?",
-      reason: "test",
-      requestedBy: {
-        threadId,
-        providerInstanceId: ProviderInstanceId.make("codex"),
-        path: COMPUTER_USE_GRANT_HANDOFF_PATH,
-      },
-      target: { environmentId: EnvironmentId.make("env"), path: COMPUTER_USE_GRANT_HANDOFF_PATH },
-      dedupeKey: id,
-      state: "completed",
-      expiresAt: DateTime.add(now, { hours: 1 }),
-      createdAt: now,
-      actor: { type: "server" },
-      ...(apps === undefined ? {} : { apps }),
-    };
-    yield* sql`
-      INSERT INTO orchestration_v2_projection_turn_items
-        (turn_item_id, thread_id, run_id, ordinal, type, status, updated_at, payload_json)
-      VALUES (${id}, ${threadId}, 'run', 0, 'human_handoff', 'completed', '2026-01-01',
-        ${'{"handoff":' + encodeHandoff(handoff) + "}"})
-    `;
-    return handoff;
-  });
-
 layer("ComputerUseLeases controls", (it) => {
   it.effect("tells session lists about a control minted for a thread that had none", () =>
     Effect.scoped(
@@ -107,6 +47,50 @@ layer("ComputerUseLeases controls", (it) => {
         assert.equal(yield* PubSub.remaining(signals), 0);
       }),
     ),
+  );
+
+  it.effect(
+    "a turn's control counts as acting once its agent's call reaches it, until the turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const owner = ThreadId.make("thread-acted");
+          yield* Effect.addFinalizer(() => leases.stop(owner));
+          const control = yield* leases.control(owner, Option.none());
+          const acted = () =>
+            leases.sessions.pipe(
+              Effect.map(
+                (all) =>
+                  all.find((entry) => entry.control.controlId === control.controlId)?.control,
+              ),
+              Effect.map((listed) => listed?.acted === true),
+            );
+          assert.isFalse(yield* acted());
+          const signals = yield* leases.subscribe;
+          // Refused or admitted, the call means this agent wants the screen.
+          yield* leases.callReservation(owner, {
+            action: "reserve",
+            controlId: control.controlId,
+            connectionId: "driver:acted",
+            callId: "list",
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "list_apps",
+            args: {},
+          });
+          assert.isTrue(yield* acted());
+          assert.isAbove(yield* PubSub.remaining(signals), 0);
+          yield* run(owner, "run-acted-1", 1, "completed");
+          assert.isTrue(yield* leases.turnEnded(owner));
+          // Idle keeps the mark, so a card a person stops between turns still shows as stopped.
+          assert.isTrue(yield* acted());
+          // The next turn reuses the control, and has not asked for the screen yet.
+          yield* leases.control(owner, Option.none());
+          assert.isFalse(yield* acted());
+        }),
+      ),
   );
 
   it.effect(
@@ -133,8 +117,8 @@ layer("ComputerUseLeases controls", (it) => {
         assert.isTrue((yield* listed())?.control.idle);
         // Its proxy keeps the control, so the next turn needs no respawn.
         assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
-        // A person typing between turns pauses nothing.
-        yield* leases.pause("human_input");
+        // An idle control has no agent input to pause; it remains active for the next turn.
+        yield* leases.pause("takeover");
         assert.equal((yield* leases.controlState(turnThread, first.controlId))._tag, "active");
 
         const next = yield* leases.control(turnThread, Option.none());
@@ -280,26 +264,26 @@ layer("ComputerUseLeases controls", (it) => {
   );
 
   it.effect(
-    "pauses agents for a person's input only while one holds the screen, and the kill switch ends them all",
+    "an explicit takeover pause holds the screen, and the kill switch ends every agent",
     () =>
       Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         yield* leases.stopAll;
-        // Someone typing with no agent on the screen pauses nothing to come.
-        yield* leases.pause("human_input");
+        // A takeover with no agent on the screen pauses nothing to come.
+        yield* leases.pause("takeover");
         const mine = yield* leases.control(thread, Option.none());
         assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
 
         const bots = yield* leases.control(other, Option.none());
-        yield* leases.pause("human_input");
+        yield* leases.pause("takeover");
         for (const [id, control] of [
           [thread, mine],
           [other, bots],
         ] as const)
           assert.deepEqual(yield* leases.controlState(id, control.controlId), {
             _tag: "paused",
-            reason: "human_input",
+            reason: "takeover",
           });
         yield* leases.resume;
         assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
@@ -313,85 +297,6 @@ layer("ComputerUseLeases controls", (it) => {
         // With nobody left on the screen the pause is gone too.
         const after = yield* leases.control(thread, Option.none());
         assert.equal((yield* leases.controlState(thread, after.controlId))._tag, "active");
-      }),
-  );
-
-  it.effect(
-    "another agent's own input seen by a helper pauses nobody, a person's after it does",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        const call = (state: "start" | "end", at: number) =>
-          leases.agentInput(other, bots.controlId, { call: "7", state, at });
-        // Only a live control's own proxy records its calls.
-        assert.isFalse(
-          yield* leases.agentInput(thread, bots.controlId, { call: "7", state: "start", at: 0 }),
-        );
-        assert.isTrue(yield* call("start", 1_000));
-        // A report dated far from the server's clock is refused and records nothing.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 10 * 60_000), "refused");
-        assert.isFalse(
-          yield* leases.agentInput(other, bots.controlId, {
-            call: "8",
-            state: "start",
-            at: 10 * 60_000,
-          }),
-        );
-        // The bot's click, seen by my helper while it runs and just after it answered.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_100), "agents");
-        yield* call("end", 1_200);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 1_600), "agents");
-        assert.equal((yield* leases.controlState(thread, mine.controlId))._tag, "active");
-        // A person, a moment later.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 2_000), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-        yield* leases.resume;
-        // A call left open by a control that has ended covers nothing.
-        yield* call("start", 5_000);
-        yield* leases.stop(other);
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 5_100), "paused");
-        assert.deepEqual(yield* leases.controlState(thread, mine.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-      }),
-  );
-
-  it.effect(
-    "a proxy's report of a person's input pauses every agent, from its live control only",
-    () =>
-      Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
-        // An old proxy, or another thread's control id, pauses nobody.
-        assert.equal(yield* leases.humanInput(thread, "control:old", 0), "refused");
-        assert.equal(yield* leases.humanInput(thread, bots.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
-
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "paused");
-        for (const [id, control] of [
-          [thread, mine],
-          [other, bots],
-        ] as const)
-          assert.deepEqual(yield* leases.controlState(id, control.controlId), {
-            _tag: "paused",
-            reason: "human_input",
-          });
-        yield* leases.resume;
-        yield* leases.stop(thread);
-        // An ended control's proxy can no longer pause the agents left.
-        assert.equal(yield* leases.humanInput(thread, mine.controlId, 0), "refused");
-        assert.equal((yield* leases.controlState(other, bots.controlId))._tag, "active");
       }),
   );
 });
@@ -429,6 +334,94 @@ it.effect(
                 NodeServices.layer,
                 DesktopTelemetryReceiver.layerTest({
                   setCuaWatch: (active) => Queue.offer(sent, active).pipe(Effect.asVoid),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect("sends the union of named approvals, updating apps while controls stay active", () =>
+  Effect.gen(function* () {
+    const sent = yield* Queue.unbounded<{
+      active: boolean;
+      apps: ReadonlyArray<string> | undefined;
+    }>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // A whole-screen approval contributes nothing to the named union.
+      yield* grant(other, "handoff:screen");
+      yield* leases.control(other, yield* leases.active(other));
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.control(thread, Option.none());
+      yield* grant(thread, "handoff:first", ["com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+      yield* grant(thread, "handoff:second", ["com.example.new", "com.example.notes"]);
+      yield* leases.changed;
+      assert.deepEqual(yield* Queue.take(sent), {
+        active: true,
+        apps: ["com.example.new", "com.example.notes"],
+      });
+      yield* leases.stop(thread);
+      assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+      yield* leases.stop(other);
+      assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                setCuaWatch: (active, apps) =>
+                  Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "removes expired approved apps while the interactive control keeps watching through a pause",
+  () =>
+    Effect.gen(function* () {
+      const sent = yield* Queue.unbounded<{
+        active: boolean;
+        apps: ReadonlyArray<string> | undefined;
+      }>();
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        yield* grant(thread, "handoff:earlier", ["com.example.notes"]);
+        yield* TestClock.adjust("30 minutes");
+        const control = yield* leases.control(thread, Option.none());
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: ["com.example.notes"] });
+        yield* leases.pause("takeover");
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "paused");
+        yield* TestClock.adjust("31 minutes");
+        assert.deepEqual(yield* Queue.take(sent), { active: true, apps: [] });
+        yield* leases.resume;
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* leases.stop(thread);
+        assert.deepEqual(yield* Queue.take(sent), { active: false, apps: [] });
+      }).pipe(
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  setCuaWatch: (active, apps) =>
+                    Queue.offer(sent, { active, apps }).pipe(Effect.asVoid),
                 }),
               ),
             ),
@@ -566,289 +559,4 @@ it.effect("stops watching when the grant behind the last control is cancelled", 
       ),
     );
   }),
-);
-
-it.effect(
-  "follows the helper's reports: what it detects, and a secret field that pauses every agent until it loses focus",
-  () =>
-    Effect.gen(function* () {
-      const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
-      // What the receiver accepted; it stores a report before publishing it.
-      const accepted = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
-      const readiness = (
-        signals: DesktopCuaReadinessReport["signals"],
-      ): DesktopCuaReadinessReport => ({
-        version: 1,
-        type: "cuaReadiness",
-        generation: 1,
-        readiness: {
-          grants: { accessibility: "granted", screenCapture: "granted" },
-          helper: "authenticated",
-          capture: "ready",
-          tree: "ready",
-          input: "background",
-          blockers: [],
-          reasons: [],
-        },
-        signals,
-      });
-      yield* Effect.gen(function* () {
-        yield* runMigrations();
-        const leases = yield* ComputerUseLeases.ComputerUseLeases;
-        const signals = yield* leases.subscribe;
-        // Nothing reported yet: a host that never says it detects anything detects nothing.
-        assert.deepEqual(yield* leases.detection, {
-          humanInput: false,
-          privateMode: false,
-          frames: false,
-        });
-        const supported = readiness({ humanInput: "supported", privateMode: "supported" });
-        yield* Ref.set(accepted, Option.some(supported));
-        yield* Queue.offer(reports, supported);
-        yield* PubSub.take(signals);
-        assert.deepEqual(yield* leases.detection, {
-          humanInput: true,
-          privateMode: true,
-          frames: false,
-        });
-        // A downgrade counts as soon as the receiver accepts it, before the report is consumed.
-        yield* Ref.set(
-          accepted,
-          Option.some(readiness({ humanInput: "supported", privateMode: "unsupported" })),
-        );
-        assert.deepEqual(yield* leases.detection, {
-          humanInput: true,
-          privateMode: false,
-          frames: false,
-        });
-        yield* Ref.set(accepted, Option.some(supported));
-        // Frames count only when the helper itself says it sends them (#1370).
-        yield* Ref.set(accepted, Option.some({ ...supported, frames: true }));
-        assert.isTrue((yield* leases.detection).frames);
-        yield* Ref.set(accepted, Option.some(supported));
-
-        const control = yield* leases.control(thread, Option.none());
-        // The new control is announced to session lists first.
-        yield* PubSub.take(signals);
-        yield* Queue.offer(reports, {
-          version: 1,
-          type: "cuaPrivateMode",
-          active: true,
-          target: { pid: 7, windowId: 3 },
-        });
-        yield* PubSub.take(signals);
-        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
-          _tag: "paused",
-          reason: "private",
-        });
-        yield* Queue.offer(reports, {
-          version: 1,
-          type: "cuaPrivateMode",
-          active: false,
-          target: { pid: 7, windowId: 3 },
-        });
-        yield* PubSub.take(signals);
-        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
-        // A secret that comes and goes before anyone reads the control still counts as a pause.
-        const before = yield* leases.controlState(thread, control.controlId);
-        for (const active of [true, false])
-          yield* Queue.offer(reports, {
-            version: 1,
-            type: "cuaPrivateMode",
-            active,
-            target: { pid: 7, windowId: 3 },
-          });
-        yield* PubSub.take(signals);
-        yield* PubSub.take(signals);
-        const after = yield* leases.controlState(thread, control.controlId);
-        assert.equal(
-          after._tag === "active" && before._tag === "active"
-            ? after.interruptions.count - before.interruptions.count
-            : -1,
-          1,
-        );
-        assert.deepInclude(after, { interruptions: { count: 2, last: "private" } });
-        // A person's input the helper cannot attribute to a device still pauses the agents.
-        yield* Queue.offer(reports, { version: 1, type: "cuaHumanInput", source: "unknown" });
-        yield* PubSub.take(signals);
-        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
-          _tag: "paused",
-          reason: "human_input",
-        });
-        // Only the thread's live control records a window; a replaced proxy's report changes nothing.
-        assert.isFalse(yield* leases.setTarget(thread, "control:old", { pid: 9, windowId: 9 }));
-        assert.isTrue(yield* leases.setTarget(thread, control.controlId, { pid: 7, windowId: 3 }));
-        const recorded = (yield* leases.sessions).find(
-          (entry) => entry.control.controlId === control.controlId,
-        );
-        assert.deepEqual(recorded?.control.target, { pid: 7, windowId: 3 });
-      }).pipe(
-        Effect.provide(
-          ComputerUseLeases.layer.pipe(
-            Layer.provideMerge(
-              Layer.mergeAll(
-                database,
-                NodeServices.layer,
-                DesktopTelemetryReceiver.layerTest({
-                  cuaSafety: Stream.fromQueue(reports),
-                  cuaReadiness: Ref.get(accepted),
-                }),
-              ),
-            ),
-          ),
-        ),
-      );
-    }),
-);
-
-/** `threadId` in the projection, in `runtimeMode`. */
-const threadIn = (threadId: ThreadId, runtimeMode: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      INSERT INTO orchestration_v2_projection_threads
-        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
-         created_at, updated_at, payload_json)
-      VALUES (${threadId}, 'project', 'thread', 'codex', ${runtimeMode}, 'default',
-        '2026-01-01', '2026-01-01', '{}')
-      ON CONFLICT (thread_id) DO UPDATE SET runtime_mode = excluded.runtime_mode
-    `;
-  });
-
-const everyAppLayer = ComputerUseLeases.layer.pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(
-      database,
-      NodeServices.layer,
-      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
-    ),
-  ),
-);
-
-it.effect(
-  "gives a full access thread every app until it leaves full access or the host stops allowing it",
-  () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const settings = yield* ServerSettings.ServerSettingsService;
-      const auto = ThreadId.make("thread-auto");
-      yield* threadIn(auto, "full-access");
-      const claim = () =>
-        leases
-          .everyAppControl(auto, false)
-          .pipe(Effect.map((control) => Option.getOrThrow(control)));
-      const first = yield* claim();
-      const state = yield* leases.controlState(auto, first.controlId);
-      assert.equal(state._tag, "active");
-      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // A turn outside full access gets a control of its own, limited to its grants.
-      const scoped = yield* leases.control(auto, Option.none());
-      assert.notEqual(scoped.controlId, first.controlId);
-
-      // Leaving full access ends it, with the provider session and its proxy still alive.
-      const second = yield* claim();
-      yield* threadIn(auto, "auto");
-      assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-
-      yield* threadIn(auto, "full-access");
-      const third = yield* claim();
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      assert.deepEqual(yield* leases.controlState(auto, third.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
-    }).pipe(Effect.provide(everyAppLayer)),
-);
-
-it.effect("lists a full access thread's session as soon as it is admitted", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const signals = yield* leases.subscribe;
-      const admitted = ThreadId.make("thread-full-access-listed");
-      yield* threadIn(admitted, "full-access");
-      yield* Effect.addFinalizer(() => leases.stop(admitted));
-      assert.isTrue(Option.isSome(yield* leases.everyAppControl(admitted, false)));
-      // Full access admits without a grant; its session still appears in the list at once.
-      assert.isAbove(yield* PubSub.remaining(signals), 0);
-    }),
-  ).pipe(Effect.provide(everyAppLayer)),
-);
-
-it.effect("lets one unattended thread at a time hold the screen without a grant", () =>
-  Effect.gen(function* () {
-    yield* runMigrations();
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    const first = ThreadId.make("thread-scheduled-1");
-    const second = ThreadId.make("thread-scheduled-2");
-    const person = ThreadId.make("thread-directed");
-    for (const id of [first, second, person]) yield* threadIn(id, "full-access");
-
-    const held = yield* leases.everyAppControl(first, true);
-    assert.isTrue(Option.isSome(held));
-    assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
-    // Requests and approvals see it as the holder, as they see a grant.
-    assert.equal(Option.getOrThrow(yield* leases.holder(second)).threadId, first);
-    assert.isTrue(Option.isNone(yield* leases.holder(first)));
-    // A person directing a thread can still use the screen meanwhile.
-    assert.isTrue(Option.isSome(yield* leases.everyAppControl(person, false)));
-
-    // Once the first one stops, the next can have it; a grant held elsewhere still keeps it out.
-    yield* leases.stop(first);
-    yield* grant(person, "handoff:person-screen");
-    assert.isTrue(Option.isNone(yield* leases.everyAppControl(second, true)));
-    yield* leases.stopAll;
-  }).pipe(Effect.provide(everyAppLayer)),
-);
-
-it.effect(
-  "ends unattended full access work when a person approved another thread's grant meanwhile",
-  () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const scheduled = ThreadId.make("thread-scheduled-race");
-      const approved = ThreadId.make("thread-approved-race");
-      yield* threadIn(scheduled, "full-access");
-      // The approval checked holder() before the claim, so it commits after the claim succeeds.
-      const claimed = Option.getOrThrow(yield* leases.everyAppControl(scheduled, true));
-      yield* grant(approved, "handoff:approved-race");
-      assert.deepEqual(yield* leases.controlState(scheduled, claimed.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      yield* leases.stopAll;
-    }).pipe(Effect.provide(everyAppLayer)),
-);
-
-it.effect(
-  "waits for a grant approval in progress before claiming the screen for unattended work",
-  () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const scheduled = ThreadId.make("thread-scheduled-serial");
-      const approved = ThreadId.make("thread-approved-serial");
-      yield* threadIn(scheduled, "full-access");
-      const claiming = yield* leases.serializeAdmission(
-        Effect.gen(function* () {
-          // The approval found no holder and has not committed yet.
-          assert.isTrue(Option.isNone(yield* leases.holder(approved)));
-          const claim = yield* leases
-            .everyAppControl(scheduled, true)
-            .pipe(Effect.forkChild({ startImmediately: true }));
-          assert.isUndefined(claim.pollUnsafe());
-          yield* grant(approved, "handoff:approved-serial");
-          return claim;
-        }),
-      );
-      assert.isTrue(Option.isNone(yield* Fiber.join(claiming)));
-      yield* leases.stopAll;
-    }).pipe(Effect.provide(everyAppLayer)),
 );

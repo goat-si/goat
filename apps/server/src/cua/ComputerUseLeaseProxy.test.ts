@@ -6,8 +6,18 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { LEASE_END_MESSAGES, leaseUpdateLines, PAUSE_MESSAGES } from "./ComputerUseLeaseProxy.ts";
-import { active, call, CONTROL, harness, refusedCall } from "./ComputerUseLeaseProxy.testkit.ts";
+import { leaseUpdateLines } from "./ComputerUseLeaseProxy.ts";
+import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import {
+  active,
+  call,
+  CONTROL,
+  foregroundActive,
+  harness,
+  refusedCall,
+  cutOffCall,
+  type ToolAnswer,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy", () => {
   it.effect(
@@ -79,7 +89,7 @@ describe("ComputerUseLeaseProxy", () => {
   );
 
   it.effect(
-    "refuses a call whose reply was still being drawn when Stop came, and drops the reply",
+    "answers a call whose reply was still being drawn when Stop came as cut off, and drops the reply",
     () =>
       Effect.gen(function* () {
         const gate = yield* Deferred.make<void>();
@@ -106,13 +116,13 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.killed;
         yield* Deferred.succeed(gate, undefined);
         const answer = yield* h.nextToProvider;
-        assert.deepEqual(answer, refusedCall(6, "stopped"));
+        assert.deepEqual(answer, cutOffCall(6, "stopped"));
         assert.notInclude(JSON.stringify(answer), "clicked");
       }),
   );
 
   it.effect(
-    "drops a reply drawn while a pause is still hiding the overlay; the pause refuses the call",
+    "drops a reply drawn while a pause is still hiding the overlay; the pause answers the call as cut off",
     () =>
       Effect.gen(function* () {
         const reply = {
@@ -153,7 +163,8 @@ describe("ComputerUseLeaseProxy", () => {
         yield* Deferred.succeed(hide.gate, undefined);
         const answer = yield* h.nextToProvider;
         assert.notInclude(JSON.stringify(answer), "clicked");
-        assert.include(JSON.stringify(answer), PAUSE_MESSAGES.takeover);
+        assert.include(JSON.stringify(answer), "A person took over the screen");
+        assert.include(JSON.stringify(answer), MAY_HAVE_ACTED);
       }),
   );
 
@@ -213,7 +224,7 @@ describe("ComputerUseLeaseProxy", () => {
     () =>
       Effect.gen(function* () {
         const h = yield* harness();
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
         assert.equal((yield* h.nextToDriver).id, 7);
         // The person ends it while run_script is still running and the provider stays up.
@@ -224,7 +235,7 @@ describe("ComputerUseLeaseProxy", () => {
           method: "notifications/cancelled",
           params: { requestId: 7, reason: LEASE_END_MESSAGES.revoked },
         });
-        assert.deepEqual(yield* h.nextToProvider, refusedCall(7, "revoked"));
+        assert.deepEqual(yield* h.nextToProvider, cutOffCall(7, "revoked"));
         yield* h.revokeCalled;
         assert.deepEqual(h.revoked, [["work"]]);
         // A late answer from the dead driver never reaches the provider.
@@ -239,7 +250,7 @@ describe("ComputerUseLeaseProxy", () => {
   it.effect("expires on its own clock with a long call outstanding and no new call", () =>
     Effect.gen(function* () {
       const h = yield* harness({ expiresAt: "1970-01-01T00:10:00.000Z" });
-      yield* h.push(active("1970-01-01T00:10:00.000Z"));
+      yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
       yield* h.send(call(3, "run_steps", { steps: [] }));
       assert.equal((yield* h.nextToDriver).id, 3);
       yield* TestClock.adjust("9 minutes");
@@ -247,7 +258,7 @@ describe("ComputerUseLeaseProxy", () => {
       yield* TestClock.adjust("1 minute");
       yield* h.killed;
       assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
-      assert.deepEqual(yield* h.nextToProvider, refusedCall(3, "expired"));
+      assert.deepEqual(yield* h.nextToProvider, cutOffCall(3, "expired"));
       yield* h.send(call(4, "click"));
       assert.deepEqual(yield* h.nextToProvider, refusedCall(4, "expired"));
     }),
@@ -262,14 +273,14 @@ describe("ComputerUseLeaseProxy", () => {
           expiresAt: "1970-01-01T00:10:00.000Z",
           revoke: () => Deferred.await(stuck),
         });
-        yield* h.push(active("1970-01-01T00:10:00.000Z"));
+        yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
         yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
         assert.equal((yield* h.nextToDriver).id, 7);
         if (reason === "revoked") yield* h.push({ state: "ended", reason: "revoked" });
         else yield* TestClock.adjust("10 minutes");
         yield* h.killed;
         assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
-        assert.deepEqual(yield* h.nextToProvider, refusedCall(7, reason));
+        assert.deepEqual(yield* h.nextToProvider, cutOffCall(7, reason));
         // The revoke started after the kill and has still not returned.
         yield* h.revokeCalled;
         assert.isFalse(yield* Deferred.isDone(stuck));
@@ -302,7 +313,7 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(1, "click"));
         assert.equal((yield* h.nextToDriver).id, 1);
         yield* h.driverExits;
-        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "helper_restarted"));
+        assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "helper_restarted"));
         yield* h.send(call(2, "get_window_state"));
         assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "helper_restarted"));
         assert.equal(computerUseRefusalReason("helper_restarted"), "helperUnavailable");
@@ -340,20 +351,20 @@ describe("ComputerUseLeaseProxy", () => {
   it.effect("on Stop kills the driver mid-call and tells the agent not to go on", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       yield* h.send(call(1, "run_script", { script: "/* long */" }));
       assert.equal((yield* h.nextToDriver).id, 1);
       yield* h.push({ state: "ended", reason: "stopped" });
       yield* h.killed;
       assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
-      assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "stopped"));
+      assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "stopped"));
       yield* h.close;
       assert.equal(yield* Fiber.join(h.proxy), "stopped");
     }),
   );
 
   it.effect(
-    "pauses for a person's input: kills the call in flight, refuses until handed back, then restarts the driver",
+    "pauses for an explicit takeover: kills the call in flight, refuses until handed back, then restarts the driver",
     () =>
       Effect.gen(function* () {
         const h = yield* harness();
@@ -374,18 +385,26 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.send(call(1, "drag", { pid: 4, window_id: 9 }));
         assert.equal((yield* h.nextToDriver).id, 1);
 
-        yield* h.push({ state: "paused", controlId: CONTROL, reason: "human_input" });
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
         yield* h.killed;
         assert.equal((yield* h.nextToDriver).method, "notifications/cancelled");
+        // The drag was already with the driver: it may have moved something, so no refusal.
+        const cutOff = (yield* h.nextToProvider) as unknown as ToolAnswer;
+        assert.equal(cutOff.id, 1);
+        assert.deepEqual(cutOff.result.structuredContent, {
+          effect: "unverifiable",
+          code: "interrupted",
+          detail: "waiting_for_human",
+        });
+        assert.include(cutOff.result.content[0]?.text, MAY_HAVE_ACTED);
         const waiting = {
           jsonrpc: "2.0",
           result: {
-            content: [{ type: "text", text: PAUSE_MESSAGES.human_input }],
+            content: [{ type: "text", text: PAUSE_MESSAGES.takeover }],
             structuredContent: { refused: "userIntervened", detail: "waiting_for_human" },
             isError: true,
           },
         };
-        assert.deepEqual(yield* h.nextToProvider, { ...waiting, id: 1 });
         yield* h.send(call(2, "click", { pid: 4, window_id: 9 }));
         assert.deepEqual(yield* h.nextToProvider, { ...waiting, id: 2 });
 
@@ -578,67 +597,6 @@ describe("ComputerUseLeaseProxy", () => {
         yield* h.nextToProvider;
         assert.equal(yield* h.reportedQueued, 0);
       }),
-  );
-
-  it.effect(
-    "reports a person's input once, and never the agent's own input during or just after its call",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* harness({ humanInput: true });
-        yield* h.push(active());
-        yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
-        assert.equal((yield* h.nextToDriver).id, 1);
-        // The click's own events, while it runs and as they surface after its answer.
-        yield* h.hid("pointer");
-        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
-        yield* h.nextToProvider;
-        yield* h.hid("pointer");
-        yield* TestClock.adjust(1_000);
-        // Reported a second late, but from the click's moment.
-        yield* h.hid("pointer", 800);
-        // A person's key well after the click: the first thing that reaches the server.
-        yield* h.hid("keyboard");
-        assert.equal(yield* h.person, "keyboard");
-      }),
-  );
-
-  it.effect("a report the server did not take is offered again with the next event", () =>
-    Effect.gen(function* () {
-      let accepted = false;
-      const h = yield* harness({ humanInput: true, acceptHuman: () => accepted });
-      yield* h.push(active());
-      yield* h.hid("keyboard");
-      assert.equal(yield* h.person, "keyboard");
-      accepted = true;
-      yield* h.hid("pointer");
-      assert.equal(yield* h.person, "pointer");
-    }),
-  );
-
-  it.effect("tells the server when each call that can post input starts and ends", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ humanInput: true });
-      yield* h.push(active());
-      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
-      yield* h.nextToDriver;
-      yield* h.send(call(2, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
-      yield* h.nextToDriver;
-      assert.equal(yield* h.agentCall, "start 2");
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
-      yield* h.nextToProvider;
-      assert.equal(yield* h.agentCall, "end 2");
-    }),
-  );
-
-  it.effect("a call that only reads never hides a person's input", () =>
-    Effect.gen(function* () {
-      const h = yield* harness({ humanInput: true });
-      yield* h.push(active());
-      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
-      assert.equal((yield* h.nextToDriver).id, 1);
-      yield* h.hid("pointer");
-      assert.equal(yield* h.person, "pointer");
-    }),
   );
 
   it.effect("pauses for a secret field with a private refusal and resumes by itself", () =>
@@ -837,7 +795,7 @@ describe("ComputerUseLeaseProxy", () => {
         }),
       );
       yield* h.push({ state: "ended", reason: "stopped" });
-      assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "stopped"));
+      assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "stopped", true));
       yield* Deferred.succeed(gate, undefined);
       yield* h.killed;
       assert.equal(yield* h.providerQueued, 0);

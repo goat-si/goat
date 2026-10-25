@@ -1,4 +1,4 @@
-import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
+import * as DecisionService from "../goatclaw/DecisionService.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
 import * as LinkedHosts from "../linkedHosts/LinkedHosts.ts";
@@ -45,6 +45,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
@@ -168,6 +169,8 @@ const served = (defaultProfile: string, enabled = true) =>
     Layer.provideMerge(Profiles.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threadsLayer),
+    // goat_describe reaches other hosts through it; these tests never pass host.
+    Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
     Layer.provideMerge(Sqlite.layerMemory),
     Layer.provideMerge(ServerSettings.layerTest({ goatclaw: { enabled, defaultProfile } })),
   );
@@ -789,7 +792,7 @@ it.effect.each([
     catalogDependencies,
     ServerSettings.layerTest(),
     Layer.succeed(McpInvocationContext.McpInvocationContext, invocation),
-    Layer.mock(DecisionInbox.DecisionInbox)({
+    Layer.mock(DecisionService.DecisionService)({
       create: (_caller, input) =>
         record(input).pipe(
           Effect.as({

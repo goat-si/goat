@@ -1,275 +1,67 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import {
-  FleetGoalId,
-  OrchestratorMcpFailure,
-  ProviderInstanceId,
-  RunId,
-  ThreadId,
-} from "@goat/contracts";
+import { FleetGoalId, ProviderInstanceId, RunId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
-import { HubDown, type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
+import { type HubDownShape, type PausedGoalWork } from "../../hub/HubDown.ts";
 import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
-import * as SqlitePersistence from "../../persistence/Sqlite.ts";
-import * as ServerSettings from "../../serverSettings.ts";
-import * as FleetDefaults from "../defaults.ts";
-import { Health, type ThreadHealth } from "../health/Health.ts";
-import { Fallback } from "../resources/Fallback.ts";
-import { Placement } from "../resources/Placement.ts";
-import { GoalController, layer as controllerLayer } from "./GoalController.ts";
-import { LAUNCH_GRACE_MS, type PullRequestObservation } from "./goalPlan.ts";
-import { GoalStore, layer as goalStoreLayer, NOT_SENT } from "./GoalStore.ts";
+import { type ThreadHealth } from "../health/Health.ts";
+import { GoalController } from "./GoalController.ts";
+import { LAUNCH_GRACE_MS } from "./goalPlan.ts";
+import { GoalStore, NOT_SENT } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 import {
-  GoalWorkerRuntime,
-  type LaunchRequest,
-  type OwnerAccess,
-  type WorkerReading,
-} from "./GoalWorkerRuntime.ts";
+  access,
+  running,
+  failedRun,
+  makeFake,
+  layerFor,
+  withWorkers,
+  insert,
+  record,
+  pass,
+  setCount,
+  setHealth,
+} from "./GoalController.testkit.ts";
 
-interface Fake {
-  readonly launches: Array<LaunchRequest & { readonly mode: string }>;
-  readonly followUps: Array<{ readonly actionId: string; readonly message: string }>;
-  readonly interrupts: Array<string>;
-  /** Threads that exist, by launch action id. */
-  readonly threads: Map<string, ThreadId>;
-  /** Threads whose run ended. */
-  readonly ended: Set<string>;
-  crashAfterStart: boolean;
-  failAfterStart: boolean;
-  crashFollowUp: boolean;
-  lookupFails: boolean;
-  /** Owner answers, one per call; the last repeats. */
-  owners: Array<OwnerAccess | { readonly unavailable: string }>;
-  /** Runs once, inside the next launch, after the thread exists. */
-  duringLaunch: Effect.Effect<void> | null;
-  reading: (threadId: string) => WorkerReading;
-  pullRequest: PullRequestObservation;
-}
-
-const access = (runtimeMode: OwnerAccess["runtimeMode"] = "full-access"): OwnerAccess => ({
-  scope: {} as OwnerAccess["scope"],
-  runtimeMode,
-  canReachHosts: runtimeMode === "full-access",
-});
-
-const running = (threadId: string, fake: Fake): WorkerReading =>
-  fake.ended.has(threadId)
-    ? {
-        kind: "seen",
-        terminal: true,
-        runId: RunId.make("run:1"),
-        runStatus: "interrupted",
-        lastActivityAt: null,
-        result: null,
-      }
-    : {
-        kind: "seen",
-        terminal: false,
-        runId: RunId.make("run:1"),
-        runStatus: "running",
-        lastActivityAt: null,
-        result: null,
-      };
-
-const makeFake = (): Fake => {
-  const fake: Fake = {
-    launches: [],
-    followUps: [],
-    interrupts: [],
-    threads: new Map(),
-    ended: new Set(),
-    crashAfterStart: false,
-    failAfterStart: false,
-    crashFollowUp: false,
-    lookupFails: false,
-    owners: [access()],
-    duringLaunch: null,
-    reading: (threadId) => running(threadId, fake),
-    pullRequest: { kind: "seen", state: "open", checks: "pending" },
-  };
-  return fake;
-};
-
-const runtimeFor = (fake: Fake) =>
-  Layer.succeed(GoalWorkerRuntime, {
-    owner: () =>
-      Effect.sync(() => (fake.owners.length > 1 ? fake.owners.shift()! : fake.owners[0]!)),
-    observeWorker: (_access, _goal, worker) => Effect.sync(() => fake.reading(worker.threadId!)),
-    observePullRequest: () => Effect.sync(() => fake.pullRequest),
-    observeIssue: () => Effect.succeed("open" as const),
-    findLaunched: (_access, _goal, actionId) =>
-      fake.lookupFails
-        ? Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "busy" }))
-        : Effect.sync(() => {
-            const threadId = fake.threads.get(actionId);
-            return threadId === undefined ? null : { host: null, threadId, runId: null };
-          }),
-    launch: (current, request) =>
-      Effect.gen(function* () {
-        fake.launches.push({ ...request, mode: current.runtimeMode });
-        const threadId = ThreadId.make("thread:worker-" + fake.launches.length);
-        fake.threads.set(request.actionId, threadId);
-        if (fake.duringLaunch !== null) {
-          const run = fake.duringLaunch;
-          fake.duringLaunch = null;
-          yield* run;
-        }
-        if (fake.crashAfterStart) {
-          fake.crashAfterStart = false;
-          return yield* Effect.die("server stopped mid-launch");
-        }
-        if (fake.failAfterStart) {
-          fake.failAfterStart = false;
-          return yield* new OrchestratorMcpFailure({
-            code: "orchestration_error",
-            message: "lost reply",
-          });
-        }
-        return { host: null, threadId, runId: RunId.make("run:1") };
-      }),
-    followUp: (_access, _goal, _worker, message, actionId) =>
-      Effect.suspend(() => {
-        if (fake.crashFollowUp) {
-          fake.crashFollowUp = false;
-          return Effect.die("server stopped before the send");
-        }
-        fake.followUps.push({ actionId, message });
-        return Effect.void;
-      }),
-    interrupt: (_access, worker) =>
-      Effect.sync(() => {
-        fake.interrupts.push(worker.threadId!);
-        fake.ended.add(worker.threadId!);
-      }),
-  });
-
-/** This machine only, like the design's first release; SSH hosts are refused. */
-/** This machine only, like the design's first release, unless a test asks it to place remotely. */
-const placementFor = (placeRemote: boolean) =>
-  Layer.succeed(Placement, {
-    place: (request) =>
-      Effect.succeed(
-        placeRemote
-          ? {
-              _tag: "Placed" as const,
-              host: "mac-studio",
-              modelSelection: request.modelSelection,
-              reason: undefined,
-            }
-          : (request.hostSelector.hosts ?? [null]).includes(null)
-            ? {
-                _tag: "Placed" as const,
-                host: null,
-                modelSelection: request.modelSelection,
-                reason: undefined,
-              }
-            : {
-                _tag: "Refused" as const,
-                reasons: (request.hostSelector.hosts ?? []).map((host) => ({
-                  host,
-                  reason: {
-                    code: "placement_unavailable" as const,
-                    message: "placement_unavailable",
-                  },
-                })),
-              },
-      ),
-    status: Effect.die("unused"),
-    statusOf: () => Effect.die("unused"),
-  });
-
-const noFallback = Layer.succeed(Fallback, {
-  next: () => Effect.succeed({ _tag: "Exhausted" as const, reason: "No chain." }),
-  reportFailure: () => Effect.void,
-  cooldowns: Effect.succeed([]),
-  coversThreads: Effect.succeed(false),
-  continueThread: () => Effect.succeed(false),
-});
-
-let healthOf = (): ThreadHealth => ({ _tag: "healthy" });
-const healthy = Layer.succeed(Health, {
-  hostCondition: (host) => Effect.succeed({ host, conditions: [], observedAt: "" }),
-  threadHealth: () => Effect.sync(() => healthOf()),
-});
-
-const persistence = (path: string | undefined) =>
-  path === undefined
-    ? SqlitePersistence.layerMemory
-    : SqlitePersistence.layerFromPath(path).pipe(Layer.provide(NodeServices.layer));
-
-const layerFor = (
-  fake: Fake,
-  options: {
-    readonly enabled?: boolean;
-    readonly path?: string;
-    readonly placeRemote?: boolean;
-    readonly hubDown?: HubDownShape;
-  } = {},
-) =>
-  controllerLayer.pipe(
-    Layer.provide(
-      options.hubDown === undefined ? Layer.empty : Layer.succeed(HubDown, options.hubDown),
-    ),
-    Layer.provideMerge(goalStoreLayer),
-    Layer.provideMerge(persistence(options.path)),
-    Layer.provide(runtimeFor(fake)),
-    Layer.provide(
-      Layer.mergeAll(
-        placementFor(options.placeRemote === true),
-        FleetDefaults.layerRescheduler,
-        noFallback,
-        healthy,
-      ),
-    ),
-    Layer.provide(
-      ServerSettings.ServerSettingsService.layerTest({
-        fleet: { controllerEnabled: options.enabled ?? true },
-      }),
-    ),
-  );
-
-const withWorkers = (id: string, count: number, overrides: Parameters<typeof testSpec>[0] = {}) =>
-  testGoal(id, {
-    spec: testSpec({
-      ...overrides,
-      workers: { ...testSpec().workers, count },
-      limits: { ...testSpec().limits, maxWorkers: Math.max(count, 1) },
-    }),
-  });
-
-const insert = (goal: ReturnType<typeof testGoal>) =>
-  GoalStore.pipe(Effect.flatMap((store) => store.create(goal, "thread:thread:owner", null)));
-
-const record = (id: string) =>
-  GoalStore.pipe(
-    Effect.flatMap((store) => store.get(FleetGoalId.make(id))),
-    Effect.map((found) => found!),
-  );
-
-const pass = (id: string) =>
-  Effect.gen(function* () {
-    const controller = yield* GoalController;
-    return yield* controller.reconcile(yield* record(id), 10);
-  });
-
-const setCount = (id: string, count: number) =>
+/**
+ * A slot row as the controller before #1472 wrote it: launched, its run 5 marked followed up, and
+ * one recovery receipt for that run.
+ */
+const legacyRow = (id: string, actionId: string, outcome: string, host: string | null = null) =>
   Effect.gen(function* () {
     const store = yield* GoalStore;
-    const { goal } = yield* record(id);
-    yield* store.updateSpec(
-      {
-        ...goal,
-        spec: { ...goal.spec, workers: { ...goal.spec.workers, count } },
-        generation: goal.generation + 1,
-      },
-      goal.generation,
-    );
+    const sql = yield* SqlClient.SqlClient;
+    yield* insert(testGoal(id));
+    yield* pass(id);
+    const nowIso = "1970-01-01T00:00:00.000Z";
+    yield* store.claim({
+      goalId: FleetGoalId.make(id),
+      generation: 1,
+      actionId,
+      kind: actionId.endsWith(":reschedule") ? "launch" : "fallback",
+      host: null,
+      slot: 0,
+      nowIso,
+    });
+    yield* store.settle(actionId, outcome, nowIso);
+    yield* sql`
+      UPDATE fleet_goal_workers
+      SET host = ${host}, detail_json = json_set(
+        json_remove(detail_json, '$.recoveredRunId'), '$.followedUpRunId', 'run:5'
+      )
+      WHERE goal_id = ${id}
+    `;
   });
+
+const failedHealth = (): ThreadHealth => ({
+  _tag: "failed",
+  failureClass: "unknown",
+  runId: RunId.make("run:5"),
+});
 
 describe("GoalController", () => {
   it.effect("does nothing while fleet.controllerEnabled is off", () => {
@@ -540,20 +332,71 @@ describe("GoalController", () => {
       ).toMatchObject({ reason: "BudgetExhausted" });
     }).pipe(Effect.provide(layerFor(fake)));
   });
+
   it.effect(
-    "never launches on another machine, even when placement offers one (P1-1, P1-2)",
+    "regression #1451: a claim already taken reads as a duplicate, not as a spent budget",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        yield* insert(
+          testGoal("goal_last_turn", {
+            spec: testSpec({ limits: { ...testSpec().limits, maxTurns: 1 } }),
+          }),
+        );
+        const claim = (actionId: string) =>
+          store.claim({
+            goalId: FleetGoalId.make("goal_last_turn"),
+            generation: 1,
+            actionId,
+            kind: "launch",
+            host: "box",
+            slot: 0,
+            nowIso: "1970-01-01T00:00:00.000Z",
+          });
+        // The move took the last turn; asking again about it spends nothing and is not refused.
+        expect(yield* claim("goal:goal_last_turn:s0:a1:run:5:reschedule")).toBeNull();
+        expect(yield* claim("goal:goal_last_turn:s0:a1:run:5:reschedule")).toBe("already_claimed");
+        expect(yield* store.turns(FleetGoalId.make("goal_last_turn"))).toBe(1);
+        // New work stays refused.
+        expect(yield* claim("goal:goal_last_turn:s1:a1:launch")).toBe("budget");
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
+  it.effect(
+    "launches on the host placement chose, recording that host before the launch (#1451)",
     () => {
       const fake = makeFake();
       return Effect.gen(function* () {
         const store = yield* GoalStore;
         yield* insert(testGoal("goal_far"));
         yield* pass("goal_far");
-        expect(fake.launches).toEqual([]);
-        expect(yield* store.launches(FleetGoalId.make("goal_far"))).toEqual([]);
-        expect(
-          (yield* record("goal_far")).goal.status.conditions.find((c) => c.type === "Blocked"),
-        ).toMatchObject({ status: "True", reason: "RemoteWorkersDisabled" });
+        expect(fake.launches.map((launch) => launch.host)).toEqual(["mac-studio"]);
+        expect(yield* store.launches(FleetGoalId.make("goal_far"))).toMatchObject([
+          { actionId: "goal:goal_far:s0:a1:launch", host: "mac-studio" },
+        ]);
       }).pipe(Effect.provide(layerFor(fake, { placeRemote: true })));
+    },
+  );
+  it.effect(
+    "never places a worker on this machine for a goal whose folder lives on another host (#1451)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const id = "goal_folder_far";
+        yield* insert(
+          testGoal(id, {
+            spec: testSpec({ project: { host: "mac-studio", projectId: null, cwd: "/repo" } }),
+          }),
+        );
+        for (let round = 0; round < 3; round += 1) {
+          yield* TestClock.adjust(60 * 60_000);
+          yield* pass(id);
+        }
+        // Placement finds no other host here, so nothing launches and no attempt is spent.
+        expect(fake.launches).toEqual([]);
+        expect((yield* record(id)).workers[0]).toMatchObject({ attempt: 1 });
+      }).pipe(Effect.provide(layerFor(fake)));
     },
   );
 
@@ -596,11 +439,11 @@ describe("GoalController", () => {
         result: null,
         usageLimitResetAt: "1970-01-01T00:10:00.000Z",
       });
-      healthOf = () => ({
+      setHealth(() => ({
         _tag: "failed",
         failureClass: "usage_limit",
         runId: RunId.make("run:5"),
-      });
+      }));
       // First the fallback gets the run (none configured), then it waits for the reset.
       yield* pass("goal_limit");
       yield* pass("goal_limit");
@@ -608,7 +451,7 @@ describe("GoalController", () => {
       yield* TestClock.adjust(11 * 60_000);
       yield* pass("goal_limit");
       yield* pass("goal_limit");
-      healthOf = () => ({ _tag: "healthy" });
+      setHealth(() => ({ _tag: "healthy" }));
       expect(fake.followUps).toEqual([
         {
           actionId: "goal:goal_limit:s0:a1:run:5:resume",
@@ -617,6 +460,80 @@ describe("GoalController", () => {
       ]);
     }).pipe(Effect.provide(layerFor(fake)));
   });
+
+  it.effect(
+    "restarts once a failed slot an earlier controller left marked followed up after a refused move (#1452)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        // The run is marked followed up after a refused move, and after a hop whose message waits
+        // held behind the failed run.
+        yield* legacyRow("goal_stranded", "goal:goal_stranded:s0:a1:run:5:reschedule", "refused");
+        yield* legacyRow("goal_hopped", "goal:goal_hopped:s0:a1:run:5:hub-hop", "switched");
+        // A slot on another host asks the Rescheduler, which refuses again; once is enough.
+        yield* legacyRow(
+          "goal_remote",
+          "goal:goal_remote:s0:a1:run:5:reschedule",
+          "refused",
+          "box",
+        );
+        fake.reading = (threadId) =>
+          threadId === "thread:worker-4" ? running(threadId, fake) : failedRun("run:5");
+        setHealth(failedHealth);
+        for (const id of ["goal_stranded", "goal_hopped", "goal_remote"])
+          for (let round = 0; round < 3; round += 1) yield* pass(id);
+        setHealth(() => ({ _tag: "healthy" }));
+        expect(fake.launches.map((launch) => launch.actionId)).toEqual([
+          "goal:goal_stranded:s0:a1:launch",
+          "goal:goal_hopped:s0:a1:launch",
+          "goal:goal_remote:s0:a1:launch",
+          "goal:goal_stranded:s0:a2:launch",
+        ]);
+        expect((yield* record("goal_stranded")).workers[0]).toMatchObject({
+          attempt: 2,
+          threadId: "thread:worker-4",
+          state: "running",
+        });
+        expect((yield* record("goal_hopped")).workers[0]).toMatchObject({ attempt: 1 });
+        const refusals = (yield* store.events(FleetGoalId.make("goal_remote"), 50)).filter(
+          (event) => event.reason === "RescheduleRefused",
+        );
+        expect(refusals).toHaveLength(1);
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
+
+  it.effect(
+    "retries a stranded slot's move after owner authority was lost between its claim and send (#1452)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        const id = "goal:goal_lost:s0:a1:run:5:reschedule";
+        yield* legacyRow("goal_lost", id, "refused", "box");
+        fake.reading = () => failedRun("run:5");
+        setHealth(failedHealth);
+        // Observing and acting see the owner; it is gone right after the move is claimed.
+        fake.owners = [
+          access(),
+          access(),
+          { unavailable: "The owner thread was archived." },
+          access(),
+        ];
+        yield* pass("goal_lost");
+        expect((yield* store.claimOf(id))?.outcome).toBe(NOT_SENT);
+        yield* pass("goal_lost");
+        yield* pass("goal_lost");
+        setHealth(() => ({ _tag: "healthy" }));
+        expect((yield* store.claimOf(id))?.outcome).toBe("refused");
+        const refusals = (yield* store.events(FleetGoalId.make("goal_lost"), 50)).filter(
+          (event) => event.reason === "RescheduleRefused",
+        );
+        expect(refusals).toHaveLength(1);
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
 
   describe("while the hub is unreachable", () => {
     const scriptedHub = (initial: HubWork) => {
@@ -689,6 +606,41 @@ describe("GoalController", () => {
           expect(hub.notices).toEqual([{ threadId: "thread:worker-1", message: "moved" }]);
           // The next attempt starts from the goal's selection, back through the hub.
           expect((yield* record("goal_hop")).workers[0]!.modelSelection.instanceId).toBe("codex");
+        }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
+      },
+    );
+
+    it.effect(
+      "does not recover a stranded slot again after its hop was sent, even if that pass's status write was lost (#1452)",
+      () => {
+        const fake = makeFake();
+        const own = { instanceId: ProviderInstanceId.make("codex-own"), model: "gpt-6.1-sol" };
+        const { hub, shape } = scriptedHub({ _tag: "Hop", selection: own, notice: "moved" });
+        return Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* legacyRow(
+            "goal_lost_write",
+            "goal:goal_lost_write:s0:a1:run:5:reschedule",
+            "refused",
+          );
+          fake.reading = () => failedRun("run:5");
+          setHealth(failedHealth);
+          yield* pass("goal_lost_write");
+          // The row as it was before that pass: a spec change in between rejected its write.
+          yield* sql`
+            UPDATE fleet_goal_workers
+            SET detail_json = json_remove(detail_json, '$.recoveredRunId')
+            WHERE goal_id = 'goal_lost_write'
+          `;
+          hub.work = UNAFFECTED;
+          yield* pass("goal_lost_write");
+          yield* pass("goal_lost_write");
+          setHealth(() => ({ _tag: "healthy" }));
+          expect(fake.followUps.map((followUp) => followUp.actionId)).toEqual([
+            "goal:goal_lost_write:s0:a1:run:5:hub-hop",
+          ]);
+          expect(fake.launches).toHaveLength(1);
+          expect((yield* record("goal_lost_write")).workers[0]).toMatchObject({ attempt: 1 });
         }).pipe(Effect.provide(layerFor(fake, { hubDown: shape })));
       },
     );

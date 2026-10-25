@@ -254,7 +254,6 @@ describe("computer use readiness and reply images", () => {
     { platform: "a locked Mac", blockers: ["screenLocked"] },
     { platform: "Windows reached over SSH (Session 0)", blockers: ["noInteractiveDesktop"] },
     { platform: "a Mac whose grant changed while the helper ran", blockers: ["restartRequired"] },
-    { platform: "a desktop a person took over", blockers: ["userIntervened"] },
   ])("is not ready on $platform even with every step proven", ({ blockers }) => {
     const blocked = Schema.decodeUnknownSync(ComputerUseReadiness)({ ...ready, blockers });
     expect(computerUseReady(blocked)).toBe(false);

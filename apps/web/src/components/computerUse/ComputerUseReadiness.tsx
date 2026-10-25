@@ -16,6 +16,12 @@ export interface ComputerUseReadinessProps {
   readonly platform?: CuaHostStatus["platform"] | undefined;
   readonly tools?: CuaHostStatus["tools"];
   readonly signals?: CuaHostStatus["signals"];
+  /** Why agents got no driver, when it was a grant macOS has not given (#1399). */
+  readonly block?: CuaHostStatus["block"];
+  /** Why the driver last failed to start on the host, when it did. */
+  readonly failure?: CuaHostStatus["failure"];
+  /** What the host's screen allows now. */
+  readonly display?: CuaHostStatus["display"];
   /** The host's name, so the Linux guide says which machine to act on. */
   readonly machine?: string;
   readonly renderGrantAction?: (
@@ -91,7 +97,9 @@ export function ComputerUseReadiness({ renderGrantAction, ...input }: ComputerUs
       <p role="status" className="text-sm font-medium">
         {result.ready
           ? "Computer use is ready on this host."
-          : "Computer use setup needs attention."}
+          : result.startsWithNextTurn
+            ? "Computer use is ready on this host. It starts with the next agent turn."
+            : "Computer use setup needs attention."}
       </p>
       <ol className="space-y-4">
         {result.steps.map((step, index) => (

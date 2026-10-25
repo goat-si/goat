@@ -1,5 +1,6 @@
 import { beforeEach } from "vite-plus/test";
 import { commands } from "vite-plus/test/browser";
+import { installMockFactoryFailureReport } from "./reportMockFactoryFailure";
 
 declare module "vite-plus/test/browser" {
   interface BrowserCommands {
@@ -7,6 +8,8 @@ declare module "vite-plus/test/browser" {
     resetPointer: () => Promise<void>;
   }
 }
+
+installMockFactoryFailureReport();
 
 // Playwright's mouse outlives each test and each file, so whatever the next test mounts
 // under its last position starts hovered. Registered here rather than in render() so tests

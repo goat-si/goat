@@ -88,6 +88,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1403,17 +1404,8 @@ const make = Effect.gen(function* () {
     });
   };
 
-  const withCaptureLock = <A>(tab: ServerTab, operation: () => Promise<A>): Promise<A> => {
-    const run = tab.captureLock.then(() => {
-      if (tab.closing) throw new Error("The preview tab closed.");
-      return operation();
-    });
-    tab.captureLock = run.then(constVoid, constVoid);
-    return run;
-  };
-
-  const startRecording = (tab: ServerTab): Promise<Recording> => {
-    const started = withCaptureLock(tab, async () => {
+  const startRecording = (tab: ServerTab, deadlineMs?: number): Promise<Recording> => {
+    const { run, answer } = queueCaptureBy(deadlineMs)(tab, async () => {
       if (tab.recording) return tab.recording;
       const encoder = await contexts.scratchPage();
       let session: CDPSession | null = null;
@@ -1473,35 +1465,48 @@ const make = Effect.gen(function* () {
         await session?.detach().catch(constVoid);
         throw cause;
       }
-    }).finally(() => {
+    });
+    // A stop waits for the real start, which can outlive its caller's deadline.
+    const started = run.finally(() => {
       if (tab.recordingStart === started) tab.recordingStart = null;
     });
-    tab.recordingStart = started;
-    return started;
+    (tab.recordingStart = started).catch(constVoid);
+    return answer;
   };
 
-  // Scaled captures repaint every screencast; pause them to avoid leaking that frame.
-  const withScreencastsPaused = <A>(tab: ServerTab, capture: () => Promise<A>): Promise<A> =>
-    withCaptureLock(tab, async () => {
-      tab.capturing += 1;
-      const recording = tab.recording;
-      try {
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.pause()),
-          recording?.session.send("Page.stopScreencast").catch(constVoid),
-        ]);
-        return await capture();
-      } finally {
-        tab.capturing -= 1;
+  // Scaled captures repaint every screencast; pause them to avoid leaking that frame. The
+  // deadline covers the pause, the capture and the resume, as the caller sees them.
+  const withScreencastsPaused = <A>(
+    tab: ServerTab,
+    capture: () => Promise<A>,
+    deadlineMs?: number,
+  ): Promise<A> =>
+    withCaptureLock(
+      tab,
+      async () => {
+        tab.capturing += 1;
+        const recording = tab.recording;
+        try {
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.pause()),
+            recording?.session.send("Page.stopScreencast").catch(constVoid),
+          ]);
+          return await capture();
+        } finally {
+          tab.capturing -= 1;
 
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.resume()),
-          recording && tab.recording === recording
-            ? recording.session.send("Page.startScreencast", RECORDING_SCREENCAST).catch(constVoid)
-            : undefined,
-        ]);
-      }
-    });
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.resume()),
+            recording && tab.recording === recording
+              ? recording.session
+                  .send("Page.startScreencast", RECORDING_SCREENCAST)
+                  .catch(constVoid)
+              : undefined,
+          ]);
+        }
+      },
+      deadlineMs,
+    );
 
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
@@ -1822,9 +1827,10 @@ const make = Effect.gen(function* () {
             "No recording is active for this thread.",
           );
         }
-        // A stop cannot act twice (a retry finds no recording);
-        // dropping a late one would leave capture running.
-        return tab.control.agent(request.agentSessionId ?? "", () => stopRecording(tab));
+        // A stop cannot act twice (a retry finds no recording), and dropping a late one would
+        // leave capture running: only its answer is bounded, so the queue moves on.
+        const stop = () => answerBy(stopRecording(tab), deadlineMs);
+        return tab.control.agent(request.agentSessionId ?? "", stop);
       }
     }
     const tab = await requireTab(request);
@@ -1962,14 +1968,17 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(tab, () =>
-          ServerBrowserPage.snapshot({
-            ...tab,
-            renderScale: tab.desktop ? "display" : RENDER_SCALE,
-            fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
-            captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
-            timeoutMs: deadlineMs - performance.now(),
-          }),
+        return withScreencastsPaused(
+          tab,
+          () =>
+            ServerBrowserPage.snapshot({
+              ...tab,
+              renderScale: tab.desktop ? "display" : RENDER_SCALE,
+              fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+              captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
+              timeoutMs: deadlineMs - performance.now(),
+            }),
+          deadlineMs,
         );
       }
       case "logs":
@@ -2032,7 +2041,7 @@ const make = Effect.gen(function* () {
           signal,
         );
       case "recordingStart": {
-        const recording = await startRecording(tab);
+        const recording = await startRecording(tab, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
       }
     }
@@ -2041,8 +2050,8 @@ const make = Effect.gen(function* () {
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
       try: () =>
-        runOperation(request, performance.now() + request.timeoutMs).finally(() =>
-          markUsed(request),
+        answerCall(request.timeoutMs, (deadlineMs) =>
+          runOperation(request, deadlineMs).finally(() => markUsed(request)),
         ),
       catch: ServerBrowserPage.toOperationError,
     }).pipe(

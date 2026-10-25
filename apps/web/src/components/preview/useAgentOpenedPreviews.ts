@@ -1,6 +1,8 @@
 import type { DeviceServiceState, ScopedThreadRef } from "@goat/contracts";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useRef } from "react";
+import { rendersServerTabNatively } from "../../browser/previewRuntime";
 import { useClientSettings } from "../../hooks/useSettings";
 import {
   browserMiniPlayerSource,
@@ -9,6 +11,7 @@ import {
 } from "../../previewMiniPlayerStore";
 import type { ThreadPreviewState } from "../../previewStateStore";
 import { useRightPanelStore, type RightPanelSurface } from "../../rightPanelStore";
+import { primaryEnvironmentIdAtom } from "../../state/primaryEnvironment";
 import { openPreviewSessionStack } from "./sessions/previewSessionStackStore";
 
 const selectAutoShowFloatingPreview = (settings: { browserAutoShowFloatingPreview: boolean }) =>
@@ -41,6 +44,7 @@ export function useAgentOpenedPreviews(input: {
     sheetLayout,
   } = input;
   const autoShowFloatingPreview = useClientSettings(selectAutoShowFloatingPreview);
+  const primaryEnvironmentId = useAtomValue(primaryEnvironmentIdAtom);
   // A device the agent opens floats over chat like an agent-driven browser,
   // or becomes a panel tab when floating previews are off. Sessions opened by
   // another client arrive the same way; sheet layouts get neither. The first
@@ -124,7 +128,14 @@ export function useAgentOpenedPreviews(input: {
       );
       if (surface && requested?.force === true) {
         useRightPanelStore.getState().activateSurface(threadRef, surface.id);
-      } else if (!surface && session.automationOwner !== undefined) {
+      } else if (
+        !surface &&
+        session.automationOwner !== undefined &&
+        // This desktop draws its own environment's tabs in a <webview> that paints only on
+        // screen; the card would stream it parked off screen and stay empty. The floating
+        // player shows that webview itself.
+        !rendersServerTabNatively(threadRef.environmentId, primaryEnvironmentId, session)
+      ) {
         // An agent's tab opens as the large agents-on-screen card, where computer use shows too.
         openPreviewSessionStack({
           environmentId: threadRef.environmentId,
@@ -145,6 +156,7 @@ export function useAgentOpenedPreviews(input: {
     threadRef,
     autoShowFloatingPreview,
     panelSurfaces,
+    primaryEnvironmentId,
   ]);
   // A floating device follows its session: once the agent or another client
   // closes the device there is nothing left to stream.

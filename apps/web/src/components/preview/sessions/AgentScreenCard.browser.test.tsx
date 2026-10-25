@@ -69,6 +69,9 @@ vi.mock("../../../state/environments", () => ({
 vi.mock("../../../state/entities", () => ({
   useThreadShell: (ref: { threadId: string } | null) =>
     ref === null ? null : { title: `Thread ${ref.threadId}` },
+  // The preview runtime module reads these; outside the desktop app no tab is drawn natively.
+  readEnvironmentSupportsServerBrowser: () => true,
+  useEnvironmentSupportsServerBrowser: () => true,
 }));
 vi.mock("../../../browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
 vi.mock("../../../hooks/useThreadRouteTarget", () => ({
@@ -103,6 +106,7 @@ vi.mock("../../../browser/ServerBrowserSurface", async () => {
 });
 
 import { AgentScreenCardView } from "./AgentScreenCard";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
@@ -350,6 +354,39 @@ it("stops every agent from the header with the cards hidden, and says when a sto
   );
 });
 
+// #1519: a card's Stop also ends the thread's grant; when it cannot, the app stays held.
+it("says when a card's Stop left the thread's apps held, and points to Stop all", async () => {
+  setup([desktopApp()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  state.control.mockResolvedValue({
+    _tag: "Success",
+    value: { applied: false, reason: "not_allowed" },
+  });
+  using toast = vi.spyOn(toastManager, "add");
+  await userEvent.hover(screen.getByRole("article"));
+  await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+  expect(state.control).toHaveBeenCalledWith({
+    environmentId,
+    input: { sessionId: "desktop-1", control: "stop" },
+  });
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "The agent stopped, but its apps are still reserved" }),
+    ),
+  );
+  // The header hides Stop all once no agent is active, so the toast carries it (#1521 review).
+  const offered = toast.mock.calls.at(-1)?.[0] as
+    | { readonly actionProps?: { readonly children?: unknown; readonly onClick?: () => void } }
+    | undefined;
+  expect(offered?.actionProps?.children).toBe("Stop all");
+  state.control.mockClear();
+  await act(() => offered?.actionProps?.onClick?.());
+  expect(state.control).toHaveBeenCalledWith({ environmentId, input: { control: "stopAll" } });
+});
+
 it("keeps the header's Stop all while the only agent tab plays in the thread's mini player", async () => {
   setup([browserTab()]);
   state.routeThread = "thread-1";
@@ -432,6 +469,37 @@ it("reveals the controls with a first tap on touch screens instead of enlarging"
     ),
   );
   await fadedControl(screen.getByRole("button", { name: "Stop" }));
+});
+
+// The stack moves its cards into the floating window's document without remounting them (#1518).
+it("puts tapped controls away with a tap outside, after the card moved to another document", async () => {
+  setup([]);
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  using _frame = { [Symbol.dispose]: () => frame.remove() };
+  const floatingDocument = frame.contentDocument!;
+  const card = cardView(browserTab());
+  const placed = (doc: Document) => (
+    <StackDocumentContext.Provider value={doc}>{card.element}</StackDocumentContext.Provider>
+  );
+  await using screen = await render(placed(document));
+  const picture = screen.getByRole("button", { name: "Open GOAT (Dev)" }).element();
+  await act(() =>
+    picture.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })),
+  );
+  await shownControl(screen.getByRole("button", { name: "Stop" }));
+  floatingDocument.body.append(screen.container);
+  await screen.rerender(placed(floatingDocument));
+  await act(() =>
+    floatingDocument.body.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }),
+    ),
+  );
+  // The frame has no stylesheet, so the class says whether the controls are put away.
+  const stop = [...screen.container.querySelectorAll("button")].find(
+    (button) => button.getAttribute("aria-label") === "Stop",
+  );
+  await vi.waitFor(() => expect(stop?.className).not.toContain("pointer-events-auto opacity-100"));
 });
 
 it("reveals the large view's controls with a tap on touch screens", async () => {
@@ -564,6 +632,24 @@ it("shows a desktop thread's live frames, drops them in private mode, and keeps 
   expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
 });
 
+it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
+  setup([]);
+  const desk = desktopApp({
+    status: "permission-needed",
+    // Frames on, so only the guard keeps the card from watching a picture.
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+    target: {
+      kind: "desktop",
+      title: "Allow Screen & System Audio Recording for GOAT Computer Use",
+    },
+  });
+  await using screen = await render(cardView(desk).element);
+  await expect
+    .element(screen.getByText(/No computer use yet\. Allow Screen & System Audio Recording/))
+    .toBeVisible();
+  expect(state.frameRequests.filter((id) => id !== null)).toEqual([]);
+});
+
 it("never mounts a picture for a session the list already marks private", async () => {
   setup([]);
   await using screen = await render(cardView(browserTab({ owner: "private" })).element);
@@ -615,4 +701,30 @@ it("leaves room for the pinned thread details card above the cards", async () =>
   } finally {
     details.remove();
   }
+});
+
+// A card whose session the server no longer knows (a newer control replaced it) used to do nothing
+// on Stop, with no word (WS9). It says so and offers Stop all.
+it("says when a card's Stop found no session to stop, and offers Stop all", async () => {
+  setup([desktopApp()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  state.control.mockResolvedValue({
+    _tag: "Success",
+    value: { applied: false, reason: "not_found" },
+  });
+  using toast = vi.spyOn(toastManager, "add");
+  await userEvent.hover(screen.getByRole("article"));
+  await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "This agent's session changed before Stop reached it" }),
+    ),
+  );
+  const offered = toast.mock.calls.at(-1)?.[0] as
+    | { readonly actionProps?: { readonly children?: unknown } }
+    | undefined;
+  expect(offered?.actionProps?.children).toBe("Stop all");
 });

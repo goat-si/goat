@@ -7,7 +7,13 @@ import type { ComputerUseReadiness } from "@goat/contracts";
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
 import * as Schema from "effect/Schema";
 
-import { type HelperBundle, type HelperProcess, openHelperSession } from "./ComputerUseHelper.ts";
+import {
+  type HelperBundle,
+  type HelperFeatures,
+  helperFeatures,
+  type HelperProcess,
+  openHelperSession,
+} from "./ComputerUseHelper.ts";
 
 /**
  * GOAT Computer Use on Windows (apps/desktop/native/computer-use-helper-windows): a folder with
@@ -83,19 +89,26 @@ export async function probeWindowsReadiness(
   screenRecording: boolean;
   detail?: string;
   blocker?: ComputerUseReadiness["blockers"][number];
+  features: HelperFeatures;
 }> {
   const session = await openHelperSession(process, expectedBundleId);
   try {
     const readiness = decodeReadiness(await session.request("permissions", { prompt: false }));
     const detail = windowsReadinessFailure(readiness);
     const blocker = windowsReadinessBlocker(readiness);
+    const features = helperFeatures(session);
     return detail === undefined
-      ? { accessibility: readiness.accessibility, screenRecording: readiness.screenRecording }
+      ? {
+          accessibility: readiness.accessibility,
+          screenRecording: readiness.screenRecording,
+          features,
+        }
       : {
           accessibility: false,
           screenRecording: false,
           detail,
           ...(blocker === undefined ? {} : { blocker }),
+          features,
         };
   } finally {
     await session.close();

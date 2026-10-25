@@ -2,10 +2,11 @@ import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /**
  * The goal tools' service (docs/internals/agentic-k8s.md, "Agent and client surface" and
- * "Authority and safety"). A goal acts as the thread that declares it, so applying is where
- * authority is set: the ceiling is that thread's runtime mode, an update can only lower it, the
- * worker mode must fit under it, and reaching another machine needs what goat_ssh_thread_launch
- * needs. Only the owner, or a full-access/default thread, can change a goal.
+ * "Authority and safety"). A goal acts as its owner: the GOAT thread that declares it, or the
+ * outside MCP client session that does. Applying is where authority is set: the ceiling is the
+ * owner's runtime mode, an update can only lower it, and the worker mode must fit under it. Only
+ * the owner, or a full-access/default GOAT thread, can change or read a goal; an outside client
+ * reaches only its own, whatever its access.
  */
 import {
   type FleetGoal,
@@ -19,6 +20,7 @@ import {
   type GoatGoalListInput,
   type GoatGoalListResult,
   OrchestratorMcpFailure,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -27,13 +29,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import * as McpClientAuthority from "../../auth/McpClientAuthority.ts";
 import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import { resolveRuntimeMode } from "../../mcp/OrchestratorMcpService.ts";
 import { assertFullAccess, type Caller, loadCaller } from "../../mcp/threadAccess.ts";
 import * as ThreadManagementService from "../../orchestration-v2/ThreadManagementService.ts";
 import { initialStatus } from "./goalPlan.ts";
+import { GoalRecovery } from "./GoalRecovery.ts";
 import { GoalStore, type GoalStoreError } from "./GoalStore.ts";
-import { REMOTE_WORKERS_DISABLED } from "./GoalWorkerRuntime.ts";
+import { REMOTE_WORKERS_NEED_FULL_ACCESS } from "./GoalWorkerRuntime.ts";
 
 export class GoalService extends Context.Service<
   GoalService,
@@ -78,36 +82,69 @@ const encodeSpec = Schema.encodeSync(FleetGoalSpec);
 const sameSpec = (left: FleetGoal["spec"], right: FleetGoal["spec"]) =>
   JSON.stringify(encodeSpec(left)) === JSON.stringify(encodeSpec(right));
 
-const ownerKeyOf = (threadId: string) => "thread:" + threadId;
+/** "thread:<id>" or "client:<auth session id>"; the store lists and dedupes by it. */
+const goalOwnerKey = (owner: Pick<FleetGoal["owner"], "kind" | "threadId" | "mcpOwner">) =>
+  owner.kind === "thread" ? "thread:" + owner.threadId : (owner.mcpOwner ?? "");
 
-const threadCallerIn = Effect.gen(function* () {
-  const caller = yield* loadCaller();
-  if (caller.caller === undefined)
-    return yield* new OrchestratorMcpFailure({
-      code: "thread_credential_required",
-      message:
-        "A goal acts as the GOAT thread that declares it, so it needs an agent running inside GOAT. Goals owned by outside MCP clients are tracked in #493.",
-    });
-  return { ...caller, caller: caller.caller };
-});
+type GoalIdentity =
+  | { readonly kind: "thread"; readonly threadId: ThreadId; readonly mcpOwner: null }
+  | {
+      readonly kind: "mcp_client";
+      readonly threadId: null;
+      readonly mcpOwner: string;
+      readonly sessionId: string;
+    };
+
+/** The owner a call from this caller would record, without its ceiling. */
+const identityOf = (caller: Caller): Effect.Effect<GoalIdentity, OrchestratorMcpFailure> =>
+  caller.caller !== undefined
+    ? Effect.succeed({ kind: "thread" as const, threadId: caller.caller.id, mcpOwner: null })
+    : caller.scope.client !== undefined
+      ? Effect.succeed({
+          kind: "mcp_client" as const,
+          threadId: null,
+          mcpOwner: "client:" + caller.scope.client.sessionId,
+          sessionId: caller.scope.client.sessionId,
+        })
+      : Effect.fail(
+          new OrchestratorMcpFailure({
+            code: "thread_credential_required",
+            message:
+              "A goal acts as its owner, so it needs a GOAT thread or a signed-in outside MCP client.",
+          }),
+        );
+
+type GoalCaller = Caller & { readonly identity: GoalIdentity };
 
 const managesGoals =
-  "Changing a goal another thread owns needs a live full-access/default calling thread.";
-const isOwner = (caller: Caller, goal: FleetGoal) =>
-  goal.owner.kind === "thread" && caller.caller?.id === goal.owner.threadId;
-const hasFullAccess = (caller: Caller) =>
-  caller.limits.runtimeMode === "full-access" && caller.limits.interactionMode === "default";
-const assertMayManage = (caller: Caller, goal: FleetGoal) =>
-  isOwner(caller, goal) ? Effect.void : assertFullAccess(caller, managesGoals);
+  "Changing a goal someone else owns needs a live full-access/default calling GOAT thread.";
+const isOwner = (caller: GoalCaller, goal: FleetGoal) =>
+  goalOwnerKey(caller.identity) === goalOwnerKey(goal.owner);
+/** Reaching other owners' goals is a GOAT thread's: an outside client sees only its own. */
+const hasFullAccess = (caller: GoalCaller) =>
+  caller.identity.kind === "thread" &&
+  caller.limits.runtimeMode === "full-access" &&
+  caller.limits.interactionMode === "default";
+const assertMayManage = (caller: GoalCaller, goal: FleetGoal) =>
+  isOwner(caller, goal)
+    ? Effect.void
+    : caller.identity.kind === "mcp_client"
+      ? Effect.fail(notFound(goal.id))
+      : assertFullAccess(caller, managesGoals);
 
 const make = Effect.gen(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
   const store = yield* GoalStore;
+  const recovery = yield* GoalRecovery;
   const crypto = yield* Crypto.Crypto;
   const threads = yield* ThreadManagementService.ThreadManagementService;
-  /** The calling thread, read with the caller's own scope. */
+  const clients = yield* McpClientAuthority.McpClientAuthority;
+  /** The calling thread or outside client, read with the caller's own scope. */
   const callerOf = (scope: McpInvocationContext.McpInvocationScope) =>
-    threadCallerIn.pipe(
+    loadCaller().pipe(
+      Effect.flatMap((caller) =>
+        Effect.map(identityOf(caller), (identity): GoalCaller => ({ ...caller, identity })),
+      ),
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
     );
@@ -144,10 +181,26 @@ const make = Effect.gen(function* () {
           code: "invalid_request",
           message: "doneWhen on pull requests, checks or issues needs spec.repo (owner/name).",
         });
-      if (spec.project.host === null && spec.project.projectId === null)
+      const hosts = spec.workers.hostSelector.hosts;
+      const remote = spec.project.host !== null || (hosts ?? []).some((host) => host !== null);
+      // Workers here launch into the project by id; workers elsewhere need a folder or that id there.
+      const here = spec.project.host === null && (hosts === undefined || hosts.includes(null));
+      if (here && spec.project.projectId === null)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "Set spec.project.projectId for workers on this machine.",
+        });
+      if (remote && spec.project.projectId === null && spec.project.cwd === null)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message:
+            "Set spec.project.cwd, or a projectId on spec.project.host, for workers on other hosts.",
+        });
+      // goat_ssh_thread_launch needs a full-access caller; the goal's ceiling must carry it.
+      if (remote && ceiling !== "full-access")
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: REMOTE_WORKERS_NEED_FULL_ACCESS,
         });
       if (spec.limits.maxTokens !== null)
         return yield* new OrchestratorMcpFailure({
@@ -158,16 +211,6 @@ const make = Effect.gen(function* () {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "workers.perTarget needs at least one target.",
-        });
-      const remote =
-        spec.project.host !== null ||
-        (spec.workers.hostSelector.hosts ?? []).some((host) => host !== null);
-      if (remote)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message:
-            REMOTE_WORKERS_DISABLED +
-            " Leave spec.project.host null and name only this machine (null) in workers.hostSelector.hosts.",
         });
     });
 
@@ -186,6 +229,17 @@ const make = Effect.gen(function* () {
         if (input.id === undefined) {
           const ceiling = caller.limits.runtimeMode;
           yield* admit(caller, input.spec, ceiling);
+          const { identity } = caller;
+          // A client's goal is rechecked later by its session id alone, so that id must name a
+          // live session that controls threads now.
+          if (identity.kind === "mcp_client") {
+            const grant = yield* clients.load(identity.sessionId);
+            if ("unavailable" in grant)
+              return yield* new OrchestratorMcpFailure({
+                code: "capability_denied",
+                message: "This MCP client cannot own a goal: " + grant.unavailable,
+              });
+          }
           const ulid = yield* crypto.randomULID.pipe(
             Effect.mapError(
               () =>
@@ -200,9 +254,9 @@ const make = Effect.gen(function* () {
             title: input.title,
             generation: 1,
             owner: {
-              kind: "thread",
-              threadId: caller.caller.id,
-              mcpOwner: null,
+              kind: identity.kind,
+              threadId: identity.threadId,
+              mcpOwner: identity.mcpOwner,
               runtimeModeCeiling: ceiling,
             },
             spec: input.spec,
@@ -213,7 +267,7 @@ const make = Effect.gen(function* () {
           };
           if (input.dryRun === true) return { goal, created: false, changed: true, dryRun: true };
           const created = yield* store
-            .create(goal, ownerKeyOf(caller.caller.id), input.clientRequestId ?? null)
+            .create(goal, goalOwnerKey(goal.owner), input.clientRequestId ?? null)
             .pipe(Effect.mapError(storeFailure));
           return {
             goal: created.goal,
@@ -223,10 +277,13 @@ const make = Effect.gen(function* () {
           };
         }
         const { goal: existing } = yield* load(input.id);
+        // Another owner's goal reads as missing to an outside client, as get and list do.
+        if (!isOwner(caller, existing) && caller.identity.kind === "mcp_client")
+          return yield* notFound(existing.id);
         if (!isOwner(caller, existing))
           return yield* new OrchestratorMcpFailure({
             code: "capability_denied",
-            message: "Only the thread that declared goal " + existing.id + " can change its spec.",
+            message: "Only the owner that declared goal " + existing.id + " can change its spec.",
           });
         if (existing.deletionRequestedAt !== null)
           return yield* new OrchestratorMcpFailure({
@@ -294,11 +351,12 @@ const make = Effect.gen(function* () {
     list: (scope, input) =>
       Effect.gen(function* () {
         const caller = yield* callerOf(scope);
+        const ownerKey = goalOwnerKey(caller.identity);
         const offset = input.cursor ?? 0;
         const limit = input.limit ?? 20;
         const page = yield* store
           .listByOwner({
-            ownerKey: ownerKeyOf(caller.caller.id),
+            ownerKey,
             phase: input.phase,
             offset,
             limit,
@@ -338,6 +396,7 @@ const make = Effect.gen(function* () {
         yield* assertMayManage(caller, goal);
         if (input.force === true) {
           const deleted = yield* store.remove(goal.id).pipe(Effect.mapError(storeFailure));
+          yield* recovery.forget(goal.id);
           return {
             id: goal.id,
             deleted,

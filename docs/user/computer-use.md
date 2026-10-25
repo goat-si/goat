@@ -38,9 +38,11 @@ them do at that keyboard.
 ## Approving apps
 
 An agent in a thread you run asks before it uses an app. The request appears in
-the thread and names the apps, such as Calculator or Notes, and until when;
-approve it in a GOAT app and the agent may use those apps' windows in that
-thread until then. Until it has an approval, the agent can list apps and
+the thread and names apps by the `bundle_id` that `list_apps` reports (on Windows
+usually the executable path), or by the listed name when it has no `bundle_id`,
+never a window title. It also says when the approval expires. Approve it in a GOAT
+app and the agent may use those apps' windows in that thread until then.
+Until it has an approval, the agent can list apps and
 windows but not look inside or type into them. A request for the whole screen
 says so; approving it lets the agent act on anything the screen shows. Agents
 cannot screenshot the whole display; they look at one window at a time. On
@@ -58,6 +60,10 @@ access stops at once. Work that runs on its own still uses the screen one thread
 at a time. Stop, **Stop all** and turning the setting or computer use off still
 end their computer use.
 
+Once admitted, agents keep working while you use the keyboard and mouse. Use
+**Stop**, **Stop all**, or **Hand back** when you want to interrupt them; a
+password, one-time code, or passkey field still pauses them automatically.
+
 ## Watching agents
 
 While agents use the built-in browser or this computer, GOAT shows them in a
@@ -67,7 +73,10 @@ small live picture; it pauses while the stack is hidden or GOAT is in the
 background. Click a browser tile to open its full preview, where **Take
 control** hands it to you.
 
-**Stop** on a tile stops that agent until you choose **Hand back**. **Stop all**
+**Stop** on a tile stops that agent until you choose **Hand back**. On a tile
+for this computer, Stop also ends that thread's approval, so its apps are free
+for other threads at once; the thread asks again to go on, unless **Full access
+without approval** lets it use every app. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
@@ -93,11 +102,16 @@ request names the thread, this computer, what the agent wants to do, and until
 when. Someone allowed to change this environment's settings approves it in a
 GOAT app; a reply in a chat channel does not count.
 
-Such work only gets the screen on a computer whose GOAT can tell when you type a
-password or use the keyboard or mouse yourself; elsewhere the request is refused
-and says why. Approving admits that thread until the time shown. It does not approve each
-action. Only one such thread uses the screen at a time, and threads you run
-yourself can still use it meanwhile, so the two may get in each other's way.
+Such work only gets the screen on a computer whose GOAT can tell when you enter
+a password or another secret; elsewhere the request is refused and says why.
+Admitted work keeps running while you use the keyboard and mouse. Approving
+admits that thread until the time shown. It does not approve each
+action. Threads approved for different apps work at the same time, each in its
+own apps. An app belongs to one thread at a time, and approving the whole screen
+waits until no other thread holds an app. While another thread holds apps, an
+agent works on its windows in the background and does not bring them to the
+front or move the pointer. Threads you run yourself can still use the screen
+meanwhile, so they may get in each other's way.
 Choose **End computer use** on the request in the thread to stop it early;
 turning computer use off also stops it. When the time runs out or you end it,
 GOAT stops the agent's computer use right away, even in the middle of an action

@@ -125,6 +125,8 @@ it.effect("083 participates in the migration ledger and leaves healthy spaces un
       [103, "RemoteReportReceipts"],
       [104, "PendingAttachmentUploads"],
       [105, "ScheduledTaskWebhookSecretRef"],
+      [106, "RemoteReportFences"],
+      [107, "HubProvisionedLinks"],
     ]);
     assert.deepStrictEqual(yield* pending, []);
     yield* sql.withTransaction(refreshCheckpointAccounting());

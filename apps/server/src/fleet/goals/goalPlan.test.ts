@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import { RunId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 import {
   type GoalObservation,
@@ -11,16 +12,20 @@ import {
   repairWorkers,
   type SlotObservation,
 } from "./goalPlan.ts";
-import type { WorkerRecord } from "./GoalStore.ts";
+import { WorkerRecord } from "./GoalStore.ts";
 import { testGoal, testSpec } from "./goalTestkit.ts";
 
 const NOW = Date.parse("2026-10-20T01:00:00.000Z");
+const decodeWorker = Schema.decodeUnknownSync(WorkerRecord);
 
 const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => ({
   now: NOW,
   owner: { available: true },
   workers: new Map(),
   launchClaims: new Map(),
+  unmovedReschedules: new Set(),
+  pendingMoves: new Map(),
+  switchedFallbacks: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
   turns: 0,
@@ -195,6 +200,58 @@ describe("planGoal", () => {
     ]);
   });
 
+  it("stops orphaned earlier attempts before launching the attempts that wait on them", () => {
+    const goal = testGoal("goal_order", {
+      spec: testSpec({ workers: { ...testSpec().workers, count: 3 } }),
+    });
+    const successors = [0, 1, 2].map((slot) => newWorker(goal, slot, null, 2));
+    const orphans = [0, 1, 2].map((slot) => running(goal, ORPHAN_SLOT_BASE + slot));
+    const plan = planGoal(
+      goal,
+      [...successors, ...orphans],
+      observe({
+        workers: new Map(
+          orphans.map((worker) => [
+            worker.slot,
+            seen({ terminal: false, runStatus: "running", result: null }),
+          ]),
+        ),
+      }),
+    );
+    expect(
+      plan.actions.map((action) => [action.type, "slot" in action ? action.slot : null]),
+    ).toEqual([
+      ["interrupt", ORPHAN_SLOT_BASE],
+      ["interrupt", ORPHAN_SLOT_BASE + 1],
+      ["interrupt", ORPHAN_SLOT_BASE + 2],
+    ]);
+    expect(plan.truncated).toBe(true);
+  });
+
+  it("gives each run of an orphan its own interrupt, so a run that started later is stopped too", () => {
+    const goal = testGoal("goal_reruns");
+    const orphan = running(goal, ORPHAN_SLOT_BASE);
+    const idFor = (runId: string) =>
+      planGoal(
+        goal,
+        [orphan],
+        observe({
+          workers: new Map([
+            [
+              ORPHAN_SLOT_BASE,
+              seen({ terminal: false, runStatus: "running", runId: RunId.make(runId) }),
+            ],
+          ]),
+        }),
+      ).actions.find((action) => action.type === "interrupt");
+    expect(idFor("run:1")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:1:interrupt",
+    });
+    expect(idFor("run:2")).toMatchObject({
+      actionId: "goal:goal_reruns:s10000:a1:run:2:interrupt",
+    });
+  });
+
   it("succeeds when every doneWhen holds and stops acting", () => {
     const goal = testGoal("goal_f", {
       spec: testSpec({
@@ -254,7 +311,7 @@ describe("planGoal", () => {
       }),
     );
     expect(shrink.actions).toEqual([
-      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:interrupt" },
+      { type: "interrupt", slot: 1, attempt: 1, actionId: "goal:goal_h:s1:a1:run:1:interrupt" },
     ]);
     // It stays live until the interrupt is confirmed.
     expect(shrink.workers[1]!.state).toBe("running");
@@ -263,7 +320,7 @@ describe("planGoal", () => {
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, live]]) }))
         .actions,
     ).toEqual([
-      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:interrupt" },
+      { type: "interrupt", slot: 0, attempt: 1, actionId: "goal:goal_h:s0:a1:run:1:interrupt" },
     ]);
     expect(
       planGoal(deleting, [running(deleting, 0)], observe({ workers: new Map([[0, seen()]]) }))
@@ -392,7 +449,10 @@ describe("planGoal", () => {
     // No slot record at all: the launched thread becomes slot 0.
     expect(
       repairWorkers(goal, [], [launch(1, "thread:a", "2026-10-20T00:00:01.000Z")]),
-    ).toMatchObject([{ slot: 0, attempt: 1, threadId: "thread:a", state: "running" }]);
+    ).toMatchObject([
+      // With its launch's branch, so a later move resumes from the worker's work (#1451).
+      { slot: 0, attempt: 1, threadId: "thread:a", branch: "goal/test/s0-a1", state: "running" },
+    ]);
     // A claimed launch with no outcome stays unclear instead of being forgotten.
     expect(repairWorkers(goal, [], [launch(1, null)])).toMatchObject([
       { slot: 0, threadId: null, state: "launch_unknown" },
@@ -429,7 +489,7 @@ describe("planGoal", () => {
         type: "interrupt",
         slot: ORPHAN_SLOT_BASE,
         attempt: 1,
-        actionId: "goal:goal_n:s10000:a1:interrupt",
+        actionId: "goal:goal_n:s10000:a1:run:1:interrupt",
       },
     ]);
   });
@@ -504,5 +564,195 @@ describe("planGoal", () => {
         observe({ workers: new Map([[0, limited("2026-10-20T00:30:00.000Z")]]) }),
       ).actions,
     ).toEqual([]);
+  });
+
+  it("recovers once a failed run an earlier controller marked followed up after a refused move (#1452)", () => {
+    const goal = testGoal("goal_q");
+    // The row the controller before #1472 left behind: the run is recorded as followed up both
+    // when its reschedule was refused and when a same-thread fallback was sent.
+    const { recoveredRunId: _absent, ...legacy } = running(goal, 0);
+    const followedUp = decodeWorker({
+      ...legacy,
+      followedUpRunId: "run:1",
+      lastRunId: "run:1",
+    });
+    const failed = seen({
+      runStatus: "failed",
+      health: { _tag: "failed", failureClass: "unknown", runId: RunId.make("run:1") },
+      result: null,
+    });
+    const refused = observe({
+      workers: new Map([[0, failed]]),
+      unmovedReschedules: new Set(["goal:goal_q:s0:a1:run:1:reschedule"]),
+    });
+    expect(planGoal(goal, [followedUp], refused).actions).toEqual([
+      {
+        type: "recover",
+        slot: 0,
+        attempt: 1,
+        runId: RunId.make("run:1"),
+        reason: "failed",
+        failureClass: "unknown",
+      },
+    ]);
+    // A sent fallback whose message waits held behind the failed run still shows that run.
+    expect(
+      planGoal(goal, [followedUp], observe({ workers: new Map([[0, failed]]) })).actions,
+    ).toEqual([]);
+    // Once this controller records the recovery's outcome, the run is not recovered again.
+    const settled = { ...followedUp, recoveredRunId: RunId.make("run:1") };
+    expect(planGoal(goal, [settled], refused).actions).toEqual([]);
+  });
+});
+
+describe("moves to another host (#1451)", () => {
+  const goal = testGoal("goal_mv", {
+    spec: testSpec({ limits: { ...testSpec().limits, maxTurns: 2 } }),
+  });
+  const moveId = "goal:goal_mv:s0:a1:run:5:reschedule";
+  const move = (threadId: string | null, settledAt: string | null, host = "B") => ({
+    actionId: moveId,
+    slot: 0,
+    claimedAt: "2026-10-20T00:00:02.000Z",
+    settledAt,
+    outcome: settledAt === null ? null : "rescheduled",
+    host,
+    threadId,
+  });
+  const onA = running(goal, 0, { host: "A", threadId: ThreadId.make("thread:a") });
+  const pending = new Map([
+    [
+      0,
+      {
+        actionId: moveId,
+        attempt: 1,
+        clientRequestId: "goal:goal_mv:s0:a2:launch",
+        runId: RunId.make("run:5"),
+      },
+    ],
+  ]);
+
+  it("never turns an unsettled move into an orphan, and restores a recorded successor after a lost write", () => {
+    // Unsettled: the slot keeps its attempt; the planner holds it.
+    expect(repairWorkers(goal, [onA], [move(null, null)])).toEqual([onA]);
+    // Settled with its thread, while the slot row still names attempt 1: the successor is the slot.
+    const rebuilt = repairWorkers(goal, [onA], [move("thread:b", "2026-10-20T00:00:03.000Z")]);
+    expect(
+      rebuilt.map((worker) => [worker.slot, worker.attempt, worker.host, worker.threadId]),
+    ).toEqual([
+      [0, 2, "B", "thread:b"],
+      [ORPHAN_SLOT_BASE, 1, "A", "thread:a"],
+    ]);
+    expect(rebuilt[0]).toMatchObject({
+      branch: "goal/test/s0-a2",
+      launchClientRequestId: "goal:goal_mv:s0:a2:launch",
+    });
+    // A successor found after the slot moved past it is stopped like any earlier attempt.
+    const third = {
+      ...newWorker(goal, 0, null, 3),
+      host: "C",
+      threadId: ThreadId.make("thread:c"),
+      state: "running" as const,
+    };
+    expect(
+      repairWorkers(goal, [third], [move("thread:b", "2026-10-20T00:00:03.000Z")]).map((worker) => [
+        worker.slot,
+        worker.threadId,
+      ]),
+    ).toEqual([
+      [0, "thread:c"],
+      [ORPHAN_SLOT_BASE, "thread:b"],
+    ]);
+  });
+
+  it("holds a slot whose move is unconfirmed: only resolve_move, kept when the budget is spent, done or deleting", () => {
+    const failed = observe({
+      workers: new Map([[0, seen({ runId: RunId.make("run:5"), runStatus: "failed" })]]),
+      pendingMoves: pending,
+    });
+    const resolve = {
+      type: "resolve_move",
+      slot: 0,
+      attempt: 1,
+      actionId: moveId,
+      clientRequestId: "goal:goal_mv:s0:a2:launch",
+      stopRunId: "run:5",
+      proceed: true,
+    };
+    expect(planGoal(goal, [onA], failed).actions).toEqual([resolve]);
+    expect(planGoal(goal, [onA], { ...failed, turns: 2 }).actions).toEqual([resolve]);
+    expect(
+      planGoal({ ...goal, deletionRequestedAt: "2026-10-20T00:59:00.000Z" }, [onA], failed),
+    ).toMatchObject({
+      actions: [{ ...resolve, proceed: false }],
+      status: { phase: "deleting" },
+    });
+    // Without the hold, a spent budget refuses the move itself.
+    expect(planGoal(goal, [onA], { ...failed, pendingMoves: new Map(), turns: 2 }).actions).toEqual(
+      [],
+    );
+  });
+
+  it("calls off a move that never launched once the goal is done, still looking it up", () => {
+    const issueGoal = testGoal("goal_mv", {
+      spec: testSpec({
+        targets: [{ type: "issue", number: 9 }],
+        doneWhen: [{ type: "issues_closed" }],
+      }),
+    });
+    const plan = planGoal(
+      issueGoal,
+      [onA],
+      observe({
+        workers: new Map([[0, seen({ runId: RunId.make("run:5"), runStatus: "failed" })]]),
+        pendingMoves: pending,
+        issues: new Map([[9, "closed"]]),
+      }),
+    );
+    expect(plan.status.phase).toBe("succeeded");
+    expect(plan.actions).toEqual([
+      expect.objectContaining({ type: "resolve_move", actionId: moveId, proceed: false }),
+    ]);
+  });
+
+  it("rebuilds a moved successor on its source's branch family after branchPrefix changed", () => {
+    const renamed = {
+      ...goal,
+      spec: {
+        ...goal.spec,
+        workers: {
+          ...goal.spec.workers,
+          workspace: { ...goal.spec.workers.workspace, branchPrefix: "goal/renamed" },
+        },
+      },
+    };
+    const rebuilt = repairWorkers(renamed, [onA], [move("thread:b", "2026-10-20T00:00:03.000Z")]);
+    expect(rebuilt[0]).toMatchObject({ attempt: 2, branch: "goal/test/s0-a2" });
+  });
+
+  it("follows the model a remote thread reports, and asks a person when a remote run is held at its usage limit", () => {
+    const remote = running(goal, 0, { host: "B", followedUpRunId: RunId.make("run:5") });
+    const plan = planGoal(
+      goal,
+      [remote],
+      observe({
+        workers: new Map([
+          [
+            0,
+            seen({
+              runId: RunId.make("run:5"),
+              runStatus: "failed",
+              health: { _tag: "failed", failureClass: "usage_limit", runId: RunId.make("run:5") },
+              modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "opus" },
+            }),
+          ],
+        ]),
+      }),
+    );
+    expect(plan.actions).toEqual([]);
+    expect(plan.workers[0]).toMatchObject({
+      state: "needs_human",
+      modelSelection: { instanceId: "claude", model: "opus" },
+    });
   });
 });

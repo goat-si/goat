@@ -42,7 +42,9 @@ export function ComputerUseReadiness({
       <Text textRole="body">
         {result.ready
           ? "Computer use is ready on this host."
-          : "Computer use setup needs attention."}
+          : result.startsWithNextTurn
+            ? "Computer use is ready on this host. It starts with the next agent turn."
+            : "Computer use setup needs attention."}
       </Text>
       {details ? <ComputerUseReadinessDetails result={result} /> : null}
     </View>
@@ -132,6 +134,8 @@ export function ComputerUseHostReadiness({
         readiness={query.data?.readiness}
         tools={query.data?.tools}
         signals={query.data?.signals}
+        failure={query.data?.failure}
+        display={query.data?.display}
         details={advanced.expanded}
       />
       <ComputerUseAdvancedRow advanced={advanced} />

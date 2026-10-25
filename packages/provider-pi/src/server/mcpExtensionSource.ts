@@ -383,15 +383,28 @@ function createStdioMcpClient(spec: StdioMcpSpec) {
 }
 
 // A process launched by an adapter without the gate keeps its launch-time behavior. Once the
-// gate exists, anything but "on", including a missing or unreadable file, closes the driver.
-async function readCuaGate(): Promise<boolean> {
+// gate exists, "on" keeps the launch driver and "driver" names a newer one beside it (a new
+// control after Stop, #1564); anything else, including a missing or unreadable file, closes it.
+async function readCuaGate(): Promise<"on" | "driver" | "off"> {
   const path = env(CUA_GATE_ENV);
-  if (path === undefined) return true;
+  if (path === undefined) return "on";
   try {
     const { readFile } = await import("node:fs/promises");
-    return (await readFile(path, "utf8")).trim() === "on";
+    const value = (await readFile(path, "utf8")).trim();
+    return value === "on" || value === "driver" ? value : "off";
   } catch {
-    return false;
+    return "off";
+  }
+}
+
+async function readCuaDriver(): Promise<StdioMcpSpec | undefined> {
+  const path = env(CUA_GATE_ENV);
+  if (path === undefined) return undefined;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return parseCuaSpec(await readFile(path + ".driver", "utf8"));
+  } catch {
+    return undefined;
   }
 }
 
@@ -409,7 +422,10 @@ async function readCuaSkill(): Promise<boolean> {
 
 function cuaSpec(): StdioMcpSpec | undefined {
   const raw = env(CUA_ENV);
-  if (raw === undefined) return undefined;
+  return raw === undefined ? undefined : parseCuaSpec(raw);
+}
+
+function parseCuaSpec(raw: string): StdioMcpSpec | undefined {
   try {
     const parsed = JSON.parse(raw) as { command?: unknown; args?: unknown; env?: unknown };
     if (typeof parsed.command !== "string" || !Array.isArray(parsed.args)) return undefined;
@@ -655,10 +671,12 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   let cuaOpen = true;
   const cuaToolNames: string[] = [];
   let closeCua: () => void = () => undefined;
+  let cuaClient: ReturnType<typeof createStdioMcpClient> | undefined;
+  let cuaDriverKey = JSON.stringify(cua);
   if (cua !== undefined) {
-    const cuaClient = createStdioMcpClient(cua);
-    closeCua = () => cuaClient.close();
-    pi.on("session_shutdown", () => cuaClient.close());
+    cuaClient = createStdioMcpClient(cua);
+    closeCua = () => cuaClient?.close();
+    pi.on("session_shutdown", () => closeCua());
     try {
       const signal = AbortSignal.timeout(20_000);
       await cuaClient.connect(signal);
@@ -679,7 +697,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
                 details: { server: "cua-driver", tool: name },
                 isError: true,
               };
-            const result = await cuaClient.callTool(
+            const result = await cuaClient!.callTool(
               name,
               (params ?? {}) as Record<string, unknown>,
               signal,
@@ -705,7 +723,20 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   pi.on("before_agent_start", async (event, ctx) => {
     reconcileDiscovery(ctx);
     if (computerUse) {
-      const open = await readCuaGate();
+      const gate = await readCuaGate();
+      let open = gate !== "off";
+      if (gate === "driver") {
+        // The same driver tools under the control GOAT minted since launch: swap the connection.
+        const next = await readCuaDriver();
+        if (next === undefined) open = false;
+        else if (JSON.stringify(next) !== cuaDriverKey) {
+          closeCua();
+          const client = createStdioMcpClient(next);
+          cuaClient = client;
+          cuaDriverKey = JSON.stringify(next);
+          closeCua = () => client.close();
+        }
+      }
       if (!open && cuaOpen) {
         // End the driver connection before the turn starts, not just its tools.
         closeCua();

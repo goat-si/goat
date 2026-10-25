@@ -2,11 +2,17 @@
 import * as NodePath from "@effect/platform-node/NodePath";
 import type {
   ComputerUseReadiness,
+  DesktopCuaAppsReport,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
 } from "@goat/contracts";
+import {
+  admittedCuaApplications,
+  cuaDriverCapabilityManifest,
+  type CuaDriverListedApp,
+} from "@goat/shared/cuaDriverManifest";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -47,6 +53,8 @@ export interface HelperAnswer {
   readonly blocker?: ComputerUseReadiness["blockers"][number];
   /** Fails the read the way a helper that cannot answer does. */
   readonly fails?: Error;
+  /** Whether the probed helper's hello lists watch, when it differs from the running one's. */
+  readonly canWatch?: boolean;
 }
 
 export const toolResult = (structured: unknown, images: ToolResult["images"] = []): ToolResult => ({
@@ -92,6 +100,8 @@ export const fixture = Effect.fn(function* (
     failFirstStart?: boolean;
     hold?: "start" | "stop" | "monitor";
     tools?: Record<string, ToolResult>;
+    /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
+    withdrawIdentityAfter?: string;
     blankCapture?: boolean;
     refuseStart?: boolean;
     /** Ship the GOAT Computer Use helper; its grants are separate from Electron's. */
@@ -102,12 +112,28 @@ export const fixture = Effect.fn(function* (
     helperWithoutInput?: boolean;
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
+    /** The app update puts a new helper generation beside the one already running. */
+    updatedHelper?: boolean;
+    publisher?: DesktopTelemetryPublisher["Service"];
+    appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
 ) {
+  const appRequests = yield* Queue.sliding<void>(1);
+  const pendingAppRequests = new Set<string>();
+  const appReports = yield* Queue.unbounded<DesktopCuaAppsReport>();
+  let computerUseEnabled = true;
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
   const readiness: DesktopCuaReadinessReport[] = [];
   const watching = yield* Queue.unbounded<boolean>();
+  const approvals = yield* Queue.unbounded<{
+    apps: ReadonlyArray<string>;
+    done: Deferred.Deferred<void>;
+  }>();
+  const manifests = new Map<string, string>();
+  let listedApps: ReadonlyArray<CuaDriverListedApp> = [
+    { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+  ];
   const safety: DesktopCuaPrivateModeReport[] = [];
   const safetyHeard = yield* Queue.unbounded<void>();
   /** The helper's watch calls, in order, and a way to raise its private-mode event. */
@@ -136,36 +162,46 @@ export const fixture = Effect.fn(function* (
   let allowed = !options.denyPermissions;
   let helperAnswer = typeof options.helper === "object" ? options.helper : undefined;
   let helperLost: "unusable" | "absent" | undefined;
+  let updatedHelper = options.updatedHelper === true;
   let starts = 0;
   let stops = 0;
   let destroys = 0;
   const toolCalls: Array<{ name: string; input: unknown }> = [];
   let clientsOpen = 0;
+  let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
+  let appListingFails = options.helperAppsFail === true;
   const helperLaunches: Array<{
     bundleId: string;
     driverPath: string;
     manifestPath: string;
     environment: ReadonlyArray<{ name: string; value: string }>;
     direct: boolean;
+    verify: boolean;
   }> = [];
+  let identityWithdrawn = false;
+  const createClient = (): Awaited<ReturnType<DesktopCuaDriverDependencies["connect"]>> => {
+    clientsOpen++;
+    return {
+      callTool: async (name, input) => {
+        toolCalls.push({ name, input: JSON.parse(input) });
+        const result = (options.tools ?? healthyTools())[name];
+        if (!result) throw new Error(`unexpected tool ${name}`);
+        if (name === options.withdrawIdentityAfter) identityWithdrawn = true;
+        return result;
+      },
+      uniffiDestroy: () => {
+        clientsOpen--;
+      },
+    };
+  };
   const dependencies: DesktopCuaDriverDependencies = {
     connect: async () => {
-      clientsOpen++;
-      return {
-        callTool: async (name, input) => {
-          toolCalls.push({ name, input: JSON.parse(input) });
-          const result = (options.tools ?? healthyTools())[name];
-          if (!result) throw new Error(`unexpected tool ${name}`);
-          return result;
-        },
-        uniffiDestroy: () => {
-          clientsOpen--;
-        },
-      };
+      socketConnections++;
+      return createClient();
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
     helperGrants: async (bundle, prompt) => {
@@ -175,15 +211,24 @@ export const fixture = Effect.fn(function* (
       return {
         accessibility: granted,
         screenRecording: granted,
+        // A probe's helper says in its hello what it can do, as an agent's helper does.
+        features: {
+          canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
+          reportsInput: options.helperWithoutWatch !== true && options.helperWithoutInput !== true,
+          canFrame: false,
+        },
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
     },
-    helperBundlePath: async () =>
+    helperBundlePath: async ({ busy }) =>
       options.helper === "unusable" || helperLost === "unusable"
         ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
         : options.helper && helperLost === undefined
-          ? { kind: "found", path: HELPER_BUNDLE }
+          ? {
+              kind: "found",
+              path: updatedHelper && !busy ? HELPER_BUNDLE + "/generations/new" : HELPER_BUNDLE,
+            }
           : { kind: "absent" },
     helperHost: (helper) => {
       helperLaunches.push({
@@ -192,6 +237,7 @@ export const fixture = Effect.fn(function* (
         manifestPath: helper.capabilityManifestPath,
         environment: helper.environment,
         direct: helper.direct === true,
+        verify: helper.verify === true,
       });
       const manifest = prepared.get(helper.capabilityManifestPath);
       launches.push({
@@ -203,6 +249,7 @@ export const fixture = Effect.fn(function* (
       });
       const exit = Promise.withResolvers<void>();
       let running = false;
+      let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
       const session = {
         canWatch: options.helperWithoutWatch !== true,
@@ -227,11 +274,30 @@ export const fixture = Effect.fn(function* (
         },
       };
       return {
-        servicePid: () => (running ? HELPER_PID : undefined),
-        session: () => (running ? session : undefined),
+        servicePid: () => (running && !identityWithdrawn ? HELPER_PID : undefined),
+        readinessPeer: () => readinessClient,
+        // The macOS readiness check runs the helper as an MCP child, which has no session.
+        session: () =>
+          running && !(helper.verify && (options.platform ?? "linux") === "darwin")
+            ? session
+            : undefined,
         start: async () => {
           starts++;
           running = true;
+          if (helper.verify) {
+            const peer = createClient();
+            let closed = false;
+            readinessClient = {
+              ...peer,
+              uniffiDestroy: () => {
+                if (closed) return;
+                closed = true;
+                peer.uniffiDestroy?.();
+                running = false;
+                exit.resolve();
+              },
+            };
+          }
           Deferred.doneUnsafe(starting, Exit.void);
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
@@ -265,6 +331,8 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          readinessClient?.uniffiDestroy?.();
+          readinessClient = undefined;
           exit.resolve();
         },
         waitForExit: (_generation, operation) => {
@@ -288,22 +356,33 @@ export const fixture = Effect.fn(function* (
     prepareManifest: async (input) => {
       const path = `${input.directory}/${input.scope}.yaml`;
       prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
+      const apps =
+        input.scope === "agents" ? await (input.listApplications?.() ?? Promise.resolve([])) : [];
       if (input.scope === "agents")
-        manifestListings.push(
-          input.listApplications
-            ? {
-                scope: input.scope,
-                through: "helper",
-                apps: (await input.listApplications()).length,
-              }
-            : { scope: input.scope, through: "driver", apps: 0 },
-        );
+        manifestListings.push({
+          scope: input.scope,
+          through: input.listApplications ? "helper" : "driver",
+          apps: apps.length,
+        });
+      manifests.set(
+        path,
+        cuaDriverCapabilityManifest({
+          applications: admittedCuaApplications(apps, input.hostBundleIds),
+        }),
+      );
       return path;
+    },
+    listApps: async () => listedApps,
+    computerUseEnabled: async () => computerUseEnabled,
+    readManifest: async (path) => {
+      const text = manifests.get(path);
+      if (text === undefined) throw new Error("missing manifest");
+      return text;
     },
     helperApps: async (bundle) => {
       helperAppListings.push(bundle.bundleId);
-      if (options.helperAppsFail) throw new Error("driver_untrusted");
-      return [{ bundle_id: "com.apple.TextEdit", name: "TextEdit" }];
+      if (appListingFails) throw new Error("driver_untrusted");
+      return options.appListing ? options.appListing() : listedApps;
     },
     processId: HOST_PID,
     executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
@@ -391,8 +470,26 @@ export const fixture = Effect.fn(function* (
     updateCommits: Stream.empty,
     updateCancellations: Stream.empty,
     publishUpdateReport: () => Effect.void,
+    cuaAppsRequests: Stream.fromQueue(appRequests),
+    takeCuaAppsRequests: Effect.sync(() => {
+      const requestIds = [...pendingAppRequests];
+      pendingAppRequests.clear();
+      return {
+        requestIds,
+        publish: (report: DesktopCuaAppsReport) =>
+          Queue.offer(appReports, report).pipe(Effect.asVoid),
+      };
+    }),
     cuaRequests: Stream.fromQueue(requests),
     cuaWatch: Stream.fromQueue(watching),
+    cuaWatchApps: Stream.fromQueue(approvals).pipe(
+      Stream.flatMap(({ apps, done }) =>
+        Stream.concat(
+          Stream.make(apps),
+          Stream.drain(Stream.fromEffect(Deferred.succeed(done, undefined))),
+        ),
+      ),
+    ),
     publishCuaReport: (report) => Queue.offer(reports, report).pipe(Effect.asVoid),
     publishCuaReadiness: (report) =>
       Effect.sync(() => {
@@ -424,16 +521,40 @@ export const fixture = Effect.fn(function* (
     ),
   );
   const driver = yield* make(dependencies).pipe(
-    Effect.provideService(DesktopTelemetryPublisher, publisher),
+    Effect.provideService(DesktopTelemetryPublisher, options.publisher ?? publisher),
     Effect.provide(environment),
   );
   yield* driver.listen;
   return {
+    requestApps: (requestId: string) =>
+      Effect.sync(() => {
+        pendingAppRequests.add(requestId);
+      }).pipe(Effect.andThen(Queue.offer(appRequests, undefined))),
+    nextApps: Queue.take(appReports),
+    setComputerUseEnabled: (enabled: boolean) =>
+      Effect.sync(() => {
+        computerUseEnabled = enabled;
+      }),
+    manifest: () => manifests.get(launches.at(-1)?.manifestPath ?? "") ?? "",
+    failAppListing: Effect.sync(() => {
+      appListingFails = true;
+    }),
+    listApps: (apps: ReadonlyArray<CuaDriverListedApp>) =>
+      Effect.sync(() => {
+        listedApps = apps;
+      }),
+    approveApps: (apps: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const done = yield* Deferred.make<void>();
+        yield* Queue.offer(approvals, { apps, done });
+        yield* Deferred.await(done);
+      }),
     restart: driver.restart,
     verify: driver.verify,
     grants: driver.grants,
     toolCalls,
     clientsOpen: () => clientsOpen,
+    socketConnections: () => socketConnections,
     request: (requestId: string, enabled = true) =>
       Queue.offer(requests, { version: 1, type: "cuaDriverRequest", requestId, enabled }),
     next: Queue.take(reports),
@@ -471,6 +592,9 @@ export const fixture = Effect.fn(function* (
     helperLaunches,
     readiness,
     /** The server says whether agents control the host. */
+    applyHelperUpdate: Effect.sync(() => {
+      updatedHelper = true;
+    }),
     setWatching: (active: boolean) => Queue.offer(watching, active).pipe(Effect.asVoid),
     nextHelperWatch: Queue.take(helperWatches),
     raisePrivateMode: (active: boolean, windowId: number) =>

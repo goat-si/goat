@@ -116,8 +116,11 @@ whether to send it itself. The relay does not change the dispatch's latest repor
 ## Fleet goals
 
 Fleet goals and their controller (`apps/server/src/fleet/goals/`, tools `goat_goal_*`) launch and
-follow workers through the same launch services as the tools above, as the goal's owner thread and
-never above its ceiling. They are off unless `fleet.controllerEnabled` is set. Host cordon,
+follow workers on this machine through the same launch services as the tools above, and workers on
+other hosts directly over `SshRemoteDispatch` (`GoalRemoteWorkers.ts`, rechecking before each
+write), as the goal's owner (its GOAT
+thread, or the outside MCP client session whose live grant `auth/McpClientAuthority.ts` reads
+again by session id) and never above its ceiling. They are off unless `fleet.controllerEnabled` is set. Host cordon,
 placement limits and fallback chains do not exist yet; the controller reaches them through the
 `goat/fleet/*` service tags, whose defaults are local-only. Design and current differences:
 [agentic-k8s.md](../docs/internals/agentic-k8s.md).

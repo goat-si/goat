@@ -41,6 +41,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as HostStatusMcpService from "./HostStatusMcpService.ts";
 import * as HubParity from "../hub/HubParity.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
+import * as OpenCodexSync from "../hub/OpenCodexSync.ts";
 import * as GoalService from "../fleet/goals/GoalService.ts";
 import * as FleetFallback from "../fleet/resources/Fallback.ts";
 import * as FleetPlacement from "../fleet/resources/Placement.ts";
@@ -76,6 +77,8 @@ import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReview
 import * as ProjectService from "../project/ProjectService.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import type { Project } from "@goat/contracts";
 import { McpSchema } from "effect/ai";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import { AttachmentToolkit } from "./toolkits/attachment/tools.ts";
@@ -155,7 +158,10 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   // A live thread, so thread callers reach the handler instead of the inert services above.
   liveThreadsLayer,
-  Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
+  Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+    proxy: undefined,
+    foregroundApprovalEpoch: Effect.succeed(0),
+  }),
   Layer.mock(Handoffs.Handoffs)({}),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
@@ -182,6 +188,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostStatusMcpService.HostStatusMcpService)({}),
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
+  Layer.mock(OpenCodexSync.OpenCodexSync)({}),
   Layer.mock(GoalService.GoalService)({}),
   Layer.mock(FleetFallback.FallbackChains)({}),
   Layer.mock(FleetPlacement.Placement)({}),
@@ -245,6 +252,18 @@ const inertDependencies = Layer.mergeAll(
 const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
 const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
+/**
+ * The calling thread's project exists and grants Agent device access, so a device handler runs
+ * past its per-call access check. Merge it after `dependencies`.
+ */
+export const deviceAccessGranted = Layer.mergeAll(
+  Layer.mock(ProjectService.ProjectService)({
+    getById: (id) => Effect.succeed(Option.some({ id } as Project)),
+  }),
+  Layer.mock(Settings.ServerSettingsService)({
+    getSettings: Effect.succeed({ ...DEFAULT_SERVER_SETTINGS, enableAgentDeviceAccess: true }),
+  }),
+);
 /**
  * The same inert services with goatclaw on, so the capability gate holds threads to their
  * profiles. The caller provides SqlClient (with the calling thread seeded) and the

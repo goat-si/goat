@@ -12,6 +12,8 @@ import {
   COMPUTER_USE_LEASE_ROUTE,
   ComputerUseLeaseReport,
   ComputerUseLeaseUpdate,
+  ComputerUseCallReservation,
+  ComputerUseCallAdmission,
 } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -29,6 +31,10 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
+const encodeAdmission = Schema.encodeSync(Schema.fromJsonString(ComputerUseCallAdmission));
+const decodeReservation = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ComputerUseCallReservation),
+);
 
 /** Updates for one thread's control until one of them ends it. */
 export const leaseUpdates = (input: {
@@ -83,13 +89,24 @@ export const leaseUpdates = (input: {
           yield* Queue.take(wake);
           continue;
         }
-        yield* Queue.offer(queue, {
-          state: "active",
-          controlId: input.controlId,
-          expiresAt: DateTime.formatIso(state.expiresAt),
-          ...(state.apps === undefined ? {} : { apps: state.apps }),
-          ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
-        });
+        yield* Queue.offer(
+          queue,
+          state.idle === true
+            ? {
+                state: "idle",
+                controlId: input.controlId,
+              }
+            : {
+                state: "active",
+                controlId: input.controlId,
+                expiresAt: DateTime.formatIso(state.expiresAt),
+                ...(state.apps === undefined ? {} : { apps: state.apps }),
+                ...(state.idleEpoch === undefined ? {} : { idleEpoch: state.idleEpoch }),
+                ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
+                ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
+                ...(state.shared === true ? { shared: true } : {}),
+              },
+        );
         const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);
         yield* Effect.raceFirst(Queue.take(wake), Effect.sleep(Math.max(0, remaining)));
       }
@@ -128,7 +145,11 @@ export const reportLayer = HttpRouter.add(
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     const value = report.value;
     if ("humanInput" in value) {
-      const outcome = yield* leases.humanInput(threadId, value.controlId, value.humanInput.at);
+      const outcome = yield* leases.humanInput(
+        threadId,
+        value.controlId,
+        Array.isArray(value.humanInput) ? value.humanInput : [value.humanInput],
+      );
       // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
       // keeps reporting after a 202 (another agent's input) or a 409.
       return HttpServerResponse.empty({
@@ -169,4 +190,27 @@ const streamLayer = HttpRouter.add(
   }),
 );
 
-export const layer = Layer.mergeAll(streamLayer, reportLayer);
+const callLayer = HttpRouter.add(
+  "POST",
+  `${COMPUTER_USE_LEASE_ROUTE}/calls`,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const threadId = yield* threadOf;
+    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+    const call = yield* request.text.pipe(Effect.flatMap(decodeReservation), Effect.option);
+    if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const result = yield* leases.callReservation(threadId, call.value).pipe(
+      Effect.orElseSucceed((): ComputerUseCallAdmission => ({
+        status: "refused",
+        detail: "unauthorized",
+      })),
+    );
+    return HttpServerResponse.text(encodeAdmission(result), {
+      contentType: "application/json",
+      headers: { "cache-control": "no-store" },
+    });
+  }),
+);
+
+export const layer = Layer.mergeAll(streamLayer, reportLayer, callLayer);

@@ -386,6 +386,20 @@ terminal, which a profile bounds only through its runtime-mode ceiling. A goatcl
 role launch is refused when the narrowed profile lacks a capability the role's work
 uses ([RoleTemplates.ts](../../apps/server/src/goatclaw/RoleTemplates.ts)), so a
 merge manager is never started without `pr.merge`.
+A supervisor keeps `pr.merge` from its own profile when only its caller's stored
+profile lacks it, so a person's worker thread can still get merges through one; a
+launch snapshot or forwarded ceiling without it still removes it. That is safe only
+while `pr.merge` gates nothing but role launches, so gating a tool on it would hand
+that tool to every supervisor.
+Every check that compares a role thread's grant with its caller's, such as the
+recheck before an SSH launch and a send's target check and rebinding, derives it
+with the same `roleProfile`; comparing against the caller's plain profile reads the
+kept capability as a narrowing, refusing the launch or send or stripping it.
+Creating and cloning a project are the one environment write a calling thread at
+`auto` may run, because worker agents run at `auto` at most. When goatclaw governs
+the thread its profile decides, full access included, before and again after
+admission: it must allow `worktree.create` and leave the thread at `auto` or above
+after its runtime ceiling. Every other environment write still needs full access.
 With goatclaw on, the served handle refuses a GOAT thread whose effective profile
 lacks the declared capability, before arguments decode, so `goat_call` and anything
 else that calls through the server inherit the check
@@ -438,11 +452,20 @@ schemas from the tools this server actually serves, with `surfaceVersion` at the
 client-only, read-only client, not served, and for a GOAT thread the goatclaw capability its
 effective profile lacks, judged as the call gate judges it. A profile that does not resolve
 reports its reason on every write that needs a capability. What depends on the call's
-arguments or the moment, such as a host allowlist, lanes left, and `host`, is still judged
+arguments or the moment, such as a host allowlist and lanes left, is still judged
 only when the call is made; examples and related paths are not in it yet. `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
+
+**Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
+authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
+the session this caller gets there, which carries no thread or profile, so this machine then
+refuses each path it would not carry there for this caller: one it lacks or that takes no `host`
+here, and for a write the interaction-mode, link-access and profile host checks a routed write
+meets. `coverage.hostOlder` orders the two GOAT builds with `compareRuntimeBuilds`;
+`surfaceVersion` is a hash and has no order. A host that predates reporting its build answers
+`null`. See [hostDescribe](../../apps/server/src/mcp/toolkits/agentSurface/hostDescribe.ts).
 
 **Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
 visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays

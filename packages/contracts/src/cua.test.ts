@@ -1,9 +1,29 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
-import { CuaHostStatus } from "./cua.ts";
+import {
+  ComputerUseCallReservation,
+  ComputerUseCallAdmission,
+  ComputerUseLeaseUpdate,
+  ComputerUseForegroundGrant,
+  ComputerUseRequestInput,
+  ComputerUseRequestResult,
+  CuaHostStatus,
+  DesktopCuaWatch,
+} from "./cua.ts";
+import {
+  DesktopTelemetryControlMessage,
+  DesktopHostTelemetryMessage,
+} from "./resourceTelemetry.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
+
+const decodeControlMessage = Schema.decodeUnknownSync(DesktopTelemetryControlMessage);
+const decodeTelemetryMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
+const decodeRequestResult = Schema.decodeUnknownSync(ComputerUseRequestResult);
+const decodeCallReservation = Schema.decodeUnknownSync(ComputerUseCallReservation);
+const decodeLeaseUpdate = Schema.decodeUnknownSync(ComputerUseLeaseUpdate);
+const decodeCallAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
 
 const computerUse = {
   enabled: false,
@@ -27,6 +47,176 @@ const metrics = {
 };
 
 describe("computer use on the wire", () => {
+  it("decodes correlated app listing controls, reports and actionable unknown-app refusals", () => {
+    const request = { version: 1, type: "cuaAppsRequest", requestId: "apps-1" };
+    expect(decodeControlMessage(request)).toEqual(request);
+    const decode = decodeTelemetryMessage;
+    const listed = {
+      version: 1,
+      type: "cuaApps",
+      requestId: "apps-1",
+      status: "listed",
+      apps: ["com.example.Editor", "fixture.exe"],
+    };
+    expect(decode(listed)).toEqual(listed);
+    const unavailable = { version: 1, type: "cuaApps", requestId: "apps-1", status: "unavailable" };
+    expect(decode(unavailable)).toEqual(unavailable);
+    for (const invalid of [
+      { ...listed, requestId: " " },
+      { ...listed, apps: [" "] },
+      { ...listed, apps: [7] },
+      { ...listed, apps: Array.from({ length: 1001 }, () => "app") },
+      { ...listed, status: "ready" },
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const refusal = {
+      kind: "refused",
+      reason: "unknown_app",
+      unknownApps: ["Editor window"],
+      message: "Call list_apps and ask again.",
+    };
+    expect(decodeRequestResult(refusal)).toEqual(refusal);
+  });
+
+  it("preserves the admitted app scope and rejects malformed permission deadlines", () => {
+    const admitted = { status: "admitted", reservationId: "ticket" };
+    expect(decodeCallAdmission(admitted)).toEqual(admitted);
+    for (const apps of [undefined, [], ["com.example.AppA"]]) {
+      const permission = {
+        ...admitted,
+        permissions: { ...(apps === undefined ? {} : { apps }), validUntilMillis: 300_000 },
+      };
+      expect(decodeCallAdmission(permission)).toEqual(permission);
+    }
+    for (const permissions of [
+      { apps: [7], validUntilMillis: 1 },
+      {},
+      ...[-1, 0.5, Infinity, Number.MAX_SAFE_INTEGER + 1].map((validUntilMillis) => ({
+        validUntilMillis,
+      })),
+    ])
+      expect(() => decodeCallAdmission({ ...admitted, permissions })).toThrow();
+  });
+  it("preserves optional foreground authority and rejects malformed grant identities and expiry", () => {
+    const grant = {
+      handoffId: "handoff:foreground",
+      purpose: "Check build",
+      target: "desktop",
+      expiresAtMillis: 1234,
+    };
+    const decode = Schema.decodeUnknownSync(ComputerUseForegroundGrant);
+    expect(decode(grant)).toEqual(grant);
+    for (const invalid of [
+      { ...grant, handoffId: "" },
+      { ...grant, purpose: " " },
+      { ...grant, target: "app" },
+      ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Infinity].map((expiresAtMillis) => ({
+        ...grant,
+        expiresAtMillis,
+      })),
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const active = {
+      state: "active",
+      controlId: "control:one",
+      expiresAt: "later",
+      foreground: [grant],
+      idleEpoch: 2,
+    };
+    expect(decodeLeaseUpdate(active)).toEqual(active);
+    const reserve = {
+      action: "reserve",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      callId: "call:one",
+      interruptions: 0,
+      idleEpoch: 2,
+      name: "bring_to_front",
+      args: {},
+      foregroundGrantId: grant.handoffId,
+    };
+    expect(decodeCallReservation(reserve)).toEqual(reserve);
+    expect(
+      decodeCallAdmission({
+        status: "refused",
+        detail: "foreground_not_approved",
+      }),
+    ).toEqual({ status: "refused", detail: "foreground_not_approved" });
+    const request = Schema.decodeUnknownSync(ComputerUseRequestInput);
+    expect(request({ purpose: "Check" })).toEqual({ purpose: "Check" });
+    for (const foreground of [true, false])
+      expect(request({ purpose: "Check", foreground })).toEqual({ purpose: "Check", foreground });
+    for (const foreground of ["true", 1, {}])
+      expect(() => request({ purpose: "Check", foreground })).toThrow();
+  });
+  it("decodes ticket confirmation strictly without accepting replacement authority", () => {
+    const validation = {
+      action: "validate",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      reservationId: "ticket:one",
+    };
+    expect(decodeCallReservation(validation)).toEqual(validation);
+    for (const invalid of [
+      ...[null, "", " ", 0, false].map((reservationId) => ({ ...validation, reservationId })),
+      { ...validation, controlId: "" },
+      { ...validation, connectionId: "" },
+      { ...validation, threadId: "thread:forged" },
+      { ...validation, name: "list_apps" },
+      { ...validation, args: {} },
+      { ...validation, foregroundGrantId: "handoff:fresh" },
+    ])
+      expect(() => decodeCallReservation(invalid)).toThrow();
+    for (const action of ["release", "close"]) {
+      const request = {
+        action,
+        controlId: validation.controlId,
+        connectionId: validation.connectionId,
+        ...(action === "release" ? { reservationId: validation.reservationId } : {}),
+      };
+      expect(decodeCallReservation(request)).toEqual(request);
+    }
+  });
+
+  it("roundtrips execution ownership and refuses malformed or unknown reservation actions", () => {
+    const decode = Schema.decodeUnknownSync(ComputerUseCallReservation);
+    const request = {
+      action: "reserve",
+      controlId: "control:one",
+      connectionId: "driver:one",
+      callId: "one",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "type_text",
+      args: { pid: 42, window_id: 7 },
+    };
+    expect(decode(request)).toEqual(request);
+    const { idleEpoch: _idleEpoch, ...missingIdleEpoch } = request;
+    for (const invalid of [
+      missingIdleEpoch,
+      { ...request, action: "steal" },
+      { ...request, connectionId: "" },
+      { ...request, interruptions: -1 },
+      { ...request, idleEpoch: -1 },
+      { ...request, name: "" },
+    ])
+      expect(() => decode(invalid)).toThrow();
+    const refusal = { status: "refused", detail: "target_busy", holderThreadId: "thread:holder" };
+    expect(decodeCallAdmission(refusal)).toEqual(refusal);
+    expect(decodeLeaseUpdate({ state: "idle", controlId: "control:one" })).toEqual({
+      state: "idle",
+      controlId: "control:one",
+    });
+  });
+  it("accepts watch messages from older servers and preserves optional approved app ids", () => {
+    const decode = Schema.decodeUnknownSync(DesktopCuaWatch);
+    const watch = { version: 1, type: "cuaWatch", seq: 1, active: true };
+    expect(decode(watch)).toEqual(watch);
+    const apps = ["com.example.notes", "C:\\work\\fixture.exe"];
+    expect(decode({ ...watch, apps })).toEqual({ ...watch, apps });
+    expect(() => decode({ ...watch, apps: [7] })).toThrow();
+  });
+
   it("preserves reported readiness and signals, and drops future optional shapes independently", () => {
     const decode = Schema.decodeUnknownSync(CuaHostStatus);
     const readiness = {

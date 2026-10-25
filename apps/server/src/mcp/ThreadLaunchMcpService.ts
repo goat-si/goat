@@ -71,6 +71,8 @@ export interface CloudRunLaunch {
   readonly externalLauncher?: string;
   /** The caller already passed the cloud launch approval for this launch. */
   readonly approved?: true;
+  /** Asked right before the thread is created and before its first message; see ThreadLaunchInput. */
+  readonly confirm?: ThreadLaunch.ThreadLaunchInput["confirm"];
 }
 
 export class ThreadLaunchMcpService extends Context.Service<
@@ -540,6 +542,7 @@ const make = Effect.gen(function* () {
                     ),
                   ),
             (route) =>
+              // The child-work claim holds this launch in flight until the scope closes.
               Effect.gen(function* () {
                 yield* launchChildWork(channelChildWork, admission, { threadId });
                 const admitted = yield* permissions
@@ -583,6 +586,7 @@ const make = Effect.gen(function* () {
                   ...(cloudRun?.externalLauncher === undefined
                     ? {}
                     : { externalLauncher: cloudRun.externalLauncher }),
+                  ...(cloudRun?.confirm === undefined ? {} : { confirm: cloudRun.confirm }),
                   // The calling thread is the launcher. A launch forwarded over SSH has no
                   // calling thread here and names its launcher on the other machine instead.
                   ...(caller !== undefined
@@ -635,9 +639,13 @@ const make = Effect.gen(function* () {
                   Effect.tap(() =>
                     admitted.enabled ? permissions.complete(commandId) : Effect.void,
                   ),
+                  // A thread the failed launch created keeps its lane, bound so that it counts only
+                  // while that thread runs: one whose first message was refused never does.
                   Effect.onError(() =>
                     admitted.enabled
-                      ? permissions.release(commandId, true).pipe(Effect.ignore)
+                      ? permissions
+                          .release(commandId, true)
+                          .pipe(Effect.andThen(permissions.complete(commandId)), Effect.ignore)
                       : Effect.void,
                   ),
                   // Only a launch that never created its thread returns the capacity. The
@@ -757,7 +765,7 @@ const make = Effect.gen(function* () {
                     ? {}
                     : { report: { correlationId: report.correlationId } }),
                 };
-              }),
+              }).pipe(Effect.scoped),
             (route) =>
               routeKept || route.webhookTarget === null
                 ? Effect.void

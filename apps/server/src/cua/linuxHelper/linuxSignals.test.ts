@@ -88,6 +88,20 @@ describe("Linux safety signals", () => {
     await helper.close();
   });
 
+  it("a helper shutting down does not report a focused secret as cleared (#1494 r5)", async () => {
+    const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
+    await watch(helper, "w1");
+    expect(
+      (await helper.events()).map((entry) => (entry.event as { active?: boolean }).active),
+    ).toEqual([true]);
+    await helper.shutdown();
+    expect(
+      (await helper.events()).map((entry) => (entry.event as { active?: boolean }).active),
+    ).toEqual([true]);
+    expect(helper.armed()).toBe(0);
+    await helper.close();
+  });
+
   it("a driver error listing windows does not count as the window closing", async () => {
     const helper = await connect({ focus: { known: true, secure: true, windows: 1 } });
     await watch(helper, "w1");

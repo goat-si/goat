@@ -10,7 +10,8 @@
  *
  * The reconcile pass settles records against the real state of their destinations: child thread
  * runs for local work, remote_dispatches rows for remote work. An unresolved remote outcome keeps
- * its capacity until the destination answers (resolve-or-fence lands with PR-D).
+ * its capacity until the destination answers; only the destination's fence (the dispatch is then
+ * recorded cancelled) or a confirmed pre-launch refusal releases it.
  *
  * @module ChannelChildWork
  */
@@ -31,6 +32,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -108,11 +110,16 @@ export class ChannelChildWork extends Context.Service<
       readonly destinationHint?: string | undefined;
       readonly clientRequestId?: string | undefined;
     }) => Effect.Effect<ChannelChildWorkAdmission, ChannelChildWorkError>;
-    /** reserved -> launched, recording where the launch is headed. */
-    readonly markLaunched: (
+    /**
+     * reserved -> launched, recording where the launch is headed; false when the record is no
+     * longer reserved (a task stop released it) or the write failed, and the launch must not run.
+     * Until the scope closes the launch counts as in flight, so a stop or reconcile pass never
+     * settles its destination as missing while the launch can still create it.
+     */
+    readonly claimLaunch: (
       record: ChannelChildWorkRecord,
       destination: ChannelChildWorkDestination,
-    ) => Effect.Effect<void, never>;
+    ) => Effect.Effect<boolean, never, Scope.Scope>;
     /** reserved|launched -> bound; the destination accepted the work. */
     readonly markBound: (
       record: ChannelChildWorkRecord,
@@ -137,7 +144,8 @@ export class ChannelChildWork extends Context.Service<
      * it), and a record settles cancelled once the stop lands or the thread proves gone.
      * Delegates are covered by the worker's own cascade and remote-binding children by
      * reconcile, so both are only watched here. "retry" asks the caller to run the stop pass
-     * again; a refused stop while the child is still live advances the owning stop's attempt,
+     * again: a launch still in flight, a record another writer moved, or a stop that did not
+     * land. A refused stop while the child is still live advances the owning stop's attempt,
      * since a refused command id is refused for good.
      */
     readonly cancelForTask: (input: {
@@ -160,6 +168,25 @@ const make = Effect.gen(function* () {
 
   const toError = (detail: string, cause?: unknown): ChannelChildWorkError =>
     new ChannelChildWorkError({ reason: "storage", detail, cause });
+
+  // Launches this process is running, by record id. A launch commits its destination inside its
+  // own fiber (the orchestrator dispatches in the caller under the thread lock, and a remote
+  // launch inserts its dispatch row before any remote write), so once a claim's scope closes, a
+  // destination still missing never appears. The server owner lock keeps one process per
+  // database, which makes this process's view complete.
+  const launching = new Map<string, number>();
+  const isLaunching = (record: ChannelChildWorkRecord) =>
+    (launching.get(record.childWorkId) ?? 0) > 0;
+  const enterLaunch = (record: ChannelChildWorkRecord) =>
+    Effect.sync(() => {
+      launching.set(record.childWorkId, (launching.get(record.childWorkId) ?? 0) + 1);
+    });
+  const leaveLaunch = (record: ChannelChildWorkRecord) =>
+    Effect.sync(() => {
+      const remaining = (launching.get(record.childWorkId) ?? 0) - 1;
+      if (remaining > 0) launching.set(record.childWorkId, remaining);
+      else launching.delete(record.childWorkId);
+    });
 
   const ownershipForCaller = Effect.fn("ChannelChildWork.ownershipForCaller")(function* (
     callerThreadId: ThreadId,
@@ -265,12 +292,13 @@ const make = Effect.gen(function* () {
     return { _tag: "admitted", record, requestKey } as const satisfies ChannelChildWorkAdmission;
   });
 
+  /** Compare-and-set; false when another writer moved the record first or the write failed. */
   const transition = (
     record: ChannelChildWorkRecord,
     from: ReadonlyArray<ChannelChildWorkState>,
     to: ChannelChildWorkState,
     destination?: ChannelChildWorkDestination,
-  ) =>
+  ): Effect.Effect<boolean> =>
     nowIso.pipe(
       Effect.flatMap((now) =>
         store.transition({
@@ -282,34 +310,41 @@ const make = Effect.gen(function* () {
           now,
         }),
       ),
-      // A lost compare-and-set means another writer settled the record first; that is fine.
+      Effect.map((next) => next !== undefined),
       Effect.catch((error) =>
         Effect.logWarning("child-work transition failed", {
           childWorkId: record.childWorkId,
           to,
           detail: error.detail,
-        }),
+        }).pipe(Effect.as(false)),
       ),
-      Effect.asVoid,
     );
 
-  const markLaunched = (record: ChannelChildWorkRecord, destination: ChannelChildWorkDestination) =>
-    transition(record, ["reserved"], "launched", destination);
+  // The marker goes up before the record shows launched, so no reader sees a launched record
+  // whose launch looks finished; acquisition is uninterruptible, so the finalizer always runs.
+  const claimLaunch = (record: ChannelChildWorkRecord, destination: ChannelChildWorkDestination) =>
+    Effect.acquireRelease(
+      enterLaunch(record).pipe(
+        Effect.andThen(transition(record, ["reserved"], "launched", destination)),
+        Effect.tap((claimed) => (claimed ? Effect.void : leaveLaunch(record))),
+      ),
+      (claimed) => (claimed ? leaveLaunch(record) : Effect.void),
+    );
 
   const markBound = (record: ChannelChildWorkRecord, destination?: ChannelChildWorkDestination) =>
-    transition(record, ["reserved", "launched"], "bound", destination);
+    transition(record, ["reserved", "launched"], "bound", destination).pipe(Effect.asVoid);
 
   const markTerminal = (record: ChannelChildWorkRecord, to: "completed" | "failed" | "cancelled") =>
-    transition(record, ["launched", "bound", "unknown"], to);
+    transition(record, ["launched", "bound", "unknown"], to).pipe(Effect.asVoid);
 
   const markReleased = (record: ChannelChildWorkRecord) =>
-    transition(record, ["reserved", "launched", "unknown"], "released");
+    transition(record, ["reserved", "launched", "unknown"], "released").pipe(Effect.asVoid);
 
   const releaseReserved = (record: ChannelChildWorkRecord) =>
-    transition(record, ["reserved"], "released");
+    transition(record, ["reserved"], "released").pipe(Effect.asVoid);
 
   const markUnknown = (record: ChannelChildWorkRecord) =>
-    transition(record, ["launched", "bound"], "unknown");
+    transition(record, ["launched", "bound"], "unknown").pipe(Effect.asVoid);
 
   // Same liveness the dispatcher's stop applies: a run that has not ended, a finished run
   // whose provider still works in the background, or a cloud task in flight. Settling a
@@ -353,13 +388,19 @@ const make = Effect.gen(function* () {
       .listForTask(input.taskId)
       .pipe(Effect.mapError((error) => toError("Unable to list the task's child work.", error)));
     const attemptKey = input.attempt === 0 ? undefined : "attempt-" + input.attempt;
+    // Every record gets its pass even when an earlier one must retry, so one stuck child never
+    // starves the stop of the others.
+    let pending = false;
+    let attemptAdvanced = false;
     for (const record of records) {
       if (record.generation !== input.generation || !isChannelChildWorkActive(record.state))
         continue;
-      // Never launched: capacity returns. A reservation inserted after this pass (a launch
-      // racing the stop) is released by reconcile once the owner is terminal.
+      // Never launched: capacity returns, and a launch that has not claimed it yet refuses to
+      // run. A claim that won this race leaves the record launched for the next pass to stop.
+      // A reservation inserted after this pass is released by reconcile once the owner is
+      // terminal.
       if (record.state === "reserved") {
-        yield* releaseReserved(record);
+        if (!(yield* transition(record, ["reserved"], "released"))) pending = true;
         continue;
       }
       // Delegates stop with the worker's own cascade; reconcile settles their records.
@@ -368,6 +409,12 @@ const make = Effect.gen(function* () {
       // A remote-binding child has no local thread to stop; reconcile (and the destination's
       // resolve-or-fence hook) settles it.
       if (threadId === undefined) continue;
+      // A launch still running can yet create its thread, so a stop now would find nothing and
+      // settle too early. The launch ends bound (the next pass stops it) or released.
+      if (record.state === "launched" && isLaunching(record)) {
+        pending = true;
+        continue;
+      }
       const stop = yield* threads
         .dispatch({
           type: "thread.stop",
@@ -377,28 +424,49 @@ const make = Effect.gen(function* () {
           reason: input.reason,
         })
         .pipe(Effect.result);
-      if (stop._tag === "Success" || isThreadMissing(stop.failure)) {
-        yield* markTerminal(record, "cancelled");
+      if (stop._tag === "Success") {
+        if (!(yield* transition(record, ["launched", "bound", "unknown"], "cancelled")))
+          pending = true;
+        continue;
+      }
+      if (isThreadMissing(stop.failure)) {
+        // A launch that ended without creating its thread ran nothing, so its slot returns; a
+        // thread that existed and is gone now was deleted.
+        const settled =
+          record.state === "launched"
+            ? transition(record, ["launched"], "released")
+            : transition(record, ["bound", "unknown"], "cancelled");
+        if (!(yield* settled)) pending = true;
         continue;
       }
       const tag = (stop.failure as { readonly _tag?: string })._tag;
       const refused =
         tag === "OrchestratorCommandRejectedError" ||
         tag === "OrchestratorCommandPreviouslyRejectedError";
-      if (!refused) return "retry" as const;
-      if (yield* childThreadLive(threadId)) {
-        yield* ledger
-          .advanceStopAttempt({
-            eventId: input.stopEventId,
-            from: input.attempt,
-            now: yield* nowIso,
-          })
-          .pipe(Effect.mapError((error) => toError("Unable to advance the stop attempt.", error)));
-        return "retry" as const;
+      if (!refused) {
+        pending = true;
+        continue;
       }
-      yield* markTerminal(record, "cancelled");
+      if (yield* childThreadLive(threadId)) {
+        if (!attemptAdvanced) {
+          yield* ledger
+            .advanceStopAttempt({
+              eventId: input.stopEventId,
+              from: input.attempt,
+              now: yield* nowIso,
+            })
+            .pipe(
+              Effect.mapError((error) => toError("Unable to advance the stop attempt.", error)),
+            );
+          attemptAdvanced = true;
+        }
+        pending = true;
+        continue;
+      }
+      if (!(yield* transition(record, ["launched", "bound", "unknown"], "cancelled")))
+        pending = true;
     }
-    return "settled" as const;
+    return pending ? ("retry" as const) : ("settled" as const);
   });
 
   /** The owning task is gone, terminal, or a newer generation: its reservations may release. */
@@ -415,78 +483,71 @@ const make = Effect.gen(function* () {
   const reconcileReserved = Effect.fnUntraced(function* (record: ChannelChildWorkRecord) {
     const settled = yield* owningTaskSettled(record);
     if (!settled) return false;
-    yield* transition(record, ["reserved"], "released");
-    return true;
+    return yield* transition(record, ["reserved"], "released");
   });
 
   const reconcileLocal = Effect.fnUntraced(function* (
     record: ChannelChildWorkRecord,
     threadId: ThreadId,
   ) {
-    const records = yield* threads
-      .getThreadRecords(threadId, ["runs"])
-      .pipe(Effect.mapError(() => undefined));
-    if (records === undefined) {
-      // The thread record itself could not be read; keep capacity rather than guess.
+    // The marker is read before the thread: a launch that ends after this check has already
+    // committed or abandoned its thread, and its bind wins the compare-and-set below.
+    const launchEnded = record.state === "launched" && !isLaunching(record);
+    const read = yield* threads.getThreadRecords(threadId, ["runs"]).pipe(Effect.result);
+    if (read._tag === "Failure") {
+      // A launch that ended without creating its thread (it failed, or the server restarted
+      // mid-launch) ran nothing. Any other unreadable thread keeps capacity rather than guess.
+      if (launchEnded && isThreadMissing(read.failure))
+        return yield* transition(record, ["launched"], "released");
       return false;
     }
-    const runs = records.runs ?? [];
+    const runs = read.success.runs ?? [];
     if (runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status))) return false;
     const latest = runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
     if (latest === undefined) {
       // Bound work whose thread vanished never landed; work still starting keeps its slot.
-      if (record.state === "unknown") {
-        yield* transition(record, ["unknown"], "released");
-        return true;
-      }
+      if (record.state === "unknown") return yield* transition(record, ["unknown"], "released");
       return false;
     }
     if (!isTerminalRunStatus(latest.status)) return false;
-    yield* transition(record, ["launched", "bound", "unknown"], recordStateForRun(latest.status));
-    return true;
+    return yield* transition(
+      record,
+      ["launched", "bound", "unknown"],
+      recordStateForRun(latest.status),
+    );
   });
 
   const reconcileRemote = Effect.fnUntraced(function* (
     record: ChannelChildWorkRecord,
     correlationId: string,
   ) {
+    // Read before the dispatch row, for the same reason as reconcileLocal.
+    const launchEnded = record.state === "launched" && !isLaunching(record);
     const rows = yield* sql<{ readonly state: string }>`
       SELECT state FROM remote_dispatches WHERE correlation_id = ${correlationId}
     `.pipe(Effect.mapError(() => undefined));
     if (rows === undefined) return false;
     if (rows[0] === undefined) {
-      // No dispatch row yet: the row is inserted inside the launch call, so a launched record
-      // without one is mid-launch while its task lives. Only a settled task's may release.
-      if (record.state === "launched") {
-        const settled = yield* owningTaskSettled(record);
-        if (!settled) return false;
-        yield* transition(record, ["launched"], "released");
-        return true;
-      }
-      return false;
+      // The launch inserts its row before any remote write, so one still running keeps its
+      // slot and one that ended without a row sent nothing.
+      if (!launchEnded) return false;
+      return yield* transition(record, ["launched"], "released");
     }
     const state = rows[0].state;
     if (state === "running" || state === "idle") {
-      if (record.state !== "bound") {
-        yield* transition(record, ["launched", "unknown"], "bound");
-        return true;
-      }
+      if (record.state !== "bound")
+        return yield* transition(record, ["launched", "unknown"], "bound");
       return false;
     }
-    if (state === "settled") {
-      yield* transition(record, ["launched", "bound", "unknown"], "completed");
-      return true;
-    }
-    if (state === "cancelled") {
-      yield* transition(record, ["launched", "bound", "unknown"], "cancelled");
-      return true;
-    }
+    if (state === "settled")
+      return yield* transition(record, ["launched", "bound", "unknown"], "completed");
+    if (state === "cancelled")
+      return yield* transition(record, ["launched", "bound", "unknown"], "cancelled");
     if (state === "lost") {
-      // The outcome is uncertain; the resolve-or-fence reconcile (PR-D) is what may release it.
-      if (record.state !== "unknown") {
-        yield* transition(record, ["launched", "bound"], "unknown");
-        return true;
-      }
+      // The outcome is uncertain until the coordinator's resolve pass settles the row with the
+      // destination: rebound (running) or fenced (cancelled).
+      if (record.state !== "unknown")
+        return yield* transition(record, ["launched", "bound"], "unknown");
     }
     return false;
   });
@@ -522,7 +583,7 @@ const make = Effect.gen(function* () {
   return ChannelChildWork.of({
     ownershipForCaller,
     admit,
-    markLaunched,
+    claimLaunch,
     markBound,
     markTerminal,
     markReleased,

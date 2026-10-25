@@ -87,6 +87,7 @@ const pidsOf = (image: string) => processes(["/fi", "imagename eq " + image]).ma
 
 interface Helper {
   readonly call: (method: string, params?: object) => Promise<unknown>;
+  readonly bundleId: string;
   /** frame and frameUnavailable lines; returns the unsubscribe. */
   readonly onFrame: (listener: (message: Record<string, unknown>) => void) => () => void;
   readonly close: () => Promise<void>;
@@ -126,6 +127,7 @@ async function openHelper(): Promise<Helper> {
   const exited = new Promise((resolve) => child.once("exit", resolve));
   return {
     call,
+    bundleId: String(greeting.bundleId),
     onFrame: (listener) => {
       frameListeners.add(listener);
       return () => frameListeners.delete(listener);
@@ -138,6 +140,23 @@ async function openHelper(): Promise<Helper> {
 }
 
 type Elements = ReadonlyArray<ComputerUseElement>;
+/** The parts of the desktop's helper session this smoke drives (apps/desktop ComputerUseHelper). */
+interface HostEvent {
+  readonly type: string;
+  readonly active?: boolean;
+  readonly target?: { readonly pid: number; readonly windowId: number };
+}
+interface HostSession {
+  readonly canWatch: boolean;
+  readonly watch: (watchId: string) => Promise<void>;
+  readonly unwatch: () => Promise<void>;
+  readonly onEvent: (listener: (event: HostEvent) => void) => () => void;
+  readonly close: () => Promise<void>;
+}
+const until = async (test: () => boolean, failure: string) => {
+  for (let attempt = 0; attempt < 40 && !test(); attempt++) await sleep(250);
+  if (!test()) fail(failure);
+};
 const fullElements = (observation: ComputerUseObservation): Elements =>
   observation.kind === "full" ? observation.elements : fail("Expected a full observation.");
 const labelled = (elements: Elements, pattern: RegExp) =>
@@ -451,6 +470,31 @@ async function main(
         hidden.screenshot !== undefined
       )
         fail("A focused password field must withhold the whole window.");
+      // 1b. The desktop host's own private-mode watch (#1415), through the very client GOAT's
+      // desktop uses, against a second helper process: it must be offered, accept the host's
+      // desktop-wide watch, and report this password field's process.
+      const client = (await import(
+        NodeURL.pathToFileURL(NodePath.join(repo, "apps/desktop/src/cua/ComputerUseHelper.ts")).href
+      )) as {
+        openHelperSession: (process: unknown, bundleId: string) => Promise<HostSession>;
+        spawnHelperProcess: (executable: string, platform: NodeJS.Platform) => unknown;
+      };
+      const host = await client.openHelperSession(
+        client.spawnHelperProcess(NodePath.join(helperDir, "GOAT Computer Use.exe"), "win32"),
+        helper.bundleId,
+      );
+      closeButtons.push(() => host.close());
+      const heard: Array<HostEvent> = [];
+      host.onEvent((event) => void heard.push(event));
+      if (!host.canWatch) fail("The helper does not offer the desktop host's private-mode watch.");
+      await host.watch("smoke-host-watch");
+      const privateFor = (on: boolean) => () =>
+        heard.some(
+          (event) =>
+            event.type === "privateMode" && event.active === on && event.target?.pid === fw.pid,
+        );
+      await until(privateFor(true), "The host watch did not report the focused password field.");
+      record("host watch while the password field has focus", heard);
       await frame("fixture-private", "private", { ...fixtureTarget, maxWidth: 480 });
       await refused(
         "privateMode",
@@ -485,6 +529,9 @@ async function main(
         hidden.observationId,
       );
       if (again.privateMode) fail("Private mode did not end when focus left the password field.");
+      await until(privateFor(false), "The host watch did not clear when focus left the field.");
+      record("host watch after focus left", heard);
+      await host.unwatch();
 
       // Notepad is not used: it restores unsaved tabs and open files on its next start, so any
       // run would leave text behind for the person who uses this computer.

@@ -25,6 +25,86 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
     }),
   });
 
+  it.effect(
+    "refreshes an app started after the host when approved, retiring the Windows host",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform: "win32", helper: { granted: true } });
+          const app = "C:\\work\\fixture.exe";
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.notInclude(test.manifest(), app);
+          yield* test.listApps([{ executable: app, name: "fixture.exe" }]);
+          yield* test.approveApps([app]);
+          assert.include(test.manifest(), JSON.stringify(app));
+          assert.equal((yield* test.next).status, "stopped");
+          assert.deepEqual(test.counts(), { starts: 1, stops: 1, destroys: 1 });
+          yield* test.request("resumed");
+          assert.equal((yield* test.next).status, "ready");
+          yield* test.approveApps([app]);
+          assert.deepEqual(test.counts(), { starts: 2, stops: 1, destroys: 1 });
+          assert.deepEqual(test.helperAppListings, [HELPER_ID, HELPER_ID, HELPER_ID]);
+        }),
+      ),
+  );
+
+  it.effect("refreshes a late app for macOS direct connections without restarting the host", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.listApps([{ bundle_id: "com.example.late", name: "Late" }]);
+        yield* test.approveApps(["com.example.late"]);
+        assert.include(test.manifest(), "com.example.late");
+        assert.isTrue(test.helperLaunches[0]?.direct);
+        yield* test.approveApps(["COM.EXAMPLE.LATE"]);
+        assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+        assert.deepEqual(test.helperAppListings, [HELPER_ID, HELPER_ID]);
+      }),
+    ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "does not restart %s for an approved app still absent or excluded",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({ platform, helper: { granted: true } });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          yield* test.approveApps(["com.example.not-running"]);
+          yield* test.listApps([{ bundle_id: "com.apple.Passwords", name: "Passwords" }]);
+          yield* test.approveApps(["com.apple.Passwords"]);
+          assert.notInclude(test.manifest(), "com.apple.Passwords");
+          assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+          // With no host an approval must neither list nor start one.
+          yield* test.restart;
+          yield* test.next;
+          const listings = test.helperAppListings.length;
+          yield* test.approveApps(["com.example.not-running"]);
+          assert.equal(test.helperAppListings.length, listings);
+        }),
+      ),
+  );
+
+  it.effect("keeps the Windows host and manifest when verified app listing fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "win32", helper: { granted: true } });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        const manifest = test.manifest();
+        yield* test.failAppListing;
+        yield* test.approveApps(["C:\\work\\fixture.exe"]);
+        assert.equal(test.manifest(), manifest);
+        assert.deepEqual(test.counts(), { starts: 1, stops: 0, destroys: 0 });
+        assert.isEmpty(test.constructors);
+      }),
+    ),
+  );
+
   it.effect("runs the helper folder's driver once the desktop is ready", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -44,12 +124,15 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
     ),
   );
 
-  it.effect("keeps computer use off on a desktop it cannot use and says why", () =>
+  it.effect("keeps computer use off on a desktop it cannot use and says why, typed (#1516)", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const detail =
           "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Start GOAT from the signed-in desktop on this computer to use computer use.";
-        const test = yield* fixture({ platform: "win32", helper: { granted: false, detail } });
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: false, detail, blocker: "noInteractiveDesktop" },
+        });
         yield* test.request("agent");
         assert.deepEqual(yield* test.next, {
           version: 1,
@@ -57,6 +140,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
           requestId: "agent",
           status: "unavailable",
           message: detail,
+          block: { reason: "desktopUnavailable", detail, blocker: "noInteractiveDesktop" },
         });
         assert.isEmpty(test.helperLaunches);
         assert.deepEqual((yield* test.verify).steps, [{ id: "grants", ok: false, detail }]);

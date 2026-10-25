@@ -10,18 +10,26 @@ import type {
   FleetGoalEvent,
   FleetGoalPhase,
   FleetGoalStatus,
-  FleetGoalTarget,
   GoalCondition,
   GoalConditionType,
   GoalWorkerPullRequest,
   OrchestrationV2ProviderFailureClass,
+  ModelSelection,
   RunId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { ThreadHealth } from "../health/Health.ts";
-import { type LaunchClaim, NOT_SENT, publicWorker, type WorkerRecord } from "./GoalStore.ts";
+import { publicWorker, type WorkerRecord } from "./GoalStore.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
+import {
+  desiredSlots,
+  followUpActionId,
+  interruptActionId,
+  newWorker,
+  rescheduleActionId,
+  resumeActionId,
+} from "./goalWorkers.ts";
 
 export const LAUNCH_GRACE_MS = 300_000;
 export const MAX_ACTIONS_PER_GOAL = 3;
@@ -33,119 +41,17 @@ const BACKOFF_MAX_MS = 15 * 60_000;
 /** Follow-ups per attempt before the slot asks for a person. */
 const MAX_FOLLOW_UPS = 3;
 
-export const launchActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
-  "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":launch";
-const followUpActionId = (
-  goal: Pick<FleetGoal, "id">,
-  slot: number,
-  attempt: number,
-  runId: string,
-) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":followup";
-export const fallbackActionId = (
-  goal: Pick<FleetGoal, "id">,
-  slot: number,
-  attempt: number,
-  runId: string,
-  hop: number,
-) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":fallback:" + hop;
-const resumeActionId = (
-  goal: Pick<FleetGoal, "id">,
-  slot: number,
-  attempt: number,
-  runId: string,
-) => "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":" + runId + ":resume";
-const interruptActionId = (goal: Pick<FleetGoal, "id">, slot: number, attempt: number) =>
-  "goal:" + goal.id + ":s" + slot + ":a" + attempt + ":interrupt";
-
-export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>
-  goal.spec.workers.workspace.branchPrefix.replace(/\/+$/, "") + "/s" + slot + "-a" + attempt;
-
-export const targetKey = (target: FleetGoalTarget) =>
-  target.type === "issue"
-    ? "issue:" + target.number
-    : target.type === "pull_request"
-      ? "pull_request:" + target.number
-      : target.type === "branch"
-        ? "branch:" + target.name
-        : "prompt:" + target.key;
-
-/** The slots the spec asks for, each with the target it owns when slots follow targets. */
-export const desiredSlots = (goal: Pick<FleetGoal, "spec">) => {
-  const { workers, limits, targets } = goal.spec;
-  const count = workers.perTarget ? targets.length : workers.count;
-  return Array.from({ length: Math.min(count, limits.maxWorkers) }, (_, slot) => ({
-    slot,
-    target: workers.perTarget ? (targets[slot] ?? null) : null,
-  }));
-};
-
-/** Slots for earlier attempts found only in launch records; they are stopped like dropped slots. */
-export const ORPHAN_SLOT_BASE = 10_000;
-
-const attemptOf = (actionId: string) => Number(/:a(\d+):launch$/.exec(actionId)?.[1] ?? 1);
-const slotOf = (actionId: string) => Number(/:s(\d+):a\d+:launch$/.exec(actionId)?.[1] ?? 0);
-
-/**
- * Rebuilds slot records from the launch records, which outlive any status write. A launch whose
- * thread is recorded is attached to its slot; one whose slot record was never written, or was
- * dropped by a write lost to a generation change, becomes that slot again; and a launch for a
- * slot that has since moved to another attempt becomes an orphan slot the plan stops. A claimed
- * launch with no outcome yet is kept as unclear, so nothing (deletion included) forgets it.
- */
-export function repairWorkers(
-  goal: FleetGoal,
-  workers: ReadonlyArray<WorkerRecord>,
-  launches: ReadonlyArray<LaunchClaim>,
-): ReadonlyArray<WorkerRecord> {
-  const bySlot = new Map(workers.map((worker) => [worker.slot, worker]));
-  const threads = new Set(
-    workers.flatMap((worker) => (worker.threadId === null ? [] : [worker.threadId as string])),
-  );
-  const referenced = new Set(workers.map((worker) => worker.launchClientRequestId));
-  let nextOrphan = Math.max(ORPHAN_SLOT_BASE - 1, ...workers.map((worker) => worker.slot)) + 1;
-  const targets = new Map(desiredSlots(goal).map(({ slot, target }) => [slot, target]));
-  for (const launch of launches) {
-    if (launch.outcome === NOT_SENT) continue;
-    if (launch.threadId !== null && threads.has(launch.threadId)) continue;
-    const slot = launch.slot ?? slotOf(launch.actionId);
-    const current = bySlot.get(slot);
-    if (current !== undefined && current.launchClientRequestId === launch.actionId) {
-      if (current.threadId === null && launch.threadId !== null) {
-        bySlot.set(slot, {
-          ...current,
-          host: launch.host,
-          threadId: launch.threadId as WorkerRecord["threadId"],
-          state: "running",
-        });
-        threads.add(launch.threadId);
-      }
-      continue;
-    }
-    // Settled without a thread: it failed or was given up; nothing started.
-    if (launch.threadId === null && (launch.settledAt !== null || referenced.has(launch.actionId)))
-      continue;
-    const record: WorkerRecord = {
-      ...newWorker(goal, slot, targets.get(slot) ?? null, attemptOf(launch.actionId)),
-      launchClientRequestId: launch.actionId,
-      host: launch.host,
-      threadId: launch.threadId as WorkerRecord["threadId"],
-      state: launch.threadId === null ? "launch_unknown" : "running",
-    };
-    if (current === undefined) bySlot.set(slot, record);
-    else {
-      bySlot.set(nextOrphan, {
-        ...record,
-        slot: nextOrphan,
-        target: null,
-        note: "An earlier attempt of slot " + slot + ".",
-      });
-      nextOrphan += 1;
-    }
-    if (launch.threadId !== null) threads.add(launch.threadId);
-    referenced.add(launch.actionId);
-  }
-  return [...bySlot.values()].toSorted((left, right) => left.slot - right.slot);
-}
+export {
+  branchFor,
+  desiredSlots,
+  fallbackActionId,
+  launchActionId,
+  newWorker,
+  nextAttempt,
+  ORPHAN_SLOT_BASE,
+  repairWorkers,
+  targetKey,
+} from "./goalWorkers.ts";
 
 export const nextDelayMs = (failures: number) =>
   failures <= 0
@@ -164,6 +70,8 @@ export type SlotObservation =
       readonly lastActivityAt: string | null;
       /** When a usage limit on the latest run resets; null when unknown or not limited. */
       readonly usageLimitResetAt?: string | null;
+      /** The thread's model as its host reports it; absent for a local worker. */
+      readonly modelSelection?: ModelSelection | null;
       readonly result: {
         readonly reported: boolean;
         readonly pullRequest: number | null;
@@ -190,6 +98,20 @@ export interface GoalObservation {
     string,
     { readonly claimedAt: number; readonly settled: boolean } | null
   >;
+  /** Reschedules claimed that did not move their slot: refused, never sent, or never settled. */
+  readonly unmovedReschedules: ReadonlySet<string>;
+  /** Moves claimed and not settled, by slot; each holds its slot until it is resolved. */
+  readonly pendingMoves: ReadonlyMap<
+    number,
+    {
+      readonly actionId: string;
+      readonly attempt: number;
+      readonly clientRequestId: string;
+      readonly runId: RunId | null;
+    }
+  >;
+  /** Fallbacks and hub hops that continued their run in its own thread, by action id. */
+  readonly switchedFallbacks: ReadonlySet<string>;
   readonly pullRequests: ReadonlyMap<number, PullRequestObservation>;
   readonly issues: ReadonlyMap<number, "open" | "closed" | "unknown">;
   readonly turns: number;
@@ -242,6 +164,21 @@ export type GoalAction =
       readonly runId: RunId;
       readonly actionId: string;
     }
+  | {
+      /** Finds what an unconfirmed move to another host started; it takes no turn. */
+      readonly type: "resolve_move";
+      readonly slot: number;
+      readonly attempt: number;
+      readonly actionId: string;
+      readonly clientRequestId: string;
+      /** The run the move may stop; null when it was taken for a reason alone. */
+      readonly stopRunId: RunId | null;
+      /**
+       * Whether a move that never launched may still go on: the goal stays, still wants the
+       * slot, and the attempt is on the run the move was for (a person may have resumed it).
+       */
+      readonly proceed: boolean;
+    }
   | { readonly type: "delete_row" };
 
 export interface GoalPlan {
@@ -267,45 +204,9 @@ const ACTIVE: ReadonlySet<WorkerRecord["state"]> = new Set([
   "stalled",
 ]);
 
-export const newWorker = (
-  goal: FleetGoal,
-  slot: number,
-  target: FleetGoalTarget | null,
-  attempt = 1,
-): WorkerRecord => ({
-  slot,
-  attempt,
-  host: null,
-  threadId: null,
-  watchId: null,
-  branch: null,
-  modelSelection: goal.spec.workers.modelSelection,
-  state: "placing",
-  launchClientRequestId: launchActionId(goal, slot, attempt),
-  tried: [],
-  target: target === null ? null : targetKey(target),
-  pullRequest: null,
-  lastActivityAt: null,
-  reported: false,
-  followUps: 0,
-  followedUpRunId: null,
-  steeredRunId: null,
-  resumedRunId: null,
-  lastRunId: null,
-  note: null,
-});
-
-/** The slot record for the next attempt, or a failed one when attempts are spent. */
-export const nextAttempt = (goal: FleetGoal, worker: WorkerRecord, note: string): WorkerRecord =>
-  worker.attempt >= goal.spec.limits.maxAttemptsPerWorker
-    ? { ...worker, state: "failed", note: note + " No attempts left." }
-    : {
-        ...newWorker(goal, worker.slot, null, worker.attempt + 1),
-        target: worker.target,
-        modelSelection: worker.modelSelection,
-        tried: worker.tried,
-        note,
-      };
+/** Stopping work and finding what earlier launches and moves started: never new work. */
+const cleanup = (action: GoalAction) =>
+  action.type === "interrupt" || action.type === "resolve_launch" || action.type === "resolve_move";
 
 export function planGoal(
   goal: FleetGoal,
@@ -379,13 +280,36 @@ export function planGoal(
       unobserved = true;
       return { ...worker, note: seen.message };
     }
+    const hostModel = seen.modelSelection;
     worker = {
       ...worker,
       lastActivityAt: seen.lastActivityAt ?? worker.lastActivityAt,
       lastRunId: seen.runId ?? worker.lastRunId,
+      // A worker on another host runs the model its thread reports, as after a lost status write.
+      ...(hostModel == null ||
+      (hostModel.instanceId === worker.modelSelection.instanceId &&
+        hostModel.model === worker.modelSelection.model)
+        ? {}
+        : { modelSelection: hostModel }),
       note: null,
     };
     const fresh = seen.runId !== null && worker.followedUpRunId !== seen.runId;
+    // Each run is recovered once. A row an earlier controller wrote marks a run followed up both
+    // after a same-thread fallback it sent and after a move that did not happen; only the move
+    // left it without a way forward (#1452). A sent fallback's receipt also outlives a lost status
+    // write, while its message may wait held behind the failed run.
+    const runPrefix = (runId: string) =>
+      "goal:" + goal.id + ":s" + worker.slot + ":a" + worker.attempt + ":" + runId + ":";
+    const switched = (runId: string) =>
+      [...observation.switchedFallbacks].some((id) => id.startsWith(runPrefix(runId)));
+    const unrecovered =
+      seen.runId !== null &&
+      worker.recoveredRunId !== seen.runId &&
+      !switched(seen.runId) &&
+      (fresh ||
+        observation.unmovedReschedules.has(
+          rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId),
+        ));
     const followUp = (message: string): WorkerRecord => {
       if (seen.runId === null || !fresh) return worker;
       if (worker.followUps >= MAX_FOLLOW_UPS)
@@ -403,11 +327,11 @@ export function planGoal(
     const recover = (
       reason: "failed" | "stalled" | "host_unreachable",
       failureClass: OrchestrationV2ProviderFailureClass,
-      // A stall was already steered on this run, so it is no longer fresh; the reschedule's
-      // next-attempt launch id dedupes it instead.
-      requireFresh = true,
+      // A steered stall and a lost host ask again on every pass; the reschedule's next-attempt
+      // launch id dedupes them instead.
+      once = true,
     ) => {
-      if (fresh || !requireFresh)
+      if (!once || unrecovered)
         actions.push({
           type: "recover",
           slot: worker.slot,
@@ -441,7 +365,8 @@ export function planGoal(
       }
     }
     if (seen.runStatus === "interrupted" || seen.runStatus === "cancelled")
-      // Someone stopped it on purpose; acting would fight them.
+      // Someone stopped it on purpose; acting would fight them. A stop the goal's own move made
+      // keeps the slot held by that move instead (resolve_move).
       return { ...worker, state: "needs_human", note: "A person stopped the run." };
     if (seen.runStatus === "failed") {
       const failureClass = seen.health._tag === "failed" ? seen.health.failureClass : "unknown";
@@ -450,6 +375,15 @@ export function planGoal(
       if (failureClass === "usage_limit" && !fresh && seen.runId !== null) {
         if (worker.resumedRunId === seen.runId) return { ...worker, state: "running" };
         const resetAt = seen.usageLimitResetAt ?? null;
+        // Another host does not say when its limit resets, and GOAT there resumes its own threads.
+        if (resetAt === null && worker.host !== null)
+          return {
+            ...worker,
+            state: "needs_human",
+            note:
+              worker.host +
+              " holds this run at its usage limit; GOAT there or a person continues it.",
+          };
         if (resetAt !== null && observation.now >= Date.parse(resetAt)) {
           actions.push({
             type: "resume",
@@ -534,6 +468,10 @@ export function planGoal(
           : stored;
     const unclear =
       known.threadId === null && observation.launchClaims.get(known.launchClientRequestId) != null;
+    if (moving(known)) {
+      workers.push(hold(known));
+      continue;
+    }
     workers.push(
       deleting && unclear
         ? judge(known)
@@ -541,6 +479,32 @@ export function planGoal(
           ? observeOnly(known)
           : judge(known),
     );
+  }
+  /** A slot whose move is unconfirmed takes no other action: it waits for its successor. */
+  function moving(worker: WorkerRecord) {
+    return observation.pendingMoves.get(worker.slot)?.attempt === worker.attempt;
+  }
+  function hold(worker: WorkerRecord): WorkerRecord {
+    const move = observation.pendingMoves.get(worker.slot);
+    if (move === undefined) return worker;
+    const seen = observation.workers.get(worker.slot);
+    const runNow = seen?.kind === "seen" ? seen.runId : null;
+    actions.push({
+      type: "resolve_move",
+      slot: worker.slot,
+      attempt: worker.attempt,
+      actionId: move.actionId,
+      clientRequestId: move.clientRequestId,
+      stopRunId: move.runId,
+      proceed:
+        !deleting &&
+        worker.slot < desired.length &&
+        (move.runId === null || runNow === null || runNow === move.runId),
+    });
+    return {
+      ...observeOnly(worker),
+      note: worker.note ?? "Its move to another host is not confirmed yet.",
+    };
   }
   function observeOnly(worker: WorkerRecord): WorkerRecord {
     const seen = observation.workers.get(worker.slot);
@@ -555,9 +519,23 @@ export function planGoal(
     const seen = observation.workers.get(worker.slot);
     return worker.threadId !== null && seen?.kind === "seen" && !seen.terminal;
   };
+  const interrupt = (worker: WorkerRecord): GoalAction => {
+    const seen = observation.workers.get(worker.slot);
+    return {
+      type: "interrupt",
+      slot: worker.slot,
+      attempt: worker.attempt,
+      actionId: interruptActionId(
+        goal,
+        worker.slot,
+        worker.attempt,
+        seen?.kind === "seen" ? seen.runId : null,
+      ),
+    };
+  };
   /** Known to have stopped: no thread was ever started, the run ended, or the thread is gone. */
   const confirmedDone = (worker: WorkerRecord) => {
-    if (worker.state === "launch_unknown") return false;
+    if (worker.state === "launch_unknown" || moving(worker)) return false;
     if (worker.threadId === null) return true;
     const seen = observation.workers.get(worker.slot);
     return seen?.kind === "missing" || (seen?.kind === "seen" && seen.terminal);
@@ -567,6 +545,10 @@ export function planGoal(
   // A dropped slot stays as it is until its run is confirmed stopped, so an interrupt that did
   // not fit in this pass, or failed, is planned again next pass.
   for (const worker of shrunk) {
+    if (moving(worker)) {
+      workers.push(hold(worker));
+      continue;
+    }
     const claim =
       worker.threadId === null
         ? (observation.launchClaims.get(worker.launchClientRequestId) ?? null)
@@ -583,28 +565,16 @@ export function planGoal(
       workers.push({ ...worker, state: "launch_unknown" });
       continue;
     }
-    if (isLive(worker))
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    if (isLive(worker)) actions.push(interrupt(worker));
     workers.push(confirmedDone(worker) ? { ...worker, state: "superseded" } : worker);
   }
   if (deleting) {
     // Unclear launches are still looked up, since one may have started a thread to stop.
-    const resolving = actions.filter((action) => action.type === "resolve_launch");
+    const resolving = actions.filter(cleanup);
     actions.length = 0;
-    actions.push(...resolving);
+    actions.push(...resolving.filter((action) => action.type !== "interrupt"));
     const live = workers.filter(isLive);
-    for (const worker of live)
-      actions.push({
-        type: "interrupt",
-        slot: worker.slot,
-        attempt: worker.attempt,
-        actionId: interruptActionId(goal, worker.slot, worker.attempt),
-      });
+    for (const worker of live) actions.push(interrupt(worker));
     // Like a finalizer: the row goes only once every attempt is known to have stopped. A worker
     // that cannot be read keeps the goal as a tombstone; goat_goal_delete with force drops it.
     if (workers.every(confirmedDone)) actions.push({ type: "delete_row" });
@@ -731,16 +701,21 @@ export function planGoal(
     : spec.paused || !owner.available
       ? []
       : done
-        ? // Done stops new work, but threads it may have started are still found and stopped.
-          actions.filter(
-            (action) => action.type === "interrupt" || action.type === "resolve_launch",
-          )
-        : budgetSpent
-          ? actions.filter(
-              (action) => action.type === "interrupt" || action.type === "resolve_launch",
+        ? // Done stops new work, but threads it may have started are still found and stopped;
+          // a move that never launched is called off.
+          actions
+            .filter(cleanup)
+            .map((action) =>
+              action.type === "resolve_move" ? { ...action, proceed: false } : action,
             )
+        : // A spent budget refuses new work; finding what a move already started is not new work.
+          budgetSpent
+          ? actions.filter(cleanup)
           : actions;
-  const bounded = allowed.slice(0, MAX_ACTIONS_PER_GOAL);
+  const bounded = [
+    ...allowed.filter(cleanup),
+    ...allowed.filter((action) => !cleanup(action)),
+  ].slice(0, MAX_ACTIONS_PER_GOAL);
 
   if (phase !== goal.status.phase)
     event(
