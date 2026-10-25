@@ -5,6 +5,7 @@ import {
   type ProviderDriverKind,
   type ServerProvider,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 function humanizeSlug(slug: string): string {
@@ -148,6 +149,33 @@ export function codexRouteErrorMessage(error: unknown): string {
 }
 
 const isHandoffError = Schema.is(HandoffError);
+
+/**
+ * When a pending handoff expires, in the reader's own time to the minute. Near a change of the
+ * zone's UTC offset (any size: clocks fall back 30 minutes on Lord Howe, two hours at Troll) the
+ * same wall time can mean two instants, so the label then names the zone. An expiry is always
+ * ahead of its request, and current tz data changes no offset by more than two hours, so three
+ * hours either side catch every repeated time. Locale and zone default to the reader's; tests pin
+ * them.
+ */
+export function handoffExpiryLabel(
+  expiresAt: DateTime.Utc,
+  options: { readonly locale?: string; readonly timeZone?: string } = {},
+): string {
+  const at = DateTime.toEpochMillis(expiresAt);
+  const zone = options.timeZone === undefined ? {} : { timeZone: options.timeZone };
+  const offsets = new Intl.DateTimeFormat("en-US", { ...zone, timeZoneName: "longOffset" });
+  const offset = (ms: number) =>
+    offsets.formatToParts(ms).find((part) => part.type === "timeZoneName")?.value;
+  const changes = [at - 3 * 3_600_000, at + 3 * 3_600_000].some((ms) => offset(ms) !== offset(at));
+  const clock = new Intl.DateTimeFormat(options.locale, {
+    hour: "numeric",
+    minute: "2-digit",
+    ...zone,
+    ...(changes ? { timeZoneName: "short" } : {}),
+  });
+  return `Expires ${clock.format(at)}`;
+}
 
 /**
  * What a person is told when their answer to a handoff fails. An approved provider change that

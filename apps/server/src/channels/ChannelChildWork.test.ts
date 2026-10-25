@@ -1,328 +1,23 @@
 import { assert, describe, it } from "@effect/vitest";
-import {
-  ChannelDispatchTarget,
-  ChannelInboundMessage,
-  ChannelRequester,
-  ChannelTask,
-  ChannelTaskEvent,
-  ThreadId,
-} from "@goat/contracts";
+import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as Stream from "effect/Stream";
 
-import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { childWorkCorrelationIdFor, taskEventIdFor } from "./channelIds.ts";
 import {
-  bindingIdFor,
-  childWorkCorrelationIdFor,
-  contentHashFor,
-  conversationIdFor,
-  inputIdFor,
-  taskEventIdFor,
-  taskIdFor,
-} from "./channelIds.ts";
-import { prepareTransition, type ChannelTaskEventSpec } from "./channelTaskWrites.ts";
-
-const NOW = "2026-10-12T00:00:00.000Z";
-const workerThread = ThreadId.make("worker-1");
-const childThread = ThreadId.make("child-1");
-
-const decodeMessage = Schema.decodeUnknownSync(ChannelInboundMessage);
-const decodeRequester = Schema.decodeUnknownSync(ChannelRequester);
-const decodeTask = Schema.decodeUnknownSync(ChannelTask);
-const decodeEvent = Schema.decodeUnknownSync(ChannelTaskEvent);
-const decodeTarget = Schema.decodeUnknownSync(ChannelDispatchTarget);
-const isChildWorkError = Schema.is(ChannelChildWork.ChannelChildWorkError);
-
-const slackMessage = decodeMessage({
-  kind: "slack",
-  connectionId: "slack-1",
-  conversationKey: "T1:C1:1760000000.000100",
-  externalMessageId: "1760000000.000200",
-  idempotencyKey: "T1:Ev1",
-  actor: { externalActorId: "U1" },
-  replyAddress: {
-    kind: "slack",
-    connectionId: "slack-1",
-    teamId: "T1",
-    channelId: "C1",
-    rootTs: "1760000000.000100",
-  },
-  text: "Audit the release.",
-  attachments: [],
-  receivedAt: NOW,
-  intent: "message",
-});
-
-const requester = decodeRequester({
-  ownerId: "owner",
-  principalId: "owner",
-  displayName: "Jun",
-  originKind: "slack",
-  externalActorId: "U1",
-  runtimeModeCeiling: "approval-required",
-  grantedScopes: ["orchestration:read", "orchestration:operate"],
-});
-
-const target = decodeTarget({
-  environmentId: "env-1",
-  projectId: "project-1",
-  modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
-  runtimeMode: "approval-required",
-  interactionMode: "default",
-  workspaceStrategy: { type: "root" },
-});
-
-/** A run record as reconcileLocal reads it: ordinal for recency, status for the state map. */
-const fakeRun = (status: string, ordinal = 1) => ({ id: "run-1", status, ordinal });
-
-const unused = () => Effect.die("Unexpected test dependency call");
-
-interface DispatchedStop {
-  readonly commandId: string;
-  readonly threadId: string;
-  readonly stopDelegatedTasks: boolean | undefined;
-}
-
-const threadsLayer = (
-  runs: ReadonlyMap<string, ReadonlyArray<unknown>>,
-  failures: ReadonlyMap<string, unknown> = new Map(),
-  dispatched: Array<DispatchedStop> = [],
-  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
-) =>
-  Layer.succeed(
-    ThreadManagementService.ThreadManagementService,
-    ThreadManagementService.ThreadManagementService.of({
-      getLaunchedPendingQuestions: unused,
-      assertReviewTaskSendAllowed: unused,
-      listActiveSubagentThreadIds: unused,
-      getThreadShell: unused,
-      getShellSnapshot: unused,
-      readShellSnapshot: unused,
-      ensureLegacyTranscript: unused,
-      dispatch: ((command: {
-        readonly type: string;
-        readonly commandId: string;
-        readonly threadId?: string;
-        readonly stopDelegatedTasks?: boolean;
-      }) => {
-        if (command.threadId === undefined) return Effect.die("unexpected non-thread command");
-        dispatched.push({
-          commandId: command.commandId,
-          threadId: command.threadId,
-          stopDelegatedTasks: command.stopDelegatedTasks,
-        });
-        const failure = failures.get(command.threadId);
-        return failure === undefined
-          ? Effect.succeed({ sequence: 0, storedEvents: [] } as never)
-          : Effect.fail(failure as never);
-      }) as never,
-      searchThread: unused,
-      searchThreadStream: () => Stream.empty,
-      getThreadHistoryPage: unused,
-      getTimelinePage: unused,
-      getMessageCount: unused,
-      getTurnItem: unused,
-      getReviewLedgerEntries: unused,
-      getThreadRecords: ((threadId: ThreadId) =>
-        Effect.succeed({
-          thread: {
-            id: threadId,
-            projectId: "project-1",
-            archivedAt: null,
-            deletedAt: null,
-            pullRequests: [],
-            updatedAt: NOW,
-            activeProviderThreadId: null,
-          },
-          runs: runs.get(threadId) ?? [],
-          runtimeRequests: [],
-          turnItems: [],
-          providerThreads: providerThreads.get(threadId) ?? [],
-          subagents: [],
-          messages: [],
-        } as never)) as never,
-      getThreadProjection: unused,
-      getCheckpointContext: unused,
-      getThreadSnapshot: unused,
-      getThreadTranscript: unused,
-      getThreadSnapshotWindow: unused,
-      getProjectThreadRecords: unused,
-      getProjectThread: unused,
-      listProjectThreads: unused,
-      sendToThread: unused,
-      assertProviderInstanceEnabled: unused,
-      isProviderInstanceEnabledForProject: unused,
-      hasReceipt: unused,
-      receiptStatus: unused,
-      waitForThread: unused,
-      settleAfterRun: unused,
-      settleThread: unused,
-      interruptThread: unused,
-      stopWorkflow: unused,
-      stopDelegatedTasks: unused,
-      getThreadEventSequence: unused,
-      recoverDelegatedTask: unused,
-      delegatedTaskResultPending: unused,
-      streamStoredEvents: Stream.empty,
-      streamStoredEventsFrom: () => Stream.empty,
-      streamDomainEvents: Stream.empty,
-    }),
-  );
-
-const makeLayer = (
-  runs: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
-  failures: ReadonlyMap<string, unknown> = new Map(),
-  dispatched: Array<DispatchedStop> = [],
-  providerThreads: ReadonlyMap<string, ReadonlyArray<unknown>> = new Map(),
-) =>
-  ChannelChildWork.layer.pipe(
-    Layer.provideMerge(ChannelChildWorkStore.layer),
-    Layer.provideMerge(ChannelLedger.layer),
-    Layer.provideMerge(threadsLayer(runs, failures, dispatched, providerThreads)),
-    Layer.provideMerge(SqlitePersistence.layerMemory),
-  );
-
-const accept = () => {
-  const conversationId = conversationIdFor({
-    ownerId: "owner",
-    kind: slackMessage.kind,
-    connectionId: slackMessage.connectionId,
-    conversationKey: slackMessage.conversationKey,
-  });
-  return ChannelLedger.ChannelLedger.pipe(
-    Effect.flatMap((ledger) =>
-      ledger.acceptInput({
-        ownerId: "owner",
-        inputId: inputIdFor({
-          ownerId: "owner",
-          kind: slackMessage.kind,
-          connectionId: slackMessage.connectionId,
-          idempotencyKey: slackMessage.idempotencyKey,
-        }),
-        conversationId,
-        bindingId: bindingIdFor(conversationId, "root"),
-        message: slackMessage,
-        contentHash: contentHashFor(slackMessage),
-        requester,
-        acceptedAt: NOW,
-      }),
-    ),
-  );
-};
-
-const move = (taskId: ChannelTask["taskId"], spec: ChannelTaskEventSpec) =>
-  Effect.gen(function* () {
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const stored = yield* ledger.getTask(taskId);
-    if (stored === undefined) return yield* Effect.die("task missing");
-    const prepared = prepareTransition(stored, spec, NOW, undefined);
-    if (!prepared.ok) return yield* Effect.die("transition rejected: " + prepared.reason);
-    yield* ledger.applyTaskEvent({
-      owner: "cw-owner",
-      write: prepared.write,
-      deliveries: prepared.deliveries,
-    });
-  });
-
-/** A channel task in generation 1 whose bound worker is workerThread. */
-const seedWorker = Effect.gen(function* () {
-  const ledger = yield* ChannelLedger.ChannelLedger;
-  yield* ledger.claimOwnership({
-    token: "cw-owner",
-    now: NOW,
-    staleBefore: "2026-10-11T23:59:30.000Z",
-  });
-  const input = yield* accept();
-  yield* ledger.beginReception({
-    owner: "cw-owner",
-    inputId: input.inputId,
-    receptionId: "cw-r" as never,
-    readAt: NOW,
-  });
-  const taskId = taskIdFor(input.inputId, 0);
-  const task = decodeTask({
-    taskId,
-    conversationId: input.conversationId,
-    originBindingId: input.bindingId,
-    originAddress: slackMessage.replyAddress,
-    originInputId: input.inputId,
-    requester,
-    title: "Audit the release.",
-    instruction: "Audit the release.",
-    status: "received",
-    version: 1,
-    generation: 1,
-    openQuestions: [],
-    createdAt: NOW,
-    updatedAt: NOW,
-  });
-  const event = decodeEvent({
-    eventId: taskEventIdFor(taskId, 1),
-    sequence: 0,
-    taskId,
-    taskVersion: 1,
-    occurredAt: NOW,
-    actor: "system",
-    type: "task.created",
-    payload: { title: task.title, instruction: task.instruction, originInputId: input.inputId },
-  });
-  yield* ledger.completeReception({
-    owner: "cw-owner",
-    inputId: input.inputId,
-    receptionId: "cw-r" as never,
-    replyText: "Starting.",
-    decision: { replyText: "Starting.", action: { type: "report_only" } },
-    createdTask: { task, event },
-    deliveries: [],
-    now: NOW,
-  });
-  yield* move(taskId, {
-    type: "task.dispatch.claimed",
-    payload: { generation: 1, target, leaseExpiresAt: NOW },
-  });
-  yield* move(taskId, {
-    type: "task.worker.bound",
-    payload: {
-      worker: {
-        environmentId: "env-1" as never,
-        threadId: workerThread as never,
-        runId: "run-1" as never,
-        generation: 1,
-      },
-    },
-  });
-  return taskId;
-});
-
-const admit = (
-  prompt: string,
-  options?: {
-    readonly callerThreadId?: ThreadId;
-    readonly surface?: "delegate_local" | "delegate_remote" | "thread_launch" | "ssh_thread_launch";
-    readonly destinationKey?: string;
-    readonly clientRequestId?: string;
-  },
-) =>
-  ChannelChildWork.ChannelChildWork.pipe(
-    Effect.flatMap((childWork) =>
-      childWork.admit({
-        callerThreadId: options?.callerThreadId ?? workerThread,
-        surface: options?.surface ?? "delegate_local",
-        prompt,
-        destinationKey: options?.destinationKey ?? "codex/gpt-6.1-sol",
-        ...(options?.clientRequestId === undefined
-          ? {}
-          : { clientRequestId: options.clientRequestId }),
-      }),
-    ),
-  );
+  admit,
+  childThread,
+  type DispatchedStop,
+  fakeRun,
+  isChildWorkError,
+  makeLayer,
+  move,
+  NOW,
+  seedWorker,
+} from "./testkit/channelChildWorkFixture.ts";
 
 describe("ChannelChildWork admission", () => {
   it.effect("a caller outside channel work is never recorded", () =>
@@ -378,7 +73,7 @@ describe("ChannelChildWork admission", () => {
       assert.strictEqual(first._tag, "admitted");
       assert.strictEqual(second._tag, "admitted");
       if (first._tag !== "admitted") return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(first.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(first.record, { threadId: childThread }));
       yield* childWork.markTerminal(first.record, "completed");
       const third = yield* admit("three");
       assert.strictEqual(third._tag, "admitted");
@@ -391,7 +86,7 @@ describe("ChannelChildWork admission", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("delegate");
       if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       const nested = yield* Effect.flip(admit("nested", { callerThreadId: childThread }));
       assert.strictEqual(nested.reason, "depth_exceeded");
     }).pipe(Effect.provide(makeLayer())),
@@ -437,7 +132,7 @@ describe("ChannelChildWork admission", () => {
       yield* childWork.releaseReserved(first.record);
       const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
       assert.strictEqual((yield* store.get(taskId, first.record.childWorkId))?.state, "released");
-      yield* childWork.markLaunched(second.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(second.record, { threadId: childThread }));
       yield* childWork.releaseReserved(second.record);
       assert.strictEqual((yield* store.get(taskId, second.record.childWorkId))?.state, "launched");
       // The first slot came back and the second stays held: exactly one more admission fits.
@@ -484,7 +179,7 @@ describe("ChannelChildWork reconcile", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("local work");
       if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       yield* childWork.markBound(admission.record, { threadId: childThread });
       assert.strictEqual(yield* childWork.reconcile, 1);
       const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
@@ -518,7 +213,7 @@ describe("ChannelChildWork reconcile", () => {
       const admission = yield* admit("remote work", { surface: "delegate_remote" });
       if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
       const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
-      yield* childWork.markLaunched(admission.record, { correlationId, host: "box" });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { correlationId, host: "box" }));
       const insertRow = (state: string) =>
         sql`INSERT INTO remote_dispatches
           (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, created_at, updated_at)
@@ -541,7 +236,7 @@ describe("ChannelChildWork reconcile", () => {
   );
 
   it.effect(
-    "keeps a launched remote record whose dispatch row is not yet visible while the task is live",
+    "keeps a launched remote record without a dispatch row while its launch is in flight, even once the task settles",
     () =>
       Effect.gen(function* () {
         const taskId = yield* seedWorker;
@@ -549,42 +244,57 @@ describe("ChannelChildWork reconcile", () => {
         const admission = yield* admit("remote in flight", { surface: "delegate_remote" });
         if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
         const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
-        // markLaunched precedes the dispatch-row insert inside the launch call, so a reconcile
+        // The claim precedes the dispatch-row insert inside the launch call, so a reconcile
         // pass racing that window must hold the record and its capacity.
-        yield* childWork.markLaunched(admission.record, { correlationId, host: "box" });
-        assert.strictEqual(yield* childWork.reconcile, 0);
-        const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
-        assert.strictEqual(
-          (yield* store.get(taskId, admission.record.childWorkId))?.state,
-          "launched",
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            assert.isTrue(
+              yield* childWork.claimLaunch(admission.record, { correlationId, host: "box" }),
+            );
+            const second = yield* admit("second remote", { surface: "delegate_remote" });
+            if (second._tag !== "admitted") return yield* Effect.die("expected admission");
+            yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+            // Only the untouched reservation releases; the launch can still insert its row.
+            assert.strictEqual(yield* childWork.reconcile, 1);
+            const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
+            const stateOf = (id: typeof second.record.childWorkId) =>
+              store.get(taskId, id).pipe(Effect.map((record) => record?.state));
+            assert.strictEqual(yield* stateOf(admission.record.childWorkId), "launched");
+            assert.strictEqual(yield* stateOf(second.record.childWorkId), "released");
+          }),
         );
-        const second = yield* admit("second remote", { surface: "delegate_remote" });
-        assert.strictEqual(second._tag, "admitted");
-        const refused = yield* Effect.flip(admit("third remote", { surface: "delegate_remote" }));
-        assert.strictEqual(refused.reason, "at_capacity");
       }).pipe(Effect.provide(makeLayer())),
   );
 
   it.effect(
-    "releases a launched remote record whose dispatch row never landed once the task settles",
+    "releases a launched remote record whose launch ended without a dispatch row, and keeps one whose row is still launching",
     () =>
       Effect.gen(function* () {
         const taskId = yield* seedWorker;
         const childWork = yield* ChannelChildWork.ChannelChildWork;
-        const admission = yield* admit("remote lost pre-row", { surface: "delegate_remote" });
-        if (admission._tag === "not_channel_owned") return yield* Effect.die("expected ownership");
-        const correlationId = childWorkCorrelationIdFor(admission.record.childWorkId);
-        yield* childWork.markLaunched(admission.record, { correlationId, host: "box" });
-        yield* move(taskId, { type: "task.cancelled", payload: { reason: "Stop" } });
+        const sql = yield* SqlClient.SqlClient;
+        const lost = yield* admit("remote lost pre-row", { surface: "delegate_remote" });
+        const sent = yield* admit("remote sent", { surface: "delegate_remote" });
+        if (lost._tag !== "admitted" || sent._tag !== "admitted")
+          return yield* Effect.die("expected admission");
+        const sentId = childWorkCorrelationIdFor(sent.record.childWorkId);
+        for (const [record, correlationId] of [
+          [lost.record, childWorkCorrelationIdFor(lost.record.childWorkId)],
+          [sent.record, sentId],
+        ] as const)
+          yield* Effect.scoped(childWork.claimLaunch(record, { correlationId, host: "box" }));
+        // The coordinator inserts the row before any remote write and restart recovery treats
+        // a launching row as uncertain, so that one keeps its slot after the launch call ends.
+        yield* sql`INSERT INTO remote_dispatches
+          (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, created_at, updated_at)
+          VALUES (${sentId}, 'thread', ${sent.record.callerThreadId}, 'box', 'read-key', 'wake', 'launching', ${NOW}, ${NOW})`;
+        // The task is still live: a launch that ended without a row sent nothing either way.
         assert.strictEqual(yield* childWork.reconcile, 1);
         const store = yield* ChannelChildWorkStore.ChannelChildWorkStore;
-        assert.strictEqual(
-          (yield* store.get(taskId, admission.record.childWorkId))?.state,
-          "released",
-        );
-        // A terminal owner admits nothing new; the release keeps the accounting honest.
-        const next = yield* Effect.flip(admit("after release", { surface: "delegate_remote" }));
-        assert.strictEqual(next.reason, "owner_terminal");
+        assert.strictEqual((yield* store.get(taskId, lost.record.childWorkId))?.state, "released");
+        assert.strictEqual((yield* store.get(taskId, sent.record.childWorkId))?.state, "launched");
+        const next = yield* admit("after release", { surface: "delegate_remote" });
+        assert.strictEqual(next._tag, "admitted");
       }).pipe(Effect.provide(makeLayer())),
   );
 });
@@ -602,7 +312,7 @@ describe("ChannelChildWork cancelForTask", () => {
       });
       if (launched._tag !== "admitted" || reserved._tag !== "admitted")
         return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(launched.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(launched.record, { threadId: childThread }));
       const outcome = yield* childWork.cancelForTask({
         taskId,
         generation: 1,
@@ -640,10 +350,12 @@ describe("ChannelChildWork cancelForTask", () => {
       const thread = yield* admit("thread child", { surface: "thread_launch" });
       if (delegate._tag !== "admitted" || thread._tag !== "admitted")
         return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(delegate.record, {
-        threadId: ThreadId.make("delegate-1"),
-      });
-      yield* childWork.markLaunched(thread.record, { threadId: childThread });
+      yield* Effect.scoped(
+        childWork.claimLaunch(delegate.record, {
+          threadId: ThreadId.make("delegate-1"),
+        }),
+      );
+      yield* Effect.scoped(childWork.claimLaunch(thread.record, { threadId: childThread }));
       const outcome = yield* childWork.cancelForTask({
         taskId,
         generation: 1,
@@ -674,7 +386,7 @@ describe("ChannelChildWork cancelForTask", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("thread child", { surface: "thread_launch" });
       if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       const stopEventId = taskEventIdFor(taskId, 99);
       const ledger = yield* ChannelLedger.ChannelLedger;
       const first = yield* childWork.cancelForTask({
@@ -720,7 +432,7 @@ describe("ChannelChildWork cancelForTask", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("thread child", { surface: "thread_launch" });
       if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       const stopEventId = taskEventIdFor(taskId, 99);
       const outcome = yield* childWork.cancelForTask({
         taskId,
@@ -755,7 +467,7 @@ describe("ChannelChildWork cancelForTask", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("thread child", { surface: "thread_launch" });
       if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       const stopEventId = taskEventIdFor(taskId, 99);
       const outcome = yield* childWork.cancelForTask({
         taskId,
@@ -803,7 +515,7 @@ describe("ChannelChildWork cancelForTask", () => {
       const childWork = yield* ChannelChildWork.ChannelChildWork;
       const admission = yield* admit("thread child", { surface: "thread_launch" });
       if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
-      yield* childWork.markLaunched(admission.record, { threadId: childThread });
+      yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThread }));
       const stopEventId = taskEventIdFor(taskId, 99);
       const outcome = yield* childWork.cancelForTask({
         taskId,

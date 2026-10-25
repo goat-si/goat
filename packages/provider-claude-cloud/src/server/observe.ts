@@ -47,6 +47,22 @@ export const isShortenedReply = (task: Task) =>
 const dollars = (cost: number) => "$" + cost.toFixed(4);
 const REPLIED = "Session replied";
 
+/**
+ * The run's failure when the session answered the run's own prompt with a terminal API error.
+ * Nothing else is evidence: a failed task without the marker, or the marker on any other status,
+ * leaves delivery uncertain.
+ */
+export const confirmedFailure = (task: Task | undefined) =>
+  task?.status === "failed" && task.confirmedTerminalError === true
+    ? new ClaudeCloudError({
+        detail: task.error ?? "The cloud session reported an error.",
+        outcome: "uncertain",
+      })
+    : undefined;
+/** Every write after the confirmed failure's own drops its evidence; see confirmedFailure. */
+export const withoutFailureEvidence = ({ confirmedTerminalError: _evidence, ...task }: Task) =>
+  task;
+
 export type Observation =
   | { readonly kind: "done" }
   | { readonly kind: "replied"; readonly text: string }
@@ -251,6 +267,8 @@ export const observeCloudSession = Effect.fn("ClaudeCloudAdapter.observe")(funct
           progress: "Session reported an error (" + spentText() + ")",
           error: reply.error,
           summary: shorten(reply.error),
+          // readSessionReply fails only on the API error line after this run's own prompt.
+          confirmedTerminalError: true,
         }),
         "idle",
       );

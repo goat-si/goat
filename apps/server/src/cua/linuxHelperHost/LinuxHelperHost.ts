@@ -108,8 +108,10 @@ const UNANSWERED_REASON =
   "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
 
 /**
- * Readiness after a check the helper did not answer: the grants and helper it last reported
- * stand, while capture, the tree, input and both safety signals are unproven.
+ * Readiness after a check the helper did not answer. Nothing it proved earlier stands (D10): the
+ * helper is unconfirmed, the grants unchecked, and capture, the tree, input and both safety
+ * signals unproven. What it said about the session and its blockers stays, so setup can still
+ * name the desktop and keep a pause in place (#1514).
  */
 const unanswered = (
   previous: DesktopCuaReadinessReport | undefined,
@@ -119,15 +121,14 @@ const unanswered = (
   type: "cuaReadiness",
   generation: launch,
   readiness: {
-    ...(previous?.readiness ?? {
-      grants: { accessibility: "unknown", screenCapture: "unknown" },
-      helper: "authenticated",
-      blockers: [],
-    }),
+    grants: { accessibility: "unknown", screenCapture: "unknown" },
+    helper: "unauthenticated",
     capture: "unavailable",
     tree: "unavailable",
     input: "unavailable",
+    blockers: previous?.readiness.blockers ?? [],
     reasons: [UNANSWERED_REASON],
+    ...(previous?.readiness.platform ? { platform: previous.readiness.platform } : {}),
   },
   signals: { privateMode: "unsupported", humanInput: "unsupported" },
 });

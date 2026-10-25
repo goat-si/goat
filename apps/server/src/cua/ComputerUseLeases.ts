@@ -103,6 +103,8 @@ const WATCH_RETRY_MS = 1_000;
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
 const REPORT_SKEW_MS = 60_000;
+/** How many of a batch's events are judged between turns of the server's other work. */
+const HUMAN_INPUT_CHUNK = 256;
 
 /** Why a thread runs without a person directing it; see ComputerUseOrigin. */
 export type ChannelOrigin = "goat_bot" | "channel_task";
@@ -184,16 +186,17 @@ export class ComputerUseLeases extends Context.Service<
       target: { readonly pid: number; readonly windowId: number },
     ) => Effect.Effect<boolean>;
     /**
-     * A keyboard or pointer event at "at" that a control's proxy saw through its helper, outside
-     * its own input calls (#1235). Unless another agent's input of the same kind covers that
-     * moment, every agent on the host pauses, as for the desktop's report. Refused when the
-     * control is not the thread's live one, so an old proxy cannot pause anyone.
+     * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
+     * one in time order (#1488). An event another agent's input of the same kind covers is
+     * dropped, and so is one too old or too far from now to judge; the first that is left pauses
+     * every agent on the host, as for the desktop's report. "agents" when none paused anyone.
+     * Refused when the control is not the thread's live one, so an old proxy cannot pause anyone,
+     * and when not one event could be judged.
      */
     readonly humanInput: (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) => Effect.Effect<"paused" | "agents" | "refused">;
     /**
      * One of a control's calls that can post input started or ended (#1235). A person's input
@@ -843,26 +846,38 @@ const make = Effect.gen(function* () {
     humanInput: Effect.fn("ComputerUseLeases.humanInput")(function* (
       threadId: ThreadId,
       controlId: string,
-      at: number,
-      source: ComputerUseHumanInputSource,
+      events: ReadonlyArray<{ readonly at: number; readonly source: ComputerUseHumanInputSource }>,
     ) {
-      if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
-      if (!(yield* nearNow(at))) return "refused" as const;
-      // The calls that could have covered an older event are forgotten, so it cannot be judged:
-      // an agent's own late event would pass for a person's. A person still at the machine makes
-      // newer ones.
-      if (!agentInputs.remembers(at, yield* Clock.currentTimeMillis)) return "refused" as const;
-      // Another agent's input on this host shows up in every helper; only a live control's
-      // calls count.
-      const live = new Set(
-        [...controls.values()]
-          .filter((record) => record.ended === undefined)
-          .map((record) => record.controlId),
-      );
-      if (agentInputs.isAgents(at, source, (key) => live.has(key.slice(0, key.indexOf(CALL_KEY)))))
-        return "agents" as const;
-      yield* pause("human_input");
-      return "paused" as const;
+      const sorted = [...events].sort((left, right) => left.at - right.at);
+      let judged = false;
+      // A batch can hold thousands of events: each chunk is judged against the log as it is when
+      // the chunk starts, and the server gets to run its other work between chunks.
+      for (let start = 0; start < sorted.length; start += HUMAN_INPUT_CHUNK) {
+        if (start > 0) yield* Effect.yieldNow;
+        if ((yield* liveControl(threadId, controlId)) === undefined) return "refused" as const;
+        // Another agent's input on this host shows up in every helper; only a live control's
+        // calls count.
+        const live = new Set(
+          [...controls.values()]
+            .filter((record) => record.ended === undefined)
+            .map((record) => record.controlId),
+        );
+        const now = yield* Clock.currentTimeMillis;
+        agentInputs.prune(now);
+        const isAgents = agentInputs.judge((key) => live.has(key.slice(0, key.indexOf(CALL_KEY))));
+        for (const { at, source } of sorted.slice(start, start + HUMAN_INPUT_CHUNK)) {
+          if (Math.abs(now - at) > REPORT_SKEW_MS) continue;
+          // The calls that could have covered an older event are forgotten, so it cannot be
+          // judged: an agent's own late event would pass for a person's. A person still at the
+          // machine makes newer ones.
+          if (!agentInputs.remembers(at, now)) continue;
+          judged = true;
+          if (isAgents(at, source)) continue;
+          yield* pause("human_input");
+          return "paused" as const;
+        }
+      }
+      return judged ? ("agents" as const) : ("refused" as const);
     }),
     agentInput: Effect.fn("ComputerUseLeases.agentInput")(function* (
       threadId: ThreadId,

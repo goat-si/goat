@@ -118,14 +118,31 @@ export type ComputerUseLeaseTarget = typeof ComputerUseLeaseTarget.Type;
 const EpochMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /**
- * Proxy -> server, on the same route: a keyboard or pointer event at `at` that the lease
- * proxy's helper saw while the control was live, outside the proxy's own input calls (#1235).
- * The server drops it when another agent's input covers `at`, else every agent pauses. Only the
- * kind of input, never what was typed or where.
+ * Proxy -> server, on the same route: keyboard or pointer events the lease proxy's helper saw
+ * while the control was live (#1235), one or every event that piled up behind the last report
+ * (#1488), in time order. The server judges each: an event another agent's input covers is
+ * dropped, and the first one no agent covers pauses every agent. Only the kind of input and when,
+ * never what was typed or where.
  */
+const ComputerUseHumanInputEvent = Schema.Struct({
+  source: ComputerUseHumanInputSource,
+  at: EpochMillis,
+});
+/**
+ * The most events one report carries; a proxy sends any more in the next one. Large enough that
+ * a 1 kHz pointer behind a report as slow as the proxy's 2 s timeout fits in one.
+ */
+export const COMPUTER_USE_HUMAN_INPUT_BATCH = 4096;
 export const ComputerUseLeaseHumanInput = Schema.Struct({
   controlId: TrimmedNonEmptyString,
-  humanInput: Schema.Struct({ source: ComputerUseHumanInputSource, at: EpochMillis }),
+  // One event is what a proxy from before batching sends.
+  humanInput: Schema.Union([
+    ComputerUseHumanInputEvent,
+    Schema.Array(ComputerUseHumanInputEvent).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(COMPUTER_USE_HUMAN_INPUT_BATCH),
+    ),
+  ]),
 });
 export type ComputerUseLeaseHumanInput = typeof ComputerUseLeaseHumanInput.Type;
 

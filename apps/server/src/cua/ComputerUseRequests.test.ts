@@ -196,6 +196,43 @@ it.effect(
     ),
 );
 
+it.effect(
+  "the approval says once, in words a person reads, what is asked: no run id, ISO time or second summary",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+          Effect.gen(function* () {
+            const iso = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+            for (const asked of [
+              { apps: ["com.example.build"] },
+              { foreground: true },
+            ] satisfies Array<Partial<ComputerUseRequestInput>>) {
+              const result = yield* request(asked);
+              if (result.kind !== "needs_human")
+                return assert.fail("the request waits for a person");
+              const card = yield* handoffs.open(
+                { threadId, handoffId: result.handoff.handoffId },
+                sessionId,
+              );
+              const reason = card.handoff.reason;
+              // The card shows the expiry in the reader's own time, so the text carries no clock time.
+              assert.notMatch(reason, /UTC|run:|%3A/);
+              assert.notMatch(reason, iso);
+              assert.include(reason, `for 30 minutes: ${purpose}`);
+              const details = card.human?.location ?? "";
+              // What the card shows after "Review request" adds to the summary; it does not repeat it.
+              assert.notInclude(details, "asks to");
+              assert.notInclude(details, purpose);
+              assert.notMatch(details, /run:|%3A|UTC/);
+              assert.notMatch(details, iso);
+            }
+          }),
+        );
+      }),
+    ),
+);
+
 it.effect("a repeated request announces the pending handoff's original expiry", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request }) =>
@@ -325,7 +362,6 @@ it.effect(
           );
           assert.isUndefined(backgroundCard.handoff.computerUseForeground);
           assert.include(backgroundCard.handoff.reason, "Background-only");
-          assert.include(backgroundCard.human?.location ?? "", "Background-only");
           assert.notInclude(backgroundCard.handoff.reason, "already sent");
           assert.notInclude(backgroundCard.human?.location ?? "", "already sent");
           const card = yield* handoffs.open(
@@ -334,21 +370,17 @@ it.effect(
           );
           assert.deepEqual(card.handoff.computerUseForeground, { purpose, target: "desktop" });
           assert.isUndefined(card.handoff.apps);
-          for (const disclosure of [card.handoff.reason, card.human?.location ?? ""]) {
-            for (const required of [
-              purpose,
-              "Whole-desktop",
-              "focus",
-              "Pause",
-              "Stop",
-              "replacement",
-              "turn end",
-              "one input action already sent under live approval",
-              "GOAT does not restore focus when approval ends",
-              DateTime.formatIso(card.handoff.expiresAt!),
-            ])
-              assert.include(disclosure, required);
-          }
+          for (const required of [purpose, "Whole-desktop foreground", "focus"])
+            assert.include(card.handoff.reason, required);
+          for (const required of [
+            "Pause",
+            "Stop",
+            "replacement",
+            "turn end",
+            "one input action already sent under live approval",
+            "GOAT does not restore focus when approval ends",
+          ])
+            assert.include(card.human?.location ?? "", required);
         }),
       ),
     ),
