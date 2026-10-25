@@ -101,13 +101,18 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   "com.apple.passwords",
   "com.1password.1password",
   "com.agilebits.onepassword7",
+  "com.1password.safari",
   "com.bitwarden.desktop",
   "org.keepassxc.keepassxc",
   "com.lastpass.lastpass",
   "com.dashlane.dashlanephonefinal",
+  "com.nordsec.nordpass",
+  "me.proton.pass.electron",
+  "me.proton.pass.catalyst",
 ]);
+// Names cover Windows and Linux, where an app is listed by its executable path or desktop name.
 const EXCLUDED_NAME =
-  /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|keychain access|passwords)\b/iu;
+  /\b(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords)\b/iu;
 /** The driver, and GOAT's helper on Windows, named by their executables. */
 const EXCLUDED_EXECUTABLE = /(^|[\\/])((cua-driver|GOAT Computer Use)\.exe|cua-driver)$/iu;
 
