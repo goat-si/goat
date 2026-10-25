@@ -163,13 +163,17 @@ export const makeCuaDriverInstallation = Effect.fn("CuaDriverInstallation.make")
 
     const install = Effect.fn("CuaDriverInstallation.install")(
       function* (release: CuaDriverRelease) {
-        const destination = path.join(installRoot, release.version);
+        // One version has different archives per architecture; never run another one's binary.
+        const destination = path.join(installRoot, release.version, release.archiveName);
+        const versionDirectory = path.dirname(destination);
         const executable = path.join(destination, release.executable);
-        if (yield* complete(destination, release)) return executable;
-        yield* fs.makeDirectory(installRoot, { recursive: true });
+        const cached = yield* complete(destination, release);
+        if (cached) return executable;
+        yield* fs.remove(versionDirectory, { recursive: false }).pipe(Effect.ignore);
+        yield* fs.makeDirectory(versionDirectory, { recursive: true });
         // A sibling staging directory makes publication atomic on the same filesystem.
         const staging = yield* fs.makeTempDirectoryScoped({
-          directory: installRoot,
+          directory: versionDirectory,
           prefix: ".install-",
         });
         const archivePath = path.join(staging, release.archiveName);

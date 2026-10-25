@@ -19,6 +19,7 @@ import {
   descriptor,
   HOST_PID,
   HELPER_ID,
+  HELPER_BUNDLE,
   toolResult,
   healthyTools,
   fixture,
@@ -28,6 +29,31 @@ import {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("DesktopCuaDriver", () => {
+  it.effect("starts an updated helper after the running generation is restarted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+        });
+        yield* test.request("before-update");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.applyHelperUpdate;
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+        yield* test.request("after-update");
+        assert.equal((yield* test.next).status, "ready");
+        assert.deepEqual(
+          test.helperLaunches.map(({ driverPath }) => driverPath),
+          [
+            HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
+            HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
+          ],
+        );
+      }),
+    ),
+  );
+
   it.effect("hosts with the app identity, preserves the descriptor, reuses and releases once", () =>
     Effect.gen(function* () {
       vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/ignored-in-packaged-app");
