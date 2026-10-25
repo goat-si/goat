@@ -60,10 +60,15 @@ describe("desktop computer use payload", () => {
         const globs = config.asarUnpack as string[];
         assert.isArray(globs, `${platform} needs explicit native unpack rules`);
         const asarPath = path.join(root, `${platform}.asar`);
+        // electron-builder resolves file patterns from the app directory; anchor them the same way
+        // so the result does not depend on where the temporary fixture lives.
+        const ignore = (config.files as string[]).map(
+          (glob) => `${sourceDir.replaceAll("\\", "/")}/${glob.slice(1)}`,
+        );
         yield* Effect.promise(() =>
           createPackageWithOptions(sourceDir, asarPath, {
             unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
-            globOptions: { ignore: (config.files as string[]).map((glob) => glob.slice(1)) },
+            globOptions: { ignore },
           }),
         );
         const excluded = (file: string) =>
