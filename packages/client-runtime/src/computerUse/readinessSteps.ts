@@ -129,6 +129,11 @@ const toolsCopy = {
 // compositor cannot capture one window, so it is not described as a prompt to answer.
 const LINUX_CAPTURE_UNPROVEN =
   "Screen capture is not proven yet. A Wayland desktop may be waiting for consent, or may not capture one window at all.";
+// Windows asks nobody for consent: pending there means no check has read a window since the
+// helper started, and the tree it reports unavailable meanwhile is unread, not refused (#1520).
+const WINDOWS_CAPTURE_UNCHECKED =
+  "Not checked yet. Turning computer use on here restarts the helper and proves a real window capture.";
+const WINDOWS_TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
@@ -231,17 +236,22 @@ export function computerUseReadinessSteps({
   // The tree and input are read through a confirmed helper; before that they are unchecked,
   // not unsupported.
   const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
+  const windowsUnchecked = platform === "win32" && readiness?.capture === "pending";
   const capture = readiness
     ? [
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
-          : captureCopy[readiness.capture],
+          : windowsUnchecked
+            ? ({ state: "pending", detail: WINDOWS_CAPTURE_UNCHECKED } as const)
+            : captureCopy[readiness.capture],
         unconfirmed && readiness.tree === "unavailable"
           ? ({
               state: "unknown",
               detail: "The accessibility tree is read once the helper is confirmed.",
             } as const)
-          : treeCopy[readiness.tree],
+          : windowsUnchecked && readiness.tree === "unavailable"
+            ? ({ state: "pending", detail: WINDOWS_TREE_UNCHECKED } as const)
+            : treeCopy[readiness.tree],
         unconfirmed && readiness.input === "unavailable"
           ? ({
               state: "unknown",
