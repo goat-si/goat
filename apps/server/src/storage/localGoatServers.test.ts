@@ -7,6 +7,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import * as ProcessRunner from "../processRunner.ts";
 import * as LocalGoatServers from "./localGoatServers.ts";
@@ -119,5 +120,56 @@ describe("local GOAT server discovery", () => {
           Effect.provideService(HostProcess.Environment, {}),
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("counts a database it cannot reach as unchecked, never as absent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-" }));
+      const own = path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite");
+      // A known home whose folder lost its permissions while its server keeps the database open.
+      const locked = path.join(home, ".goat", "userdata");
+      const lockedDatabase = path.join(locked, "statev2.sqlite");
+      yield* fs.makeDirectory(locked, { recursive: true });
+      new NodeSqlite.DatabaseSync(lockedDatabase).close();
+      // A database a running server holds open that this check cannot find on disk.
+      const held = path.join(home, "custom", "userdata", "statev2.sqlite");
+      const output = (stdout: string): ProcessRunner.ProcessRunOutput => ({
+        stdout,
+        stderr: "",
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutInvalidUtf8: false,
+        stderrInvalidUtf8: false,
+      });
+      const runner = Layer.mock(ProcessRunner.ProcessRunner)({
+        run: (input) =>
+          Effect.succeed(
+            input.command === "ps"
+              ? output("  4242     1   501 Sat Oct 25 10:00:00 2026 /usr/local/bin/goat serve\n")
+              : output("p4242\nn" + held + "\n"),
+          ),
+      });
+      yield* fs.chmod(locked, 0o000);
+      const found = yield* Effect.gen(function* () {
+        return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
+      }).pipe(
+        Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+        Effect.provideService(HostProcess.HomeDirectory, home),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.UserId, 501),
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.ensuring(fs.chmod(locked, 0o755).pipe(Effect.orDie)),
+      );
+      expect(found.databases).toEqual([]);
+      for (const database of [lockedDatabase, held])
+        expect(
+          found.unverified.some((reason) => reason.includes(database)),
+          database,
+        ).toBe(true);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 });

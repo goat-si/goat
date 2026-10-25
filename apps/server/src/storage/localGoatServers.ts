@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- reads other GOAT servers' databases read-only.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeSqlite from "node:sqlite";
 
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -105,6 +106,19 @@ const readDatabase = (file: string) =>
     catch: (cause) => (cause instanceof Error ? cause.message : String(cause)),
   });
 
+/**
+ * Whether a database file is there. Only a missing file or folder counts as absent: a folder this
+ * user cannot search hides a database without proving there is none.
+ */
+const presence = (file: string) =>
+  NodeFSP.stat(file).then(
+    () => "present" as const,
+    (error: NodeJS.ErrnoException) =>
+      error.code === "ENOENT" || error.code === "ENOTDIR"
+        ? ("absent" as const)
+        : ("unreachable" as const),
+  );
+
 const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindings")(
   function* (input: { readonly ownDatabase: string }) {
     const fs = yield* FileSystem.FileSystem;
@@ -119,6 +133,8 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
 
     const candidates = new Set<string>();
+    // Databases a running process holds open must be there; the known homes may not exist.
+    const heldOpen = new Set<string>();
     for (const goatHome of [
       env.GOAT_HOME,
       path.join(home, ".goat"),
@@ -151,7 +167,11 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       // Whatever its command line says, a process holding a GOAT database open is a server.
       const open = yield* databasesOpenBy(uid);
       if (open === null) unverified.push("the databases open on this machine could not be listed");
-      for (const files of open?.values() ?? []) for (const file of files) candidates.add(file);
+      for (const files of open?.values() ?? [])
+        for (const file of files) {
+          candidates.add(file);
+          heldOpen.add(file);
+        }
       const servers = rows.filter(
         (row) => row.uid === uid && row.pid !== process.pid && looksLikeGoatServer(row.command),
       );
@@ -171,7 +191,16 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
     const worktreePaths: Array<string> = [];
     const projectRoots: Array<string> = [];
     for (const candidate of candidates) {
-      if (!(yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false)))) continue;
+      const found = yield* Effect.promise(() => presence(candidate));
+      if (found === "unreachable") {
+        unverified.push("the GOAT database " + candidate + " could not be reached");
+        continue;
+      }
+      if (found === "absent") {
+        if (heldOpen.has(candidate))
+          unverified.push("the GOAT database " + candidate + " a process holds open was not found");
+        continue;
+      }
       const file = yield* real(candidate);
       if (seen.has(file)) continue;
       seen.add(file);
