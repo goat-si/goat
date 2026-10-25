@@ -146,6 +146,38 @@ from npm, it stays as it is. With both GOAT and GOAT (Nightly) installed, `goat`
 runs the app you installed it from. If it runs the other app, choose **Remove** and
 then **Install** in the app you want.
 
+### GOAT and GOAT (Nightly) side by side
+
+GOAT and GOAT (Nightly) keep separate data, so both can run at once without
+sharing a database, settings, or logs:
+
+| App            | macOS and Linux           | Windows                               |
+| -------------- | ------------------------- | ------------------------------------- |
+| GOAT           | `~/.goat/desktop`         | `%USERPROFILE%\.goat\desktop`         |
+| GOAT (Nightly) | `~/.goat/desktop-nightly` | `%USERPROFILE%\.goat\desktop-nightly` |
+
+Preview builds use the nightly folder. Setting `GOAT_HOME` overrides both.
+
+The first time GOAT (Nightly) opens without its own folder, it copies GOAT's
+threads, projects, settings, saved connections, secrets, attachments, and notes
+into it. GOAT's folder is only read, never moved or deleted, so GOAT and any older
+nightly keep working from it. Logs and caches are not copied. Worktrees and
+project folders are not copied either: both apps keep using the same folders on
+disk. A large history can make that first launch take a little longer. If the
+copy fails, for example because the disk is full, GOAT (Nightly) says why and
+quits without changing anything; it tries again the next time you open it. On
+macOS, reading saved connections may ask once for permission to use GOAT's
+keychain item. Sign in to your GOAT account again in the nightly app.
+
+The copy starts with its automation paused, because it would otherwise act as a
+second copy of the same machine: scheduled tasks, channel bots such as Slack,
+goals and Fleet work, memory sync, and hub and remote links stay off, and agent
+work that was in progress when the copy was made does not continue. Your own
+threads and commands work as usual. A notice at the top of **Settings** explains
+this; choose **Resume automation on this app** there to turn it on. If both apps
+run with automation on, each runs it: scheduled tasks and channel replies happen
+twice.
+
 ### Windows Subsystem for Linux
 
 Choose a WSL distro in **Settings → Connections** to run agents and projects
