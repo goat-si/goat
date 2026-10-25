@@ -4,7 +4,7 @@ import {
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
-import { type RefObject, useEffect, useState, useSyncExternalStore } from "react";
+import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
@@ -120,25 +120,28 @@ const NO_PICTURE: Partial<Record<PreviewSessionNoPicture, string>> = {
 };
 
 /**
- * The last picture of each desktop session, kept outside the card: Pop out and Dock mount the
- * stack anew, and a stopped session sends no more frames, so a card's own state would lose it
- * (#1518). A private answer forgets it. Bounded, oldest first, since closed sessions stay here.
+ * A stopped desktop session's last picture, handed from a card that unmounts to the next one
+ * of the same session and thread: Pop out and Dock mount the stack anew, and a stopped session
+ * sends no more frames (#1518). Only a stopped card hands one over, and the next mount takes
+ * it, so a picture from before a private period or a person's control never comes back.
+ * Bounded, oldest first, for cards that never mount again.
  */
-const lastFrames = new Map<string, string>();
+const handedFrames = new Map<string, string>();
 const LAST_FRAMES_KEPT = 8;
 
-function rememberLastFrame(key: string, frame: string | null) {
-  if (frame === null) {
-    lastFrames.delete(key);
-    return;
+function handOver(key: string, frame: string) {
+  handedFrames.delete(key);
+  handedFrames.set(key, frame);
+  for (const oldest of handedFrames.keys()) {
+    if (handedFrames.size <= LAST_FRAMES_KEPT) break;
+    handedFrames.delete(oldest);
   }
-  if (lastFrames.get(key) === frame) return;
-  lastFrames.delete(key);
-  lastFrames.set(key, frame);
-  for (const oldest of lastFrames.keys()) {
-    if (lastFrames.size <= LAST_FRAMES_KEPT) break;
-    lastFrames.delete(oldest);
-  }
+}
+
+function takeOver(key: string) {
+  const frame = handedFrames.get(key) ?? null;
+  handedFrames.delete(key);
+  return frame;
 }
 
 /**
@@ -155,15 +158,22 @@ function DesktopThumbnail(props: {
   const { event } = useDesktopSessionFrame(session.environmentId, watching ? session.id : null);
   const frame = event?.type === "frame" ? `data:${event.mime};base64,${event.data}` : null;
   const reason = event?.type === "unavailable" ? event.reason : undefined;
-  const key = `${session.environmentId}\u0000${session.id}`;
-  // A card mounted anew starts from the picture an earlier one of this session kept.
-  const [last, setLast] = useState<string | null>(() => lastFrames.get(key) ?? null);
+  const key = `${session.environmentId}\u0000${session.id}\u0000${session.threadId ?? ""}`;
+  // A stopped card mounted anew starts from the picture the previous one handed over.
+  const [last, setLast] = useState<string | null>(() => (props.stopped ? takeOver(key) : null));
   // Kept for a stopped session; adjusted while rendering, as the last event decides it.
   const kept = frame ?? (reason === "private" ? null : last);
   if (kept !== last) setLast(kept);
+  const handed = useRef<string | null>(null);
   useEffect(() => {
-    if (frame !== null || reason === "private") rememberLastFrame(key, frame);
-  }, [key, frame, reason]);
+    handed.current = props.stopped ? last : null;
+  });
+  useEffect(() => {
+    // Whatever a stopped card shows when it goes away is for the next mount of this session.
+    return () => {
+      if (handed.current !== null) handOver(key, handed.current);
+    };
+  }, [key]);
   const shown = frame ?? (props.stopped ? last : null);
   if (shown !== null)
     return (
