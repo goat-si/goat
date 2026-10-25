@@ -267,8 +267,8 @@ function maskJoseToken(run: string): string {
 // key=value or key: value for every credential name a field is masked by.
 const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi");
 // A scheme word alone on its line, "authorization=Bearer" then a line break, still leads the
-// credential on the next line. Sticky, so it is tried once at the value's start.
-const LONE_SCHEME_WORD = /[A-Za-z][\w+.~-]*[ \t]*(?:\r\n?|\n)[ \t]*(?=[^\s])/y;
+// credential on the next line that holds anything. Sticky, so it is tried once at the value's start.
+const LONE_SCHEME_WORD = /[A-Za-z][\w+.~-]*[ \t]*[\r\n]\s*(?=\S)/y;
 
 /**
  * Every assignment to a credential name with its whole value masked: a JSON value up to its
@@ -410,10 +410,11 @@ const MAX_SCANNED = 8 * MAX_STRING;
 
 /** Text with credentials replaced, then cut to a bound, so the cut never splits a credential. */
 export function redactLogText(text: string): string {
+  // A cut provider token is found first, before a later pass can mask part of the word holding it.
   const scanned =
     text.length <= MAX_SCANNED
       ? text
-      : maskUnfinishedToken(maskUnfinishedUrl(maskUnfinishedJose(text.slice(0, MAX_SCANNED))));
+      : maskUnfinishedUrl(maskUnfinishedJose(maskUnfinishedToken(text.slice(0, MAX_SCANNED))));
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) =>
       typeof replacement === "string"

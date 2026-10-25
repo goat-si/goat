@@ -166,6 +166,9 @@ describe("redactLogText", () => {
     ['authorization="first\nCANARY" next\nkept', "authorization=***\nkept"],
     ['cookie="sid=first\r\nCANARY" next\r\nkept', "cookie=***\r\nkept"],
     ["authorization=first\\\nCANARY next\nkept", "authorization=***\nkept"],
+    // A scheme word alone on its line leads the credential however many blank lines follow.
+    ["authorization=Bearer\n\nCANARY next", "authorization=***"],
+    ["Authorization=Bearer\r\n \t\r\nCANARY next\r\nkept", "Authorization=***\r\nkept"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
   });
@@ -196,6 +199,9 @@ describe("redactLogText", () => {
     ["a Slack token", `${xox}b-CANARY12`],
     ["a Slack token joined to a word", `request-id-${xox}b-CANARY12`],
     ["a Google API key", `${aiza}CANARY12`],
+    // Its end could also start a JOSE header; the token is still found from its prefix.
+    ["a Google API key ending like a JOSE header", `${aiza}CANARY12eyJhbGci`],
+    ["a Slack token ending like a JOSE header", `${xox}b-CANARY12eyJhbGci`],
     ["a PEM private key", `${pemBegin} PRIVATE KEY-----\nCANARY12`],
     ["an authorization assignment", "authorization=Custom+Scheme CANARY12"],
     ["a cookie assignment", "cookie=sid=1; theme=CANARY12"],
