@@ -26,6 +26,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
 import type { HelperEvent } from "./ComputerUseHelper.ts";
+import { makeAppCatalog } from "./appCatalog.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
 import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
 
@@ -383,6 +384,11 @@ export const fixture = Effect.fn(function* (
       return path;
     },
     listApps: async () => listedApps,
+    appCatalog: (() => {
+      const catalog = makeAppCatalog(async () => new Map());
+      return (listed: ReadonlyArray<CuaDriverListedApp>, hostBundleIds: ReadonlyArray<string>) =>
+        catalog(listed, hostBundleIds);
+    })(),
     computerUseEnabled: async () => computerUseEnabled,
     readManifest: async (path) => {
       const text = manifests.get(path);

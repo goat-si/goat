@@ -363,7 +363,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         return undefined;
       const apps = cuaRequestableApps(listed, hosts);
       // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
-      return apps.length <= 1000 ? apps : undefined;
+      if (apps.length > 1000) return undefined;
+      // Names and icons are for people; a catalog that fails leaves the approval list intact.
+      const catalog = yield* Effect.tryPromise(() =>
+        native.appCatalog(listed, hosts, environment.platform),
+      ).pipe(Effect.option);
+      return { apps, catalog: Option.getOrUndefined(catalog) };
     }).pipe(Effect.orElseSucceed(() => undefined));
     if (!closed)
       for (const requestId of batch.requestIds)
@@ -373,7 +378,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           requestId,
           ...(apps === undefined
             ? { status: "unavailable" as const }
-            : { status: "listed" as const, apps }),
+            : {
+                status: "listed" as const,
+                apps: apps.apps,
+                ...(apps.catalog === undefined ? {} : { catalog: apps.catalog }),
+              }),
         });
   });
 

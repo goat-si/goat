@@ -118,6 +118,10 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
       stopAllComputerUse(leases, handoffs, sessionId).pipe(
         Effect.map(({ stopped }) => ({ stopped })),
       ),
+    [WS_METHODS.computerUseApps]: (_input: {}) =>
+      Option.isNone(driver)
+        ? Effect.succeed({ apps: [] })
+        : driver.value.appCatalog.pipe(Effect.map((apps) => ({ apps }))),
     [WS_METHODS.computerUseResume]: (_input: {}) =>
       Option.isNone(leases) ? Effect.succeed({}) : leases.value.resume.pipe(Effect.as({})),
   } as const;

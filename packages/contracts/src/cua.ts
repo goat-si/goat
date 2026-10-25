@@ -43,6 +43,28 @@ export const DesktopCuaAppsRequest = Schema.Struct({
 });
 export type DesktopCuaAppsRequest = typeof DesktopCuaAppsRequest.Type;
 
+/** At most this many icons ride on one listing; the rest show the generic app icon. */
+export const COMPUTER_USE_APP_ICON_LIMIT = 200;
+/** A 64x64 PNG data URL is a few KiB; anything larger is not an app icon. */
+const COMPUTER_USE_APP_ICON_MAX_CHARS = 64 * 1024;
+
+/**
+ * One running app a person can name in the composer (`@Finder`) or see beside an agent's call:
+ * the id the driver admits (a bundle id, or an executable path where there is none), its name
+ * and, when the desktop could read one, a small PNG icon as a data URL.
+ */
+export const ComputerUseApp = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  icon: Schema.optionalKey(
+    TrimmedNonEmptyString.check(
+      Schema.isMaxLength(COMPUTER_USE_APP_ICON_MAX_CHARS),
+      Schema.isPattern(/^data:image\/png;base64,/),
+    ),
+  ),
+});
+export type ComputerUseApp = typeof ComputerUseApp.Type;
+
 export const DesktopCuaAppsReport = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
@@ -50,6 +72,8 @@ export const DesktopCuaAppsReport = Schema.Union([
     requestId: TrimmedNonEmptyString,
     status: Schema.Literal("listed"),
     apps: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(1000)),
+    /** The same apps with names and icons, for people; a desktop older than #1700 omits it. */
+    catalog: Schema.optionalKey(Schema.Array(ComputerUseApp).check(Schema.isMaxLength(1000))),
   }),
   Schema.Struct({
     version: Schema.Literal(1),

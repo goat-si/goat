@@ -7,6 +7,7 @@ import {
 } from "./handoff.ts";
 import {
   ComputerUseStopAllResult,
+  ComputerUseApp,
   ComputerUseStopInput,
   ComputerUseStopResult,
   CuaHostStatus,
@@ -606,6 +607,7 @@ export const WS_METHODS = {
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
   computerUseResume: "computerUse.resume",
+  computerUseApps: "computerUse.apps",
   previewSessionsSubscribe: "previewSessions.subscribe",
   previewSessionsControl: "previewSessions.control",
   previewSessionsFrames: "previewSessions.frames",
@@ -794,6 +796,17 @@ const WsComputerUseStatusChangesRpc = Rpc.make(WS_METHODS.computerUseStatusChang
   success: Schema.Struct({ revision: NonNegativeInt }),
   error: EnvironmentAuthorizationError,
   stream: true,
+});
+
+/**
+ * The apps running on this host that computer use could reach, with names and icons, for the
+ * composer's @ list and the icons beside an agent's calls. Empty when computer use is off or the
+ * host cannot list them; asking grants nothing.
+ */
+const WsComputerUseAppsRpc = Rpc.make(WS_METHODS.computerUseApps, {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({ apps: Schema.Array(ComputerUseApp) }),
+  error: EnvironmentAuthorizationError,
 });
 
 /** Ends one thread's control of this host's screen, killing its driver transport. */
@@ -2418,6 +2431,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
   WsComputerUseResumeRpc,
+  WsComputerUseAppsRpc,
   WsPreviewSessionsSubscribeRpc,
   WsPreviewSessionsControlRpc,
   WsPreviewSessionsFramesRpc,

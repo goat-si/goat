@@ -3,7 +3,7 @@ import {
   type AgentRouteCommand,
   type AgentRouteOutcome,
 } from "./agentRouteProbe.ts";
-import type { ComputerUseReadiness } from "@goat/contracts";
+import type { ComputerUseApp, ComputerUseReadiness } from "@goat/contracts";
 import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
 import { listCuaDriverApplications, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import { fromLenientJson } from "@goat/shared/schemaJson";
@@ -26,6 +26,8 @@ import { probeWindowsReadiness, windowsDriverPipe } from "./ComputerUseHelperWin
 import { resolveHelperBundle } from "./ComputerUseHelperInstall.ts";
 import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
 import { makeMcpHelperHost } from "./McpHelperHost.ts";
+import { makeAppCatalog } from "./appCatalog.ts";
+import { makeAppIconReader } from "./appIcons.ts";
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
@@ -130,6 +132,12 @@ export interface DesktopCuaDriverDependencies {
     readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   }) => Promise<string>;
   readonly listApps: typeof listCuaDriverApplications;
+  /** Names and icons for a listing's requestable apps; icons are read once per app. */
+  readonly appCatalog: (
+    listed: ReadonlyArray<CuaDriverListedApp>,
+    hostBundleIds: ReadonlyArray<string>,
+    platform: NodeJS.Platform,
+  ) => Promise<ReadonlyArray<ComputerUseApp>>;
   /** Read the local server's persisted opt-in, not whether an agent driver happens to run. */
   readonly computerUseEnabled: (settingsPath: string) => Promise<boolean>;
   readonly readManifest: (path: string) => Promise<string>;
@@ -213,6 +221,17 @@ export const dependencies: DesktopCuaDriverDependencies = {
   },
   prepareManifest: prepareDesktopManifest,
   listApps: listCuaDriverApplications,
+  appCatalog: (() => {
+    const catalogs = new Map<NodeJS.Platform, ReturnType<typeof makeAppCatalog>>();
+    return (listed, hostBundleIds, platform) => {
+      let catalog = catalogs.get(platform);
+      if (catalog === undefined) {
+        catalog = makeAppCatalog(makeAppIconReader(platform));
+        catalogs.set(platform, catalog);
+      }
+      return catalog(listed, hostBundleIds);
+    };
+  })(),
   computerUseEnabled: async (settingsPath) => {
     const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
     const settings = decodeComputerUseSetting(raw);
