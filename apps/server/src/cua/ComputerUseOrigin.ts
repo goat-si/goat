@@ -8,7 +8,15 @@
  *
  * @module ComputerUseOrigin
  */
-import type { MessageId, RunId, ThreadId } from "@goat/contracts";
+import {
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
+  type Handoff,
+  type MessageId,
+  type OrchestrationV2Actor,
+  type OrchestrationV2CreationSource,
+  type RunId,
+  type ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -65,6 +73,8 @@ export interface OriginMessage {
   readonly scheduledTaskId?: string | undefined;
   readonly senderThreadId?: ThreadId | undefined;
   readonly channel?: unknown;
+  readonly createdBy?: OrchestrationV2Actor | undefined;
+  readonly creationSource?: OrchestrationV2CreationSource | undefined;
 }
 
 /** Reads a classification needs; each failure or absence fails closed. */
@@ -82,6 +92,14 @@ export interface OriginReads {
     threadId: ThreadId,
     messageId: MessageId,
   ) => Effect.Effect<OriginMessage | undefined, ComputerUseOriginError>;
+}
+
+/** Classification reads plus the run that asked for an approved computer use grant. */
+export interface PersonStartReads extends OriginReads {
+  readonly grantRun: (
+    threadId: ThreadId,
+    handoffId: string,
+  ) => Effect.Effect<RunId | undefined, ComputerUseOriginError>;
 }
 
 const INTERACTIVE: ComputerUseOrigin = { _tag: "interactive" };
@@ -180,24 +198,86 @@ export const computerUseOrigin = (
     Effect.withSpan("ComputerUse.origin"),
   );
 
+/** What a person's client writes on a message it sends; server and MCP paths write others. */
+const fromPersonClient = (message: OriginMessage) =>
+  message.createdBy === "user" &&
+  (message.creationSource === "web" || message.creationSource === "mobile");
+
+/** The wake HandoffWakeReactor sends when a person approves a computer use request. */
+const APPROVAL_WAKE = /^message:handoff-wake:(.+):completed$/;
+
+/**
+ * Whether a person caused this run: a person's client sent its message, or it is the wake for a
+ * computer use approval that such a run asked for. Full access gives these runs every app and
+ * foreground input without asking. Classification can call other runs interactive too (a task's
+ * completion wake), which keep the approvals they had. Any failed read, or a chain longer than
+ * lineage allows, is false.
+ */
+export const personStarted = (
+  reads: PersonStartReads,
+  input: { readonly threadId: ThreadId; readonly runId: RunId },
+): Effect.Effect<boolean> =>
+  Effect.gen(function* () {
+    let runId = input.runId;
+    for (let depth = 0; depth <= MAX_DEPTH; depth++) {
+      const origin = yield* computerUseOrigin(reads, { threadId: input.threadId, runId });
+      if (origin._tag !== "interactive") return false;
+      const run = (yield* reads.runs(input.threadId)).find((candidate) => candidate.id === runId);
+      if (run === undefined) return false;
+      const message = yield* reads.message(input.threadId, run.userMessageId);
+      if (
+        message === undefined ||
+        message.scheduledTaskId !== undefined ||
+        message.channel !== undefined ||
+        message.senderThreadId !== undefined
+      )
+        return false;
+      if (fromPersonClient(message)) return true;
+      // Only the wake reactor writes agent messages from the server under these ids.
+      const wake =
+        message.createdBy === "agent" && message.creationSource === "server"
+          ? APPROVAL_WAKE.exec(run.userMessageId)
+          : null;
+      const asking =
+        wake?.[1] === undefined ? undefined : yield* reads.grantRun(input.threadId, wake[1]);
+      if (asking === undefined) return false;
+      runId = asking;
+    }
+    return false;
+  }).pipe(
+    Effect.catchCause(() => Effect.succeed(false)),
+    Effect.withSpan("ComputerUse.personStarted"),
+  );
+
+interface OriginTurnItem {
+  readonly id: string;
+  readonly runId: RunId | null;
+  readonly handoff?: Pick<Handoff, "state" | "target" | "requestedBy"> | undefined;
+}
+
 /** The projection reads both callers have, as classification reads. */
 export const projectionOriginReads = <E1, E2>(deps: {
   readonly getThreadRecords: (
     threadId: ThreadId,
-    fields: ReadonlyArray<"runs" | "messages">,
-    filter?: { readonly messageIds?: ReadonlyArray<MessageId> },
+    fields: ReadonlyArray<"runs" | "messages" | "turnItems">,
+    filter?: {
+      readonly messageIds?: ReadonlyArray<MessageId>;
+      readonly turnItemTypes?: ReadonlyArray<"human_handoff">;
+      readonly turnItemStatuses?: ReadonlyArray<"completed">;
+    },
   ) => Effect.Effect<
     {
       readonly thread: OriginThread;
       readonly runs?: ReadonlyArray<OriginRun>;
       readonly messages?: ReadonlyArray<OriginMessage & { readonly id: MessageId }>;
+      readonly turnItems?: ReadonlyArray<OriginTurnItem>;
     },
     E1
   >;
   readonly channelOrigin: (
     threadId: ThreadId,
   ) => Effect.Effect<"goat_bot" | "channel_task" | undefined, E2>;
-}): OriginReads => ({
+}): PersonStartReads => ({
   channelOrigin: (id) => originRead(deps.channelOrigin(id)),
   thread: (id) =>
     originRead(deps.getThreadRecords(id, []).pipe(Effect.map((records) => records.thread))),
@@ -211,6 +291,25 @@ export const projectionOriginReads = <E1, E2>(deps: {
         .getThreadRecords(id, ["messages"], { messageIds: [messageId] })
         .pipe(
           Effect.map((records) => records.messages?.find((message) => message.id === messageId)),
+        ),
+    ),
+  grantRun: (id, handoffId) =>
+    originRead(
+      deps
+        .getThreadRecords(id, ["turnItems"], {
+          turnItemTypes: ["human_handoff"],
+          turnItemStatuses: ["completed"],
+        })
+        .pipe(
+          Effect.map((records) => {
+            const item = records.turnItems?.find((candidate) => candidate.id === handoffId);
+            const handoff = item?.handoff;
+            return handoff?.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+              handoff.state === "completed" &&
+              handoff.requestedBy.threadId === id
+              ? (item?.runId ?? undefined)
+              : undefined;
+          }),
         ),
     ),
 });

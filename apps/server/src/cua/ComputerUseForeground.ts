@@ -3,8 +3,9 @@ import {
   type ComputerUseForegroundGrant,
   type ComputerUseControlEnd,
   type Handoff,
+  type RunId,
   type ThreadId,
-  type TurnItemId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -17,25 +18,70 @@ interface Binding {
   readonly admissionHandoffId: TurnItemId;
 }
 
-/** Durable admission cannot recreate focus authority after a pause, replacement or restart. */
+interface Implied {
+  readonly threadId: ThreadId;
+  readonly controlId: string;
+  readonly runId: RunId;
+  readonly expiresAtMillis: number;
+}
+
+/**
+ * Durable admission cannot recreate focus authority after a pause, replacement or restart.
+ *
+ * A run a person started in a full access thread holds foreground authority without an approval
+ * (`imply`), bound to its control and run. Every revocation that ends approved authority ends it
+ * too and remembers the run, so a pause, private field, Stop or the run's end leaves that run
+ * without it even if its session attaches again; the thread's next run gets it afresh.
+ */
 export const makeForegroundApprovals = () => {
   const bindings = new Map<TurnItemId, Binding>();
   const consumed = new Set<TurnItemId>();
+  const implied = new Map<TurnItemId, Implied>();
+  const revokedRuns = new Map<ThreadId, Set<RunId>>();
   let revision = 0;
+  const dropImplied = (keep: (entry: Implied) => boolean) => {
+    for (const [id, entry] of implied) {
+      if (keep(entry)) continue;
+      implied.delete(id);
+      const runs = revokedRuns.get(entry.threadId) ?? new Set<RunId>();
+      revokedRuns.set(entry.threadId, runs.add(entry.runId));
+    }
+  };
+  const impliedFor = (threadId: ThreadId, controlId: string | undefined, now: number) =>
+    [...implied.entries()].filter(
+      ([, entry]) =>
+        entry.threadId === threadId && entry.controlId === controlId && entry.expiresAtMillis > now,
+    );
   const usable = (grant: LiveGrant, now: number) =>
     grant.apps === undefined &&
     grant.computerUseForeground?.target === "desktop" &&
     grant.expiresAt !== null &&
     DateTime.toEpochMillis(grant.expiresAt) > now;
   const bound = (id: TurnItemId, threadId: ThreadId, controlId: string) => {
-    const binding = bindings.get(id);
+    const binding = bindings.get(id) ?? implied.get(id);
     return binding?.threadId === threadId && binding.controlId === controlId;
   };
   return {
     revision: () => revision,
     hasThread(threadId: ThreadId) {
-      for (const binding of bindings.values()) if (binding.threadId === threadId) return true;
+      for (const binding of [...bindings.values(), ...implied.values()])
+        if (binding.threadId === threadId) return true;
       return false;
+    },
+    imply(threadId: ThreadId, controlId: string, runId: RunId, expiresAt: DateTime.Utc) {
+      if (revokedRuns.get(threadId)?.has(runId) === true) return;
+      // A newer run of the thread took over; the runs before it are over.
+      dropImplied((entry) => entry.threadId !== threadId || entry.runId === runId);
+      revokedRuns.set(
+        threadId,
+        new Set([...(revokedRuns.get(threadId) ?? [])].filter((run) => run === runId)),
+      );
+      implied.set(TurnItemId.make(`full-access:${controlId}:${runId}`), {
+        threadId,
+        controlId,
+        runId,
+        expiresAtMillis: DateTime.toEpochMillis(expiresAt),
+      });
     },
     approve(input: {
       readonly handoff: Handoff;
@@ -72,15 +118,18 @@ export const makeForegroundApprovals = () => {
     },
     revokeControl(threadId: ThreadId, controlId: string) {
       revision++;
+      dropImplied((entry) => entry.threadId !== threadId || entry.controlId !== controlId);
       for (const [id, binding] of bindings)
         if (binding.threadId === threadId && binding.controlId === controlId) bindings.delete(id);
     },
     revokeThread(threadId: ThreadId) {
       revision++;
+      dropImplied((entry) => entry.threadId !== threadId);
       for (const [id, binding] of bindings) if (binding.threadId === threadId) bindings.delete(id);
     },
     clear() {
       revision++;
+      dropImplied(() => false);
       bindings.clear();
     },
     available(
@@ -90,6 +139,8 @@ export const makeForegroundApprovals = () => {
       grants: ReadonlyArray<LiveGrant>,
       now: number,
     ) {
+      // A full access run's own authority answers any purpose.
+      if (impliedFor(threadId, controlId, now).length > 0) return true;
       return grants.some((grant) => {
         if (!usable(grant, now) || grant.computerUseForeground?.purpose !== purpose) return false;
         const binding = bindings.get(grant.handoffId);
@@ -107,21 +158,30 @@ export const makeForegroundApprovals = () => {
       grants: ReadonlyArray<LiveGrant>,
       now: number,
     ): ReadonlyArray<ComputerUseForegroundGrant> {
-      return grants.flatMap((grant) =>
-        !bound(grant.handoffId, threadId, controlId) ||
-        !usable(grant, now) ||
-        grant.computerUseForeground === undefined ||
-        grant.expiresAt === null
-          ? []
-          : [
-              {
-                handoffId: grant.handoffId,
-                purpose: grant.computerUseForeground.purpose,
-                target: "desktop" as const,
-                expiresAtMillis: DateTime.toEpochMillis(grant.expiresAt),
-              },
-            ],
-      );
+      return grants
+        .flatMap((grant) =>
+          !bound(grant.handoffId, threadId, controlId) ||
+          !usable(grant, now) ||
+          grant.computerUseForeground === undefined ||
+          grant.expiresAt === null
+            ? []
+            : [
+                {
+                  handoffId: grant.handoffId,
+                  purpose: grant.computerUseForeground.purpose,
+                  target: "desktop" as const,
+                  expiresAtMillis: DateTime.toEpochMillis(grant.expiresAt),
+                },
+              ],
+        )
+        .concat(
+          impliedFor(threadId, controlId, now).map(([handoffId, entry]) => ({
+            handoffId,
+            purpose: "full access",
+            target: "desktop" as const,
+            expiresAtMillis: entry.expiresAtMillis,
+          })),
+        );
     },
     bound,
   };

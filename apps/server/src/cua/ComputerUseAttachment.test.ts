@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -56,6 +57,7 @@ const fakeLeases = (input: {
     holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
     channelOrigin: () => Effect.die("unused"),
     state: () => Effect.die("unused"),
+    attached: () => Effect.succeedNone,
     everyAppControl: (threadId, unattended) =>
       Effect.sync(() => {
         everyApp.push(unattended);
@@ -267,6 +269,35 @@ describe("computerUseAttachment", () => {
         );
         assert.deepEqual(leases.everyApp, []);
         assert.deepEqual(leases.minted, [Option.none()]);
+      }),
+  );
+
+  it.effect(
+    "gives a person-directed full access turn every app without the host's unattended setting",
+    () =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const turn = (personStarted: boolean) =>
+          decide(driver, {
+            runtimeMode: "full-access",
+            runId: RunId.make("run:person"),
+            personStarted,
+            leases: leases.leases,
+          }).pipe(Effect.provide(allowFullAccess(false)));
+        const attached = yield* turn(true);
+        assert.equal(
+          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+          "control:every-app",
+        );
+        assert.deepEqual(leases.everyApp, [false]);
+        assert.deepEqual(leases.minted, []);
+        // A run no person started (a task's completion wake) keeps the apps it was granted.
+        const woken = yield* turn(false);
+        assert.equal(
+          woken._tag === "proxied" ? woken.control.controlId : woken._tag,
+          "control:interactive",
+        );
       }),
   );
 
