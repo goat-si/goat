@@ -10,6 +10,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as AutomationHold from "../automationHold.ts";
+
 import {
   threadId,
   person,
@@ -449,4 +451,31 @@ it.effect("wakes after an approved provider sync settles, with how each host end
       );
     }),
   ),
+);
+
+it.effect("keeps handoff wakes pending while held and dispatches after release", () =>
+  Effect.gen(function* () {
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    yield* withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const summary = yield* ask(world, "example.approve");
+        yield* world.handoffs.respond(
+          { threadId, handoffId: summary.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+        yield* hold.release;
+        yield* world.reactor.reconcile;
+        expect((yield* wakes(world)).map((message) => message.id)).toEqual([
+          `message:handoff-wake:${summary.handoffId}:completed`,
+        ]);
+      }),
+    ).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+  }),
 );

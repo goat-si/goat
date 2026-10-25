@@ -99,6 +99,9 @@ export const layer = HttpApiBuilder.group(
             ? (effect) =>
                 effect.pipe(Effect.withParentSpan(relayParent.value), withRelayClientTracing)
             : (effect) => effect,
+          Effect.catchTags({
+            WebhookAutomationHeldError: () => Effect.succeed({ _tag: "automation_held" as const }),
+          }),
           Effect.catchCause((cause) =>
             Effect.logWarning("Webhook delivery failed").pipe(
               Effect.annotateLogs({ hookId: params.hookId }),
@@ -109,6 +112,12 @@ export const layer = HttpApiBuilder.group(
         );
 
       switch (result._tag) {
+        case "automation_held":
+          return HttpServerResponse.setHeader(
+            json(503, { error: "automation_held" }, "automation_held"),
+            "retry-after",
+            "30",
+          );
         case "accepted":
           return json(202, { deliveryId: result.deliveryId }, result.outcome);
         case "not_found":

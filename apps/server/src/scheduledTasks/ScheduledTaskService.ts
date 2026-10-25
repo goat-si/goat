@@ -71,8 +71,10 @@ import {
 } from "./webhookTemplate.ts";
 import { constantTimeEquals, verifyWebhookSignature } from "./webhookVerification.ts";
 import { webhookEndpoint } from "./webhookEndpoint.ts";
+import { WebhookAutomationHeldError, rejectWebhookWhileHeld } from "./webhookAutomationHold.ts";
 
 export { WEBHOOK_ROUTE_PREFIX } from "./webhookEndpoint.ts";
+
 const isScheduledTaskError = Schema.is(ScheduledTaskError);
 const PROMPT_TOO_LONG = "The filled-in prompt is too long.";
 const WEBHOOK_DELIVERY_RETENTION = 50;
@@ -280,7 +282,7 @@ export class ScheduledTaskService extends Context.Service<
      */
     readonly triggerWebhook: (
       request: WebhookTriggerRequest,
-    ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>;
+    ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError | WebhookAutomationHeldError>;
   }
 >()("goat/scheduledTasks/ScheduledTaskService") {}
 
@@ -1786,7 +1788,8 @@ export const layer = Layer.effect(
       yield* Effect.annotateCurrentSpan({ "scheduled_task.id": task.id });
       const schedule = task.schedule;
       if (schedule.type !== "webhook") return yield* notFound;
-
+      const held = yield* rejectWebhookWhileHeld(schedule.signature, row.webhook_secret, request);
+      if (held !== undefined) return held;
       const now = yield* localNow;
       // Anyone can reach the tunnel directly and set the relay's header, so
       // a receive time is never later than now: a future one would pin the

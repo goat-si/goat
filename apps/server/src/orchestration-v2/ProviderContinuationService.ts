@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
@@ -242,7 +243,8 @@ export const layer = Layer.effectDiscard(
       },
     );
 
-    yield* requests.take.pipe(
+    yield* AutomationHold.awaitRelease.pipe(
+      Effect.andThen(requests.take),
       Effect.flatMap((request) =>
         dispatchContinuation(request).pipe(
           Effect.catchCause((cause) =>

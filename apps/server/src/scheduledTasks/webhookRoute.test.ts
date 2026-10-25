@@ -31,6 +31,8 @@ import * as RelayDeliveryProof from "./RelayDeliveryProof.ts";
 import { WEBHOOK_MAX_BODY_BYTES } from "./webhookRoute.ts";
 import * as WebhookRoute from "./webhookRoute.ts";
 
+import { WebhookAutomationHeldError } from "./webhookAutomationHold.ts";
+
 class WebhookTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.webhooks) {}
 
 const environmentId = EnvironmentId.make("env-1");
@@ -72,7 +74,7 @@ const relayProof = Effect.fn("relayProof")(function* (claims: {
 const handlerFor = (
   trigger: (
     request: WebhookTriggerRequest,
-  ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError>,
+  ) => Effect.Effect<WebhookTriggerResult, ScheduledTaskError | WebhookAutomationHeldError>,
   secrets: ReadonlyMap<string, string> = linkedSecrets,
 ) =>
   HttpRouter.toWebHandler(
@@ -113,6 +115,19 @@ const post = (
 ) => new Request(`http://env.local${path}`, { method: "POST", body, headers });
 
 describe("webhook route", () => {
+  it("returns retryable 503 while automation is held", async () => {
+    const { handler, dispose } = handlerFor(() => Effect.fail(new WebhookAutomationHeldError({})));
+    try {
+      const response = await handler(post("/api/hooks/id/tok", "{}"));
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("30");
+      expect(response.headers.get("x-t3-hook-outcome")).toBe("automation_held");
+      expect(await response.json()).toEqual({ error: "automation_held" });
+    } finally {
+      await dispose();
+    }
+  });
+
   it.live("trusts the relay's delivery id and receive time only with its signed proof", () =>
     Effect.gen(function* () {
       const received: Array<WebhookTriggerRequest> = [];

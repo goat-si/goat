@@ -18,6 +18,7 @@ import {
   type OrchestrationV2DomainEvent,
   type ThreadId,
 } from "@goat/contracts";
+import * as AutomationHold from "../automationHold.ts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -170,6 +171,7 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     wake: LaunchWatchWake,
   ) {
+    if (yield* AutomationHold.isHeld) return false;
     const now = DateTime.toEpochMillis(yield* DateTime.now);
     const retry = retries.get(wake.messageId) ?? { next: 0, eligibleAt: 0 };
     // False: nothing was sent, the retry is not due yet.
