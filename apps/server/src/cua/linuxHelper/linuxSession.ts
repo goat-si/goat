@@ -262,13 +262,22 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
       "Screen capture on Wayland needs the desktop's consent for this helper, or the compositor cannot show one window.",
     );
   if (capture === "unavailable")
-    reasons.push(facts.captureRefused ?? "The driver could not capture a window.");
+    reasons.push(
+      // Where the driver will not list windows, app controls do not work either (#1610).
+      facts.listingRefused
+        ? (facts.captureRefused ?? "The driver could not capture a window.").replace(
+            "; app controls still work.",
+            ".",
+          )
+        : (facts.captureRefused ?? "The driver could not capture a window."),
+    );
   const input = wayland ? "foregroundOnly" : facts.uinputWritable ? "background" : "foregroundOnly";
   if (input === "foregroundOnly")
     reasons.push(
-      wayland
-        ? "Wayland cannot send pointer or key input to a window in the background; controls still work through AT-SPI."
-        : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices; controls still work through AT-SPI.",
+      (wayland
+        ? "Wayland cannot send pointer or key input to a window in the background"
+        : "Background pointer and key input needs a writable /dev/uinput and an X server that accepts new input devices") +
+        (facts.listingRefused ? "." : "; controls still work through AT-SPI."),
     );
   return {
     grants: {

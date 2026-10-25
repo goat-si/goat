@@ -52,7 +52,13 @@ it.each(ComputerUseGrant.literals)(
 
 it("gives a Linux host its setup guide, with the commands a person runs at that machine", () => {
   const result = computerUseReadinessSteps({
-    readiness: { ...ready, tree: "unavailable", platform: { linux: { displayServer: "x11" } } },
+    // AT-SPI off: the server reports the tree unavailable and the grant unknown together.
+    readiness: {
+      ...ready,
+      grants: { ...ready.grants, accessibility: "unknown" },
+      tree: "unavailable",
+      platform: { linux: { displayServer: "x11" } },
+    },
     platform: "linux",
     tools: "available",
     machine: "lab-box",

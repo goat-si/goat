@@ -269,7 +269,13 @@ export function computerUseReadinessSteps({
             } as const)
           : windowsUnchecked && readiness.tree === "unavailable"
             ? ({ state: "pending", detail: WINDOWS_TREE_UNCHECKED } as const)
-            : treeCopy[readiness.tree],
+            : readiness.tree === "unavailable" && readiness.grants.accessibility === "granted"
+              ? // Accessibility answered, yet the driver will not show agents the app's windows.
+                ({
+                  state: "unsupported",
+                  detail: "Accessibility answers, but agents cannot read app controls here.",
+                } as const)
+              : treeCopy[readiness.tree],
         unconfirmed && readiness.input === "unavailable"
           ? ({
               state: "unknown",
