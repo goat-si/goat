@@ -620,6 +620,11 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "wrong_display",
   /** It would bring a window forward or move the pointer while another thread holds apps here. */
   "screen_shared",
+  /**
+   * A foreground pointer call on a window whose last read offered element tokens the agent has
+   * not tried: foreground takes the person's cursor, so tokens and the keyboard come first.
+   */
+  "token_first",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

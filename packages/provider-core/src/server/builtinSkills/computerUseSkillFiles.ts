@@ -27,6 +27,10 @@ const COMPUTER_USE_APP_NOTES: Readonly<
       "System Settings: sidebar rows open their pane with a click on the row; `hotkey` command+[ goes back. Panes load lazily, so read again (or `verify_state` for an element of the new pane) before acting on it.",
       "Never flip privacy, security or account switches unless the person asked for that exact change.",
     ].join("\n"),
+    KakaoTalk: [
+      "KakaoTalk: the chat list is a table whose rows can be selected in the background. Click the chat's cell by its `element_token` (it selects the row), then `press_key` Return to open the chat; a point click on the list is ignored in the background. In a chat, `type_text` into the message field by its token and `press_key` Return to send.",
+      "Sending a message goes to other people: confirm the recipient and the text with the person first.",
+    ].join("\n"),
     Preview: [
       "Preview: toolbar zoom buttons and menu shortcuts work in the background (command+plus, command+minus, command+9 fits the window). Text in a PDF page is drawn, not in the tree; use the screenshot to read it.",
     ].join("\n"),

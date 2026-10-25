@@ -40,12 +40,13 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
+import { makeTokenFirst, TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
-import { driverExitReason, markUnverified } from "./ComputerUseDriverOutcome.ts";
+import { driverExitReason } from "./ComputerUseDriverOutcome.ts";
 import {
   approvedApps,
   learnApps,
@@ -120,12 +121,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
+  const tokenFirst = makeTokenFirst();
   const outstanding = new Map<
     string,
     {
       readonly id: JsonRpcId;
       readonly method: string;
       readonly tool?: string;
+      readonly args?: unknown;
       readonly unfiltered?: boolean;
       readonly reservationId?: string;
       readonly connectionId: string;
@@ -271,7 +274,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
-            if (request.method === "tools/call") line = markUnverified(request.tool, line);
+            if (request.method === "tools/call") line = tokenFirst.reply(request, message, line);
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
@@ -670,6 +673,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       );
     if (sharedNow() && takesScreen(message.params?.name, message.params?.arguments))
       return refusal(id, message.method, "screen_shared", SCREEN_SHARED);
+    if (tokenFirst.refuses(message.params?.name, message.params?.arguments))
+      return refusal(id, message.method, "token_first", TOKEN_FIRST_MESSAGE);
     const focusNow = yield* Clock.currentTimeMillis;
     if (
       requiresForeground({
@@ -946,6 +951,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           id,
           method: message!.method!,
           ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
+          args: message?.params?.arguments,
           unfiltered: Object.keys(message?.params?.arguments ?? {}).every(
             (key) => key === "session",
           ),
