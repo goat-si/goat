@@ -11,13 +11,14 @@
  */
 import type { ComputerUseControlEnd, ThreadId } from "@goat/contracts";
 
-import type { ComputerUseControl, ComputerUseControlState } from "./ComputerUseControl.ts";
+import {
+  type ComputerUseControl,
+  type ComputerUseControlState,
+  hasCard,
+} from "./ComputerUseControl.ts";
 
 type Stopped = Extract<ComputerUseControlEnd, "stopped" | "stopped_all">;
 type Listed = { readonly control: ComputerUseControl; readonly state: ComputerUseControlState };
-
-const stoppedBy = (state: ComputerUseControlState) =>
-  state._tag === "ended" && (state.reason === "stopped" || state.reason === "stopped_all");
 
 export const makeStoppedCards = () => {
   const byThread = new Map<
@@ -64,14 +65,10 @@ export const makeStoppedCards = () => {
             state.apps?.length === 0
           ),
       );
-      // Covered by a newer control only once the list shows it: its agent acted this turn (#1555).
+      // Covered by a newer control only once the list shows it, by the list's own rule.
       const covered = new Set(
         shown
-          .filter(
-            ({ control, state }) =>
-              control.acted === true &&
-              (state._tag === "ended" ? stoppedBy(state) : control.idle !== true),
-          )
+          .filter(({ control, state }) => hasCard(control, state))
           .map(({ control }) => control.threadId),
       );
       return [
