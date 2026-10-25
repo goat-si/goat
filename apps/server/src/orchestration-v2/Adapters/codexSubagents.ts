@@ -8,6 +8,9 @@
  * @module codexSubagents
  */
 import type { OrchestrationV2Subagent } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import type * as CodexClient from "effect-codex-app-server/client";
 
 // Codex spawns can omit the prompt, which registers as an empty string.
 export function label(task: OrchestrationV2Subagent): string | undefined {
@@ -51,3 +54,56 @@ export const stopped = <
     }
     return false;
   });
+
+/** Whether any of these lineages runs through a turn that Stop or a failure ended. */
+export const stoppedLineage = (
+  starts: ReadonlyArray<TurnLike>,
+  terminalized: ReadonlySet<string>,
+) =>
+  starts.some((start) => {
+    for (let turn: TurnLike | undefined = start; turn; turn = turn.subagent?.parentContext)
+      if (terminalized.has(turn.nativeTurnId)) return true;
+    return false;
+  });
+
+/**
+ * Records which parent turn gave these children work (send_input and the like), so a child's
+ * next turn is known to be new work of that turn rather than the late start of stopped work
+ * (#1643).
+ */
+export const assign = (
+  subagents: ReadonlyMap<string, { assignedTurn?: string }>,
+  childThreadIds: ReadonlyArray<string>,
+  turnId: string,
+) => {
+  for (const childThreadId of childThreadIds) {
+    const subagent = subagents.get(childThreadId);
+    if (subagent !== undefined) subagent.assignedTurn = turnId;
+  }
+};
+
+/** Interrupts a child's turn that started for work whose lineage was already stopped. */
+export const interruptLateTurn = Effect.fn("CodexAdapterV2.interruptLateSubagentTurn")(function* (
+  client: CodexClient.CodexAppServerClient["Service"],
+  nativeThreadId: string,
+  nativeTurnId: string,
+) {
+  const interrupted = yield* client
+    .request("turn/interrupt", { threadId: nativeThreadId, turnId: nativeTurnId })
+    .pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        Effect.logWarning("orchestration-v2.codex-late-subagent-interrupt-failed", {
+          nativeThreadId,
+          nativeTurnId,
+          cause,
+        }).pipe(Effect.as(false)),
+      ),
+      Effect.timeoutOption("10 seconds"),
+    );
+  if (Option.isNone(interrupted))
+    yield* Effect.logWarning("orchestration-v2.codex-late-subagent-interrupt-timeout", {
+      nativeThreadId,
+      nativeTurnId,
+    });
+});

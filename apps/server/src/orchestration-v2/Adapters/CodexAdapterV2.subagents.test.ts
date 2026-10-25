@@ -7,6 +7,28 @@ import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
+// A parent turn giving a child work starts a send_input call naming it.
+const sendInput = (root: string, child: string) => ({
+  type: "emit_inbound" as const,
+  frame: {
+    method: "item/started",
+    params: {
+      threadId: root,
+      turnId: "turn-2",
+      item: {
+        type: "collabAgentToolCall",
+        id: "send-to-" + child,
+        tool: "sendInput",
+        status: "inProgress",
+        senderThreadId: root,
+        receiverThreadIds: [child],
+        agentsStates: {},
+      },
+      startedAtMs: 1782622443000,
+    },
+  },
+});
+
 describe("Codex native subagents as their thread's background work", () => {
   // Settling a run and releasing an idle session ask the adapter per thread (#1571).
   it.effect(
@@ -186,7 +208,7 @@ describe("Codex native subagents as their thread's background work", () => {
               params: { threadId: child, turn: makeCodexReplayTurn({ id: "child-turn", status }) },
             },
           });
-          f.entries.push(childTurn("inProgress"), childTurn("completed"));
+          f.entries.push(sendInput(root, child), childTurn("inProgress"), childTurn("completed"));
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -204,6 +226,84 @@ describe("Codex native subagents as their thread's background work", () => {
           yield* replay.terminal;
           assert.equal(replay.subagentStatuses.at(-1), "completed");
           assert.include(replay.subagentStatuses, "interrupted");
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "a stopped subagent whose first turn starts late, during the next parent turn, is still stopped (#1643)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "late-child-after-stop";
+          const child = root + "-agent";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, child);
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 4,
+                method: "turn/interrupt",
+                params: { threadId: root, turnId: "turn-1" },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 4, result: {} } },
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: root,
+                  turn: makeCodexReplayTurn({ id: "turn-1", status: "interrupted" }),
+                },
+              },
+            },
+          );
+          // The next parent turn runs, and the stopped child's spawned work starts only now. The
+          // new turn gave it nothing, so the late turn is interrupted.
+          yield* f.turnStart(5, 2, false);
+          f.entries.push(
+            {
+              type: "emit_inbound",
+              frame: {
+                method: "turn/started",
+                params: {
+                  threadId: child,
+                  turn: makeCodexReplayTurn({ id: "child-late", status: "inProgress" }),
+                },
+              },
+            },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 6,
+                method: "turn/interrupt",
+                params: { threadId: child, turnId: "child-late" },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 6, result: {} } },
+          );
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          const allocator = yield* IdAllocator.IdAllocatorV2;
+          yield* replay.runtime.interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-1",
+            }),
+            requestRuntimeRestart: true,
+          });
+          yield* replay.terminal;
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.equal(replay.subagentStatuses.at(-1), "interrupted");
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );

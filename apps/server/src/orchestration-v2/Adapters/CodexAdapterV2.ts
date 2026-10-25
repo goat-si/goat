@@ -1289,6 +1289,8 @@ interface CodexSubagentThreadContext {
   task: OrchestrationV2Subagent;
   /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
   endedByStop?: boolean;
+  /** The parent turn that last gave it work; its next turn belongs to that turn (#1643). */
+  assignedTurn?: string;
 }
 
 const approvalOwnerCodexTurn = (
@@ -3098,45 +3100,29 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ) {
             if (subagent.nativeTurnIds.has(turn.nativeTurnId)) return;
             subagent.nativeTurnIds.add(turn.nativeTurnId);
+            // The turn the child was spawned or last given work under. A child whose first turn
+            // starts late, after the parent thread moved on to a new turn, still belongs to it
+            // unless that new turn gave it the work (#1643).
+            const spawnedUnder = subagent.parentContext;
             const parentNativeThreadId = yield* getNativeThreadId(
               subagent.parentContext.providerThread,
             );
             const currentParent = yield* findActiveTurnByNativeThreadId(parentNativeThreadId);
             if (currentParent !== undefined) subagent.parentContext = currentParent;
-            const terminalizedNativeTurns = yield* Ref.get(terminalizedNonCompletedNativeTurns);
-            let ancestor: ActiveCodexTurnContext | undefined = subagent.parentContext;
-            while (ancestor !== undefined) {
-              if (terminalizedNativeTurns.has(ancestor.nativeTurnId)) {
-                const nativeThreadId = yield* getNativeThreadId(subagent.providerThread);
-                const interrupted = yield* client
-                  .request("turn/interrupt", {
-                    threadId: nativeThreadId,
-                    turnId: turn.nativeTurnId,
-                  })
-                  .pipe(
-                    Effect.as(true),
-                    Effect.catch((cause) =>
-                      Effect.logWarning("orchestration-v2.codex-late-subagent-interrupt-failed", {
-                        nativeThreadId,
-                        nativeTurnId: turn.nativeTurnId,
-                        cause,
-                      }).pipe(Effect.as(false)),
-                    ),
-                    Effect.timeoutOption("10 seconds"),
-                  );
-                if (Option.isNone(interrupted)) {
-                  yield* Effect.logWarning(
-                    "orchestration-v2.codex-late-subagent-interrupt-timeout",
-                    {
-                      nativeThreadId,
-                      nativeTurnId: turn.nativeTurnId,
-                    },
-                  );
-                }
-                return;
-              }
-              ancestor = ancestor.subagent?.parentContext;
-            }
+            const assigned = subagent.assignedTurn === subagent.parentContext.nativeTurnId;
+            if (
+              CodexSubagents.stoppedLineage(
+                assigned ? [subagent.parentContext] : [subagent.parentContext, spawnedUnder],
+                yield* Ref.get(terminalizedNonCompletedNativeTurns),
+              )
+            )
+              // Forked: notifications are handled on the input reader, which must stay free to
+              // read the interrupt's answer.
+              return yield* CodexSubagents.interruptLateTurn(
+                client,
+                yield* getNativeThreadId(subagent.providerThread),
+                turn.nativeTurnId,
+              ).pipe(Effect.forkIn(scope), Effect.asVoid);
             const providerTurnId = idAllocator.derive.providerTurn({
               driver: CODEX_PROVIDER,
               nativeTurnId: turn.nativeTurnId,
@@ -5326,6 +5312,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               return;
             }
+            if (payload.item.type === "collabAgentToolCall")
+              CodexSubagents.assign(
+                yield* Ref.get(subagentThreads),
+                payload.item.receiverThreadIds,
+                payload.turnId,
+              );
 
             yield* completeProviderRetry(context, yield* DateTime.now);
             if (payload.item.type !== "reasoning") {
