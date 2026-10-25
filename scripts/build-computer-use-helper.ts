@@ -340,6 +340,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "WindowAXSystem.swift"),
       // The agent cursor overlay (#1214); main.swift runs it in agent connection mode.
       path.join(sourceDir, "Overlay.swift"),
+      // Where the overlay sits relative to the target window (covered windows hide it).
+      path.join(sourceDir, "OverlayOrder.swift"),
       // A person's input while an agent connection runs (#1235); the overlay channel carries it.
       path.join(sourceDir, "HumanInput.swift"),
       // Single-window live pictures (#1370), requested with the frames method.

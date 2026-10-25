@@ -54,6 +54,24 @@ func overlayWindowFrame(_ windowId: CGWindowID) -> NSRect? {
   return NSRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
 }
 
+/// Every on-screen window, front to back, for OverlayOrder.raisesToFront.
+func overlayListedWindows() -> [OverlayListedWindow] {
+  guard
+    let list = CGWindowListCopyWindowInfo(
+      [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+  else { return [] }
+  return list.compactMap { entry in
+    guard let id = entry[kCGWindowNumber as String] as? Int,
+      let pid = entry[kCGWindowOwnerPID as String] as? Int,
+      let layer = entry[kCGWindowLayer as String] as? Int,
+      let bounds = entry[kCGWindowBounds as String] as? NSDictionary,
+      let rect = CGRect(dictionaryRepresentation: bounds)
+    else { return nil }
+    return OverlayListedWindow(
+      windowId: CGWindowID(id), pid: pid, layer: layer, width: rect.width, height: rect.height)
+  }
+}
+
 final class AgentOverlay {
   /// Room around the window for the glow and a cursor at its edge.
   private let margin: CGFloat = 24
@@ -76,7 +94,9 @@ final class AgentOverlay {
     // No fade: a hide must be off screen before its ack, and a fading panel still showed in
     // captures taken right after it (measured on macOS 26 with screencapture).
     panel.animationBehavior = .none
-    panel.level = .screenSaver
+    // Normal level, ordered just above the target window in place(): a window that covers the
+    // target also covers its border and cursor, instead of the overlay showing over it.
+    panel.level = .normal
     panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
     panel.contentView = view
   }
@@ -123,7 +143,17 @@ final class AgentOverlay {
       NSPoint(x: margin + $0.x * frame.width, y: margin + (1 - $0.y) * frame.height)
     }
     view.needsDisplay = true
-    panel.orderFrontRegardless()
+    // Ordered relative to another app's window number: the window server accepts any window
+    // number here, whatever process owns it.
+    panel.order(.above, relativeTo: Int(target.windowId))
+    if OverlayOrder.raisesToFront(
+      target: target.windowId,
+      frontmostPid: NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) },
+      ownPid: Int(getpid()),
+      windows: overlayListedWindows())
+    {
+      panel.orderFrontRegardless()
+    }
   }
 }
 
