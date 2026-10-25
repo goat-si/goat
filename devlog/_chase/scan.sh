@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Scan GOAT against upstream T3 for a chase cycle (see devlog/_chase/020_cycle_runbook.md).
-# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [--delta] [--names] [target-ref, default origin/dev]
+# Usage: devlog/_chase/scan.sh [--no-fetch] [--commits] [--delta] [--names] [--cua] [target-ref, default origin/dev]
 # --delta checks only the fork delta registry and exits 1 on a problem; it needs no upstream remote.
 # --names reports names the current rules miss after rewriting a disposable upstream worktree.
+# --cua reports the Cua Driver axis instead (20_cua_cycle_runbook.md) and checks only its registry.
 # Default: read-only apart from fetching. --names creates and removes its own sibling worktree.
 set -euo pipefail
 
@@ -10,6 +11,7 @@ fetch=1
 commits=0
 delta_only=0
 names=0
+cua=0
 target=origin/dev
 for arg in "$@"; do
   case "$arg" in
@@ -17,7 +19,8 @@ for arg in "$@"; do
     --commits) commits=1 ;;
     --delta) delta_only=1 ;;
     --names) names=1 ;;
-    -h | --help) sed -n '2,6p' "$0"; exit 0 ;;
+    --cua) cua=1 ;;
+    -h | --help) sed -n '2,7p' "$0"; exit 0 ;;
     *) target=$arg ;;
   esac
 done
@@ -26,12 +29,13 @@ cd "$(git rev-parse --show-toplevel)"
 
 # Fork delta areas (devlog/_chase/010_fork_delta.md) are "### `slug` title" blocks. Slugs must be
 # unique, well formed and in byte order, and every hash on a "- 커밋:" line must be reachable from
-# the target. Branches cite PR numbers there, which this check skips.
+# the target. Branches cite PR numbers there, which this check skips. The Cua registry passes its own
+# path, a label and 0 for the hash check: its commits live in goat-si/cua-driver.
 check_fork_delta() {
-  local registry=devlog/_chase/010_fork_delta.md
+  local registry=${1:-devlog/_chase/010_fork_delta.md} label=${2:-fork delta registry} check_commits=${3:-1}
   local ids problems="" id="" line sha
   ids=$(sed -nE 's/^### `([^`]*)`.*/\1/p' "$registry")
-  echo "## fork delta registry ($(printf '%s\n' "$ids" | grep -c .) areas)"
+  echo "## $label ($(printf '%s\n' "$ids" | grep -c .) areas)"
   for id in $(printf '%s\n' "$ids" | sort | uniq -d); do problems+="  duplicate id: $id"$'\n'; done
   for id in $(printf '%s\n' "$ids" | grep -vE '^[a-z0-9]+(-[a-z0-9]+)*$' || true); do
     problems+="  id is not a kebab-case slug: $id"$'\n'
@@ -44,6 +48,7 @@ check_fork_delta() {
     case "$line" in
       '### `'*) id=$(printf '%s\n' "$line" | sed -E 's/^### `([^`]*)`.*/\1/') ;;
       '- 커밋:'*)
+        [ "$check_commits" = 1 ] || continue
         for sha in $(printf '%s\n' "$line" | grep -oE '`[0-9a-f]{7,40}`' | tr -d '`' || true); do
           if ! git merge-base --is-ancestor "$sha" "$target" 2>/dev/null; then
             problems+="  $id: $sha is not reachable from $target (cite the PR number until it lands)"$'\n'
@@ -58,6 +63,42 @@ check_fork_delta() {
   fi
   echo "  ok"
 }
+
+# Report only: GOAT's pin declarations at the target and the newest upstream and fork refs. The exit
+# status comes from the Cua registry check alone, so a network failure never fails the scan.
+scan_cua() {
+  local release=packages/shared/src/cuaDriverRelease.ts
+  echo "## cua-driver pin at $target (20_cua_baseline.md)"
+  git grep -n -E 'CUA_DRIVER_VERSION = |releases/download/' "$target" -- "$release" | sed "s#^$target:#  #" || true
+  git grep -n -F '@trycua/cua-driver' "$target" -- pnpm-workspace.yaml | sed "s#^$target:#  #" || true
+  git grep -n -F 'cua-driver' "$target" -- third-party-licenses.config.json | sed "s#^$target:#  #" || true
+  echo
+  echo "## newest upstream cua-driver-rs tags (trycua/cua)"
+  if [ "$fetch" = 1 ]; then
+    git ls-remote --tags --refs https://github.com/trycua/cua.git 'cua-driver-rs-v*' 2>/dev/null |
+      sed 's#.*refs/tags/#  #' | sort -V | tail -3 || echo "  unavailable"
+  else
+    echo "  skipped (--no-fetch)"
+  fi
+  echo
+  echo "## fork goat-si/cua-driver (upstream = reviewed-through split)"
+  if [ "$fetch" = 1 ]; then
+    git ls-remote https://github.com/goat-si/cua-driver.git refs/heads/upstream refs/heads/main 2>/dev/null |
+      awk '{ sub("refs/heads/", "", $2); printf "  %-9s %s\n", $2, substr($1, 1, 12) }' || echo "  unavailable"
+    git ls-remote --tags --refs https://github.com/goat-si/cua-driver.git 2>/dev/null |
+      sed 's#.*refs/tags/#  tag #' | sort -V | tail -5 || true
+  else
+    echo "  skipped (--no-fetch)"
+  fi
+  echo
+  check_fork_delta devlog/_chase/20_cua_fork_delta.md "cua fork delta registry" 0
+}
+
+if [ "$cua" = 1 ]; then
+  if [ "$fetch" = 1 ]; then git fetch --quiet origin; fi
+  scan_cua
+  exit
+fi
 
 if [ "$delta_only" = 1 ]; then
   if [ "$fetch" = 1 ]; then git fetch --quiet origin; fi

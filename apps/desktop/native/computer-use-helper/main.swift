@@ -356,12 +356,16 @@ final class DriverService {
   }
 
   /// Read without prompting unless asked. Both answers are this bundle's own grants; macOS
-  /// caches them per process, so the host starts a fresh helper to see a change.
+  /// caches them per process, so the host starts a fresh helper to see a change, and a "no"
+  /// is read again for a moment before it counts (GrantSettle).
   func permissions(prompt: Bool) -> [String: Any] {
     let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-    let accessibility = AXIsProcessTrustedWithOptions([key: prompt] as CFDictionary)
-    let screenRecording = prompt ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess()
-    return ["accessibility": accessibility, "screenRecording": screenRecording]
+    let granted = GrantSettle.read(
+      prompt: prompt,
+      accessibility: { AXIsProcessTrustedWithOptions([key: $0] as CFDictionary) },
+      screenRecording: { $0 ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess() },
+      wait: { Thread.sleep(forTimeInterval: $0) })
+    return ["accessibility": granted.accessibility, "screenRecording": granted.screenRecording]
   }
 
   /// What every driver this helper runs inherits: the allowlisted names, the host's tuning

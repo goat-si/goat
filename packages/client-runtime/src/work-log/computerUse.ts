@@ -4,10 +4,17 @@ import {
   cuaDriverToolName,
   replaceComputerUseTypedText,
 } from "@goat/shared/toolActivity";
+import { toolOutputSettle } from "@goat/shared/toolOutput";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
-export type ComputerUseRunStatus = "running" | "succeeded" | "failed" | "denied" | "stopped";
+export type ComputerUseRunStatus =
+  | "running"
+  | "succeeded"
+  | "unsettled"
+  | "failed"
+  | "denied"
+  | "stopped";
 
 /** A computer-use call as its run card shows it. */
 export interface ComputerUseRun {
@@ -21,6 +28,7 @@ export interface ComputerUseRun {
 
 const OBSERVATION_TOOLS: ReadonlySet<string> = new Set([
   "get_window_state",
+  "wait_for_window_settle",
   "get_desktop_state",
   "zoom",
   "verify_state",
@@ -37,6 +45,7 @@ const SUMMARIES: Readonly<Record<string, string>> = {
   bring_to_front: "Bring a window to the front",
   set_window_frame: "Move a window",
   get_window_state: "Look at a window",
+  wait_for_window_settle: "Wait for a window to settle",
   get_desktop_state: "Look at the desktop",
   zoom: "Zoom in",
   verify_state: "Check a window",
@@ -199,7 +208,65 @@ export function computerUseRunStatus(
 export const COMPUTER_USE_RUN_STATUS_LABELS: Readonly<Record<ComputerUseRunStatus, string>> = {
   running: "Running",
   succeeded: "Done",
+  unsettled: "Not settled",
   failed: "Failed",
   denied: "Denied",
   stopped: "Stopped",
 };
+
+const SETTLE_REASONS: Readonly<Record<string, string>> = {
+  private_or_unknown_focus: "focus is private or unknown",
+  accessibility_not_granted: "Accessibility access is not granted",
+  app_not_approved: "the app is not approved",
+  degraded_final_sample: "the final read was incomplete",
+};
+
+/**
+ * The status a card shows for a finished call, and a note when the result contradicts it: a
+ * settle wait completes as a tool call whether or not the window settled (#1585).
+ */
+export function computerUseResult(
+  run: ComputerUseRun | undefined,
+  status: ComputerUseRunStatus | null,
+  output: unknown,
+): { readonly status: ComputerUseRunStatus | null; readonly note: string | null } {
+  if (status !== "succeeded" || run?.tool !== "wait_for_window_settle")
+    return { status, note: null };
+  // The wire keeps the outcome in compact output, so a row that never fetched detail reads it too.
+  const settle = toolOutputSettle(output);
+  if (settle === undefined || settle.outcome === "settled") return { status, note: null };
+  const note =
+    settle.outcome === "pending"
+      ? "Window did not settle before the deadline"
+      : settle.outcome === "destroyed"
+        ? "Window closed before it settled"
+        : `Window did not settle: ${SETTLE_REASONS[settle.reason] ?? (settle.reason.replaceAll("_", " ") || settle.outcome)}`;
+  return { status: "unsettled", note };
+}
+
+/**
+ * A card's status from its row: the wire item's compact output keeps the settle outcome even when
+ * fetched detail was cut at its byte limit, so it is read first and the detail only fills a gap.
+ */
+export function computerUseItemResult(
+  run: ComputerUseRun | undefined,
+  status: ComputerUseRunStatus | null,
+  wireOutput: unknown,
+  fetchedOutput: unknown,
+): { readonly status: ComputerUseRunStatus | null; readonly note: string | null } {
+  const fromWire = computerUseResult(run, status, wireOutput);
+  return fromWire.note !== null || fetchedOutput === undefined
+    ? fromWire
+    : computerUseResult(run, status, fetchedOutput);
+}
+
+/**
+ * Whether a card must fetch detail for its status even with screenshots hidden: a settle row whose
+ * wire output carries no outcome, as from a server before compact settle outcomes.
+ */
+export function computerUseNeedsResultDetail(
+  run: ComputerUseRun | undefined,
+  wireOutput: unknown,
+): boolean {
+  return run?.tool === "wait_for_window_settle" && toolOutputSettle(wireOutput) === undefined;
+}

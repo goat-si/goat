@@ -173,6 +173,8 @@ func runOverlayIfConnected() {
         guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
           let seq = message["seq"] as? Int, let command = message["command"] as? [String: Any]
         else { continue }
+        // Cancellation reaches native observations before a busy AppKit queue can delay it.
+        interruptNativeMcp(command)
         DispatchQueue.main.async {
           overlay.apply(command)
           // Hand the change to the window server now, and answer on the next turn of the main

@@ -36,6 +36,25 @@ const reply = (id: string, image?: { width: number; height: number }): OverlayEv
 const snapshot = [call("s", "get_window_state"), reply("s", { width: 1000, height: 500 })];
 
 describe("ComputerUseOverlay", () => {
+  it("hides the overlay through settle sampling and uses that window's fresh pixel frame", () => {
+    const { sent, state } = run([
+      ...snapshot,
+      call("c", "click", WINDOW),
+      reply("c"),
+      call("settle", "wait_for_window_settle"),
+      reply("settle", { width: 2000, height: 1000 }),
+      call("next", "click", { ...WINDOW, x: 1000, y: 500 }),
+    ]);
+    assert.deepEqual(sent[4], [{ op: "hide", reason: "capture" }]);
+    assert.deepEqual(state.shown, {
+      op: "show",
+      pid: 42,
+      windowId: 7,
+      point: { fx: 0.5, fy: 0.5 },
+      phase: "acting",
+    });
+  });
+
   it("hides before a capture is forwarded and comes back after it answers", () => {
     const { sent } = run([
       ...snapshot,
