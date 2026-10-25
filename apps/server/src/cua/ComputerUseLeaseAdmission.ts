@@ -74,26 +74,40 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   readonly bound: (threadId: ThreadId, controlId: string, id: TurnItemId) => boolean;
 }) => {
   const { admission, controls, reservations, changed, controlState } = deps;
-  /** Whether this control of the thread can still start or run calls: live and not idle. */
+  /**
+   * Lease streams open per control, and the controls whose last stream ended: their proxy is gone,
+   * so nothing admitted for them later (a reserve that was waiting for the permit) can hold an app
+   * past the grace. A stream opening again (a respawned proxy) clears it.
+   */
+  const streams = new Map<string, number>();
+  const gone = new Set<string>();
+  /** Whether this control of the thread can still start or run calls: live, not idle, not gone. */
   const canAct = (holder: ThreadId, controlId: string) => {
     const record = controls.get(holder);
-    return record?.controlId === controlId && record.ended === undefined && record.idle !== true;
+    return (
+      !gone.has(controlId) &&
+      record?.controlId === controlId &&
+      record.ended === undefined &&
+      record.idle !== true
+    );
   };
   // A pause is host-wide and lifts for every holder at once, so it keeps the holder's apps. A
   // lease whose call carried no app id (an older proxy) holds its process while the control does.
   const appLeases = makeAppLeases({
     holds: (threadId, controlId, app) =>
-      controlState(threadId, controlId).pipe(
-        Effect.map(
-          (state) =>
-            state._tag === "paused" ||
-            (state._tag === "active" &&
-              state.idle !== true &&
-              (state.apps === undefined ||
-                app === undefined ||
-                state.apps.some((name) => name.toLowerCase() === app.toLowerCase()))),
-        ),
-      ),
+      gone.has(controlId)
+        ? Effect.succeed(false)
+        : controlState(threadId, controlId).pipe(
+            Effect.map(
+              (state) =>
+                state._tag === "paused" ||
+                (state._tag === "active" &&
+                  state.idle !== true &&
+                  (state.apps === undefined ||
+                    app === undefined ||
+                    state.apps.some((name) => name.toLowerCase() === app.toLowerCase()))),
+            ),
+          ),
   });
   const reserve = Effect.fn("ComputerUseLeases.callReservation")(function* (
     threadId: ThreadId,
@@ -153,7 +167,11 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           request.action === "validate"
             ? { status: "admitted", reservationId: request.reservationId }
             : reservations.reserve(threadId, call);
-        if (decision.status === "admitted") appLeases.hold(threadId, call.controlId, need, now);
+        if (decision.status === "admitted") {
+          // Admitted after its proxy went away: it can only be stopping, from now.
+          if (gone.has(call.controlId)) reservations.markStopped(threadId, call.controlId, now);
+          else appLeases.hold(threadId, call.controlId, need, now);
+        }
         return withCallPermissions(decision, state);
       }),
     );
@@ -162,10 +180,21 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   const releaseApps = (threadId: ThreadId, controlId: string) =>
     DateTime.now.pipe(
       Effect.map((now) => {
+        const open = Math.max(0, (streams.get(controlId) ?? 1) - 1);
+        if (open === 0) {
+          streams.delete(controlId);
+          gone.add(controlId);
+        } else streams.set(controlId, open);
         appLeases.release(threadId, controlId);
         // Its calls may still be stopping with their driver; they hold their apps briefly.
         reservations.markStopped(threadId, controlId, DateTime.toEpochMillis(now));
       }),
     );
-  return { reserve, releaseApps };
+  /** A lease stream for this control opened: its proxy is (back) there. */
+  const streamOpened = (controlId: string) =>
+    Effect.sync(() => {
+      streams.set(controlId, (streams.get(controlId) ?? 0) + 1);
+      gone.delete(controlId);
+    });
+  return { reserve, releaseApps, streamOpened };
 };

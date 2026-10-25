@@ -725,6 +725,111 @@ describe("call admission after an app lease check (D17)", () => {
       assert.deepEqual(yield* Fiber.join(pending), { status: "refused", detail: "revoked" });
     }),
   );
+  it.effect(
+    "a reserve admitted after its proxy's stream ended holds its app no longer than the grace",
+    () =>
+      Effect.gen(function* () {
+        const third = ThreadId.make("thread-third");
+        const entered = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        const controls = new Map([
+          [first, control(first, "control:first")],
+          [second, control(second, "control:second")],
+          [third, control(third, "control:third")],
+        ]);
+        const calls = makeCallReservation({
+          admission: yield* Semaphore.make(1),
+          controls,
+          reservations: makeCallReservations(),
+          changed: Effect.void,
+          // The third thread's admission holds the permit until the gate opens.
+          controlState: (threadId) =>
+            threadId === third
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.as(active()),
+                )
+              : Effect.succeed(active()),
+          blocked: () => false,
+          interruptions: () => 0,
+          bound: () => false,
+        });
+        const click = (
+          threadId: ThreadId,
+          controlId: string,
+          callId: string,
+          windowId: number,
+          app = TEXTEDIT,
+        ) =>
+          calls.reserve(threadId, {
+            action: "reserve",
+            controlId,
+            connectionId: `proxy:${threadId}`,
+            callId,
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "click",
+            args: { pid: PIDS[app], window_id: windowId, x: 1, y: 1 },
+            app,
+          });
+        yield* calls.streamOpened("control:first");
+        const holding = yield* click(third, "control:third", "hold", 99, CALCULATOR).pipe(
+          Effect.forkChild,
+        );
+        yield* Deferred.await(entered);
+        // The first thread's reserve waits for the permit; meanwhile its proxy dies.
+        const waiting = yield* click(first, "control:first", "late", 7).pipe(Effect.forkChild);
+        yield* calls.releaseApps(first, "control:first");
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(holding);
+        yield* Fiber.join(waiting);
+        // Nothing of the dead proxy may hold the app past the grace.
+        yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
+        assert.equal((yield* click(second, "control:second", "after", 8)).status, "admitted");
+      }),
+  );
+  it.effect(
+    "a stream that opens again for the control (a respawned proxy) lets it hold apps again",
+    () =>
+      Effect.gen(function* () {
+        const controls = new Map([
+          [first, control(first, "control:first")],
+          [second, control(second, "control:second")],
+        ]);
+        const calls = makeCallReservation({
+          admission: yield* Semaphore.make(1),
+          controls,
+          reservations: makeCallReservations(),
+          changed: Effect.void,
+          controlState: () => Effect.succeed(active()),
+          blocked: () => false,
+          interruptions: () => 0,
+          bound: () => false,
+        });
+        const click = (threadId: ThreadId, controlId: string, callId: string, windowId: number) =>
+          calls.reserve(threadId, {
+            action: "reserve",
+            controlId,
+            connectionId: `proxy:${threadId}`,
+            callId,
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "click",
+            args: { pid: 42, window_id: windowId, x: 1, y: 1 },
+            app: TEXTEDIT,
+          });
+        yield* calls.streamOpened("control:first");
+        yield* calls.releaseApps(first, "control:first");
+        yield* calls.streamOpened("control:first");
+        assert.equal((yield* click(first, "control:first", "back", 7)).status, "admitted");
+        yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
+        assert.deepInclude(yield* click(second, "control:second", "other", 8), {
+          status: "refused",
+          detail: "app_busy",
+          holderThreadId: first,
+        });
+      }),
+  );
 });
 
 describe("proxy releases (D17)", () => {

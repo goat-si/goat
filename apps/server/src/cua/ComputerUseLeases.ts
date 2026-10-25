@@ -186,6 +186,8 @@ export class ComputerUseLeases extends Context.Service<
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
     /** A control's proxy went away; the apps its calls leased are free at once (D17). */
     readonly releaseApps: (threadId: ThreadId, controlId: string) => Effect.Effect<void>;
+    /** A lease stream for this control opened: its proxy is there (D17). */
+    readonly streamOpened: (controlId: string) => Effect.Effect<void>;
     readonly foregroundApprovalEpoch: Effect.Effect<number>;
     readonly approveForeground: (handoff: Handoff, observedEpoch: number) => Effect.Effect<void>;
     readonly foregroundAvailable: (
@@ -800,6 +802,7 @@ const make = Effect.gen(function* () {
     }),
     callReservation: calls.reserve,
     releaseApps: calls.releaseApps,
+    streamOpened: calls.streamOpened,
     stop: (threadId) =>
       Effect.sync(() => end(threadId, "stopped")).pipe(
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),

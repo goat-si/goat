@@ -116,7 +116,10 @@ export const threadLeaseUpdates = (input: {
           continue;
         }
         previous = current.controlId;
-        followed.add(current.controlId);
+        if (!followed.has(current.controlId)) {
+          followed.add(current.controlId);
+          yield* leases.streamOpened(current.controlId);
+        }
         waiting = false;
         const identity = {
           controlId: current.controlId,

@@ -69,6 +69,7 @@ const fixture = Effect.fnUntraced(function* () {
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
     releaseApps: () => Effect.void,
+    streamOpened: () => Effect.void,
     foregroundApprovalEpoch: Effect.die("unused"),
     approveForeground: () => Effect.die("unused"),
     foregroundAvailable: () => Effect.die("unused"),
@@ -162,6 +163,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
       Layer.mock(ComputerUseLeases.ComputerUseLeases)({
         releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
+        streamOpened: () => Effect.void,
         proxy: undefined,
         currentControl: () =>
           Ref.get(current).pipe(
@@ -470,6 +472,7 @@ describe("computer use lease route", () => {
               }),
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
                 releaseApps: () => Effect.void,
+                streamOpened: () => Effect.void,
                 foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
                 callReservation: (owner, call) =>
