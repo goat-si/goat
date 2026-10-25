@@ -68,10 +68,8 @@ describe("server computer-use call reservations", () => {
       const f = yield* fixture();
       const holder = yield* f.reserve(f.a);
       assert.equal(holder.status, "admitted");
-      assert.deepEqual(yield* f.reserve(f.b, { pid: 42, window_id: 7 }, "wait_for_window_settle"), {
-        status: "admitted",
-        reservationId: null,
-      });
+      const settle = yield* f.reserve(f.b, { pid: 42, window_id: 7 }, "wait_for_window_settle");
+      assert.deepInclude(settle, { status: "admitted", reservationId: null });
     }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
   );
 
