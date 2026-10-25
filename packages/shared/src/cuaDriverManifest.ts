@@ -357,6 +357,9 @@ export function listCuaDriverApplications(input: {
     );
     const send = (message: object) => child.stdin.write(JSON.stringify(message) + "\n");
     child.on("error", (error) => finish(error));
+    // A driver that exits before reading leaves the pipe closed: that write fails here, not
+    // as an uncaught error in the process that asked for the listing.
+    child.stdin.on("error", (error) => finish(error));
     child.on("exit", (code) =>
       finish(new Error("Cua Driver exited while listing apps (" + code + ").")),
     );
@@ -431,30 +434,45 @@ export async function writeCuaDriverCapabilityManifest(
 }
 
 /** Lists the driver's apps, admits them as above, and writes the agents' manifest. */
-export async function prepareCuaDriverCapabilityManifest(input: {
+interface CuaDriverListingInput {
   readonly binaryPath: string;
   readonly platform: NodeJS.Platform;
   readonly environment: Readonly<Record<string, string>>;
   readonly hostBundleIds: ReadonlyArray<string>;
-  readonly path: string;
   /** Lists apps through a helper that verifies the driver first, instead of running it here. */
   readonly listApplications?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
-}): Promise<string> {
+}
+
+/** The driver's apps with the identities GOAT judges them by, and the host's own to exclude. */
+async function listForHost(input: CuaDriverListingInput) {
   const listed = await (input.listApplications?.() ?? listCuaDriverApplications(input));
   const linux = input.platform === "linux";
   const apps = linux ? await withLinuxExecutables(listed) : listed;
   const { realpath } = await import("node:fs/promises");
   // GOAT's own runtime (node or Electron) is never granted by its executable.
   const self = linux ? await realpath(process.execPath).catch(() => process.execPath) : undefined;
+  return { apps, host: self === undefined ? input.hostBundleIds : [...input.hostBundleIds, self] };
+}
+
+export async function prepareCuaDriverCapabilityManifest(
+  input: CuaDriverListingInput & { readonly path: string },
+): Promise<string> {
+  const { apps, host } = await listForHost(input);
   return writeCuaDriverCapabilityManifest(
     input.path,
-    cuaDriverCapabilityManifest({
-      applications: admittedCuaApplications(
-        apps,
-        self === undefined ? input.hostBundleIds : [...input.hostBundleIds, self],
-      ),
-    }),
+    cuaDriverCapabilityManifest({ applications: admittedCuaApplications(apps, host) }),
   );
+}
+
+/**
+ * The app names an approval request may use on a host whose server runs the driver itself
+ * (#1561): the same listing and identities the manifest is built from, read when asked.
+ */
+export async function listCuaRequestableApplications(
+  input: CuaDriverListingInput,
+): Promise<ReadonlyArray<string>> {
+  const { apps, host } = await listForHost(input);
+  return cuaRequestableApps(apps, host);
 }
 
 /** What the desktop's macOS grant check calls on GOAT's own window, and nothing else. */

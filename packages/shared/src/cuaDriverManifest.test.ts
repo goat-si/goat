@@ -17,6 +17,7 @@ import {
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
+  listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
@@ -417,4 +418,54 @@ describe("cuaDriverManifest app listing", () => {
     await expect(prepareCuaDriverCapabilityManifest(driver.input)).rejects.toThrow();
     expect(driver.ran()).toBe(true);
   });
+});
+
+describe("request-time listing on standalone servers (#1561)", () => {
+  it("names the apps a request may ask for, from the same listing the manifest uses, without GOAT or credential stores", async () => {
+    const names = await listCuaRequestableApplications({
+      binaryPath: "/nonexistent/cua-driver",
+      platform: "darwin",
+      environment: {},
+      hostBundleIds: ["si.goat.server"],
+      listApplications: async () => [
+        { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        { bundle_id: "si.goat.server", name: "GOAT" },
+        { bundle_id: "com.1password.1password", name: "1Password" },
+        { bundle_id: null, name: "python3" },
+      ],
+    });
+    expect(names).toEqual(["com.apple.TextEdit", "python3"]);
+  });
+});
+
+describe("request-time listing on standalone servers, failure paths (#1561)", () => {
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a driver that answers once and exits is a failed listing, never an uncaught pipe error",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-listing-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // It answers initialize and is gone before GOAT asks for list_apps.
+      NodeFS.writeFileSync(
+        binaryPath,
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"jsonrpc":"2.0","id":1,"result":{}}\'\nexec 0<&-\nexit 0\n',
+        { mode: 0o755 },
+      );
+      const uncaught: Array<unknown> = [];
+      const onUncaught = (error: unknown) => uncaught.push(error);
+      process.on("uncaughtException", onUncaught);
+      onTestFinished(() => void process.off("uncaughtException", onUncaught));
+      for (let run = 0; run < 5; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+          }),
+        ).rejects.toThrow();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(uncaught).toEqual([]);
+    },
+  );
 });
