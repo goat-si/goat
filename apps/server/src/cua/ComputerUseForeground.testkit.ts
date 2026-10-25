@@ -139,8 +139,8 @@ export const foregroundProxy = Effect.fn("foreground.fixtureProxy")(function* (
     reservation: (request) => leases.callReservation(threadId, request).pipe(Effect.orDie),
     ...(options.kill === undefined ? {} : { kill: options.kill }),
     humanInput: true,
-    onHumanInput: (input) =>
-      leases.humanInput(threadId, control.controlId, input.at, input.source).pipe(
+    onHumanInput: (events) =>
+      leases.humanInput(threadId, control.controlId, events).pipe(
         Effect.tap((outcome) => Queue.offer(humanReports, outcome)),
         Effect.map((outcome) => outcome === "paused"),
       ),

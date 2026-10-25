@@ -88,10 +88,12 @@ export const harness = Effect.fn(function* (
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
-    readonly onHumanInput?: (input: {
-      readonly source: ComputerUseHumanInputSource;
-      readonly at: number;
-    }) => Effect.Effect<boolean>;
+    readonly onHumanInput?: (
+      events: ReadonlyArray<{
+        readonly source: ComputerUseHumanInputSource;
+        readonly at: number;
+      }>,
+    ) => Effect.Effect<boolean>;
     readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<void>;
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
     readonly manifestStamp?: () => string | undefined;
@@ -188,7 +190,7 @@ export const harness = Effect.fn(function* (
                 options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
               ),
               Effect.andThen(
-                options.onHumanInput?.(input) ?? Effect.succeed(options.acceptHuman?.() ?? true),
+                options.onHumanInput?.(events) ?? Effect.succeed(options.acceptHuman?.() ?? true),
               ),
             ),
           onAgentInput: (report: AgentInputReport) =>
