@@ -208,7 +208,21 @@ export const makeRemoteWorkers = (deps: {
         .require(input.scope, "threads.remote", { host: input.host, runtimeMode: input.mode })
         .pipe(
           Effect.mapError((error) => new RemoteAuthorityLost({ message: error.message })),
-          Effect.as(input.mode),
+          // A profile lowered since cannot be stopped through a session above it.
+          Effect.flatMap((effective) =>
+            RANK[effective.runtimeMode] >= RANK[input.mode]
+              ? Effect.succeed(input.mode)
+              : Effect.fail(
+                  new RemoteAuthorityLost({
+                    message:
+                      "The owner's goatclaw profile now allows only " +
+                      effective.runtimeMode +
+                      " mode, below " +
+                      input.mode +
+                      ".",
+                  }),
+                ),
+          ),
         ),
     );
 

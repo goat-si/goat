@@ -38,7 +38,7 @@ import {
   type PullRequestObservation,
   type SlotObservation,
 } from "./goalPlan.ts";
-import { makeGoalMoves, STOPPING } from "./GoalMoves.ts";
+import { makeGoalMoves } from "./GoalMoves.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
 import { pendingMoves } from "./goalWorkers.ts";
 import {
@@ -178,9 +178,6 @@ const make = Effect.gen(function* () {
         launchClaims,
         unmovedReschedules,
         pendingMoves: pendingMoves(goal, launches),
-        stoppingMoves: new Set(
-          launches.flatMap((launch) => (launch.outcome === STOPPING ? [launch.actionId] : [])),
-        ),
         switchedFallbacks: new Set(yield* store.switchedFallbacks(goal.id)),
         pullRequests,
         issues,
@@ -857,7 +854,7 @@ const make = Effect.gen(function* () {
               });
             }
             case "resolve_move":
-              return yield* moves.resolve(worker, action);
+              return yield* moves.resolve(worker, action, access);
             case "interrupt": {
               if ((yield* claim(action.actionId, "interrupt", worker, worker.host)) !== null)
                 return;

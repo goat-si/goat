@@ -281,6 +281,33 @@ const startThenFail = (world: World, fake: Fake, id: string) =>
 
 const turnsOf = (id: string) =>
   GoalStore.pipe(Effect.flatMap((store) => store.turns(FleetGoalId.make(id))));
+
+/** The first worker's run on A stalls; after a steer, the goal's move stops that run itself. */
+const stallThenStop = (world: World, fake: Fake, id: string) =>
+  Effect.gen(function* () {
+    yield* pass(id);
+    world.sourceRun = "running";
+    fake.reading = (threadId) =>
+      threadId === "thread:worker-1"
+        ? {
+            kind: "seen",
+            terminal: world.sourceRun !== "running",
+            runId: RunId.make("run:5"),
+            runStatus: world.sourceRun,
+            lastActivityAt: null,
+            result: null,
+          }
+        : running(threadId, fake);
+    world.health = (threadId) =>
+      threadId === "thread:worker-1" && world.sourceRun === "running"
+        ? { _tag: "stalled", idleMs: 30 * 60_000 }
+        : { _tag: "healthy" };
+    yield* pass(id);
+    yield* pass(id);
+    expect(world.sourceRun).toBe("interrupted");
+    expect(world.launches).toEqual([]);
+  });
+
 const moveOutcome = (id: string) =>
   GoalStore.pipe(
     Effect.flatMap((store) => store.claimOf("goal:" + id + ":s0:a1:run:5:reschedule")),
@@ -471,28 +498,7 @@ describe("goal moves across a restart (#1451)", () => {
           const id = "goal_stalled";
           yield* Effect.gen(function* () {
             yield* insert(goalWith(id));
-            yield* pass(id);
-            world.sourceRun = "running";
-            fake.reading = (threadId) =>
-              threadId === "thread:worker-1"
-                ? {
-                    kind: "seen",
-                    terminal: world.sourceRun !== "running",
-                    runId: RunId.make("run:5"),
-                    runStatus: world.sourceRun,
-                    lastActivityAt: null,
-                    result: null,
-                  }
-                : running(threadId, fake);
-            world.health = (threadId) =>
-              threadId === "thread:worker-1" && world.sourceRun === "running"
-                ? { _tag: "stalled", idleMs: 30 * 60_000 }
-                : { _tag: "healthy" };
-            // First a steer, then the move, which has to stop the run on A first.
-            yield* pass(id);
-            yield* pass(id);
-            expect(world.sourceRun).toBe("interrupted");
-            expect(world.launches).toEqual([]);
+            yield* stallThenStop(world, fake, id);
             yield* pass(id);
             expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
             expect((yield* record(id)).workers[0]).toMatchObject({
@@ -500,6 +506,100 @@ describe("goal moves across a restart (#1451)", () => {
               host: "B",
               state: "running",
             });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "still starts a stopped worker's successor when the move took the goal's last turn",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled_budget";
+          yield* Effect.gen(function* () {
+            // The launch, the steer and the move take all three turns.
+            yield* insert(goalWith(id, { maxTurns: 3 }));
+            yield* stallThenStop(world, fake, id);
+            expect(yield* turnsOf(id)).toBe(3);
+            yield* pass(id);
+            expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
+            expect((yield* record(id)).workers[0]).toMatchObject({ attempt: 2, host: "B" });
+            expect(yield* turnsOf(id)).toBe(3);
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "keeps a stopped worker's move after a capacity refusal and a restart, without asking a person",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled_capacity";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* stallThenStop(world, fake, id);
+            world.reachable.B = false;
+            for (let round = 0; round < 2; round += 1) {
+              yield* TestClock.adjust(60 * 60_000);
+              yield* pass(id);
+            }
+            expect(world.launches).toEqual([]);
+            expect((yield* record(id)).workers[0]?.state).not.toBe("needs_human");
+          }).pipe(Effect.provide(server(fake, world, path)));
+          world.reachable.B = true;
+          yield* Effect.gen(function* () {
+            yield* pass(id);
+            expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              attempt: 2,
+              host: "B",
+              state: "running",
+            });
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "does not delete a goal while its stopped worker's successor may be running, then stops it",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled_delete";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* stallThenStop(world, fake, id);
+            // The successor starts on B, but its answer is lost and B then goes dark.
+            world.loseNextLaunchAnswer = true;
+            yield* pass(id);
+            expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
+            world.reachable.B = false;
+            const store = yield* GoalStore;
+            yield* store.requestDeletion(FleetGoalId.make(id), "2026-10-25T00:00:00.000Z");
+            for (let round = 0; round < 3; round += 1) {
+              yield* TestClock.adjust(LAUNCH_GRACE_MS + 60_000);
+              yield* pass(id);
+            }
+            expect(yield* store.get(FleetGoalId.make(id))).not.toBeNull();
+            expect(world.launches).toHaveLength(1);
+          }).pipe(Effect.provide(server(fake, world, path)));
+          world.reachable.B = true;
+          yield* Effect.gen(function* () {
+            yield* pass(id);
+            yield* pass(id);
+            expect(fake.interrupts).toContain("thread:B-1");
+            expect(world.launches).toHaveLength(1);
           }).pipe(Effect.provide(server(fake, world, path)));
         }),
       ),

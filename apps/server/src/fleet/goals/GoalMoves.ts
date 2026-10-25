@@ -11,10 +11,11 @@ import {
   FleetOwnerKey,
   type ModelSelection,
   type RunId,
+  type ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
-import type { Rescheduler, RescheduleReason } from "../health/Rescheduler.ts";
+import type { Rescheduler, RescheduleReason, RescheduleResult } from "../health/Rescheduler.ts";
 import type { actionAuthority } from "./GoalAuthority.ts";
 import { renderPrompt } from "./goalPrompt.ts";
 import type { ActionIssue } from "./goalPlan.ts";
@@ -26,13 +27,10 @@ import {
   type WorkerRecord,
 } from "./GoalStore.ts";
 import { branchFor, launchActionId, nextAttempt, rescheduleActionId } from "./goalWorkers.ts";
-import type { GoalWorkerRuntime } from "./GoalWorkerRuntime.ts";
+import type { GoalWorkerRuntime, OwnerAccess } from "./GoalWorkerRuntime.ts";
 
-/**
- * A move that interrupted its attempt to take it over: the run it stopped is the goal's, not a
- * person's, so the plan continues the same move once that run has stopped.
- */
-export const STOPPING = "stopping";
+/** Records that a move stopped its own attempt; claimed as an interrupt, so it takes no turn. */
+const moveStopId = (moveId: string) => moveId.replace(/:reschedule$/, ":move-stop");
 
 /** Refusals that say nothing about the move itself: it is asked for again on a later pass. */
 const TRANSIENT = new Set(["no_capacity", "host_still_answers", "not_allowed"]);
@@ -46,7 +44,7 @@ export const makeGoalMoves = (deps: {
   readonly authority: ReturnType<typeof actionAuthority>;
   readonly claim: (
     actionId: string,
-    kind: "launch",
+    kind: "launch" | "interrupt",
     worker: WorkerRecord,
     host: string | null,
   ) => Effect.Effect<ClaimRefusal | null, GoalStoreError>;
@@ -110,46 +108,13 @@ export const makeGoalMoves = (deps: {
     );
   });
 
-  /** Moves a stopped or lost worker; `handled` is the worker once this run counts as recovered. */
-  const move = Effect.fn("GoalMoves.move")(function* (input: {
-    readonly worker: WorkerRecord;
-    readonly handled: WorkerRecord;
-    readonly reason: Exclude<RescheduleReason, "drain" | "manual">;
-    readonly runId: RunId | null;
-    readonly selection: ModelSelection;
-  }) {
-    const { worker } = input;
-    if (worker.threadId === null || worker.host === null) return;
-    const actionId = rescheduleActionId(
-      goal,
-      worker.slot,
-      worker.attempt,
-      input.runId ?? input.reason,
-    );
-    if ((yield* deps.claim(actionId, "launch", worker, worker.host)) !== null) return;
-    const current = yield* authority.afterClaim(actionId, "launch");
-    if (current === null) return;
-    const refused = Effect.fn("GoalMoves.refused")(function* (
-      message: string,
-      settle: string,
-      next: WorkerRecord,
-    ) {
-      yield* store.settle(actionId, settle, nowIso);
-      deps.fail();
-      deps.setWorker({ ...next, note: message });
-      deps.issue({
-        condition: "Degraded",
-        reason: "RescheduleRefused",
-        message: "Slot " + worker.slot + ": " + message,
-      });
-      deps.note(
-        "Warning",
-        "RescheduleRefused",
-        "Slot " + worker.slot + " (" + input.reason + "): " + message,
-        worker,
-        actionId,
-      );
-    });
+  /** What the Rescheduler made of one move of worker off its host, under the owner's authority now. */
+  const send = Effect.fn("GoalMoves.send")(function* (
+    worker: WorkerRecord & { readonly host: string; readonly threadId: ThreadId },
+    current: OwnerAccess,
+    reason: Exclude<RescheduleReason, "drain" | "manual">,
+    selection: ModelSelection,
+  ) {
     const allowed = yield* runtime
       .moveAuthority(
         current,
@@ -158,18 +123,22 @@ export const makeGoalMoves = (deps: {
         worker.host,
       )
       .pipe(Effect.result);
-    // Refused before anything was sent: the move may be asked for again.
+    // Refused before anything was sent.
     if (allowed._tag === "Failure")
-      return yield* refused(allowed.failure.message, NOT_SENT, worker);
+      return {
+        _tag: "Refused",
+        reason: "not_allowed",
+        message: allowed.failure.message,
+      } satisfies RescheduleResult;
     const may = allowed.success;
     const project = yield* runtime.project(goal);
     const branch = branchFor(goal, worker.slot, worker.attempt + 1);
-    const result = yield* rescheduler.reschedule({
+    return yield* rescheduler.reschedule({
       ref: { host: worker.host, threadId: worker.threadId, watchId: worker.watchId },
       owner,
       attempt: worker.attempt,
-      reason: input.reason,
-      modelSelection: input.selection,
+      reason,
+      modelSelection: selection,
       workspace: {
         baseRef: goal.spec.workers.workspace.baseRef,
         branch,
@@ -193,12 +162,74 @@ export const makeGoalMoves = (deps: {
         : { permissionProfileCeiling: may.permissionProfileCeiling }),
       ...(may.prepareCeiling === undefined ? {} : { prepareCeiling: may.prepareCeiling }),
     });
+  });
+
+  const refusal = (worker: WorkerRecord, actionId: string, why: string, message: string) => {
+    deps.fail();
+    deps.setWorker({ ...worker, note: message });
+    deps.issue({
+      condition: "Degraded",
+      reason: "RescheduleRefused",
+      message: "Slot " + worker.slot + ": " + message,
+    });
+    deps.note(
+      "Warning",
+      "RescheduleRefused",
+      "Slot " + worker.slot + " (" + why + "): " + message,
+      worker,
+      actionId,
+    );
+  };
+
+  /**
+   * The move had to interrupt its attempt first. Its receipt stays open, so the slot keeps waiting
+   * for it (resolve_move); this record says the stop was the goal's, so the move goes on once the
+   * run has stopped instead of being read as a person's stop.
+   */
+  const stopped = Effect.fn("GoalMoves.stopped")(function* (
+    worker: WorkerRecord,
+    actionId: string,
+    message: string,
+  ) {
+    const stopId = moveStopId(actionId);
+    if ((yield* deps.claim(stopId, "interrupt", worker, worker.host)) === null)
+      yield* store.settle(stopId, "interrupted", nowIso);
+    deps.setWorker({ ...worker, note: message });
+    deps.note("Normal", "MoveStopping", "Slot " + worker.slot + ": " + message, worker, actionId);
+  });
+
+  /** Moves a stopped or lost worker; `handled` is the worker once this run counts as recovered. */
+  const move = Effect.fn("GoalMoves.move")(function* (input: {
+    readonly worker: WorkerRecord;
+    readonly handled: WorkerRecord;
+    readonly reason: Exclude<RescheduleReason, "drain" | "manual">;
+    readonly runId: RunId | null;
+    readonly selection: ModelSelection;
+  }) {
+    const { worker } = input;
+    const { host, threadId } = worker;
+    if (threadId === null || host === null) return;
+    const actionId = rescheduleActionId(
+      goal,
+      worker.slot,
+      worker.attempt,
+      input.runId ?? input.reason,
+    );
+    if ((yield* deps.claim(actionId, "launch", worker, host)) !== null) return;
+    const current = yield* authority.afterClaim(actionId, "launch");
+    if (current === null) return;
+    const result = yield* send(
+      { ...worker, host, threadId },
+      current,
+      input.reason,
+      input.selection,
+    );
     switch (result._tag) {
       case "Rescheduled":
         return yield* moved(
           worker,
           actionId,
-          { host: result.host ?? worker.host, threadId: result.threadId, branch: result.branch },
+          { host: result.host ?? host, threadId: result.threadId, branch: result.branch },
           "Rescheduled after " + input.reason + ".",
           input.selection,
         );
@@ -206,41 +237,74 @@ export const makeGoalMoves = (deps: {
         // The receipt stays open: the slot waits for resolve_move to find the thread.
         return unconfirmed(worker, actionId, result.message);
       case "Refused":
-        if (result.stopping === true) return yield* refused(result.message, STOPPING, worker);
-        return yield* TRANSIENT.has(result.reason)
-          ? refused(result.message, NOT_SENT, worker)
-          : refused(result.message, "refused", input.handled);
+        if (result.stopping === true) return yield* stopped(worker, actionId, result.message);
+        // Nothing was sent, or nothing launched: transient refusals may be asked again later.
+        yield* store.settle(actionId, TRANSIENT.has(result.reason) ? NOT_SENT : "refused", nowIso);
+        return refusal(
+          TRANSIENT.has(result.reason) ? worker : input.handled,
+          actionId,
+          input.reason,
+          result.message,
+        );
     }
   });
 
-  /** Settles a move whose answer was lost, from what its destination shows. */
+  /**
+   * Settles or carries on an open move, from what its destination shows. A move that never
+   * launched is released unless it stopped its attempt to take it over: then it goes on, outside
+   * the turn budget it already spent, and never while the goal is being deleted.
+   */
   const resolve = Effect.fn("GoalMoves.resolve")(function* (
     worker: WorkerRecord,
     action: { readonly actionId: string; readonly clientRequestId: string },
+    current: OwnerAccess,
   ) {
     const found = yield* rescheduler.findMove({ clientRequestId: action.clientRequestId, owner });
-    switch (found._tag) {
-      case "Launched":
+    if (found._tag === "Launched")
+      return yield* moved(
+        worker,
+        action.actionId,
+        found,
+        "Its move to " + found.host + " was confirmed.",
+      );
+    if (found._tag === "Unknown") return unconfirmed(worker, action.actionId, found.message);
+    const { host, threadId } = worker;
+    const ours = (yield* store.claimOf(moveStopId(action.actionId))) !== null;
+    if (!ours || goal.deletionRequestedAt !== null || host === null || threadId === null) {
+      // Nothing was sent, so nothing holds the slot; moving again is new work, budget and all.
+      yield* store.settle(action.actionId, NOT_SENT, nowIso);
+      deps.setWorker({ ...worker, note: "Its move never started." });
+      deps.note(
+        "Warning",
+        "MoveNotStarted",
+        "Slot " + worker.slot + ": its move never started.",
+        worker,
+        action.actionId,
+      );
+      return;
+    }
+    const result = yield* send(
+      { ...worker, host, threadId },
+      current,
+      "stalled",
+      worker.modelSelection,
+    );
+    switch (result._tag) {
+      case "Rescheduled":
         return yield* moved(
           worker,
           action.actionId,
-          found,
-          "Its move to " + found.host + " was confirmed.",
+          { host: result.host ?? host, threadId: result.threadId, branch: result.branch },
+          "Moved once its stopped run let it.",
         );
-      case "NotLaunched":
-        // Nothing was sent, so nothing holds the slot; moving again is new work, budget and all.
-        yield* store.settle(action.actionId, NOT_SENT, nowIso);
-        deps.setWorker({ ...worker, note: "Its move never started." });
-        deps.note(
-          "Warning",
-          "MoveNotStarted",
-          "Slot " + worker.slot + ": its move never started.",
-          worker,
-          action.actionId,
-        );
-        return;
-      case "Unknown":
-        return unconfirmed(worker, action.actionId, found.message);
+      case "Unconfirmed":
+        return unconfirmed(worker, action.actionId, result.message);
+      case "Refused":
+        if (result.stopping === true)
+          return yield* stopped(worker, action.actionId, result.message);
+        // The receipt stays open on a transient refusal, so the stop stays the goal's.
+        if (!TRANSIENT.has(result.reason)) yield* store.settle(action.actionId, "refused", nowIso);
+        return refusal(worker, action.actionId, "stalled", result.message);
     }
   });
 
