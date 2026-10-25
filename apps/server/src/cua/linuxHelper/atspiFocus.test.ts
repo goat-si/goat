@@ -98,4 +98,33 @@ describe("makeSecureFocusProbe", () => {
       windows: 2,
     });
   });
+
+  it("reads a reply that is not a list of objects as unknown, never as nothing focused", async () => {
+    // A string reply that merely contains a quoted pair, then a window list that is not one.
+    const odd: GdbusRunner = async (args) => {
+      const method = args[args.indexOf("--method") + 1];
+      const dest = args[args.indexOf("--dest") + 1] ?? "";
+      if (method === "org.a11y.Bus.GetAddress") return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+      if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 30,)\n";
+      if (method === "org.a11y.atspi.Accessible.GetChildren")
+        return dest === "org.a11y.atspi.Registry" ? `("(':1.30', '/root_1')",)\n` : "(false,)\n";
+      throw new Error("unexpected " + method);
+    };
+    expect(await makeSecureFocusProbe(odd)(30)).toEqual({
+      known: false,
+      secure: false,
+      windows: 0,
+    });
+    // A real list, but the focused object's role cannot be read.
+    const noRole: GdbusRunner = async (args) => {
+      const method = args[args.indexOf("--method") + 1];
+      if (method === "org.a11y.atspi.Accessible.GetRole") return "(false,)\n";
+      return bus(40)(args);
+    };
+    expect(await makeSecureFocusProbe(noRole)(10)).toEqual({
+      known: false,
+      secure: false,
+      windows: 0,
+    });
+  });
 });
