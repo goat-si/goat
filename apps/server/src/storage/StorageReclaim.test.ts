@@ -12,6 +12,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
 
+import { pinnedRuntimeVersionsDir } from "../cloud/pinnedRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
@@ -359,6 +360,91 @@ describe("StorageReclaim", () => {
       });
       yield* run.pipe(Effect.provide(layer(tempRoot)));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("keeps an old runtime a thread was launched into", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      const versions = pinnedRuntimeVersionsDir(path, config.baseDir);
+      for (const version of ["0.0.1", "0.0.2"]) {
+        const directory = path.join(versions, version);
+        yield* fs.makeDirectory(path.join(directory, "notes"), { recursive: true });
+        const sentinel = path.join(directory, ".install-complete");
+        yield* fs.writeFileString(sentinel, version + "\n");
+        yield* fs.utimes(sentinel, version === "0.0.1" ? 1 : 2, version === "0.0.1" ? 1 : 2);
+      }
+      const oldest = path.join(versions, "0.0.1");
+      const runtime = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(
+            Effect.map((report) =>
+              report.items.find((item) => item.kind === "runtime_version" && item.path === oldest),
+            ),
+          );
+      const offered = (yield* runtime())!;
+      expect(offered.state).toBe("removable");
+      yield* fs.writeFileString(path.join(oldest, "notes", "findings.md"), "what broke\n");
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+           created_at, updated_at, payload_json)
+        VALUES ('thread-in-runtime', 'project', 'Runtime', 'codex', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          ${JSON.stringify({ worktreePath: path.join(oldest, "notes") })})
+      `;
+      expect(yield* runtime()).toMatchObject({
+        state: "protected",
+        reason: "A thread or project on this server uses it",
+      });
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.readFileString(path.join(oldest, "notes", "findings.md"))).toBe(
+        "what broke\n",
+      );
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps rotated logs while a thread works in the logs folder", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        storageCleanup: { logsAfterDays: 7 },
+      });
+      yield* fs.makeDirectory(config.logsDir, { recursive: true });
+      const rotated = path.join(config.logsDir, "server.log.1");
+      yield* fs.writeFileString(rotated, "old log\n");
+      yield* fs.utimes(rotated, LONG_AGO, LONG_AGO);
+      const logs = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(Effect.map((report) => report.items.find((item) => item.kind === "rotated_logs")));
+      const offered = (yield* logs())!;
+      expect(offered.state).toBe("removable");
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+           created_at, updated_at, payload_json)
+        VALUES ('thread-in-logs', 'project', 'Logs', 'codex', 'full-access', 'default',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          ${JSON.stringify({ worktreePath: config.logsDir })})
+      `;
+      expect(yield* logs()).toMatchObject({
+        state: "protected",
+        reason: "A thread works in this folder",
+      });
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.exists(rotated)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
   it.live("skips a reviewed leftover folder once anything inside it changed", () =>

@@ -429,6 +429,47 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
       (known) => samePath(known, target, rules) || isStrictlyInside(target, known, rules),
     ) ||
     ownProjectRoots.some((projectRoot) => overlaps(projectRoot, target, rules));
+  /**
+   * Why a folder outside the worktrees (temp, runtime) must stay because something uses it: a
+   * thread can be launched into any existing folder. Null when nothing does.
+   */
+  const usedBy = (target: string) => {
+    if (ownRows === null)
+      return state("needs_attention", "This server's threads could not be read");
+    if (referenced(target)) return state("protected", "A thread or project on this server uses it");
+    const otherReason = otherServerReason(other, target, rules);
+    if (otherReason !== null)
+      return state(
+        other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
+        sentenceCase(otherReason),
+      );
+    const working = processInside(cwds, [target], rules);
+    if (working === null) return state("needs_attention", "Running processes could not be listed");
+    if (working) return state("protected", "A process is running in it");
+    return null;
+  };
+
+  /**
+   * Why a GOAT folder of files (logs, attachments) must be left alone: a thread of any local server
+   * works in it or inside it, or a process does. Projects that merely contain it do not count.
+   */
+  const workedIn = (folder: string) => {
+    if (ownRows === null)
+      return state("needs_attention", "This server's threads could not be read");
+    const within = (bound: string) =>
+      samePath(bound, folder, rules) || isStrictlyInside(folder, bound, rules);
+    if ([...ownBound].some(within) || other.bound.some(within))
+      return state("protected", "A thread works in this folder");
+    if (other.bindings.unverified.length > 0)
+      return state(
+        "needs_attention",
+        "Not every GOAT server on this machine could be checked: " + other.bindings.unverified[0],
+      );
+    const working = processInside(cwds, [folder], rules);
+    if (working === null) return state("needs_attention", "Running processes could not be listed");
+    if (working) return state("protected", "A process is running in this folder");
+    return null;
+  };
 
   // Leftover folders: <root>/<name> or <root>/<repository>/<name>, as worktrees are laid out.
   if (facts._tag === "Success" && ownRows !== null) {
@@ -515,9 +556,10 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           ? state("protected", "The previous version, kept to roll back to")
           : !runtimes.decided
             ? state("needs_attention", "Whether it is in use could not be checked")
-            : runtime.unused
-              ? state("removable", "No service, process or launcher uses it", true)
-              : state("protected", "The service, a running process or a launcher uses it");
+            : !runtime.unused
+              ? state("protected", "The service, a running process or a launcher uses it")
+              : (usedBy(runtime.directory) ??
+                state("removable", "No service, process, launcher or thread uses it", true));
     add(
       {
         kind: "runtime_version",
@@ -564,7 +606,8 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           kind: "rotated_logs",
           path: config.logsDir,
           label: expired.length + " rotated log files",
-          ...state("removable", "Older than the " + logsAfterDays + " days logs are kept", true),
+          ...(workedIn(config.logsDir) ??
+            state("removable", "Older than the " + logsAfterDays + " days logs are kept", true)),
           bytes: expired.reduce((sum, file) => sum + file.size, 0),
         },
         {
@@ -591,30 +634,11 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
-    // A thread can be launched into any existing folder, a temporary one included.
-    const otherReason = otherServerReason(other, target, rules);
-    const working = processInside(cwds, [target], rules);
     const { decision, token, stamp } = yield* stamped(
       "temp:" + target,
       target,
       TEMP_MIN_AGE_MS,
-      ownRows === null
-        ? state("needs_attention", "This server's threads could not be read")
-        : referenced(target)
-          ? state("protected", "A thread or project on this server uses it")
-          : otherReason !== null
-            ? state(
-                other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
-                sentenceCase(otherReason),
-              )
-            : working !== false
-              ? state(
-                  working === null ? "needs_attention" : "protected",
-                  working === null
-                    ? "Running processes could not be listed"
-                    : "A process is running in it",
-                )
-              : state("removable", "A temporary folder GOAT left more than a day ago"),
+      usedBy(target) ?? state("removable", "A temporary folder GOAT left more than a day ago"),
     );
     add(
       {
@@ -648,7 +672,8 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           kind: "attachments",
           path: config.attachmentsDir,
           label: leftovers.removable.length + " files of deleted threads",
-          ...state("removable", "No surviving thread or task mentions their threads" + kept),
+          ...(workedIn(config.attachmentsDir) ??
+            state("removable", "No surviving thread or task mentions their threads" + kept)),
           bytes: leftovers.removable.reduce((sum, file) => sum + file.size, 0),
         },
         {

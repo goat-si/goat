@@ -250,6 +250,46 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Why GOAT's folder of files (logs, attachments) must be left alone now: a thread of any local
+   * server works in it or inside it, or a process does.
+   */
+  const workedInNow = Effect.fn("StorageReclaim.workedInNow")(function* (folder: string) {
+    const threads = yield* sql<{ readonly path: string | null }>`
+      SELECT json_extract(payload_json, '$.worktreePath') AS "path"
+      FROM orchestration_v2_projection_threads
+    `.pipe(
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    if (threads === null) return "this server's threads could not be read";
+    const other = yield* resolveOtherServerPaths(config.dbPath);
+    if (other.bindings.unverified.length > 0)
+      return (
+        "not every GOAT server on this machine could be checked: " + other.bindings.unverified[0]
+      );
+    const folders = [path.resolve(folder), (yield* real(folder)) ?? path.resolve(folder)];
+    const within = (bound: string) =>
+      folders.some((each) => samePath(bound, each, rules) || isStrictlyInside(each, bound, rules));
+    for (const row of threads) {
+      if (row.path === null) continue;
+      if (
+        within(path.resolve(row.path)) ||
+        within((yield* real(row.path)) ?? path.resolve(row.path))
+      )
+        return "a thread works in this folder";
+    }
+    if (other.bound.some(within)) return "a thread of another GOAT server works in this folder";
+    const working = processInside(
+      yield* (yield* LocalGoatServers).workingDirectories,
+      folders,
+      rules,
+    );
+    if (working === null) return "running processes could not be listed";
+    if (working) return "a process is running in this folder";
+    return null;
+  });
+
+  /**
    * Runs a removal holding the folder whole, so no lease on it or inside it goes to anyone else
    * meanwhile; skipped when something on this server already works inside it.
    */
@@ -423,42 +463,66 @@ const make = Effect.gen(function* () {
         return null;
       }
       case "runtime": {
-        const removed = yield* removeUnusedPinnedRuntime({
-          baseDir: config.baseDir,
-          keep: [packageJson.version],
-          version: target.version,
-        }).pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-        return removed ? null : "it is in use now";
-      }
-      case "files": {
-        if (item.kind !== "attachments") return yield* removeFiles(item, target, actor);
-        // A message can reference a file of a deleted thread at any moment. Holding the write
-        // lock while checking again and unlinking means such a message commits either before the
-        // check, which keeps the file, or after it is gone. Only the selected files' threads are
-        // read, so writes wait briefly.
-        return yield* sql.withTransaction(
+        // A thread can be launched into a folder of an old runtime too.
+        return yield* holdingWhole(
+          item.path,
           Effect.gen(function* () {
-            const threads = yield* sql<{ readonly id: string; readonly deleted: string | null }>`
-              SELECT thread_id AS "id", deleted_at AS "deleted" FROM orchestration_v2_projection_threads
-            `;
-            const fresh = yield* deletedThreadAttachments({
-              attachmentsDir: target.root,
-              threads,
-              now: yield* Clock.currentTimeMillis,
-              only: new Set(target.files.map((file) => file.path)),
-            });
-            const still = new Set(
-              fresh.removable.map((file) => file.path + ":" + file.identity.ino),
-            );
-            if (target.files.some((file) => !still.has(file.path + ":" + file.identity.ino)))
-              return "a surviving thread or task mentions some of these files' threads now";
-            return yield* removeFiles(item, target, actor);
+            const reason = yield* inUse(item.path);
+            if (reason !== null) return reason;
+            const own = yield* ownReference(item.path);
+            if (own !== null) return own;
+            const removed = yield* removeUnusedPinnedRuntime({
+              baseDir: config.baseDir,
+              keep: [packageJson.version],
+              version: target.version,
+            }).pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
+            return removed ? null : "it is in use now";
           }),
         );
       }
+      case "files":
+        // A thread can be launched into the logs or attachments folder like any other.
+        return yield* holdingWhole(
+          target.root,
+          Effect.gen(function* () {
+            const reason = yield* workedInNow(target.root);
+            if (reason !== null) return reason;
+            return yield* removeGroup(item, target, actor);
+          }),
+        );
       case "none":
         return "it is shown for information only";
     }
+  }, Effect.provideContext(context));
+
+  /** Files of one group: rotated logs, or deleted threads' attachments under the write lock. */
+  const removeGroup = Effect.fn("StorageReclaim.removeGroup")(function* (
+    item: StorageItem,
+    target: Extract<StorageTarget, { readonly kind: "files" }>,
+    actor: string,
+  ) {
+    if (item.kind !== "attachments") return yield* removeFiles(item, target, actor);
+    // A message can reference a file of a deleted thread at any moment. Holding the write
+    // lock while checking again and unlinking means such a message commits either before the
+    // check, which keeps the file, or after it is gone. Only the selected files' threads are
+    // read, so writes wait briefly.
+    return yield* sql.withTransaction(
+      Effect.gen(function* () {
+        const threads = yield* sql<{ readonly id: string; readonly deleted: string | null }>`
+              SELECT thread_id AS "id", deleted_at AS "deleted" FROM orchestration_v2_projection_threads
+            `;
+        const fresh = yield* deletedThreadAttachments({
+          attachmentsDir: target.root,
+          threads,
+          now: yield* Clock.currentTimeMillis,
+          only: new Set(target.files.map((file) => file.path)),
+        });
+        const still = new Set(fresh.removable.map((file) => file.path + ":" + file.identity.ino));
+        if (target.files.some((file) => !still.has(file.path + ":" + file.identity.ino)))
+          return "a surviving thread or task mentions some of these files' threads now";
+        return yield* removeFiles(item, target, actor);
+      }),
+    );
   }, Effect.provideContext(context));
 
   const removeFiles = Effect.fn("StorageReclaim.removeFiles")(function* (
