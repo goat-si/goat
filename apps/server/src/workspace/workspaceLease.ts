@@ -136,7 +136,10 @@ export const tryWithWorkspaceSubtree = <A, E, R>(
       const busy =
         [...leases.values()].some((lease) => inside(key, lease.canonical)) ||
         [...subtrees.keys()].some((other) => inside(other, key) || inside(key, other));
-      if (busy) return Effect.succeed(Option.none<{ readonly key: string }>());
+      if (busy)
+        return Effect.succeed(
+          Option.none<{ readonly key: string; readonly held: ReadonlyArray<string> }>(),
+        );
       subtrees.set(key, Deferred.makeUnsafe<void>());
       return Effect.succeed(Option.some({ key, held: fiber.getRef(HeldSubtrees) }));
     }),
