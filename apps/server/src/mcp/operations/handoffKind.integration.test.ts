@@ -15,6 +15,8 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as TestClock from "effect/testing/TestClock";
 import { McpSchema } from "effect/ai";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
@@ -91,6 +93,73 @@ const as =
       Effect.provideService(McpInvocationContext, scope),
       Effect.provideService(McpSchema.McpServerClient, client),
     );
+const appliedOutcome = {
+  version: 1,
+  effects: { install: "done", save: "done" },
+  outcome: {
+    state: "applied",
+    result: {
+      kind: "applied",
+      action: "add",
+      instance: null,
+      next: { call: "goat_provider_diagnose" },
+    },
+  },
+} as const;
+
+/**
+ * One server process for operation.wait over real provider change handoffs. `reads` takes one entry
+ * per finished handoff read, so a test advances the clock only once the waiter is between polls.
+ */
+const waitOver = (orchestrator: Parameters<typeof durableHandoffs>[0]) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const durable = yield* durableHandoffs(orchestrator, {
+      environmentId,
+      sessions: Effect.succeed([
+        {
+          sessionId: reviewer,
+          subject: "test",
+          method: "browser-session-cookie",
+          scopes: ["orchestration:operate", "providers:manage"],
+          client: { label: "Human reviewer", deviceType: "unknown" },
+          issuedAt: now,
+          expiresAt: DateTime.add(now, { days: 2 }),
+          lastConnectedAt: now,
+          connected: true,
+          current: true,
+        },
+      ]),
+    });
+    const handoffs = yield* durable.start;
+    const tokens = yield* makeOperationTokens.pipe(Effect.provide(key));
+    const reads = yield* Queue.unbounded<string>();
+    const readHandoff = makeHandoffReader(Option.some(handoffs));
+    const operations = makeOperations(noTools, tokens, (handoffId) =>
+      readHandoff(handoffId).pipe(Effect.tap(() => Queue.offer(reads, handoffId))),
+    );
+    const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+    const ask = (title: string, expiresAt?: DateTime.Utc) =>
+      Effect.gen(function* () {
+        const summary = yield* handoffs.create({
+          kind: "approval",
+          title,
+          reason: "An agent asked",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "provider.settings" },
+          target: { environmentId, path: "provider.settings" },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Add Devin." },
+          args: { title },
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+        });
+        const operationId = yield* tokens.issue("handoff", summary.handoffId, owner);
+        return { address: { threadId, handoffId: summary.handoffId }, operationId };
+      });
+    const wait = (operationId: string, timeoutMs?: number) =>
+      Effect.forkChild(operations.wait({ operationId, timeoutMs }).pipe(as(owner)));
+    return { handoffs, operations, reads, ask, wait };
+  });
 
 it.effect("reads an approved provider change as applying, then applied, across a restart", () =>
   withHarness(({ orchestrator }) =>
@@ -233,6 +302,116 @@ it.effect("reads an approved provider change as applying, then applied, across a
       expect(stranger).toMatchObject({ reason: "not_found" });
     }),
   ),
+);
+
+it.effect(
+  "waits through approval and application, and succeeds only once applied is recorded",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, reads, ask, wait } = yield* waitOver(orchestrator);
+        const change = yield* ask("Add Devin?");
+        const waiting = yield* wait(change.operationId);
+        yield* Queue.take(reads);
+
+        // Approved: the change is applying, so the wait keeps reading.
+        yield* handoffs.respond({ ...change.address, action: "completed" }, reviewer);
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(reads);
+        expect(waiting.pollUnsafe()).toBeUndefined();
+        yield* handoffs.recordProviderProgress(change.address, {
+          version: 1,
+          effects: { install: "started" },
+        });
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(reads);
+        expect(waiting.pollUnsafe()).toBeUndefined();
+
+        yield* handoffs.finishProviderContinuation(change.address, appliedOutcome);
+        yield* TestClock.adjust("3 seconds");
+        const done = yield* Fiber.join(waiting);
+        expect(done).toMatchObject({
+          operation: { state: "succeeded" },
+          result: {
+            value: { handoff: { state: "completed" }, change: { outcome: { state: "applied" } } },
+          },
+        });
+        expect(done).not.toHaveProperty("timedOut");
+      }),
+    ),
+);
+
+it.effect(
+  "ends a wait as cancelled when the person declines, and failed when the ask expires",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, reads, ask, wait } = yield* waitOver(orchestrator);
+        const declined = yield* ask("Remove Devin?");
+        const waitingDecline = yield* wait(declined.operationId);
+        yield* Queue.take(reads);
+        yield* handoffs.respond({ ...declined.address, action: "declined" }, reviewer);
+        yield* TestClock.adjust("3 seconds");
+        expect(yield* Fiber.join(waitingDecline)).toMatchObject({
+          operation: { state: "cancelled" },
+          result: { value: { handoff: { state: "declined" } } },
+        });
+
+        const unanswered = yield* ask(
+          "Update Devin?",
+          DateTime.add(yield* DateTime.now, { seconds: 3 }),
+        );
+        const waitingExpiry = yield* wait(unanswered.operationId);
+        yield* Queue.take(reads);
+        // Past its deadline the ask stays pending until the expiry sweep records it.
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(reads);
+        expect(waitingExpiry.pollUnsafe()).toBeUndefined();
+        yield* handoffs.sweep;
+        yield* TestClock.adjust("3 seconds");
+        expect(yield* Fiber.join(waitingExpiry)).toMatchObject({
+          operation: { state: "failed" },
+          result: { value: { handoff: { state: "expired" } } },
+        });
+      }),
+    ),
+);
+
+it.effect(
+  "times out only the observer: the change keeps applying and a later wait sees it applied",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const { handoffs, operations, reads, ask, wait } = yield* waitOver(orchestrator);
+        const change = yield* ask("Add Devin?");
+        yield* handoffs.respond({ ...change.address, action: "completed" }, reviewer);
+        const progress = { version: 1, effects: { install: "started" } };
+        yield* handoffs.recordProviderProgress(change.address, progress);
+
+        const observer = yield* wait(change.operationId, 5_000);
+        yield* Queue.take(reads);
+        yield* TestClock.adjust("3 seconds");
+        yield* Queue.take(reads);
+        yield* TestClock.adjust("2 seconds");
+        expect(yield* Fiber.join(observer)).toMatchObject({
+          operation: { state: "running" },
+          result: { value: { applying: true } },
+          timedOut: true,
+        });
+        expect(yield* handoffs.readProviderContinuation(change.address)).toMatchObject({
+          handoff: { state: "completed" },
+          applying: true,
+          progress,
+        });
+
+        yield* handoffs.finishProviderContinuation(change.address, appliedOutcome);
+        const later = yield* Fiber.join(yield* wait(change.operationId));
+        expect(later.operation.state).toBe("succeeded");
+        expect(later).not.toHaveProperty("timedOut");
+        const read = yield* operations.read({ operationId: change.operationId }).pipe(as(owner));
+        expect(read.operation.state).toBe("succeeded");
+      }),
+    ),
 );
 it.effect(
   "reads a change in one observation, keeps its plan and arguments private, and stays in its thread",
