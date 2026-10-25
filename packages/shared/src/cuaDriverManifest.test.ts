@@ -138,7 +138,10 @@ describe("cuaDriverManifest", () => {
 
   it("writes a Linux executable grant the driver matches, and reads back the names approvals use (#1513)", () => {
     const text = cuaDriverCapabilityManifest({
-      applications: ["org.gnome.Calculator", { executable: "/usr/bin/python3.12", names: ["python3"] }],
+      applications: [
+        "org.gnome.Calculator",
+        { executable: "/usr/bin/python3.12", names: ["python3"] },
+      ],
       tools: ["list_apps"],
     });
     expect(text).toContain('    - executable: "/usr/bin/python3.12" # names: ["python3"]');
@@ -147,16 +150,18 @@ describe("cuaDriverManifest", () => {
       "/usr/bin/python3.12",
       "python3",
     ]);
-    expect(missingCuaDriverApplications(["python3", "gedit"], cuaDriverManifestApplications(text))).toEqual([
-      "gedit",
-    ]);
+    expect(
+      missingCuaDriverApplications(["python3", "gedit"], cuaDriverManifestApplications(text)),
+    ).toEqual(["gedit"]);
   });
 
-  it.skipIf(process.platform !== "linux")(
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
     "reads a windowed Linux app's executable from /proc, never GOAT's own process or a windowless one (#1513)",
     async () => {
       const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-"));
-      const child = (await import("node:child_process")).spawn("sleep", ["30"], { stdio: "ignore" });
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
       try {
         const pid = child.pid ?? 0;
         const path = await prepareCuaDriverCapabilityManifest({

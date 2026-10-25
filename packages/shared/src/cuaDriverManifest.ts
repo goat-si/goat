@@ -198,7 +198,11 @@ async function withLinuxExecutables(
         return app;
       const executable = await readlink("/proc/" + pid + "/exe").catch(() => undefined);
       // A replaced binary reads as "<path> (deleted)", which no longer names a file to grant.
-      if (executable === undefined || !executable.startsWith("/") || executable.endsWith(" (deleted)"))
+      if (
+        executable === undefined ||
+        !executable.startsWith("/") ||
+        executable.endsWith(" (deleted)")
+      )
         return app;
       return { ...app, executable };
     }),
