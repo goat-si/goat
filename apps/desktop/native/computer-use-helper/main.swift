@@ -3,7 +3,7 @@
 // GOAT's desktop host launches this bundle's executable with stdio pipes. Its launcher
 // verifies the parent and re-execs with TCC responsibility disclaimed. The service answers
 // grant, app-listing and observation requests, or runs the bundled driver's direct MCP server
-// on inherited stdio. The driver is this service's child, so macOS attributes its grants to
+// through GOAT-owned pipes. The driver is this service's child, so macOS attributes its grants to
 // this bundle. The host supplies the capability manifest and a fixed set of tuning knobs.
 
 import ApplicationServices
@@ -704,101 +704,6 @@ func runService() -> Never {
     }
     service.shutDown()
   }
-  dispatchMain()
-}
-
-// MARK: - Agent connection (D3 amendment 2)
-
-/// Failures in --mcp mode: stdout already belongs to MCP, so the reason goes to stderr and the
-/// exit code names it for the proxy (77 parent, 79 driver, 64 arguments, 78 spawn).
-func mcpFail(_ code: Int32, _ message: String) -> Never {
-  FileHandle.standardError.write(Data(("GOAT Computer Use: " + message + "\n").utf8))
-  exit(code)
-}
-
-/// One agent connection: the bundled driver's MCP server owns its runtime in a direct child of
-/// this service, on the service's own stdin and stdout. There is no socket, so nothing but the
-/// process that launched this helper reaches the driver (#1210). The driver inherits this
-/// process's disclaimed responsibility, so macOS charges its grants to this bundle.
-func runMcp() -> Never {
-  // The launcher this service was started by, captured before anything can re-parent it.
-  let launcher = getppid()
-  guard launcherIsSelf() else { mcpFail(77, "Start the helper through its launcher.") }
-  let arguments = Array(CommandLine.arguments.dropFirst())
-  guard let flag = arguments.firstIndex(of: "--capability-manifest"),
-    flag + 1 < arguments.count, arguments[flag + 1].hasPrefix("/")
-  else { mcpFail(64, "--mcp needs --capability-manifest with an absolute path.") }
-  let service = DriverService()
-  guard let driverPath = service.driverPath, FileManager.default.isExecutableFile(atPath: driverPath)
-  else { mcpFail(79, "The helper bundle has no Cua Driver.") }
-  if let refusal = service.driverRefusal(driverPath) { mcpFail(79, refusal) }
-
-  // Only the knobs a host may set come from this process's environment; the rest is fixed.
-  let settable = ProcessInfo.processInfo.environment.filter { hostSettableNames.contains($0.key) }
-    .map { ["name": $0.key, "value": $0.value] }
-  var environment = service.driverEnvironment(settable)
-  environment["CUA_DRIVER_CAPABILITY_MANIFEST_FILE"] = arguments[flag + 1]
-  environment["CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED"] = "1"
-  environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
-
-  let argv =
-    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId].map {
-      strdup($0)
-    } + [nil]
-  let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-  var child: pid_t = 0
-  // The driver inherits stdin, stdout and stderr and nothing else this process holds open.
-  var actions: posix_spawn_file_actions_t?
-  posix_spawn_file_actions_init(&actions)
-  defer { posix_spawn_file_actions_destroy(&actions) }
-  for descriptor in [STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO] {
-    posix_spawn_file_actions_addinherit_np(&actions, descriptor)
-  }
-  var attributes: posix_spawnattr_t?
-  posix_spawnattr_init(&attributes)
-  defer { posix_spawnattr_destroy(&attributes) }
-  posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
-  // stdout belongs to MCP, so this service names itself on stderr. Written before the driver
-  // starts: the driver shares stderr, and the first hello the host reads is this one.
-  // Readiness binds the driver's reported parent to this pid.
-  let greeting: [String: Any] = [
-    "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
-    "bundleId": service.bundleId,
-  ]
-  if let data = try? JSONSerialization.data(withJSONObject: greeting) {
-    FileHandle.standardError.write(data + Data([0x0A]))
-  }
-  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
-  argv.forEach { free($0) }
-  envp.forEach { free($0) }
-  guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
-  // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
-  // service ends the driver it started. The driver is waited on without reaping below, so
-  // `child` names it for as long as this process runs.
-  let endDriver = {
-    kill(child, SIGKILL)
-    exit(137)
-  }
-  let launcherWatch = DispatchSource.makeProcessSource(
-    identifier: launcher, eventMask: .exit, queue: .main)
-  launcherWatch.setEventHandler(handler: endDriver)
-  launcherWatch.resume()
-  retained.append(launcherWatch)
-  if getppid() != launcher { endDriver() }
-  for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
-    signal(signalNumber, SIG_IGN)
-    let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
-    source.setEventHandler { kill(child, signalNumber) }
-    source.resume()
-    retained.append(source)
-  }
-  DispatchQueue.global().async {
-    var info = siginfo_t()
-    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
-    exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
-  }
-  // The cursor overlay (Overlay.swift) runs AppKit's loop when the proxy opened its channel.
-  runOverlayIfConnected()
   dispatchMain()
 }
 
