@@ -102,6 +102,8 @@ export interface MoveAuthority {
   readonly runtimeMode: RuntimeMode;
   readonly callerRuntimeMode: RuntimeMode;
   readonly authorize: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
+  /** For writes to the moved attempt's own host: its interrupt. */
+  readonly authorizeSource: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
   readonly allowedHosts?: ReadonlyArray<string>;
   readonly excludeHosts?: ReadonlyArray<string>;
   readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
@@ -183,11 +185,12 @@ export class GoalWorkerRuntime extends Context.Service<
     readonly project: (
       goal: FleetGoal,
     ) => Effect.Effect<{ readonly cwd: string; readonly canonicalKey: string | null } | null>;
-    /** The authority a move of this goal's worker to another host carries. */
+    /** The authority a move of this goal's worker off sourceHost to another host carries. */
     readonly moveAuthority: (
       access: OwnerAccess,
       goal: FleetGoal,
       confirm: ActionConfirm,
+      sourceHost: string,
     ) => Effect.Effect<MoveAuthority, OrchestratorMcpFailure>;
   }
 >()("goat/fleet/goals/GoalWorkerRuntime") {}
@@ -725,13 +728,20 @@ const make = Effect.gen(function* () {
               ),
               Effect.asVoid,
             )
-          : // Stopping work needs no launch capability: the goal and its owner, checked last.
-            remote.interrupt(confirm.pipe(Effect.as(access.runtimeMode)), worker.host, {
-              threadId: worker.threadId,
-              actionId,
-            }),
+          : keepLost(
+              remote.interrupt(
+                remote.stopAuthorize({
+                  scope: access.scope,
+                  mode: access.runtimeMode,
+                  host: worker.host,
+                  confirm,
+                }),
+                worker.host,
+                { threadId: worker.threadId, actionId },
+              ),
+            ),
     project: (goal) => remote.project(goal),
-    moveAuthority: (access, goal, confirm) =>
+    moveAuthority: (access, goal, confirm, sourceHost) =>
       admitRemote(access, goal, null, true, confirm).pipe(
         Effect.map((authority): MoveAuthority => {
           const selected = goal.spec.workers.hostSelector;
@@ -750,6 +760,17 @@ const make = Effect.gen(function* () {
             authorize: authority.authorize.pipe(
               Effect.mapError((error) => new RescheduleNotAllowed({ message: error.message })),
             ),
+            // Interrupting the old attempt: under the session ceiling, if the profile still reaches it.
+            authorizeSource: remote
+              .stopAuthorize({
+                scope: access.scope,
+                mode: authority.sessionMode,
+                host: sourceHost,
+                confirm: authority.authorize,
+              })
+              .pipe(
+                Effect.mapError((error) => new RescheduleNotAllowed({ message: error.message })),
+              ),
             ...(allowed === undefined ? {} : { allowedHosts: allowed }),
             ...(excluded === undefined || excluded.length === 0 ? {} : { excludeHosts: excluded }),
             ...(authority.ceiling === undefined

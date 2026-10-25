@@ -100,6 +100,8 @@ export interface GoalObservation {
   >;
   /** Reschedules claimed that did not move their slot: refused, never sent, or never settled. */
   readonly unmovedReschedules: ReadonlySet<string>;
+  /** Moves that interrupted their attempt to take it over, by receipt id. */
+  readonly stoppingMoves: ReadonlySet<string>;
   /** Moves claimed and not settled, by slot; each holds its slot until it is resolved. */
   readonly pendingMoves: ReadonlyMap<
     number,
@@ -352,9 +354,20 @@ export function planGoal(
           return { ...worker, state: "running" };
       }
     }
-    if (seen.runStatus === "interrupted" || seen.runStatus === "cancelled")
+    if (seen.runStatus === "interrupted" || seen.runStatus === "cancelled") {
+      // The goal's own move stopped it: the move goes on now that the run has stopped.
+      if (
+        seen.runId !== null &&
+        observation.stoppingMoves.has(
+          rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId),
+        )
+      ) {
+        recover("stalled", "unknown", false);
+        return { ...worker, state: "stalled", note: "Its move continues now that it stopped." };
+      }
       // Someone stopped it on purpose; acting would fight them.
       return { ...worker, state: "needs_human", note: "A person stopped the run." };
+    }
     if (seen.runStatus === "failed") {
       const failureClass = seen.health._tag === "failed" ? seen.health.failureClass : "unknown";
       // A usage-limited run the fallback could not move waits for its reset, then the goal

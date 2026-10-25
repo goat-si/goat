@@ -192,6 +192,26 @@ export const makeRemoteWorkers = (deps: {
     } satisfies RemoteAuthority<E>;
   });
 
+  /**
+   * Authorizes stopping a worker on host at mode: the controller's check, then the owner's goatclaw
+   * profile must still reach that host. Stopping needs no launch capability.
+   */
+  const stopAuthorize = <E>(input: {
+    readonly scope: Owner["scope"];
+    readonly mode: RuntimeMode;
+    readonly host: string;
+    readonly confirm: Effect.Effect<void, E>;
+  }) =>
+    Effect.andThen(
+      input.confirm,
+      permissions
+        .require(input.scope, "threads.remote", { host: input.host, runtimeMode: input.mode })
+        .pipe(
+          Effect.mapError((error) => new RemoteAuthorityLost({ message: error.message })),
+          Effect.as(input.mode),
+        ),
+    );
+
   /** Brings the destination's goatclaw policy up to date before a ceiling is forwarded to it. */
   const prepare = <E>(authority: RemoteAuthority<E>, host: string) =>
     authority.ceiling === undefined
@@ -420,5 +440,5 @@ export const makeRemoteWorkers = (deps: {
       authorize,
     ).pipe(Effect.asVoid);
 
-  return { admit, prepare, observe, find, project, launch, send, interrupt };
+  return { admit, stopAuthorize, prepare, observe, find, project, launch, send, interrupt };
 };

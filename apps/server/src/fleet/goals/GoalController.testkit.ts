@@ -192,15 +192,18 @@ export const runtimeFor = (fake: Fake) =>
         ),
       ),
     project: () => Effect.succeed(fake.project),
-    moveAuthority: (current, _goal, confirm) =>
-      Effect.succeed({
+    moveAuthority: (current, _goal, confirm) => {
+      const authorize = confirm.pipe(
+        Effect.as(current.runtimeMode),
+        Effect.mapError((lost) => new RescheduleNotAllowed({ message: lost.message })),
+      );
+      return Effect.succeed({
         runtimeMode: current.runtimeMode,
         callerRuntimeMode: current.runtimeMode,
-        authorize: confirm.pipe(
-          Effect.as(current.runtimeMode),
-          Effect.mapError((lost) => new RescheduleNotAllowed({ message: lost.message })),
-        ),
-      }),
+        authorize,
+        authorizeSource: authorize,
+      });
+    },
   });
 
 /** This machine only, like the design's first release; SSH hosts are refused. */

@@ -718,6 +718,15 @@ describe("GoalWorkerRuntime", () => {
               .pipe(Effect.flip),
           ).toMatchObject({ _tag: "GoalOwnerAuthorityLost" });
           expect(writes(seen)).toEqual([]);
+          // A host the owner's profile no longer reaches is not interrupted from here either.
+          seen.profileHosts = ["other-box"];
+          expect(
+            yield* runtime
+              .interrupt(ownerAccess("full-access"), remoteWorker, "i3", confirmed(seen))
+              .pipe(Effect.flip),
+          ).toMatchObject({ _tag: "GoalOwnerAuthorityLost" });
+          expect(writes(seen)).toEqual([]);
+          seen.profileHosts = "off";
           // With authority, the interrupt names its action id so a repeat is a no-op there.
           yield* runtime.interrupt(ownerAccess("full-access"), remoteWorker, "i2", confirmed(seen));
           expect(seen.remote.map((call) => [call.tool, call.args.clientRequestId])).toEqual([

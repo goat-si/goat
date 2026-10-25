@@ -5,7 +5,7 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { FleetGoalId, type RuntimeMode, ThreadId } from "@goat/contracts";
+import { FleetGoalId, RunId, type RuntimeMode, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -57,6 +57,8 @@ interface World {
   refuseNextLaunch: boolean;
   /** How the worker's own run reads, by thread. */
   health: (threadId: string) => ThreadHealth;
+  /** The first worker's run on A, as its host reports it; an interrupt stops it. */
+  sourceRun: "running" | "failed" | "interrupted";
 }
 
 const newWorld = (): World => ({
@@ -67,6 +69,7 @@ const newWorld = (): World => ({
   loseNextLaunchAnswer: false,
   refuseNextLaunch: false,
   health: () => ({ _tag: "healthy" }),
+  sourceRun: "failed",
 });
 
 const unavailable = (host: string) =>
@@ -87,16 +90,16 @@ const dispatchOf = (world: World) =>
         const now = DateTime.formatIso(yield* DateTime.now);
         switch (call.tool) {
           case "goat_thread_status": {
-            // The goal's first worker lives on A as thread:worker-1; its run failed.
+            // The goal's first worker lives on A as thread:worker-1, on run 5.
             return {
               host: call.host,
               threadId: call.arguments.threadId,
               title: "Worker",
-              phase: "failed",
-              terminal: true,
+              phase: world.sourceRun,
+              terminal: world.sourceRun !== "running",
               run: {
                 runId: "run:5",
-                status: "failed",
+                status: world.sourceRun,
                 requestedAt: now,
                 startedAt: now,
                 completedAt: now,
@@ -109,6 +112,13 @@ const dispatchOf = (world: World) =>
               watch: null,
             };
           }
+          case "goat_thread_interrupt":
+            world.sourceRun = "interrupted";
+            return {
+              threadId: call.arguments.threadId,
+              runId: "run:5",
+              status: "interrupt_requested",
+            };
           case "goat_thread_list":
             return {
               threads: world.threads
@@ -445,6 +455,51 @@ describe("goal moves across a restart (#1451)", () => {
             expect(world.launches).toHaveLength(1);
             expect(fake.launches).toHaveLength(1);
             expect(yield* turnsOf(id)).toBe(2);
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
+    "continues a move that had to interrupt a stalled worker, instead of asking a person",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_stalled";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* pass(id);
+            world.sourceRun = "running";
+            fake.reading = (threadId) =>
+              threadId === "thread:worker-1"
+                ? {
+                    kind: "seen",
+                    terminal: world.sourceRun !== "running",
+                    runId: RunId.make("run:5"),
+                    runStatus: world.sourceRun,
+                    lastActivityAt: null,
+                    result: null,
+                  }
+                : running(threadId, fake);
+            world.health = (threadId) =>
+              threadId === "thread:worker-1" && world.sourceRun === "running"
+                ? { _tag: "stalled", idleMs: 30 * 60_000 }
+                : { _tag: "healthy" };
+            // First a steer, then the move, which has to stop the run on A first.
+            yield* pass(id);
+            yield* pass(id);
+            expect(world.sourceRun).toBe("interrupted");
+            expect(world.launches).toEqual([]);
+            yield* pass(id);
+            expect(world.launches.map((launch) => launch.host)).toEqual(["B"]);
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              attempt: 2,
+              host: "B",
+              state: "running",
+            });
           }).pipe(Effect.provide(server(fake, world, path)));
         }),
       ),

@@ -28,6 +28,12 @@ import {
 import { branchFor, launchActionId, nextAttempt, rescheduleActionId } from "./goalWorkers.ts";
 import type { GoalWorkerRuntime } from "./GoalWorkerRuntime.ts";
 
+/**
+ * A move that interrupted its attempt to take it over: the run it stopped is the goal's, not a
+ * person's, so the plan continues the same move once that run has stopped.
+ */
+export const STOPPING = "stopping";
+
 /** Refusals that say nothing about the move itself: it is asked for again on a later pass. */
 const TRANSIENT = new Set(["no_capacity", "host_still_answers", "not_allowed"]);
 
@@ -145,7 +151,12 @@ export const makeGoalMoves = (deps: {
       );
     });
     const allowed = yield* runtime
-      .moveAuthority(current, goal, authority.confirm("launch", authority.planned(current)))
+      .moveAuthority(
+        current,
+        goal,
+        authority.confirm("launch", authority.planned(current)),
+        worker.host,
+      )
       .pipe(Effect.result);
     // Refused before anything was sent: the move may be asked for again.
     if (allowed._tag === "Failure")
@@ -174,6 +185,7 @@ export const makeGoalMoves = (deps: {
       maxAttempts: goal.spec.limits.maxAttemptsPerWorker,
       holdUnconfirmed: true,
       authorize: may.authorize,
+      authorizeSource: may.authorizeSource,
       ...(may.allowedHosts === undefined ? {} : { allowedHosts: may.allowedHosts }),
       ...(may.excludeHosts === undefined ? {} : { excludeHosts: may.excludeHosts }),
       ...(may.permissionProfileCeiling === undefined
@@ -194,6 +206,7 @@ export const makeGoalMoves = (deps: {
         // The receipt stays open: the slot waits for resolve_move to find the thread.
         return unconfirmed(worker, actionId, result.message);
       case "Refused":
+        if (result.stopping === true) return yield* refused(result.message, STOPPING, worker);
         return yield* TRANSIENT.has(result.reason)
           ? refused(result.message, NOT_SENT, worker)
           : refused(result.message, "refused", input.handled);

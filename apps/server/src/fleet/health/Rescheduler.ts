@@ -83,6 +83,11 @@ export interface RescheduleRequest {
    * thread. Goals set this; a person's goat_thread_reschedule retries on the same host instead.
    */
   readonly holdUnconfirmed?: boolean;
+  /**
+   * Re-checks the caller for a write to the attempt's own host (its interrupt) and returns the
+   * session ceiling to stop it under; authorize, at runtimeMode, when absent.
+   */
+  readonly authorizeSource?: Effect.Effect<RuntimeMode, RescheduleNotAllowed>;
 }
 
 export type RescheduleRefusal =
@@ -101,7 +106,13 @@ export type RescheduleResult =
       readonly branch: string;
       readonly resumedFrom: "branch" | "replica" | "base";
     }
-  | { readonly _tag: "Refused"; readonly reason: RescheduleRefusal; readonly message: string }
+  | {
+      readonly _tag: "Refused";
+      readonly reason: RescheduleRefusal;
+      readonly message: string;
+      /** The move interrupted the attempt; it continues once the attempt has stopped. */
+      readonly stopping?: true;
+    }
   /** A launch on host may have started; only finding its thread settles it (holdUnconfirmed). */
   | { readonly _tag: "Unconfirmed"; readonly host: string; readonly message: string };
 
@@ -314,17 +325,23 @@ const make = Effect.gen(function* () {
           "The attempt is still active on this machine; stop it first.",
         );
       }
-      const interrupted = yield* call(
-        request,
-        host,
-        "goat_thread_interrupt",
-        {
-          threadId: request.ref.threadId,
-          reason: "GOAT is moving this work to another host.",
-          clientRequestId: request.clientRequestId + ":interrupt",
-        },
-        true,
-      ).pipe(Effect.result);
+      // The attempt runs under its own mode, which a lowered replacement mode may not cover.
+      const interrupted = yield* dispatch
+        .callHostTool(
+          {
+            host,
+            tool: "goat_thread_interrupt",
+            arguments: {
+              threadId: request.ref.threadId,
+              reason: "GOAT is moving this work to another host.",
+              clientRequestId: request.clientRequestId + ":interrupt",
+            },
+            writes: true,
+            timeoutMs: REMOTE_TIMEOUT_MS,
+          },
+          request.authorizeSource ?? recheck(request),
+        )
+        .pipe(Effect.result);
       if (interrupted._tag === "Failure") {
         const error = interrupted.failure;
         if (error instanceof RescheduleNotAllowed) return refused("not_allowed", error.message);
@@ -341,12 +358,15 @@ const make = Effect.gen(function* () {
           "Could not interrupt the attempt on " + host + ": " + clip(error.message),
         );
       }
-      return refused(
-        "host_still_answers",
-        "Interrupt requested on " +
+      return {
+        _tag: "Refused",
+        reason: "host_still_answers",
+        message:
+          "Interrupt requested on " +
           host +
           "; the move happens on the next reschedule once it stops.",
-      );
+        stopping: true,
+      } satisfies RescheduleResult;
     });
 
   const launchOn = (
