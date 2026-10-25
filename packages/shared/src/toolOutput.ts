@@ -53,7 +53,8 @@ export interface ToolOutputSettle {
 }
 
 const SETTLE_PREFIX = "Notification settle: ";
-const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([a-z0-9_:]{0,128})\)/;
+// A reason can name an AX notification, such as notification_unsupported:AXMoved.
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([A-Za-z0-9_:]{0,128})\)/;
 const MAX_SETTLE_TEXTS = 32;
 
 function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {

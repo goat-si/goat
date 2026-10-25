@@ -70,6 +70,14 @@ describe("toolOutputSettle", () => {
     ).toEqual(pending);
   });
 
+  it("reads a reason that names an AX notification", () => {
+    const reason = { outcome: "unsupported", reason: "notification_unsupported:AXMoved" };
+    const line =
+      "Notification settle: unsupported (notification_unsupported:AXMoved). Quiet does not establish task completion.";
+    expect(toolOutputSettle(line)).toEqual(reason);
+    expect(compactDynamicToolOutput(line)?.settle).toEqual(reason);
+  });
+
   it("finds no outcome in other tools' results", () => {
     for (const output of [
       undefined,

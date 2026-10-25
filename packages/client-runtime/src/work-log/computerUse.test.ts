@@ -166,6 +166,17 @@ describe("computerUseResult", () => {
       },
     ];
     expect(computerUseResult(settle, "succeeded", summary)?.status).toBe("unsettled");
+    // OpenCode keeps the summary as a plain string; an AX notification name is part of the reason.
+    expect(
+      computerUseResult(
+        settle,
+        "succeeded",
+        "Notification settle: unsupported (notification_unsupported:AXMoved). Quiet does not establish task completion.",
+      ),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle: notification unsupported:AXMoved",
+    });
   });
 
   it("a settled wait, other tools and other lifecycles keep their status", () => {
