@@ -1,8 +1,13 @@
+import { TurnItemId, type ComputerUseLeaseThreadUpdate } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scheduler from "effect/Scheduler";
+import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
+import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import { call } from "./ComputerUseLeaseProxy.testkit.ts";
 import {
   initialize,
@@ -259,4 +264,269 @@ it.effect(
       assert.deepEqual((yield* h.next).result, newerTools);
       assert.equal(h.log.filter((line) => line.startsWith("start")).length, 3);
     }),
+);
+
+it.effect.each(["shared", "narrowing", "foreground", "stop", "replacement", "terminal"] as const)(
+  "receipt fences prevent dispatch across the first scheduler yield after %s",
+  (change) => {
+    let boundary = false;
+    let gate: Deferred.Deferred<void>;
+    class ReceiptScheduler extends Scheduler.MixedScheduler {
+      override shouldYield(fiber: Parameters<Scheduler.MixedScheduler["shouldYield"]>[0]) {
+        if (boundary) {
+          boundary = false;
+          // Resume admission only AFTER the next legal yield, never from the update getter.
+          queueMicrotask(() => Deferred.doneUnsafe(gate, Exit.void));
+          return true;
+        }
+        return super.shouldYield(fiber);
+      }
+    }
+    return Effect.gen(function* () {
+      const input = yield* Queue.unbounded<string>();
+      const updates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate>();
+      const applied = yield* Queue.unbounded();
+      const outcome = yield* Queue.unbounded<string>();
+      const reserved = yield* Deferred.make<void>();
+      gate = yield* Deferred.make<void>();
+      const expiresAt = "2100-01-01T00:00:00Z";
+      const initial = {
+        ...snapshot("A", expiresAt),
+        foreground: [
+          {
+            handoffId: TurnItemId.make("fg"),
+            purpose: "fixture",
+            target: "desktop" as const,
+            expiresAtMillis: 4102444800000,
+          },
+        ],
+      };
+      yield* runThreadLeaseProxy({
+        connectionId: "receipt-test",
+        bundleIds: true,
+        input: Stream.fromQueue(input),
+        leaseUpdates: Stream.fromQueue(updates),
+        output: (line) => Queue.offer(outcome, line).pipe(Effect.asVoid),
+        onLeaseUpdateApplied: (update) => Queue.offer(applied, update).pipe(Effect.asVoid),
+        startDriver: Effect.succeed({
+          send: () => Queue.offer(outcome, "DISPATCHED").pipe(Effect.asVoid),
+          lines: Stream.never,
+          kill: Effect.void,
+        }),
+        revokeSessions: () => Effect.void,
+        reports: () => ({}),
+        reservation: (reservation) =>
+          reservation.action === "reserve"
+            ? Deferred.succeed(reserved, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as({
+                  status: "admitted" as const,
+                  reservationId: "ticket",
+                  permissions: { validUntilMillis: 4102444800000 },
+                }),
+              )
+            : Effect.succeed({ status: "released" as const }),
+      }).pipe(Effect.scoped, Effect.forkChild);
+      yield* Queue.offer(updates, initial);
+      yield* Queue.take(applied);
+      yield* Queue.offer(input, call(1, "bring_to_front", { pid: 1, window_id: 2 }));
+      yield* Deferred.await(reserved);
+      const restriction: ComputerUseLeaseThreadUpdate =
+        change === "stop"
+          ? {
+              state: "control-ended",
+              controlId: "A",
+              get reason() {
+                boundary = true;
+                return "stopped" as const;
+              },
+            }
+          : change === "terminal"
+            ? {
+                state: "ended",
+                get reason() {
+                  boundary = true;
+                  return "disabled" as const;
+                },
+              }
+            : {
+                ...initial,
+                ...(change === "shared"
+                  ? { shared: true }
+                  : change === "narrowing"
+                    ? { apps: [] }
+                    : change === "replacement"
+                      ? { controlId: "B" }
+                      : { foreground: [] }),
+                get expiresAt() {
+                  boundary = true;
+                  return expiresAt;
+                },
+              };
+      yield* Queue.offer(updates, restriction);
+      const result = yield* Queue.take(outcome);
+      assert.notEqual(result, "DISPATCHED");
+      const expected = {
+        shared: "screen_shared",
+        narrowing: "app_not_approved",
+        foreground: "foreground_not_approved",
+        stop: "stopped",
+        replacement: "replaced",
+        terminal: "disabled",
+      }[change];
+      assert.equal(
+        (JSON.parse(result) as { result: { structuredContent: { detail: string } } }).result
+          .structuredContent.detail,
+        expected,
+      );
+    }).pipe(Effect.provideService(Scheduler.Scheduler, new ReceiptScheduler()));
+  },
+);
+
+it.effect(
+  "client replies cannot cross controls even when A and B issue the same server request id",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      const a = yield* h.started;
+      yield* h.applied;
+      const serverRequest = JSON.stringify({ jsonrpc: "2.0", id: 900, method: "roots/list" });
+      yield* Queue.offer(a.replies, serverRequest);
+      const fromA = yield* h.next;
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({ jsonrpc: "2.0", id: "sample", method: "sampling/createMessage" }),
+      );
+      const sampling = yield* h.next;
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: sampling.id,
+          error: { code: -1, message: "fixture" },
+        }),
+      );
+      assert.deepEqual(JSON.parse(yield* Queue.take(a.sent)), {
+        jsonrpc: "2.0",
+        id: "sample",
+        error: { code: -1, message: "fixture" },
+      });
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({ jsonrpc: "2.0", id: "cancel-me", method: "roots/list" }),
+      );
+      const cancelled = yield* h.next;
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: "cancel-me" },
+        }),
+      );
+      assert.deepInclude(yield* h.next, { params: { requestId: cancelled.id } });
+      yield* h.push(snapshot("B"));
+      const b = yield* h.started;
+      yield* h.applied;
+      yield* h.applied;
+      yield* Queue.offer(b.replies, serverRequest);
+      const fromB = yield* h.next;
+      assert.notEqual(fromA.id, fromB.id);
+      yield* h.send(
+        JSON.stringify({ jsonrpc: "2.0", id: fromA.id, result: { roots: ["A-only"] } }),
+      );
+      yield* h.send(
+        JSON.stringify({ jsonrpc: "2.0", id: fromB.id, result: { roots: ["B-only"] } }),
+      );
+      assert.deepEqual(JSON.parse(yield* Queue.take(b.sent)), {
+        jsonrpc: "2.0",
+        id: 900,
+        result: { roots: ["B-only"] },
+      });
+      yield* h.send(request(7, "ping"));
+      assert.equal((yield* h.next).id, 7);
+      assert.equal(yield* Queue.size(b.sent), 0);
+    }),
+);
+
+it.effect(
+  "cancelled request ids are reusable after the instance settles the suppressed reply",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      const a = yield* h.started;
+      yield* h.applied;
+      yield* h.send(call(1, "get_guide"));
+      yield* Queue.take(a.sent);
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 1 },
+        }),
+      );
+      yield* Queue.take(a.sent);
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }),
+      );
+      // The following driver notification is a barrier after reply processing, including release.
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }),
+      );
+      assert.equal((yield* h.next).method, "notifications/message");
+      yield* h.send(call(1, "get_guide"));
+      yield* h.send(
+        JSON.stringify({ jsonrpc: "2.0", id: "goat-thread-proxy:barrier", method: "ping" }),
+      );
+      assert.equal((yield* h.next).id, "goat-thread-proxy:barrier");
+      assert.equal((JSON.parse(yield* Queue.take(a.sent)) as { id: number }).id, 1);
+      yield* Queue.offer(
+        a.replies,
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }),
+      );
+      assert.equal((yield* h.next).id, 1);
+    }),
+);
+
+it.effect("handover answers cached setup immediately and refuses calls without a backlog", () =>
+  Effect.gen(function* () {
+    const killGate = yield* Deferred.make<void>();
+    const h = yield* threadHarness({ killGate });
+    yield* Effect.addFinalizer(() => Deferred.succeed(killGate, undefined));
+    yield* h.push(snapshot("A"));
+    const a = yield* h.started;
+    yield* h.applied;
+    yield* h.send(initialize);
+    yield* h.next;
+    yield* h.send(initialized);
+    yield* h.send(request(101, "tools/list"));
+    yield* h.next;
+    yield* h.push(snapshot("B"));
+    yield* Deferred.await(a.killed);
+    yield* h.send(initialize);
+    yield* h.send(request(102, "tools/list"));
+    for (let id = 1; id <= 256; id++) yield* h.send(request(id, "ping"));
+    yield* h.send(work(300));
+    yield* h.send(
+      JSON.stringify({ jsonrpc: "2.0", id: "goat-thread-proxy:barrier", method: "ping" }),
+    );
+    assert.deepEqual((yield* h.next).result, serverInfo);
+    assert.deepEqual((yield* h.next).result, tools);
+    for (let id = 1; id <= 256; id++) assert.equal((yield* h.next).id, id);
+    const refusal = yield* h.next;
+    assert.equal(refusal.id, 300);
+    assert.deepInclude(refusal.result?.structuredContent, { detail: "replaced" });
+    assert.equal((yield* h.next).id, "goat-thread-proxy:barrier");
+    assert.deepEqual(h.log, ["start 0"]);
+    yield* Deferred.succeed(killGate, undefined);
+    const b = yield* h.started;
+    yield* h.applied;
+    yield* h.applied;
+    yield* h.send(call(301, "get_guide"));
+    assert.equal((JSON.parse(yield* Queue.take(b.sent)) as { id: number }).id, 301);
+    assert.equal(yield* Queue.size(b.sent), 0);
+  }),
 );

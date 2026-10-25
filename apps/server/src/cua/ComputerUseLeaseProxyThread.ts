@@ -9,6 +9,7 @@ import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -42,7 +43,9 @@ const WAITING = "Computer use is not available for this turn. A new approval or 
 interface Context {
   readonly controlId: string;
   readonly input: Queue.Queue<string, Cause.Done>;
-  readonly updates: Queue.Queue<ComputerUseLeaseUpdate, Cause.Done>;
+  readonly updates: Array<ComputerUseLeaseUpdate | undefined>;
+  receive?: (update: ComputerUseLeaseUpdate | undefined) => void;
+  ready: boolean;
   readonly closed: Deferred.Deferred<void>;
   readonly replayIds: Set<string>;
   readonly wake: Queue.Queue<void>;
@@ -66,6 +69,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     string,
     { context: Context; id: JsonRpcId; method: string; cancelled: boolean }
   >();
+  const clientRequests = new Map<string, { context: Context; id: JsonRpcId }>();
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
   const setup = makeLeaseProxyHandshake({
     startDriver: options.startHandshakeDriver ?? options.startDriver,
@@ -84,6 +88,27 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const output = (context: Context, line: string) =>
     Effect.suspend(() => {
       const message = parse(line);
+      const cancelled = cancelledRequestKey(line);
+      if (cancelled !== undefined) {
+        for (const [key, owner] of clientRequests) {
+          if (owner.context !== context || JSON.stringify(owner.id) !== cancelled) continue;
+          clientRequests.delete(key);
+          const params = message?.params;
+          return options.output(
+            JSON.stringify({
+              ...message,
+              params: { ...params, requestId: key },
+            }),
+          );
+        }
+        return Effect.void;
+      }
+      if (message?.method !== undefined && message.id !== undefined && message.id !== null) {
+        if (context.ended !== undefined || terminal !== undefined) return Effect.void;
+        const id = `${OWN_ID}client:${sequence++}`;
+        clientRequests.set(id, { context, id: message.id });
+        return options.output(JSON.stringify({ ...message, id }));
+      }
       if (message?.method === undefined && message?.id !== undefined && message.id !== null) {
         const own = typeof message.id === "string" ? ownAnswers.get(message.id) : undefined;
         if (own !== undefined) {
@@ -101,26 +126,30 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       return options.output(line);
     });
 
-  const stop = Effect.fn("ComputerUseLeaseProxyThread.stopControl")(function* (
-    context: Context,
-    reason: ComputerUseControlEnd | "lost",
-  ) {
+  const receive = (context: Context, update: ComputerUseLeaseUpdate | undefined) => {
+    if (context.receive === undefined) context.updates.push(update);
+    else context.receive(update);
+  };
+  // Receipt and routing must change in one synchronous step, before any Effect can yield.
+  const stop = (context: Context, reason: ComputerUseControlEnd | "lost") => {
     if (context.ended !== undefined) return;
     context.ended = reason;
+    context.ready = false;
     if (current === context) current = undefined;
     waiting = reason;
-    if (reason === "lost") yield* Queue.end(context.updates);
-    else yield* Queue.offer(context.updates, { state: "ended", reason });
-  });
-
-  const finish = Effect.fn("ComputerUseLeaseProxyThread.finish")(function* (
-    reason: ComputerUseControlEnd | "lost",
-  ) {
+    for (const [key, owner] of clientRequests)
+      if (owner.context === context) clientRequests.delete(key);
+    receive(context, reason === "lost" ? undefined : { state: "ended", reason });
+  };
+  const finishNow = (reason: ComputerUseControlEnd | "lost") => {
     if (terminal !== undefined) return;
     terminal = reason;
-    yield* Deferred.succeed(ended, reason);
-    if (current !== undefined) yield* stop(current, reason);
-  });
+    if (current !== undefined) stop(current, reason);
+    Deferred.doneUnsafe(ended, Exit.succeed(reason));
+  };
+  const finish = Effect.fn("ComputerUseLeaseProxyThread.finish")(
+    (reason: ComputerUseControlEnd | "lost") => Effect.sync(() => finishNow(reason)),
+  );
 
   const select = Effect.fn("ComputerUseLeaseProxyThread.selectControl")(function* (
     update: Extract<ComputerUseLeaseThreadUpdate, { state: "active" | "paused" | "idle" }>,
@@ -130,10 +159,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     if (current?.controlId === update.controlId) {
       current.deadline = Math.min(current.deadline, DateTime.toEpochMillis(expiresAt.value));
       yield* Queue.offer(current.wake, undefined);
-      yield* Queue.offer(current.updates, update);
       return;
     }
-    if (current !== undefined) yield* stop(current, "replaced");
     // A stopped/expired id cannot be revived by a delayed snapshot from the subscription.
     if (seen.has(update.controlId)) return;
     seen.add(update.controlId);
@@ -141,7 +168,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     const context: Context = {
       controlId: update.controlId,
       input: yield* Queue.unbounded<string, Cause.Done>(),
-      updates: yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>(),
+      updates: [],
+      ready: false,
       closed: yield* Deferred.make<void>(),
       replayIds: new Set(),
       wake: yield* Queue.sliding<void>(1),
@@ -149,16 +177,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     };
     const connectionId = `${options.connectionId}:control:${sequence++}`;
     const reports = options.reports(context.controlId);
-    // Seed before accepting live messages; the replay belongs only to this instance.
-    for (const line of handshake) {
-      const message = parse(line);
-      if (message?.method === "initialize") {
-        const id = `${OWN_ID}initialize:${sequence++}`;
-        context.replayIds.add(JSON.stringify(id));
-        yield* Queue.offer(context.input, JSON.stringify({ ...message, id }));
-      } else yield* Queue.offer(context.input, line);
-    }
-    yield* Queue.offer(context.updates, update);
+    receive(context, update);
     current = context;
     predecessor = context;
     // The supervisor stops routing at local expiry too; the legacy proxy keeps its own guard.
@@ -167,7 +186,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         wake: context.wake,
         controlDeadline: () => context.deadline,
         foregroundDeadline: () => Infinity,
-        expireControl: stop(context, "expired"),
+        expireControl: Effect.sync(() => stop(context, "expired")),
         expireForeground: () => Effect.void,
       }),
       Deferred.await(context.closed),
@@ -177,6 +196,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       if (previous !== undefined) yield* Deferred.await(previous.closed);
       if (context.ended !== undefined || terminal !== undefined) return;
       let rechecked = false;
+      let replayed = false;
       const reason = yield* runLeaseProxy({
         ...options,
         ...reports,
@@ -185,9 +205,30 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         expiresAt: expiresAt.value,
         input: Stream.fromQueue(context.input),
         output: (line) => output(context, line),
-        leaseUpdates: Stream.fromQueue(context.updates),
+        leaseUpdates: Stream.never,
+        onLeaseUpdateReceiver: (take) => {
+          context.receive = take;
+          for (const update of context.updates) take(update);
+          context.updates.length = 0;
+        },
+        onCancelledRequestSettled: (key) => {
+          if (owners.get(key)?.context === context) owners.delete(key);
+        },
         onLeaseUpdateApplied: Effect.fn("ComputerUseLeaseProxyThread.appliedUpdate")(
           function* (applied) {
+            if (!replayed && context.ended === undefined && terminal === undefined) {
+              // Include setup received during native closure; replay precedes live instance input.
+              for (const line of handshake) {
+                const message = parse(line);
+                if (message?.method === "initialize") {
+                  const id = `${OWN_ID}initialize:${sequence++}`;
+                  context.replayIds.add(JSON.stringify(id));
+                  Queue.offerUnsafe(context.input, JSON.stringify({ ...message, id }));
+                } else Queue.offerUnsafe(context.input, line);
+              }
+              replayed = true;
+              context.ready = true;
+            }
             if (!rechecked && applied.state === "active") {
               rechecked = true;
               yield* setup
@@ -214,6 +255,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             current = undefined;
             waiting = context.ended ?? terminal ?? "lost";
           }
+          for (const [key, owner] of clientRequests)
+            if (owner.context === context) clientRequests.delete(key);
           for (const [key, owner] of owners) {
             if (owner.context !== context) continue;
             owners.delete(key);
@@ -227,20 +270,30 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     );
   });
 
-  const take = Effect.fn("ComputerUseLeaseProxyThread.takeUpdate")(function* (
-    update: ComputerUseLeaseThreadUpdate,
-  ) {
-    if (terminal === undefined) {
-      if (update.state === "ended") yield* finish(update.reason);
-      else if (update.state === "control-ended") {
-        seen.add(update.controlId);
-        if (current?.controlId === update.controlId) yield* stop(current, update.reason);
-      } else if (update.state === "waiting") {
-        if (current !== undefined) yield* stop(current, "replaced");
-      } else yield* select(update);
-    }
-    yield* options.onThreadUpdate?.(update) ?? Effect.void;
-  });
+  const take = Effect.fn("ComputerUseLeaseProxyThread.takeUpdate")(
+    (update: ComputerUseLeaseThreadUpdate) =>
+      Effect.suspend(() => {
+        if (terminal === undefined) {
+          if (update.state === "ended") finishNow(update.reason);
+          else if (update.state === "control-ended") {
+            seen.add(update.controlId);
+            if (current?.controlId === update.controlId) stop(current, update.reason);
+          } else if (update.state === "waiting") {
+            if (current !== undefined) stop(current, "replaced");
+          } else if (current?.controlId === update.controlId) receive(current, update);
+          else if (current !== undefined) stop(current, "replaced");
+        }
+        return Effect.gen(function* () {
+          if (
+            terminal === undefined &&
+            (update.state === "active" || update.state === "paused" || update.state === "idle")
+          )
+            yield* select(update);
+          yield* options.onThreadUpdate?.(update) ?? Effect.void;
+        });
+      }),
+  );
+
   yield* options.leaseUpdates.pipe(
     Stream.runForEach(take),
     Effect.catchCause(() => Effect.void),
@@ -270,6 +323,14 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       return;
     }
     const id = message?.id;
+    if (id !== undefined && id !== null && message?.method === undefined) {
+      const key = String(id);
+      const owner = clientRequests.get(key);
+      clientRequests.delete(key);
+      if (owner !== undefined && owner.context.ended === undefined && current === owner.context)
+        yield* Queue.offer(owner.context.input, JSON.stringify({ ...message, id: owner.id }));
+      return;
+    }
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
     if (
       isRequest &&
@@ -292,8 +353,12 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     const context = current;
-    if (context === undefined || terminal !== undefined) {
+    if (context === undefined || !context.ready || terminal !== undefined) {
       if (!isRequest) return;
+      if (terminal === undefined) {
+        const cached = setup.answerCached(id, message.method);
+        if (cached !== undefined) return yield* cached;
+      }
       const refuse = answerStopped(id, message.method);
       return yield* setup.covers(message.method)
         ? setup.answer(id, message.method, line, refuse).pipe(Effect.forkIn(scope))

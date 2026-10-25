@@ -39,6 +39,7 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
   /** Done when the control ends; a handshake request is then refused with endAnswer. */
   readonly ended: Deferred.Deferred<End>;
   readonly endAnswer: (id: JsonRpcId, method: string, reason: End) => string;
+  readonly onCancelledRequestSettled?: (key: string) => void;
 }) => {
   const whenEnded = (id: JsonRpcId, method: string) =>
     Deferred.await(options.ended).pipe(
@@ -171,10 +172,21 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
       ).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            if (cancels.get(key) === cancelled) cancels.delete(key);
+            if (cancels.get(key) !== cancelled) return;
+            cancels.delete(key);
+            if (Deferred.isDoneUnsafe(cancelled)) options.onCancelledRequestSettled?.(key);
           }),
         ),
         Effect.withSpan("ComputerUseLeaseProxy.answerHandshake"),
+      );
+    },
+    /** Immediate setup answers avoid accumulating work while a predecessor is closing. */
+    answerCached: (id: JsonRpcId, method: string) => {
+      const result = method === "ping" ? {} : answers.get(method);
+      if (result === undefined) return undefined;
+      if (method === "tools/list") served = true;
+      return Effect.suspend(() =>
+        Deferred.isDoneUnsafe(options.ended) ? whenEnded(id, method) : reply(id, result),
       );
     },
     pending: (key: string) => cancels.has(key),

@@ -150,8 +150,9 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
       Effect.map(
         (line) =>
           JSON.parse(line) as {
-            id: number;
+            id: number | string;
             method?: string;
+            params?: Record<string, unknown>;
             result?: { [key: string]: unknown; structuredContent?: Record<string, unknown> };
             error?: unknown;
           },
