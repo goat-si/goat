@@ -11,7 +11,8 @@ it("a capture whose deadline passed while it waited never runs, even before its 
     async () => {
       ran = true;
     },
-    performance.now() - 1,
+    // Every deadline is a performance timestamp; 0 is the process's start, long past.
+    0,
   );
   await expect(late).rejects.toMatchObject({ tag: "PreviewAutomationTimeoutError" });
   await tab.captureLock;
