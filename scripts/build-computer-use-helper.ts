@@ -326,6 +326,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      path.join(sourceDir, "DriverEnvironment.swift"),
       path.join(sourceDir, "McpRelay.swift"),
       path.join(sourceDir, "McpFraming.swift"),
       path.join(sourceDir, "McpJsonSyntax.swift"),
@@ -391,7 +392,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
     "-o",
     path.join(contents, "Resources", "AppIcon.icns"),
   ]);
-  // Cua Driver's MIT notices travel with every copy of the driver (#667).
+  // Cua Driver's MIT and MPL-2.0 notices travel with every copy of the driver (#1605).
   const notices = path.join(input.repoRoot, "apps/desktop/src/cua/notices");
   for (const name of yield* fs.readDirectory(notices))
     yield* fs.copyFile(path.join(notices, name), path.join(noticesDir, name));

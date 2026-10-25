@@ -3,6 +3,7 @@
  * A Linux helper behind its real channel, driven by a scripted Cua Driver that answers like the
  * pinned 0.37.0 driver does for the GOAT fixture window (fixtures/goat-cu-fixture.py).
  */
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import * as NodeCrypto from "node:crypto";
 import * as NodeStream from "node:stream";
 import * as NodeZlib from "node:zlib";
@@ -237,7 +238,7 @@ export function fixtureDriver() {
   };
   const client: DriverClient = {
     pid: 4242,
-    version: "0.37.0",
+    version: CUA_DRIVER_VERSION,
     exited: exit.promise,
     close: async () => undefined,
     call,
