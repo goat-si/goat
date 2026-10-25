@@ -517,7 +517,8 @@ const make = Effect.gen(function* () {
         input,
         input.action,
         { type: "client", label },
-        endsApproved || (isComputerUseGrant && record.state === "cancelled"),
+        // A resolved grant's payload is already settled: it may record how it ended.
+        isComputerUseGrant && !isHandoffPending(record.state),
       );
       if (
         foregroundEpoch !== undefined &&

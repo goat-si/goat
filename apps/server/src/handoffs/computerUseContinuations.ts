@@ -98,19 +98,37 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
         }
       });
 
-      /** Takes the answer for the call when `settle` says its turn can still use it. */
+      /**
+       * Takes the answer for the call when `settle` says its turn can still use it. The record that
+       * keeps the reactor quiet is written only once every wake already sent is withdrawn, and
+       * neither step fails the call: at worst the thread gets a second wake, never none.
+       */
       const finish = Effect.fn("Handoffs.finishComputerUseAnswer")(function* (
         input: HandoffReadInput,
         handoff: Handoff,
         settle: Effect.Effect<boolean, E>,
       ) {
-        const consumed = yield* settle;
-        if (consumed) {
-          yield* deps.markConsumed(input.handoffId);
-          yield* withdraw(input);
-        }
-        return { handoff, consumed } satisfies ComputerUseAnswer;
-      });
+        if (!(yield* settle)) return { handoff, consumed: false } satisfies ComputerUseAnswer;
+        const withdrawn = yield* withdraw(input).pipe(
+          Effect.as(true),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("an answered computer use wake could not be withdrawn", {
+              handoffId: input.handoffId,
+              cause,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+        if (withdrawn)
+          yield* deps.markConsumed(input.handoffId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("an answered computer use request was not recorded", {
+                handoffId: input.handoffId,
+                cause,
+              }),
+            ),
+          );
+        return { handoff, consumed: true } satisfies ComputerUseAnswer;
+      }, Effect.uninterruptible);
 
       /**
        * Waits until a person answers the request, it expires, or `until`. `settle` judges, under

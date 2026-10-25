@@ -59,6 +59,8 @@ interface World {
   readonly outage: {
     failing: number;
     slowMs: number;
+    /** Withdrawing a queued wake run fails. */
+    failWithdraw: boolean;
     arrived: Deferred.Deferred<void>;
     readonly sent: Array<string>;
   };
@@ -112,6 +114,7 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       const outage: World["outage"] = {
         failing: 0,
         slowMs: 0,
+        failWithdraw: false,
         arrived: yield* Deferred.make<void>(),
         sent: [],
       };
@@ -129,6 +132,13 @@ const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       };
       const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
         dispatch: (command) => {
+          if (command.type === "queued-run.cancel" && outage.failWithdraw)
+            return Effect.fail(
+              new Orchestrator.OrchestratorCommandRejectedError({
+                commandId: command.commandId,
+                commandType: command.type,
+              }),
+            );
           if (command.type !== "message.dispatch" || !command.commandId.startsWith("server:"))
             return orchestrator.dispatch(command);
           outage.sent.push(command.commandId);
@@ -338,6 +348,67 @@ it.effect("consumes an earlier approval and cancels its wake queued behind the a
         );
         expect(runs.map((run) => run.status)).toEqual(["cancelled"]);
       }
+    }),
+  ),
+);
+
+it.effect(
+  "an answer whose queued wake cannot be withdrawn still reaches the call and keeps that wake",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: summary.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
+        const sent = yield* wakes(world);
+        expect(sent).toHaveLength(1);
+        world.outage.failWithdraw = true;
+        const answer = yield* world.handoffs.awaitComputerUseAnswer(
+          {
+            threadId,
+            handoffId: summary.handoffId,
+            until: DateTime.add(yield* DateTime.now, { minutes: 1 }),
+          },
+          () => Effect.succeed(true),
+        );
+        expect(answer).toMatchObject({ handoff: { state: "completed" }, consumed: true });
+        // Nothing recorded the answer as taken, so the thread keeps the wake it was sent.
+        world.outage.failWithdraw = false;
+        yield* world.reactor.reconcile;
+        const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs.filter(
+          (run) => run.userMessageId === sent[0]!.id,
+        );
+        expect(runs.map((run) => run.status)).toEqual(["queued"]);
+        expect(yield* wakes(world)).toHaveLength(1);
+      }),
+    ),
+);
+
+it.effect("a repeated decline keeps a decline the waiting call already returned quiet", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const now = yield* DateTime.now;
+      const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+      const waiting = yield* waitForComputerUse(
+        world,
+        summary.handoffId,
+        DateTime.add(now, { minutes: 1 }),
+      );
+      const decline = world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "declined" },
+        person,
+      );
+      yield* decline;
+      expect(yield* Fiber.join(waiting)).toMatchObject({ consumed: true });
+      // A client retrying the same answer must not clear the record of it.
+      yield* decline;
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toHaveLength(0);
     }),
   ),
 );
