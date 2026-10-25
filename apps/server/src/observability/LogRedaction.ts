@@ -95,8 +95,7 @@ export const redactCause = (cause: Cause.Cause<unknown>): Cause.Cause<unknown> =
 
 /**
  * One marker per kind among the reasons past the first few, so the redacted cause is still a
- * failure, a defect or interrupt-only as the original was. Kinds are read through descriptors;
- * reasons past MAX_VISITED_REASONS are counted, not read, and reported as defects.
+ * failure, a defect or interrupt-only as the original was. Kinds are read through descriptors.
  */
 function omittedReasons(
   listed: unknown,
@@ -104,21 +103,34 @@ function omittedReasons(
   total: number,
 ): Array<Cause.Reason<unknown>> {
   const visited = Math.min(total, MAX_VISITED_REASONS);
-  let fails = 0;
-  let dies = 0;
-  let interrupts = 0;
-  for (let index = from; index < visited; index++) {
+  const omitted = { Fail: 0, Die: 0, Interrupt: 0 };
+  const seen = new Set<keyof typeof omitted>();
+  for (let index = 0; index < visited; index++) {
     const tag = dataProperty(dataProperty(listed, index), "_tag");
-    if (tag === "Fail") fails += 1;
-    else if (tag === "Interrupt") interrupts += 1;
-    else dies += 1;
+    // redactReason shows a reason of unknown kind as a defect.
+    const kind = tag === "Fail" || tag === "Interrupt" ? tag : "Die";
+    seen.add(kind);
+    if (index >= from) omitted[kind] += 1;
   }
   const markers: Array<Cause.Reason<unknown>> = [];
-  if (fails > 0) markers.push(Cause.makeFailReason(new Error(`${fails} more failures omitted`)));
-  if (dies > 0) markers.push(Cause.makeDieReason(new Error(`${dies} more defects omitted`)));
-  if (total > visited)
-    markers.push(Cause.makeDieReason(new Error(`${total - visited} more reasons not inspected`)));
-  if (interrupts > 0) markers.push(Cause.makeInterruptReason());
+  if (omitted.Fail > 0)
+    markers.push(Cause.makeFailReason(new Error(`${omitted.Fail} more failures omitted`)));
+  if (omitted.Die > 0)
+    markers.push(Cause.makeDieReason(new Error(`${omitted.Die} more defects omitted`)));
+  if (total > visited) {
+    // A list's length costs nothing to forge, so the tail past the bound is never walked. It is
+    // reported as the gravest kind already read, which keeps the classification of every cause
+    // whose tail holds no kind its first MAX_VISITED_REASONS lacked.
+    const unread = new Error(`${total - visited} more reasons not inspected`);
+    markers.push(
+      seen.has("Die")
+        ? Cause.makeDieReason(unread)
+        : seen.has("Fail")
+          ? Cause.makeFailReason(unread)
+          : Cause.makeInterruptReason(),
+    );
+  }
+  if (omitted.Interrupt > 0) markers.push(Cause.makeInterruptReason());
   return markers;
 }
 

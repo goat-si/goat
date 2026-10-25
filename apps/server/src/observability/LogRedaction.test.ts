@@ -554,14 +554,19 @@ describe("redactCause", () => {
     }),
   );
 
-  // redactCause keeps its first 16 reasons one by one and summarizes the rest.
-  it.each([
-    { name: "16 interrupts", extra: [] },
-    { name: "17 interrupts", extra: [Cause.makeInterruptReason(16)] },
-  ])("a cause of $name stays interrupt-only", ({ extra }) => {
-    const interrupts = Array.from({ length: 16 }, (_, index) => Cause.makeInterruptReason(index));
-    const redacted = redactCause(Cause.fromReasons([...interrupts, ...extra]));
-    expect(Cause.hasInterruptsOnly(redacted)).toBe(true);
+  // redactCause keeps its first 16 reasons one by one, summarizes the rest, and reads the kinds of
+  // no more than 100,000.
+  it.each([16, 17, 100_000, 100_001])("a cause of %i interrupts stays interrupt-only", (count) => {
+    const interrupts = Array.from({ length: count }, (_, index) =>
+      Cause.makeInterruptReason(index),
+    );
+    expect(Cause.hasInterruptsOnly(redactCause(Cause.fromReasons(interrupts)))).toBe(true);
+  });
+
+  it.each([100_000, 100_001])("a cause of %i failures gains no defect", (count) => {
+    const failures = Array.from({ length: count }, () => Cause.makeFailReason("failed"));
+    const redacted = redactCause(Cause.fromReasons(failures));
+    expect([Cause.hasFails(redacted), Cause.hasDies(redacted)]).toEqual([true, false]);
   });
 
   it("keeps the kind of each omitted reason past the first 16", () => {
