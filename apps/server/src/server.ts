@@ -124,6 +124,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
 import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as LocalGoatServers from "./storage/localGoatServers.ts";
 import * as WorktreeInventoryService from "./mcp/WorktreeInventoryService.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -750,7 +751,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
   StorageReclaim.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(WorktreeInventoryService.layer, ProcessRunner.layer, HostResources.layer),
+      Layer.mergeAll(
+        WorktreeInventoryService.layer,
+        LocalGoatServers.layer.pipe(Layer.provide(ProcessRunner.layer)),
+        ProcessRunner.layer,
+        HostResources.layer,
+      ),
     ),
   ),
   HostPressureMonitor.layer,

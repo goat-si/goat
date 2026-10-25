@@ -531,4 +531,81 @@ describe("WorktreeInventoryService", () => {
       expect(yield* fs.exists(path)).toBe(true);
     }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
+
+  it.live(
+    "storage cleanup removes a clean, pushed checkout only archived threads used, and prunes nothing else",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, run, repo, addWorktree, commit, setThreads } = yield* fixture;
+        const path = yield* addWorktree("abandoned");
+        const head = yield* commit(path);
+        yield* run(path, ["push", "origin", "abandoned"]);
+        // Deleted by hand: git still lists it, and this removal must leave that record alone.
+        const gone = yield* addWorktree("gone");
+        yield* fs.remove(gone, { recursive: true });
+        setThreads([{ id: "t1", worktreePath: path, archived: true }]);
+
+        const result = yield* service.removeAbandoned({
+          path,
+          head,
+          branch: "abandoned",
+          verify: Effect.succeed(null),
+        });
+        expect(result).toEqual({ removed: true });
+        expect(yield* fs.exists(path)).toBe(false);
+        expect((yield* run(repo, ["worktree", "list", "--porcelain"])).stdout).toContain(gone);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
+  it.live(
+    "storage cleanup keeps checkouts with work, a live thread, a changed head, or a failed check",
+    () =>
+      Effect.gen(function* () {
+        const { service, fs, run, addWorktree, commit, setThreads } = yield* fixture;
+        const dirty = yield* addWorktree("dirty");
+        yield* fs.writeFileString(dirty + "/scratch.txt", "draft\n");
+        // remove() accepts commits another local branch holds; the storage cleanup does not.
+        const local = yield* addWorktree("local-only");
+        const localHead = yield* commit(local);
+        yield* run(local, ["branch", "backup"]);
+        const live = yield* addWorktree("live");
+        yield* run(live, ["push", "origin", "live"]);
+        const pushed = yield* addWorktree("pushed");
+        yield* run(pushed, ["push", "origin", "pushed"]);
+        const pushedHead = (yield* run(pushed, ["rev-parse", "HEAD"])).stdout.trim();
+        setThreads([{ id: "t1", worktreePath: live, status: "completed" }]);
+        const headOf = (path: string) =>
+          run(path, ["rev-parse", "HEAD"]).pipe(Effect.map((result) => result.stdout.trim()));
+
+        const keep = (
+          path: string,
+          branch: string,
+          head: string,
+          verify = Effect.succeed<string | null>(null),
+        ) => service.removeAbandoned({ path, head, branch, verify });
+        expect(yield* keep(dirty, "dirty", yield* headOf(dirty))).toEqual({
+          removed: false,
+          reason: "it has 1 file with uncommitted changes",
+        });
+        expect(yield* keep(local, "local-only", localHead)).toEqual({
+          removed: false,
+          reason: "it has 1 commit on no remote",
+        });
+        expect(yield* keep(live, "live", yield* headOf(live))).toEqual({
+          removed: false,
+          reason: "thread t1 (Thread t1) uses it",
+        });
+        expect(yield* keep(pushed, "pushed", "0".repeat(40))).toEqual({
+          removed: false,
+          reason: "its branch or commit changed since it was reviewed",
+        });
+        expect(
+          yield* keep(pushed, "pushed", pushedHead, Effect.succeed("a process is running in it")),
+        ).toEqual({
+          removed: false,
+          reason: "a process is running in it",
+        });
+        for (const path of [dirty, local, live, pushed]) expect(yield* fs.exists(path)).toBe(true);
+      }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
 });

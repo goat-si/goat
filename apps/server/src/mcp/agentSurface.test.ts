@@ -57,8 +57,8 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes the upload and report receipt reconcile reads, origin.resolve_binding and the
-  // OpenCodex sync.
-  expect(entries).toHaveLength(207);
+  // OpenCodex sync, and the storage usage and cleanup tools.
+  expect(entries).toHaveLength(209);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -426,6 +426,7 @@ const ACCESS_EXCEPTIONS: Readonly<
   "host.status": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "cloud_agent.holders": { reason: "sshFanOut", readOnlyClient: "ssh_read_only" },
   "worktree.cleanup": { reason: "dryRunDefault", readOnlyClient: "reached" },
+  "storage.clean": { reason: "dryRunDefault", readOnlyClient: "reached" },
   "permission_profile.sync": { reason: "clientOnly", thread: "denied", fullClient: "denied" },
   "channel.task_move": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },

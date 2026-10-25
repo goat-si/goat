@@ -2,9 +2,11 @@
 import * as NodeSqlite from "node:sqlite";
 
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { parsePsRows, type ProcessRow } from "../diagnostics/StrayProcesses.ts";
@@ -232,4 +234,27 @@ export const processWorkingDirectories = Effect.fn("localGoatServers.processWork
     }
     return result;
   },
+);
+
+/** The machine-wide reads the storage cleanup depends on, replaceable in tests. */
+export class LocalGoatServers extends Context.Service<
+  LocalGoatServers,
+  {
+    readonly otherServers: (ownDatabase: string) => Effect.Effect<OtherServerBindings>;
+    readonly workingDirectories: Effect.Effect<ReadonlyArray<string> | null>;
+  }
+>()("goat/storage/localGoatServers") {}
+
+export const layer = Layer.effect(
+  LocalGoatServers,
+  Effect.gen(function* () {
+    const context = yield* Effect.context<
+      FileSystem.FileSystem | Path.Path | ProcessRunner.ProcessRunner
+    >();
+    return LocalGoatServers.of({
+      otherServers: (ownDatabase) =>
+        readOtherServerBindings({ ownDatabase }).pipe(Effect.provideContext(context)),
+      workingDirectories: processWorkingDirectories().pipe(Effect.provideContext(context)),
+    });
+  }),
 );

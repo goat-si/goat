@@ -34,7 +34,7 @@ import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
-import { processWorkingDirectories } from "./localGoatServers.ts";
+import { LocalGoatServers } from "./localGoatServers.ts";
 import {
   type FileIdentity,
   lstatOf,
@@ -92,6 +92,7 @@ const make = Effect.gen(function* () {
     | ProcessRunner.ProcessRunner
     | ProviderSessionManager.ProviderSessionManagerV2
     | GitVcsDriver.GitVcsDriver
+    | LocalGoatServers
   >();
   const config = yield* ServerConfig.ServerConfig;
   const worktrees = yield* WorktreeInventory.WorktreeInventoryService;
@@ -177,7 +178,7 @@ const make = Effect.gen(function* () {
       if (otherReason !== null) return otherReason;
       const realFolder = (yield* real(folder)) ?? folder;
       const working = processInside(
-        yield* processWorkingDirectories(),
+        yield* (yield* LocalGoatServers).workingDirectories,
         [folder, realFolder],
         rules,
       );

@@ -23,11 +23,7 @@ import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
-import {
-  type OtherServerBindings,
-  processWorkingDirectories,
-  readOtherServerBindings,
-} from "./localGoatServers.ts";
+import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import { measureFolder } from "./measureFolder.ts";
 import {
   identityToken,
@@ -130,7 +126,7 @@ export const resolveOtherServerPaths = Effect.fn("storageScan.resolveOtherServer
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const bindings = yield* readOtherServerBindings({ ownDatabase });
+  const bindings = yield* (yield* LocalGoatServers).otherServers(ownDatabase);
   const both = (values: ReadonlyArray<string>) =>
     Effect.forEach(
       values,
@@ -228,7 +224,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   });
 
   const other = yield* resolveOtherServerPaths(config.dbPath);
-  const cwds = yield* processWorkingDirectories();
+  const cwds = yield* (yield* LocalGoatServers).workingDirectories;
   if (cwds === null)
     notes.push("Running processes could not be listed, so no checkout is offered for removal.");
   for (const reason of other.bindings.unverified)

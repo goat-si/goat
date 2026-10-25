@@ -74,7 +74,7 @@ export class StorageConsent extends Context.Service<
   }
 >()("goat/storage/StorageConsent") {}
 
-const make = Effect.gen(function* () {
+export const makeStorageConsent = Effect.gen(function* () {
   const approvals = yield* ApprovalHandoffs.ApprovalHandoffs;
   const inbox = yield* DecisionInbox.DecisionInbox;
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -215,4 +215,6 @@ const make = Effect.gen(function* () {
   return StorageConsent.of({ ask, admit });
 });
 
-export const layer = Layer.effect(StorageConsent, make).pipe(Layer.provide(ApprovalHandoffs.layer));
+export const layer = Layer.effect(StorageConsent, makeStorageConsent).pipe(
+  Layer.provide(ApprovalHandoffs.layer),
+);
