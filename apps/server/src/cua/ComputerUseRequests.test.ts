@@ -221,6 +221,35 @@ it.effect("admits an attested executable from a partial listing but refuses a wi
   ),
 );
 
+// #1598: a credential store is refused even when the host cannot list its apps.
+it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<string>>()])(
+  "refuses a password manager without asking a person, whether or not the listing is available (%s)",
+  (listing) =>
+    withHarness(({ orchestrator }) =>
+      withRequests(
+        orchestrator,
+        supported,
+        ({ request }) =>
+          Effect.gen(function* () {
+            for (const app of ["NordPass", "me.proton.pass.electron", "com.1password.safari"]) {
+              const result = yield* request({ apps: ["com.example.Editor", app] });
+              assert.equal(result.kind, "refused");
+              if (result.kind !== "refused") return assert.fail(`${app} must not ask a person`);
+              assert.equal(result.reason, "unknown_app");
+              assert.deepEqual(result.unknownApps, [app]);
+              assert.include(result.message, "password");
+            }
+            const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+            assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+          }),
+        undefined,
+        undefined,
+        undefined,
+        listing,
+      ),
+    ),
+);
+
 it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<string>>()])(
   "a listed app matches case-insensitively and an unavailable listing keeps approval behavior (%s)",
   (listing) =>

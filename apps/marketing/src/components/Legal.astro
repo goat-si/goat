@@ -1,0 +1,74 @@
+---
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { LINKS } from "../lib/links";
+
+type Focus = "legal" | "privacy" | "terms" | "security";
+
+interface Props {
+  locale: Locale;
+  /** Older links reach this content through /privacy-policy/ and similar paths. */
+  focus?: Focus;
+}
+
+const { locale, focus = "legal" } = Astro.props;
+const t = messages(locale);
+const l = t.legal;
+const titles: Record<Focus, string> = {
+  legal: l.title,
+  privacy: t.meta.privacyTitle,
+  terms: t.meta.termsTitle,
+  security: t.meta.securityTitle,
+};
+const paths: Record<Focus, string> = {
+  legal: "/legal/",
+  privacy: "/privacy-policy/",
+  terms: "/terms-of-service/",
+  security: "/security-policy/",
+};
+---
+
+<Base
+  locale={locale}
+  path={paths[focus]}
+  canonicalPath="/legal/"
+  title={`${titles[focus]} | GOAT`}
+  description={t.meta.legalDescription}
+>
+  <article class="page-head container prose" aria-labelledby="legal-title">
+    <h1 id="legal-title">{titles[focus]}</h1>
+    <p class="lede">{l.lede}</p>
+
+    <section aria-labelledby="not-published">
+      <h2 id="not-published">{l.notPublishedTitle}</h2>
+      <p>{l.notPublished}</p>
+    </section>
+
+    <section aria-labelledby="this-site">
+      <h2 id="this-site">{l.siteTitle}</h2>
+      {l.site.map((paragraph) => <p>{paragraph}</p>)}
+      <p><a class="text-link" href={LINKS.githubPrivacy}>{l.githubPrivacy}</a></p>
+    </section>
+
+    <section aria-labelledby="usage-data">
+      <h2 id="usage-data">{l.usageTitle}</h2>
+      {l.usage.map((paragraph) => <p>{paragraph}</p>)}
+      <p><a class="text-link" href={l.usageGuideHref}>{l.usageGuide}</a></p>
+    </section>
+
+    <section aria-labelledby="security">
+      <h2 id="security">{l.securityTitle}</h2>
+      <p>{l.security}</p>
+      <p><a class="text-link" href={LINKS.inheritedSecurityPolicy}>{l.securityFile}</a></p>
+    </section>
+
+    <section aria-labelledby="license">
+      <h2 id="license">{l.licenseTitle}</h2>
+      <p>{l.license}</p>
+      <p class="inline-links">
+        <a class="text-link" href={LINKS.license}>{l.licenseLink}</a>
+        <a class="text-link" href={l.noticesHref}>{l.noticesLink}</a>
+      </p>
+    </section>
+  </article>
+</Base>

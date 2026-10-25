@@ -16,6 +16,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -102,6 +103,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message: cuaAgentBlockMessage(block),
     } satisfies ComputerUseRequestResult;
   if (wanted !== undefined) {
+    // Credential stores stay out whether or not the host can list its apps (#1598).
+    const excluded = wanted.filter(isExcludedCuaApplication);
+    if (excluded.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        unknownApps: excluded,
+        message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
+      } satisfies ComputerUseRequestResult;
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {
       const known = new Set(listed.value.map((app) => app.toLowerCase()));

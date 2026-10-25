@@ -7182,42 +7182,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 managedCuaByThread.delete(threadId);
               }
             }
-            // Codex ignores resume overrides on a held thread: a new driver (#1564) needs a cold
-            // reload, only while Codex reports this thread and its subagent threads quiet, and none
-            // has an active goal that can start a continuation turn on its own.
+            // Codex ignores resume overrides on a held thread: any attachment change, a new driver
+            // (#1564) or new GOAT MCP authority (#1569), needs a cold reload, only while Codex
+            // reports this thread and its subagent threads quiet with no active goal.
             const ownSubagents = Array.from((yield* Ref.get(subagentThreads)).entries()).filter(
               ([, { parentContext }]) =>
                 approvalOwnerCodexTurn(parentContext).owner.providerThread.id ===
                 turnInput.providerThread.id,
             );
             const conversation = [threadId, ...ownSubagents.map(([nativeId]) => nativeId)];
-            const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
-              (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
+            const reload = (params: Record<string, unknown>) =>
+              client.request("thread/unsubscribe", { threadId }).pipe(
                 Effect.andThen(
-                  client.raw.request("thread/resume", { threadId, excludeTurns: true, ...params }),
+                  client.raw.request("thread/resume", {
+                    threadId,
+                    excludeTurns: true,
+                    ...params,
+                  }),
                 ),
               );
             const applied = credentialsByThread.get(threadId);
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            // Other authority waits for background terminals too; a new driver does not (#1569).
+            const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
-              (mcpSession ? cuaChanged : managedCuaByThread.has(threadId)) &&
-              (yield* threadStatuses.busy(client, conversation));
+              (mcpSession ? applied !== next : applied !== undefined) &&
+              (yield* threadStatuses.busy(client, conversation, !driverChanged));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
-            if (mcpSession && applied !== next && !(cuaChanged && busy)) {
-              // Other authority changes keep the same native conversation; stale credentials are
-              // already denied by the registry.
-              yield* reconfigure(cuaChanged, runtime.params);
+            if (mcpSession && applied !== next && !busy) {
+              yield* reload(runtime.params);
               credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
               rememberCuaDriver(threadId, runtime.cuaDriver);
             }
             const previousCuaDriver = managedCuaByThread.get(threadId);
-            if (
-              !mcpSession &&
-              applied !== undefined &&
-              !(previousCuaDriver !== undefined && busy)
-            ) {
-              yield* reconfigure(previousCuaDriver !== undefined, {
+            if (!mcpSession && applied !== undefined && !busy) {
+              yield* reload({
                 config: {
                   ...CODEX_THREAD_CONFIG,
                   mcp_servers: {
@@ -7536,23 +7536,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           hasPendingBackgroundWorkForThread: Effect.fn(
             "CodexAdapterV2.hasPendingBackgroundWorkForThread",
           )(function* (providerThread) {
-            const contexts = [
-              ...(yield* Ref.get(activeTurns)).values(),
+            // Owned through its root turn, which may leave both maps while its work runs (#1571).
+            const owned = (context: ActiveCodexTurnContext) =>
+              approvalOwnerCodexTurn(context).owner.providerThread.id === providerThread.id;
+            const active = yield* Ref.get(activeTurns);
+            for (const context of [
+              ...active.values(),
               ...(yield* Ref.get(settledTurns)).values(),
-            ];
-            const roots = contexts.filter(
-              (context) => context.providerThread.id === providerThread.id,
-            );
-            for (const context of contexts) {
-              if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
-                continue;
+            ]) {
+              if (!owned(context)) continue;
               if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+              if (context.subagent !== null && active.has(context.nativeTurnId)) return true;
+            }
+            for (const subagent of (yield* Ref.get(subagentThreads)).values())
               if (
-                context.subagent !== null &&
-                (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
+                (subagent.task.status === "running" || subagent.task.status === "pending") &&
+                owned(subagent.parentContext)
               )
                 return true;
-            }
             return false;
           }),
           ensureThread: (threadInput) =>

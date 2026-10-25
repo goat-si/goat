@@ -1,0 +1,43 @@
+---
+import { messages, otherLocale, type Locale } from "../i18n";
+import { LINKS } from "../lib/links";
+import { localePath } from "../lib/paths";
+import Mark from "./Mark.astro";
+
+interface Props {
+  locale: Locale;
+  path: string;
+}
+
+const { locale, path } = Astro.props;
+const t = messages(locale);
+const alternate = otherLocale(locale);
+const alternateMessages = messages(alternate);
+---
+
+<header class="site-header">
+  <div class="container header-inner">
+    <a class="brand" href={localePath(locale, "/")} aria-label={t.nav.home}>
+      <Mark size={28} />
+      <span class="brand-name">GOAT</span>
+    </a>
+    <nav aria-label={t.nav.label}>
+      <ul class="nav-list">
+        <li><a class="nav-link" href={localePath(locale, "/download/")}>{t.nav.download}</a></li>
+        <li class="nav-optional"><a class="nav-link" href={LINKS.guides}>{t.nav.guides}</a></li>
+        <li class="nav-optional"><a class="nav-link" href={LINKS.repository}>{t.nav.github}</a></li>
+        <li>
+          <a
+            class="nav-link nav-locale"
+            href={localePath(alternate, path)}
+            hreflang={alternateMessages.htmlLang}
+            lang={alternateMessages.htmlLang}
+            title={t.switchAria}
+          >
+            {t.switchLabel}
+          </a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+</header>

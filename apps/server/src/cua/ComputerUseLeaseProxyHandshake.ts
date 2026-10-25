@@ -28,7 +28,7 @@ const HANDSHAKE = new Set(["initialize", "tools/list", "ping"]);
 /** Well inside the time a client gives an MCP server to start (Codex 0.163.0 waits 30 s). */
 const ANSWER_WITHIN = "10 seconds";
 
-export const makeLeaseProxyHandshake = <E>(options: {
+export const makeLeaseProxyHandshake = <E, End>(options: {
   readonly startDriver: Effect.Effect<LeaseProxyDriver, E, Scope.Scope>;
   /** The provider's handshake lines so far, in order. */
   readonly handshake: ReadonlyArray<string>;
@@ -36,9 +36,19 @@ export const makeLeaseProxyHandshake = <E>(options: {
   readonly output: (line: string) => Effect.Effect<void>;
   /** The proxy's own requests to its current child, by id, answered as its lines are read. */
   readonly ownAnswers: Map<string, Deferred.Deferred<Envelope | undefined>>;
-  /** Waits for the control to end, then refuses the request as ended. */
-  readonly whenEnded: (id: JsonRpcId, method: string) => Effect.Effect<void>;
+  /** Done when the control ends; a handshake request is then refused with endAnswer. */
+  readonly ended: Deferred.Deferred<End>;
+  readonly endAnswer: (id: JsonRpcId, method: string, reason: End) => string;
 }) => {
+  const whenEnded = (id: JsonRpcId, method: string) =>
+    Deferred.await(options.ended).pipe(
+      Effect.flatMap((reason) => options.output(options.endAnswer(id, method, reason))),
+    );
+  /**
+   * Tool lists a live child gave (a resumed child's answer or a recheck). A borrowed list that
+   * began before one of these is older and is not kept; borrowed lists never outrank each other.
+   */
+  let listings = 0;
   const answers = new Map<string, unknown>();
   /** The provider holds a tool list this module gave it, which the next child must confirm. */
   let served = false;
@@ -102,9 +112,12 @@ export const makeLeaseProxyHandshake = <E>(options: {
     line: string | undefined,
     refuse: Effect.Effect<void>,
   ) {
+    // An end that is already done wins over a remembered answer (#1622).
+    if (Deferred.isDoneUnsafe(options.ended)) return yield* whenEnded(id, method);
     if (method === "ping") return yield* reply(id, {});
     if (method === "tools/list") served = true;
     if (answers.has(method)) return yield* reply(id, answers.get(method));
+    const listed = listings;
     // A request a pause cut off is asked again as the provider sent it.
     const request =
       line ??
@@ -114,8 +127,10 @@ export const makeLeaseProxyHandshake = <E>(options: {
       method === "initialize" ? [request] : [...options.handshake, request],
     );
     if (answer?.result === undefined) return yield* refuse;
-    answers.set(method, answer.result);
-    yield* reply(id, answer.result);
+    if (Deferred.isDoneUnsafe(options.ended)) return yield* whenEnded(id, method);
+    // A newer list, from a resumed child, came in while this child answered: it stands.
+    if (method !== "tools/list" || listed === listings) answers.set(method, answer.result);
+    yield* reply(id, answers.get(method) ?? answer.result);
   });
 
   return {
@@ -124,28 +139,45 @@ export const makeLeaseProxyHandshake = <E>(options: {
     remember: (method: string, message: Envelope) => {
       if (method === "ping" || !HANDSHAKE.has(method) || message.result === undefined) return;
       answers.set(method, message.result);
-      if (method === "tools/list") served = false;
+      if (method === "tools/list") {
+        served = false;
+        listings++;
+      }
     },
     /**
      * Answers a handshake request without the control's driver, or runs the refusal when no
      * child could answer it in time. An end or the provider's cancellation stops the child it
      * started, and an end answers the request as ended instead.
      */
-    answer: Effect.fn("ComputerUseLeaseProxy.answerHandshake")(function* (
+    answer: (
       id: JsonRpcId,
       method: string,
       line: string | undefined,
       refuse: Effect.Effect<void>,
-    ) {
+    ) => {
+      // Registered before the answer runs, so a cancel that comes first still stops it, and a
+      // repeated id is seen as pending (#1622).
       const key = JSON.stringify(id);
-      const cancelled = yield* Deferred.make<void>();
+      const cancelled = Deferred.makeUnsafe<void>();
       cancels.set(key, cancelled);
-      yield* Effect.raceAll([
-        respond(id, method, line, refuse),
-        options.whenEnded(id, method),
-        Deferred.await(cancelled),
-      ]).pipe(Effect.ensuring(Effect.sync(() => cancels.delete(key))));
-    }),
+      return Effect.suspend(() =>
+        Deferred.isDoneUnsafe(cancelled)
+          ? Effect.void
+          : Effect.raceAll([
+              respond(id, method, line, refuse),
+              whenEnded(id, method),
+              Deferred.await(cancelled),
+            ]),
+      ).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (cancels.get(key) === cancelled) cancels.delete(key);
+          }),
+        ),
+        Effect.withSpan("ComputerUseLeaseProxy.answerHandshake"),
+      );
+    },
+    pending: (key: string) => cancels.has(key),
     cancel: (key: string) => {
       const cancelled = cancels.get(key);
       if (cancelled !== undefined) Deferred.doneUnsafe(cancelled, Exit.void);
@@ -165,6 +197,7 @@ export const makeLeaseProxyHandshake = <E>(options: {
       const answer = yield* Deferred.await(answered);
       if (answer?.result === undefined) return;
       served = false;
+      listings++;
       const before = JSON.stringify(answers.get("tools/list"));
       answers.set("tools/list", answer.result);
       if (JSON.stringify(answer.result) !== before)
