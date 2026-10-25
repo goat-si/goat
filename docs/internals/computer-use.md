@@ -93,10 +93,11 @@ requirement, never from a pid or path alone. The driver stays the helper's child
   request ids, a per-request `deadlineMs`, and a frame limit both sides agree on in the hello,
   between 64 KiB and 16 MiB. Screenshots cross as base64 inside one bounded frame and leave
   GOAT's MCP surface as image content.
-- Trust starts at the parent. A release helper serves only a parent signed by GOAT's Developer ID
-  team with the GOAT app identifier its own id extends (`si.goat.desktop` for
-  `si.goat.desktop.computer-use`), and its service half accepts only its own launcher; a dev helper
-  serves any parent. The host checks the helper's first line (protocol and bundle id) and that the
+- Trust starts at the parent. A release helper serves any parent signed by GOAT's Developer ID
+  team, whatever its identifier, and its service half accepts only its own launcher; a dev helper
+  serves any parent. It does not pin the app identifier: the agent's lease proxy runs as the
+  Electron `<name> Helper` (#1548) and the standalone server as the signed CLI runtime, and every
+  one of them runs arbitrary JavaScript as Node, so a pinned identifier only refused real parents. The host checks the helper's first line (protocol and bundle id) and that the
   driver it reports is the helper's own child (#1213), then exchanges the #1207 hello:
   `clientApiVersion` against `serverApiVersion`, with `incompatibleClientVersion` instead of a
   degraded session.

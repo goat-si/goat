@@ -25,6 +25,11 @@ export interface LeaseProxyDriver {
   readonly lines: Stream.Stream<string>;
   readonly kill: Effect.Effect<void>;
   /**
+   * The child's exit code once it has exited on its own, or undefined when it is unknown. Read
+   * after its output ends, to tell a helper that refused its parent (77) from one that restarted.
+   */
+  readonly exitCode?: Effect.Effect<number | undefined>;
+  /**
    * The helper's cursor overlay channel, when this child draws one (#1214). Returns once the
    * change is on screen, so a capture forwarded after a hide cannot contain the overlay.
    */

@@ -46,6 +46,7 @@ import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
+import { driverExitReason } from "./ComputerUseDriverExit.ts";
 import {
   approvedApps,
   learnApps,
@@ -362,7 +363,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       // agent hears why instead of an approval failure (#1233).
       Effect.andThen(
         Effect.suspend(() =>
-          lifecycle.current === current ? end("helper_restarted") : Effect.void,
+          lifecycle.current === current
+            ? driverExitReason(current.driver).pipe(Effect.flatMap(end))
+            : Effect.void,
         ),
       ),
     );

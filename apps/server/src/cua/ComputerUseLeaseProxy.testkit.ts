@@ -81,6 +81,8 @@ export const harness = Effect.fn(function* (
     readonly kill?: Effect.Effect<void> | ((index: number) => Effect.Effect<void>);
     readonly acquire?: (index: number) => Effect.Effect<void>;
     readonly restartFailure?: string;
+    /** The exit code each driver reports once its output ends; unknown by default. */
+    readonly exitCode?: number;
     /** Holds every window report until it is done, as a slow server would. */
     readonly targetGate?: Deferred.Deferred<void>;
     /**
@@ -250,6 +252,7 @@ export const harness = Effect.fn(function* (
             Effect.as(Stream.fromQueue(driver.fromDriver)),
           ),
         ),
+        ...(options.exitCode === undefined ? {} : { exitCode: Effect.succeed(options.exitCode) }),
         kill: Deferred.succeed(driver.killed, undefined).pipe(
           Effect.andThen(
             typeof options.kill === "function"

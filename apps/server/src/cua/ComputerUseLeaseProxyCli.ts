@@ -159,6 +159,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         Effect.gen(function* () {
           // Ownership is released only after both the process and its pipes close.
           const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          const exited = new Promise<number | undefined>((resolve) => {
+            if (child.exitCode !== null) resolve(child.exitCode);
+            else child.once("exit", (code) => resolve(code ?? undefined));
+          });
           // The helper's input reports, every one of them: a person's may be among a burst.
           const seen = yield* makeHelperInputFeed();
           const channel = child.stdio[3];
@@ -183,6 +187,12 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
               () => undefined,
             ).pipe(Stream.catchCause(() => Stream.empty)),
+            // Stdout closes just before the exit is reported; a child still running after a
+            // moment is not one that refused its parent.
+            exitCode: Effect.promise(() => exited).pipe(
+              Effect.timeoutOption("1 second"),
+              Effect.map(Option.getOrUndefined),
+            ),
             kill: Effect.promise(() => {
               child.stdin.end();
               killDriverGroup(platform, child, "SIGKILL");

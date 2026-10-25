@@ -521,6 +521,11 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "lost",
   /** The driver went away under the proxy: GOAT Computer Use stopped, crashed or was updated. */
   "helper_restarted",
+  /**
+   * GOAT Computer Use refused the process that started it (its parent check, exit 77), so no
+   * connection from this GOAT can work until GOAT or the helper is fixed; a restart does not help.
+   */
+  "helper_refused",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
   /** It would bring a window forward or move the pointer while another thread holds apps here. */
@@ -540,6 +545,7 @@ export const computerUseRefusalReason = (
     case "app_not_approved":
       return "appNotAllowed";
     case "helper_restarted":
+    case "helper_refused":
       return "helperUnavailable";
     default:
       return "targetRefused";

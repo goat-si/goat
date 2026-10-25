@@ -91,12 +91,13 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
   return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
 }
 
-/// Release builds only serve the GOAT app of their own channel: the same Developer ID team and
-/// the bundle identifier this helper's id extends (si.goat.desktop for
-/// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
-/// serves an unpackaged Electron or a terminal.
+/// Release builds serve any process signed by this helper's own Developer ID team, whatever its
+/// identifier: the agent's lease proxy runs as GOAT's Electron `<name> Helper` (#1548), and the
+/// standalone server as GOAT's signed CLI runtime. Each of them runs arbitrary JavaScript as Node,
+/// so pinning one identifier refuses real parents without making the check stronger. A dev
+/// helper (built with GOATComputerUseAllowAnyParent) serves an unpackaged Electron or a terminal.
 ///
-/// This is not enough on its own: GOAT's signed executable runs any JavaScript under
+/// This is not enough on its own: GOAT's signed executables run any JavaScript under
 /// ELECTRON_RUN_AS_NODE, NODE_OPTIONS or Node inspect arguments (its Electron fuses are on, since
 /// GOAT's backend, CLI and lease proxy run it as Node), so any same-user program can pass this
 /// check by running its own code as GOAT. The helper does not read the parent's fuses at launch:
@@ -110,18 +111,10 @@ func parentRefusal(_ parent: pid_t) -> String? {
   guard let own = selfStaticCode(), let team = signingTeam(own) else {
     return "This helper has no Developer ID team, so it cannot verify who launched it."
   }
-  let suffix = ".computer-use"
-  guard let ownId = Bundle.main.bundleIdentifier, ownId.hasSuffix(suffix) else {
-    return "This helper's bundle identifier does not name its GOAT app."
-  }
-  let appId = String(ownId.dropLast(suffix.count))
   guard let parent = parentCode(parent),
-    satisfies(
-      parent,
-      "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
-    )
+    satisfies(parent, "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
   else {
-    return "The process that launched the helper is not \(appId) signed by team \(team)."
+    return "The process that launched the helper is not signed by GOAT's team \(team)."
   }
   return nil
 }
