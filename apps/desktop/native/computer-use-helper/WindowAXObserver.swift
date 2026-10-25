@@ -53,6 +53,8 @@ protocol WindowAXFunctions: AnyObject {
   func pid(_ element: WindowAXElement) -> Int32?
   func windowID(_ element: WindowAXElement) -> UInt32?
   func attribute(_ element: WindowAXElement, _ name: String) -> WindowAXAttribute
+  /// AXChildren, fetching at most `max` elements so a huge container is never copied whole.
+  func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute
   func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void)
     -> WindowAXSubscription?
 }
@@ -275,14 +277,23 @@ final class WindowAXWatch: SettleWatch {
     guard isAdmitted else { return false }
     guard api.trusted() else { return false }
     guard isAdmitted else { return false }
-    let focused: WindowAXElement
     switch api.attribute(app, "AXFocusedUIElement") {
-    case .element(let element): focused = element
+    case .element(let focused): return focusChainIsSafe(focused, app: app)
     // Only noValue says there is no focused element (Calculator); unsupported leaves the app's
     // focus unknown, so it still refuses (#1585).
-    case .absent: return windowHasNoSecureField()
+    case .absent:
+      guard windowHasNoSecureField(), isAdmitted else { return false }
+      // Focus may have moved into a secure field elsewhere while the window was read.
+      switch api.attribute(app, "AXFocusedUIElement") {
+      case .absent: return true
+      case .element(let focused): return focusChainIsSafe(focused, app: app)
+      default: return false
+      }
     default: return false
     }
+  }
+
+  private func focusChainIsSafe(_ focused: WindowAXElement, app: WindowAXElement) -> Bool {
     guard !focused.same(app) else { return false }
     var node = focused
     var seen: [WindowAXElement] = []
@@ -326,16 +337,16 @@ final class WindowAXWatch: SettleWatch {
       guard visited <= Self.treeNodeLimit, depth <= Self.treeDepthLimit, isAdmitted else { return false }
       guard case .string(let role) = api.attribute(node, "AXRole"), !role.isEmpty,
         role != "AXSecureTextField", role != "AXUnknown" else { return false }
-      guard isAdmitted else { return false }
       switch api.attribute(node, "AXSubrole") {
       case .string(let subrole): if subrole == "AXSecureTextField" { return false }
       case .absent, .unsupported: if role == "AXTextField" { return false }
       default: return false
       }
-      guard isAdmitted else { return false }
-      switch api.attribute(node, "AXChildren") {
+      // Ask for one more than the budget allows, so an overflow is refused and never truncated.
+      let budget = Self.treeNodeLimit - visited - pending.count
+      switch api.children(node, max: budget + 1) {
       case .elements(let children):
-        guard visited + pending.count + children.count <= Self.treeNodeLimit else { return false }
+        guard children.count <= budget else { return false }
         pending.append(contentsOf: children.map { ($0, depth + 1) })
       case .absent: break
       case .unsupported: if !Self.leafRoles.contains(role) { return false }
@@ -501,6 +512,17 @@ private final class SystemWindowAX: WindowAXFunctions {
       return .elements(values.map(WindowAXElement.init))
     }
     return .failure
+  }
+
+  func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute {
+    guard let element = ax(element), max > 0 else { return .failure }
+    var values: CFArray?
+    let error = AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, max, &values)
+    if error == .noValue { return .absent }
+    if error == .attributeUnsupported { return .unsupported }
+    guard error == .success, let list = values as? [CFTypeRef] else { return .failure }
+    guard list.allSatisfy({ CFGetTypeID($0) == AXUIElementGetTypeID() }) else { return .failure }
+    return .elements(list.map(WindowAXElement.init))
   }
 
   func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void)

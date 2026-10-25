@@ -84,6 +84,9 @@ private final class FakeAX: WindowAXFunctions {
   var unsupportedFocus = false
   var unknownInTree = false
   var opaqueWebInTree = false
+  var leafCount: Int?
+  var chainLength: Int?
+  var childRequests: [Int] = []
   var missingSubrole = false
   var duplicateTarget = false
   var unknownMapping = false
@@ -121,6 +124,7 @@ private final class FakeAX: WindowAXFunctions {
       return missingFocus ? .failure : noFocus ? .absent : .element(focus)
     case "AXRole":
       if element.same(group) { return .string("AXGroup") }
+      if key(element).hasPrefix("chain-") { return .string("AXGroup") }
       if element.same(mystery) { return .string("AXUnknown") }
       if element.same(web) { return .string("AXWebArea") }
       if element.same(button) || key(element).hasPrefix("leaf-") { return .string("AXButton") }
@@ -128,7 +132,7 @@ private final class FakeAX: WindowAXFunctions {
       return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
     case "AXSubrole":
       if element.same(button) || element.same(group) || element.same(mystery) || element.same(web)
-        || key(element).hasPrefix("leaf-") { return .absent }
+        || key(element).hasPrefix("leaf-") || key(element).hasPrefix("chain-") { return .absent }
       if element.same(field) { return .string(secureInTree ? "AXSecureTextField" : "AXSearchField") }
       return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
     case "AXChildren":
@@ -136,7 +140,12 @@ private final class FakeAX: WindowAXFunctions {
       if element.same(group) {
         if unreadableTree { return .failure }
         if hugeTree { return .elements((0..<2000).map { WindowAXElement("leaf-\($0)" as NSString) }) }
+        if let leafCount { return .elements((0..<leafCount).map { WindowAXElement("leaf-\($0)" as NSString) }) }
+        if chainLength != nil { return .elements([WindowAXElement("chain-1" as NSString)]) }
         return .elements([button, field] + (unknownInTree ? [mystery] : []) + (opaqueWebInTree ? [web] : []))
+      }
+      if let chainLength, key(element).hasPrefix("chain-"), let n = Int(key(element).dropFirst(6)) {
+        return n < chainLength ? .elements([WindowAXElement("chain-\(n + 1)" as NSString)]) : .absent
       }
       // Real controls often do not support AXChildren at all; a button is still a known leaf.
       if element.same(button) || element.same(mystery) || element.same(web) { return .unsupported }
@@ -149,6 +158,13 @@ private final class FakeAX: WindowAXFunctions {
       return .failure
     default: return .failure
     }
+  }
+  /// Bounded read like AXUIElementCopyAttributeValues: at most `max` children come back.
+  func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute {
+    childRequests.append(max)
+    let all = attribute(element, "AXChildren")
+    if case .elements(let list) = all { return .elements(Array(list.prefix(max))) }
+    return all
   }
   func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void) -> WindowAXSubscription? {
     observerCount += 1
@@ -332,6 +348,45 @@ private func runObserverFixture(_ scenario: String) {
     appears.send(appears.api.window)
     appears.unsupported("a secure field that appears later ends the wait")
     check(!appears.events.contains("changed"), "no change is delivered once a secure field is present")
+    let huge = WatchFixture()
+    huge.api.noFocus = true
+    huge.api.hugeTree = true
+    huge.start()
+    huge.unsupported("a window with too many children fails closed")
+    check(!huge.api.childRequests.isEmpty && huge.api.childRequests.allSatisfy { $0 <= 513 },
+      "children are read within the remaining budget plus one: \(huge.api.childRequests)")
+    for (leaves, ok) in [(510, true), (511, false)] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.api.leafCount = leaves
+      f.start()
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus"]),
+        "\(leaves + 2) nodes: \(ok ? "within" : "past") the 512-node bound: \(f.events)")
+    }
+    for (links, ok) in [(31, true), (32, false)] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.api.chainLength = links
+      f.start()
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus"]),
+        "depth \(links + 1): \(ok ? "within" : "past") the depth-32 bound: \(f.events)")
+    }
+    // Focus can move while the window is read; the sample gate's verdict holds only if focus is
+    // checked again after the walk.
+    for secure in [true, false] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.start()
+      check(f.events == ["ready"], "a no-focus window starts before its sample gate")
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "field:AXSubrole" { f.api.noFocus = false; f.api.privateFocus = secure }
+      }
+      var answers: [Bool] = []
+      f.watch.check { answers.append($0) }
+      f.executor.drain()
+      check(answers == [!secure],
+        "focus that moved into a \(secure ? "secure" : "plain") field during the gate's walk: \(answers)")
+    }
   case "sample-gate":
     let safe = WatchFixture()
     safe.start()
