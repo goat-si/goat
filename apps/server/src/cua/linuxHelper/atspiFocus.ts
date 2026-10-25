@@ -31,24 +31,37 @@ const ROLE_PASSWORD_TEXT = 40;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
 // reported unknown, which the helper treats as private.
 const MAX_WINDOWS = 64;
-// AtspiStateType bits in the first state word: FOCUSED 12, SHOWING 25.
+// AtspiStateType FOCUSED: bit 12 of the first state word.
 const STATE_FOCUSED = 1 << 12;
-const STATE_SHOWING = 1 << 25;
 // GTK4 has no Collection interface, so focus is found by walking (#1607). Each node costs a
 // gdbus call or two; past this many in one probe, focus is reported unknown, which is private.
 const MAX_WALK_NODES = 256;
+const UINT32_MAX = 0xffff_ffff;
 
 /** The first state word of a `GetState` reply, `([uint32 N, M],)`; null for any other reply. */
 function parseStates(output: string): number | null {
-  const match = /^\(\[uint32 (\d+), (?:uint32 )?\d+\],\)$/u.exec(output.trim());
-  return match ? Number(match[1]) : null;
+  const match = /^\(\[uint32 (\d{1,10}), (?:uint32 )?(\d{1,10})\],\)$/u.exec(output.trim());
+  if (!match) return null;
+  const [first, second] = [Number(match[1]), Number(match[2])];
+  return first <= UINT32_MAX && second <= UINT32_MAX ? first : null;
 }
 
-/** A gdbus failure because the object has no Collection interface, as GTK4 objects do not. */
-function lacksCollection(error: unknown): boolean {
+/**
+ * A gdbus failure whose reply's own error line (never the command line, which names the method
+ * too) is UnknownMethod. Its message text is the app's, translated, so whether the object really
+ * lacks Collection is asked separately (GetInterfaces).
+ */
+function unknownMethod(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  // The command line in the message names the method too; only the reply's error counts.
-  return /UnknownMethod: No such interface .org\.a11y\.atspi\.Collection./u.test(text);
+  return /^Error: GDBus\.Error:org\.freedesktop\.DBus\.Error\.UnknownMethod: /mu.test(text);
+}
+
+/** The interfaces in a `GetInterfaces` reply, `(['org.a11y.atspi.Accessible', ...],)`. */
+function parseInterfaces(output: string): ReadonlyArray<string> | null {
+  const reply = output.trim();
+  if (reply === "(@as [],)") return [];
+  const match = /^\(\[('[A-Za-z0-9_.]+'(?:, '[A-Za-z0-9_.]+')*)\],\)$/u.exec(reply);
+  return match ? [...(match[1] ?? "").matchAll(/'([^']+)'/gu)].map(([, name]) => name ?? "") : null;
 }
 
 /** `('unix:path=...',)` from org.a11y.Bus.GetAddress. */
@@ -154,9 +167,11 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       if (windows.length > MAX_WINDOWS)
         return { known: false, secure: false, windows: windows.length };
       let walkBudget = MAX_WALK_NODES;
-      // Breadth-first through showing objects, for a toolkit without Collection: the focused
-      // object, or none. Any unreadable state or an exhausted budget throws, so focus is unknown.
+      // Every object of the window, for a toolkit without Collection: all that say they have
+      // focus, whose roles are all checked below. A hidden container can still hold focus, so
+      // none is skipped; an unreadable state or an exhausted budget throws, so focus is unknown.
       const walkFocused = async (window: { readonly bus: string; readonly path: string }) => {
+        const focused: Array<{ readonly bus: string; readonly path: string }> = [];
         const queue = [window];
         for (let node = queue.shift(); node !== undefined; node = queue.shift()) {
           if (--walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
@@ -164,15 +179,14 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
           );
           if (states === null) throw new Error("AT-SPI gave no state set.");
-          if ((states & STATE_FOCUSED) !== 0) return [node];
-          if (node === window || (states & STATE_SHOWING) !== 0)
-            queue.push(
-              ...parseReferences(
-                await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren"),
-              ),
-            );
+          if ((states & STATE_FOCUSED) !== 0) focused.push(node);
+          queue.push(
+            ...parseReferences(
+              await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren"),
+            ),
+          );
         }
-        return [];
+        return focused;
       };
       for (const window of windows) {
         let matches: ReadonlyArray<{ readonly bus: string; readonly path: string }>;
@@ -190,7 +204,11 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             ),
           );
         } catch (error) {
-          if (!lacksCollection(error)) throw error;
+          if (!unknownMethod(error)) throw error;
+          const interfaces = parseInterfaces(
+            await call(bus, window.path, "org.a11y.atspi.Accessible.GetInterfaces"),
+          );
+          if (interfaces === null || interfaces.includes("org.a11y.atspi.Collection")) throw error;
           matches = await walkFocused(window);
         }
         for (const match of matches) {

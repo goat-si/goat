@@ -166,9 +166,11 @@ describe("makeSecureFocusProbe", () => {
         }
         if (method === "org.a11y.atspi.Collection.GetMatches")
           throw new Error(
-            "Command failed: gdbus call ... --method org.a11y.atspi.Collection.GetMatches\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
+            "Command failed: gdbus call --method org.a11y.atspi.Collection.GetMatches\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
               path,
           );
+        if (method === "org.a11y.atspi.Accessible.GetInterfaces")
+          return "(['org.a11y.atspi.Accessible', 'org.a11y.atspi.Component'],)\n";
         if (method === "org.a11y.atspi.Accessible.GetState")
           return states[path] ?? "([uint32 1124073472, 0],)\n";
         if (method === "org.a11y.atspi.Accessible.GetRole")
@@ -191,5 +193,77 @@ describe("makeSecureFocusProbe", () => {
       secure: false,
       windows: 0,
     });
+  });
+
+  it("checks every focused object in a walked window, hidden containers included, and fails closed on any other error (#1607)", async () => {
+    const SHOWN = "([uint32 1124073472, 0],)\n";
+    const FOCUSED = "([uint32 1124077568, 0],)\n";
+    const HIDDEN_FOCUSED = "([uint32 4096, 0],)\n";
+    // window → (label: focused, ordinary) and (page: hidden → entry: focused password)
+    const tree =
+      (
+        collectionError: string,
+        interfaces = "(['org.a11y.atspi.Accessible', 'org.a11y.atspi.Component'],)\n",
+      ): GdbusRunner =>
+      async (args) => {
+        const method = args[args.indexOf("--method") + 1];
+        const path = args[args.indexOf("--object-path") + 1] ?? "";
+        if (method === "org.a11y.Bus.GetAddress")
+          return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+        if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 10,)\n";
+        if (method === "org.a11y.atspi.Accessible.GetChildren") {
+          if (path === "/org/a11y/atspi/accessible/root")
+            return args.includes("org.a11y.atspi.Registry")
+              ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
+              : "([(':1.9', objectpath '/w')],)\n";
+          if (path === "/w") return "([(':1.9', objectpath '/label'), (':1.9', '/page')],)\n";
+          if (path === "/page") return "([(':1.9', objectpath '/entry')],)\n";
+          return "(@a(so) [],)\n";
+        }
+        if (method === "org.a11y.atspi.Collection.GetMatches")
+          throw new Error(
+            "Command failed: gdbus call --method org.a11y.atspi.Collection.GetMatches\n" +
+              collectionError,
+          );
+        if (method === "org.a11y.atspi.Accessible.GetInterfaces") return interfaces;
+        if (method === "org.a11y.atspi.Accessible.GetState")
+          return path === "/label"
+            ? FOCUSED
+            : path === "/page"
+              ? "([uint32 0, 0],)\n"
+              : path === "/entry"
+                ? HIDDEN_FOCUSED
+                : SHOWN;
+        if (method === "org.a11y.atspi.Accessible.GetRole")
+          return "(uint32 " + (path === "/entry" ? 40 : 29) + ",)\n";
+        throw new Error("unexpected " + method);
+      };
+    const noCollection =
+      "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path /w";
+    expect(await makeSecureFocusProbe(tree(noCollection))(10)).toEqual({
+      known: true,
+      secure: true,
+      windows: 1,
+    });
+    // The message is the app's, translated; only the error name and its interfaces count.
+    const translated =
+      "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: 경로 /w의 객체에 “org.a11y.atspi.Collection” 인터페이스가 없습니다";
+    expect(await makeSecureFocusProbe(tree(translated))(10)).toEqual({
+      known: true,
+      secure: true,
+      windows: 1,
+    });
+    // Any other failure, or an object that says it has Collection after all: focus stays unknown.
+    const withCollection = "(['org.a11y.atspi.Accessible', 'org.a11y.atspi.Collection'],)\n";
+    for (const [error, interfaces] of [
+      ["Error: Timeout was reached", undefined],
+      [noCollection, withCollection],
+      [noCollection, "('not a list',)\n"],
+    ] as const)
+      expect(await makeSecureFocusProbe(tree(error, interfaces))(10)).toEqual({
+        known: false,
+        secure: false,
+        windows: 0,
+      });
   });
 });
