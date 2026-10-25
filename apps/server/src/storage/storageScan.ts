@@ -24,7 +24,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
 import { buildOutputKeeps, findBuildOutputs } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
-import { holdsGoatData, resolveGoatDataPaths } from "./goatData.ts";
+import { goatDataReason, resolveGoatDataPaths } from "./goatData.ts";
 import {
   type ContentStamp,
   contentStamp,
@@ -320,25 +320,31 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     const live = entry.threads.some((thread) => !thread.archived || thread.busy);
     const otherReason = otherServerReason(other, entry.path, rules);
     const working = processInside(cwds, [entry.path], rules);
+    const goatReason = goatDataReason(entry.path, goat, rules);
     const decision =
-      blocker !== null
-        ? state(live || fact.holdsProject ? "protected" : "needs_attention", sentenceCase(blocker))
-        : otherReason !== null
+      goatReason !== null
+        ? state("protected", sentenceCase(goatReason))
+        : blocker !== null
           ? state(
-              other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
-              sentenceCase(otherReason),
+              live || fact.holdsProject ? "protected" : "needs_attention",
+              sentenceCase(blocker),
             )
-          : working === null
-            ? state("needs_attention", "Running processes could not be listed")
-            : working
-              ? state("protected", "A process is running in it")
-              : state(
-                  "removable",
-                  entry.threads.length === 0
-                    ? "No thread uses it; no uncommitted changes and every commit is on a remote"
-                    : "Only archived threads used it; no uncommitted changes and every commit is on a remote",
-                  true,
-                );
+          : otherReason !== null
+            ? state(
+                other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
+                sentenceCase(otherReason),
+              )
+            : working === null
+              ? state("needs_attention", "Running processes could not be listed")
+              : working
+                ? state("protected", "A process is running in it")
+                : state(
+                    "removable",
+                    entry.threads.length === 0
+                      ? "No thread uses it; no uncommitted changes and every commit is on a remote"
+                      : "Only archived threads used it; no uncommitted changes and every commit is on a remote",
+                    true,
+                  );
     add(
       {
         kind: "worktree",
@@ -358,33 +364,37 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
         live || otherReason !== null || working !== false
           ? null
           : yield* buildOutputKeeps(entry.path, output);
-      const outputDecision = live
-        ? state(
-            "protected",
-            entry.threads.some((thread) => thread.busy)
-              ? "A thread is running in this worktree"
-              : "A thread still uses this worktree; archive it first",
-          )
-        : otherReason !== null
-          ? state(
-              other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
-              sentenceCase(otherReason),
-            )
-          : working === null
-            ? state("needs_attention", "Running processes could not be listed")
-            : working
-              ? state("protected", "A process is running in this worktree")
-              : keeps !== null
-                ? state(
-                    "needs_attention",
-                    sentenceCase(keeps) + "; check it before deleting it yourself",
-                  )
-                : state(
-                    "removable",
-                    path.basename(output) === "target"
-                      ? "Rust build output; cargo rebuilds it"
-                      : "Installed packages; an install brings them back",
-                  );
+      const outputGoatReason = goatDataReason(output, goat, rules);
+      const outputDecision =
+        outputGoatReason !== null
+          ? state("protected", sentenceCase(outputGoatReason))
+          : live
+            ? state(
+                "protected",
+                entry.threads.some((thread) => thread.busy)
+                  ? "A thread is running in this worktree"
+                  : "A thread still uses this worktree; archive it first",
+              )
+            : otherReason !== null
+              ? state(
+                  other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
+                  sentenceCase(otherReason),
+                )
+              : working === null
+                ? state("needs_attention", "Running processes could not be listed")
+                : working
+                  ? state("protected", "A process is running in this worktree")
+                  : keeps !== null
+                    ? state(
+                        "needs_attention",
+                        sentenceCase(keeps) + "; check it before deleting it yourself",
+                      )
+                    : state(
+                        "removable",
+                        path.basename(output) === "target"
+                          ? "Rust build output; cargo rebuilds it"
+                          : "Installed packages; an install brings them back",
+                      );
       add(
         {
           kind: "build_output",
@@ -490,7 +500,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
         for (const candidate of candidates) {
           if (referenced(candidate.path)) continue;
           // A worktrees folder set to a GOAT home holds GOAT's own data beside checkouts.
-          if (holdsGoatData(candidate.path, goat, rules)) continue;
+          if (goatDataReason(candidate.path, goat, rules) !== null) continue;
           // Another worktrees folder nested in this one is scanned as its own root.
           if (
             managedRoots.some(
@@ -665,7 +675,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
-    if (holdsGoatData(target, goat, rules)) continue;
+    if (goatDataReason(target, goat, rules) !== null) continue;
     const { decision, token, stamp } = yield* stamped(
       "temp:" + target,
       target,

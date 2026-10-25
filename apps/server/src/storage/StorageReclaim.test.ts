@@ -484,15 +484,55 @@ describe("StorageReclaim", () => {
         const leftovers = (yield* reclaim.usage({ rescan: true })).items.filter(
           (item) => item.kind === "orphan_folder" && item.path.startsWith(config.baseDir),
         );
-        // Runtimes, state, logs and attachments are GOAT's own, and the default worktrees folder
-        // inside the home is scanned as itself: only real leftovers are offered.
-        expect(
-          leftovers.map((item) => path.relative(config.baseDir, item.path)).toSorted(),
-        ).toEqual([
-          path.join("some-repo", "old-checkout"),
+        // Inside a GOAT home only its worktrees folders hold leftovers: runtimes, state, logs,
+        // attachments and anything else of the home stay, and the default worktrees folder inside
+        // it is scanned as itself.
+        expect(leftovers.map((item) => path.relative(config.baseDir, item.path))).toEqual([
           path.join("worktrees", "goat", "old-branch"),
         ]);
       }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("never offers another GOAT server's home or anything of it outside its worktrees", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find, outside } = yield* setup;
+      // Another server's home, made the worktrees folder here: its runtime is not a leftover.
+      const otherHome = path.join(outside, "other-home");
+      yield* fs.makeDirectory(path.join(otherHome, "userdata"), { recursive: true });
+      yield* fs.writeFileString(path.join(otherHome, "userdata", "statev2.sqlite"), "");
+      yield* fs.makeDirectory(path.join(otherHome, "runtime", "goat", "versions", "0.0.1"), {
+        recursive: true,
+      });
+      yield* backdate(otherHome);
+      // A clean, pushed worktree whose ignored folders hold a GOAT home.
+      const { checkout, output, uses } = yield* buildOutputWorktree(worktrees);
+      const nestedHome = path.join(output, ".goat");
+      yield* fs.makeDirectory(path.join(nestedHome, "userdata"), { recursive: true });
+      machine.others = {
+        ...machine.others,
+        databases: [
+          path.join(otherHome, "userdata", "statev2.sqlite"),
+          path.join(nestedHome, "userdata", "statev2.sqlite"),
+        ],
+      };
+      machine.facts = uses(true).map((fact) => ({
+        ...fact,
+        entry: { ...fact.entry, dirtyCount: 0 },
+      }));
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        worktreesDirectory: otherHome,
+      });
+      const items = (yield* reclaim.usage({ rescan: true })).items;
+      expect(items.filter((item) => item.path.startsWith(otherHome))).toEqual([]);
+      expect(find(items, checkout)).toMatchObject({
+        state: "protected",
+        reason: expect.stringMatching(/^It holds (a GOAT home|GOAT's own data)$/),
+      });
+      expect(find(items, output)).toMatchObject({
+        state: "protected",
+        reason: expect.stringMatching(/^It holds (a GOAT home|GOAT's own data)$/),
+      });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
   it.live("keeps rotated logs while a thread works in the logs folder", () =>

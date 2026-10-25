@@ -38,7 +38,7 @@ import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.
 import { tryWithWorkspaceSubtree, withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
-import { holdsGoatData, resolveGoatDataPaths } from "./goatData.ts";
+import { goatDataReason, resolveGoatDataPaths } from "./goatData.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import {
   type ContentStamp,
@@ -290,6 +290,17 @@ const make = Effect.gen(function* () {
     return null;
   });
 
+  /** Why removing folder would reach GOAT's own data or a GOAT home, read now; null when not. */
+  const goatDataNow = Effect.fn("StorageReclaim.goatDataNow")(function* (folder: string) {
+    const goat = yield* resolveGoatDataPaths(
+      (yield* resolveOtherServerPaths(config.dbPath)).bindings.databases,
+    );
+    const realFolder = (yield* real(folder)) ?? path.resolve(folder);
+    return (
+      goatDataReason(path.resolve(folder), goat, rules) ?? goatDataReason(realFolder, goat, rules)
+    );
+  }, Effect.provideContext(context));
+
   /**
    * Runs a removal holding the folder whole, so no lease on it or inside it goes to anyone else
    * meanwhile; skipped when something on this server already works inside it.
@@ -348,6 +359,8 @@ const make = Effect.gen(function* () {
       case "worktree": {
         // Under the worktree's leases, right before git removes it: what git status cannot see.
         const verify = Effect.gen(function* () {
+          const goat = yield* goatDataNow(item.path);
+          if (goat !== null) return goat;
           const reason = yield* inUse(item.path);
           if (reason !== null) return reason;
           const masked = yield* maskedIndexEntry(item.path);
@@ -389,10 +402,8 @@ const make = Effect.gen(function* () {
               if (reason !== null) return reason;
               const own = yield* ownReference(item.path);
               if (own !== null) return own;
-              const goat = yield* resolveGoatDataPaths(
-                (yield* resolveOtherServerPaths(config.dbPath)).bindings.databases,
-              );
-              if (holdsGoatData(item.path, goat, rules)) return "it holds GOAT's own data";
+              const goat = yield* goatDataNow(item.path);
+              if (goat !== null) return goat;
               // A batch removes items one after another; this one may have changed meanwhile.
               const changed = yield* changedSinceReview(item.path, target.stamp);
               if (changed !== null) return changed;
@@ -423,6 +434,8 @@ const make = Effect.gen(function* () {
                 return "a thread still uses its worktree";
               const reason = yield* inUse(worktree);
               if (reason !== null) return reason;
+              const goat = yield* goatDataNow(item.path);
+              if (goat !== null) return goat;
               const keeps = yield* buildOutputKeeps(worktree, item.path);
               if (keeps !== null) return keeps;
               const nested = yield* holdsGitCheckout(item.path);
