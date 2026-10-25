@@ -68,4 +68,34 @@ describe("makeSecureFocusProbe", () => {
       windows: 0,
     });
   });
+
+  it("finds every app and match in a gdbus reply, which names the object path type only once (#1606)", async () => {
+    // As gdbus prints them in a GNOME 46 session: only the first array element carries
+    // `objectpath`. The password field is in the third app's second window, second match.
+    const pids: Record<string, string> = { ":1.0": "1", ":1.2": "2", ":1.3": "30" };
+    const gnome: GdbusRunner = async (args) => {
+      const method = args[args.indexOf("--method") + 1];
+      const dest = args[args.indexOf("--dest") + 1] ?? "";
+      const path = args[args.indexOf("--object-path") + 1] ?? "";
+      if (method === "org.a11y.Bus.GetAddress") return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+      if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID")
+        return "(uint32 " + pids[args.at(-1) ?? ""] + ",)\n";
+      if (method === "org.a11y.atspi.Accessible.GetChildren")
+        return dest === "org.a11y.atspi.Registry"
+          ? "([(':1.0', objectpath '/org/a11y/atspi/accessible/root'), (':1.2', '/org/a11y/atspi/accessible/root'), (':1.3', '/org/a11y/atspi/accessible/root')],)\n"
+          : "([(':1.3', objectpath '/app/window/1'), (':1.3', '/app/window/2')],)\n";
+      if (method === "org.a11y.atspi.Collection.GetMatches")
+        return path === "/app/window/2"
+          ? "([(':1.3', objectpath '/app/label/4'), (':1.3', '/app/entry/5')],)\n"
+          : "(@a(so) [],)\n";
+      if (method === "org.a11y.atspi.Accessible.GetRole")
+        return path === "/app/entry/5" ? "(uint32 40,)\n" : "(uint32 29,)\n";
+      throw new Error("unexpected " + method);
+    };
+    expect(await makeSecureFocusProbe(gnome)(30)).toEqual({
+      known: true,
+      secure: true,
+      windows: 2,
+    });
+  });
 });

@@ -37,14 +37,19 @@ function parseAddress(output: string): string | null {
   return /^\('(.+)',\)\s*$/u.exec(output.trim())?.[1] ?? null;
 }
 
-/** The (bus name, object path) references in a GetChildren or GetMatches reply. */
+/**
+ * The (bus name, object path) references in a GetChildren or GetMatches reply. gdbus names the
+ * `objectpath` type only on an array's first element, so the rest have none (#1606).
+ */
 function parseReferences(
   output: string,
 ): ReadonlyArray<{ readonly bus: string; readonly path: string }> {
-  return [...output.matchAll(/\('([^']+)', objectpath '([^']+)'\)/gu)].map(([, bus, path]) => ({
-    bus: bus ?? "",
-    path: path ?? "",
-  }));
+  return [...output.matchAll(/\('([^']+)', (?:objectpath )?'([^']+)'\)/gu)].map(
+    ([, bus, path]) => ({
+      bus: bus ?? "",
+      path: path ?? "",
+    }),
+  );
 }
 
 /** The number in a `(uint32 N,)` reply: a process id or a role. */
