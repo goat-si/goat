@@ -6656,14 +6656,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 yield* Ref.update(terminalizedNonCompletedNativeTurns, (current) =>
                   new Set(current).add(input.nativeTurnId),
                 );
-              // Only Stop: Codex also reports a turn replaced by compaction as interrupted.
-              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId))
-                for (const subagent of CodexSubagents.stopped(
-                  yield* Ref.get(subagentThreads),
-                  input.context,
-                  yield* Ref.get(activeTurns),
-                ))
-                  yield* emitSubagentTaskUpdate({ subagent, status: "interrupted" });
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
@@ -8300,6 +8292,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             (effect, requestedInput) =>
               effect.pipe(
+                // Then the thread's subagents that never started a turn end too (#1636, #1645).
+                Effect.andThen(
+                  CodexSubagents.endStopped(
+                    subagentThreads,
+                    activeTurns,
+                    requestedInput.providerThread.id,
+                    (subagent) => emitSubagentTaskUpdate({ subagent, status: "interrupted" }),
+                  ),
+                ),
                 Effect.mapError(
                   (cause) =>
                     new ProviderAdapter.ProviderAdapterInterruptError({
