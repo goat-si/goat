@@ -79,6 +79,11 @@ export interface AbandonedWorktreeFacts {
   readonly head: string | null;
   /** The folder is, or contains, a project folder of this server. */
   readonly holdsProject: boolean;
+  /**
+   * The worktree's own path and every bound thread's recorded path, sorted: the keys turn start
+   * and storage cleanup take the workspace lease under.
+   */
+  readonly leaseKeys: ReadonlyArray<string>;
 }
 
 /**

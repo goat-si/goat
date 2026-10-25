@@ -314,12 +314,21 @@ const make = Effect.gen(function* () {
           );
         }
         const worktree = target.worktree;
-        return yield* withWorkspaceLease(
-          path.resolve(worktree),
+        const listed = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
+        const before = listed?.find((fact) => samePath(fact.entry.path, worktree, rules));
+        if (before === undefined) return "its worktree is no longer listed";
+        // Turn start leases the path its thread recorded, which can be a folder inside the
+        // worktree; holding every such lease keeps those threads from starting mid-removal.
+        const keys = [...new Set([path.resolve(worktree), ...before.leaseKeys])].toSorted();
+        return yield* keys.reduceRight(
+          (inner, key) => withWorkspaceLease(key, inner),
           Effect.gen(function* () {
             const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
-            const entry = facts?.find((fact) => samePath(fact.entry.path, worktree, rules))?.entry;
-            if (entry === undefined) return "its worktree is no longer listed";
+            const current = facts?.find((fact) => samePath(fact.entry.path, worktree, rules));
+            if (current === undefined) return "its worktree is no longer listed";
+            if (current.leaseKeys.some((key) => !keys.includes(key)))
+              return "a thread started using its worktree";
+            const entry = current.entry;
             if (entry.threads.some((thread) => thread.busy || !thread.archived))
               return "a thread still uses its worktree";
             const reason = yield* inUse(worktree);

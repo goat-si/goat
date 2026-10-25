@@ -5,6 +5,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { SqlError } from "effect/sql/SqlError";
@@ -18,6 +19,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import * as StorageReclaim from "./StorageReclaim.ts";
 
@@ -187,6 +189,7 @@ const buildOutputWorktree = Effect.fn("StorageReclaim.test.buildOutputWorktree")
       },
       head: "abc",
       holdsProject: false,
+      leaseKeys: [checkout, path.join(checkout, "packages", "app")],
     },
   ];
   return { checkout, output, uses, git };
@@ -385,6 +388,35 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live(
+    "holds the lease of every thread path inside the worktree while removing its build output",
+    () =>
+      Effect.gen(function* () {
+        const { path, worktrees, reclaim, find } = yield* setup;
+        const { checkout, output, uses } = yield* buildOutputWorktree(worktrees);
+        machine.facts = uses(true);
+        const offered = find((yield* reclaim.usage({ rescan: true })).items, output)!;
+        expect(offered.state).toBe("removable");
+        // An archived thread recorded a folder inside the worktree; resuming it leases that path.
+        let resumed: Option.Option<void> | null = null;
+        machine.onProcessListing = {
+          after: 1,
+          run: tryWithWorkspaceLease(path.join(checkout, "packages", "app"), Effect.void).pipe(
+            Effect.map((entered) => {
+              resumed = entered;
+            }),
+          ),
+        };
+        const result = yield* reclaim.clean({
+          items: [{ id: offered.id, token: offered.token }],
+          actor: "test",
+        });
+        expect(result.results[0]?.outcome).toBe("removed");
+        // The thread could not start while the final checks and removal ran.
+        expect(resumed).toEqual(Option.none());
+      }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("keeps a build output git tracks files in or does not ignore, whatever its name", () =>
     Effect.gen(function* () {
       const { fs, path, worktrees, reclaim, find } = yield* setup;
@@ -473,6 +505,7 @@ describe("StorageReclaim", () => {
           },
           head: "abc",
           holdsProject: false,
+          leaseKeys: [checkout],
         },
       ];
       const clean = () =>
