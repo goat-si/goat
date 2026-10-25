@@ -2,6 +2,7 @@ import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/cont
 import {
   COMPUTER_USE_RUN_STATUS_LABELS,
   computerUseObservedTarget,
+  computerUseResult,
   type ComputerUseRun,
   type ComputerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
@@ -19,6 +20,7 @@ import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 const STATUS_VARIANT = {
   running: "info",
   succeeded: "success",
+  unsettled: "warning",
   failed: "error",
   denied: "warning",
   stopped: "secondary",
@@ -55,7 +57,12 @@ export function ComputerUseRunCard(props: {
   const target =
     (item.type === "dynamic_tool" ? computerUseObservedTarget(item.output) : null) ??
     props.run.target;
-  if (props.status === null && target === null && images.length === 0) return null;
+  const { status, note } = computerUseResult(
+    props.run,
+    props.status,
+    item.type === "dynamic_tool" ? item.output : undefined,
+  );
+  if (status === null && target === null && images.length === 0) return null;
   return (
     <div
       className="ms-7 mt-1 mb-1.5 flex min-w-0 flex-col gap-1.5"
@@ -63,13 +70,12 @@ export function ComputerUseRunCard(props: {
       onClick={(event) => event.stopPropagation()}
     >
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        {props.status === null ? null : (
-          <Badge variant={STATUS_VARIANT[props.status]}>
-            {COMPUTER_USE_RUN_STATUS_LABELS[props.status]}
-          </Badge>
+        {status === null ? null : (
+          <Badge variant={STATUS_VARIANT[status]}>{COMPUTER_USE_RUN_STATUS_LABELS[status]}</Badge>
         )}
         {target === null ? null : <span className="min-w-0 truncate">{target}</span>}
       </div>
+      {note === null ? null : <p className="text-xs text-muted-foreground">{note}</p>}
       {images.length === 0 ? null : (
         <div className="flex flex-wrap gap-2">
           {images.map((resource) => (

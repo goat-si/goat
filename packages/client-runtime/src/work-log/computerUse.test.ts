@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   computerUseDisplayInput,
   computerUseObservedTarget,
+  computerUseResult,
   computerUseRun,
   computerUseRunStatus,
 } from "./computerUse.ts";
@@ -105,6 +106,74 @@ describe("computerUseRunStatus", () => {
     expect(computerUseRunStatus("declined")).toBe("denied");
     expect(computerUseRunStatus("stopped")).toBe("stopped");
     expect(computerUseRunStatus(undefined)).toBeNull();
+  });
+});
+
+describe("computerUseResult", () => {
+  const settle = computerUseRun(
+    call("cua-driver.wait_for_window_settle", { pid: 501, window_id: 7 }),
+  );
+  const structured = (outcome: string, reason: string) => ({
+    structuredContent: { pid: 501, window_id: 7, settle: { outcome, reason } },
+  });
+
+  it("a settle wait that completed without settling is not shown as done (#1585)", () => {
+    expect(
+      computerUseResult(settle, "succeeded", structured("unsupported", "private_or_unknown_focus")),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window did not settle: focus is private or unknown",
+    });
+    expect(computerUseResult(settle, "succeeded", structured("pending", "deadline"))).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
+    expect(
+      computerUseResult(settle, "succeeded", structured("destroyed", "window_destroyed")),
+    ).toEqual({
+      status: "unsettled",
+      note: "Window closed before it settled",
+    });
+  });
+
+  it("reads the outcome from folded JSON text or the helper's own summary line", () => {
+    const folded = {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            settle: { outcome: "unsupported", reason: "observer_unavailable" },
+          }),
+        },
+      ],
+    };
+    expect(computerUseResult(settle, "succeeded", folded)?.note).toBe(
+      "Window did not settle: observer unavailable",
+    );
+    const summary = [
+      {
+        type: "text",
+        text: "Notification settle: pending (deadline). Quiet does not establish task completion.",
+      },
+    ];
+    expect(computerUseResult(settle, "succeeded", summary)?.status).toBe("unsettled");
+  });
+
+  it("a settled wait, other tools and other lifecycles keep their status", () => {
+    expect(computerUseResult(settle, "succeeded", structured("settled", "quiet_window"))).toEqual({
+      status: "succeeded",
+      note: null,
+    });
+    expect(computerUseResult(settle, "failed", structured("unsupported", "x"))).toEqual({
+      status: "failed",
+      note: null,
+    });
+    const click = computerUseRun(call("cua-driver.click", { pid: 1, x: 1, y: 1 }));
+    expect(computerUseResult(click, "succeeded", structured("unsupported", "x"))).toEqual({
+      status: "succeeded",
+      note: null,
+    });
+    expect(computerUseResult(settle, null, undefined)).toEqual({ status: null, note: null });
   });
 });
 

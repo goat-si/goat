@@ -7,7 +7,13 @@ import {
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
-export type ComputerUseRunStatus = "running" | "succeeded" | "failed" | "denied" | "stopped";
+export type ComputerUseRunStatus =
+  | "running"
+  | "succeeded"
+  | "unsettled"
+  | "failed"
+  | "denied"
+  | "stopped";
 
 /** A computer-use call as its run card shows it. */
 export interface ComputerUseRun {
@@ -201,7 +207,69 @@ export function computerUseRunStatus(
 export const COMPUTER_USE_RUN_STATUS_LABELS: Readonly<Record<ComputerUseRunStatus, string>> = {
   running: "Running",
   succeeded: "Done",
+  unsettled: "Not settled",
   failed: "Failed",
   denied: "Denied",
   stopped: "Stopped",
 };
+
+const SETTLE_REASONS: Readonly<Record<string, string>> = {
+  private_or_unknown_focus: "focus is private or unknown",
+  accessibility_not_granted: "Accessibility access is not granted",
+  app_not_approved: "the app is not approved",
+  degraded_final_sample: "the final read was incomplete",
+};
+
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]+) \(([^)]*)\)/;
+
+/** The settle block from structuredContent, a folded JSON text block, or the helper's summary line. */
+function settleOutcome(output: unknown): { outcome: string; reason: string } | undefined {
+  const fromRecord = (value: unknown) => {
+    const settle = record(record(value)?.settle);
+    return typeof settle?.outcome === "string"
+      ? { outcome: settle.outcome, reason: typeof settle.reason === "string" ? settle.reason : "" }
+      : undefined;
+  };
+  const direct = fromRecord(record(output)?.structuredContent) ?? fromRecord(output);
+  if (direct !== undefined) return direct;
+  const blocks = Array.isArray(output) ? output : record(output)?.content;
+  if (!Array.isArray(blocks)) return undefined;
+  for (const block of blocks) {
+    const text = record(block)?.type === "text" ? record(block)?.text : undefined;
+    if (typeof text !== "string" || text.length > 65_536) continue;
+    const summary = SETTLE_SUMMARY.exec(text);
+    if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
+    if (!text.startsWith("{")) continue;
+    try {
+      const folded = fromRecord(JSON.parse(text));
+      if (folded !== undefined) return folded;
+    } catch {
+      // Plain text that only looks like JSON.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The status a card shows for a finished call, and a note when the result contradicts it: a
+ * settle wait completes as a tool call whether or not the window settled (#1585).
+ */
+export function computerUseResult(
+  run: ComputerUseRun | undefined,
+  status: ComputerUseRunStatus | null,
+  output: unknown,
+): { readonly status: ComputerUseRunStatus | null; readonly note: string | null } {
+  if (status !== "succeeded" || run?.tool !== "wait_for_window_settle")
+    return { status, note: null };
+  // A result without a readable outcome stays as the lifecycle says; an unsettled wait has no
+  // screenshot, so its output is small and never omitted from the item.
+  const settle = settleOutcome(output);
+  if (settle === undefined || settle.outcome === "settled") return { status, note: null };
+  const note =
+    settle.outcome === "pending"
+      ? "Window did not settle before the deadline"
+      : settle.outcome === "destroyed"
+        ? "Window closed before it settled"
+        : `Window did not settle: ${SETTLE_REASONS[settle.reason] ?? (settle.reason.replaceAll("_", " ") || settle.outcome)}`;
+  return { status: "unsettled", note };
+}
