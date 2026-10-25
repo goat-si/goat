@@ -135,7 +135,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
       event.type === "turn.terminal"
         ? Queue.offer(terminals, undefined)
         : event.type === "provider_thread.updated" && event.providerThread.goal
-          ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed)
+          ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
           : Effect.void,
     ),
     Effect.forkScoped,
@@ -641,10 +641,14 @@ describe("Codex computer use attachment", () => {
           // Codex has started a continuation turn but not yet published it; the person's input
           // folds into it, so a new control must wait instead of reloading under it.
           yield* f.turnStart(7, 3, true, true);
-          f.entries.splice(-2);
-          const folded = f.entries.at(-1);
-          if (folded?.type === "emit_inbound" && folded.frame.result)
-            (folded.frame.result as { turn: { id: string } }).turn.id = "turn-auto";
+          f.entries.splice(-3);
+          f.entries.push({
+            type: "emit_inbound",
+            frame: {
+              id: 7,
+              result: { turn: makeCodexReplayTurn({ id: "turn-auto", status: "inProgress" }) },
+            },
+          });
           f.status(root, "active");
           notice("turn/started", {
             threadId: root,
