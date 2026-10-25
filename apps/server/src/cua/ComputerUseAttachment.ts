@@ -158,6 +158,18 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
         .pipe(Effect.orElseSucceed(() => Option.none()))
     : Option.some(yield* leases.value.control(input.threadId, lease));
   if (Option.isNone(control)) return none("held", unattended);
+  // Sessions are also prepared outside a turn: a re-attach, a rollback, a memory policy
+  // rotation. With no run open, no turn end will settle the control this minted or reused,
+  // and the session list would show an agent acting until it expires (#1551). A turn's own
+  // run is already open here, so its control stays acting.
+  yield* leases.value.turnEnded(input.threadId).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("computer use control left acting until a turn ends", {
+        threadId: input.threadId,
+        cause,
+      }),
+    ),
+  );
   return {
     _tag: "proxied",
     mcp: mcp.value,

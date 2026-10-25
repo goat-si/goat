@@ -87,7 +87,8 @@ const fakeLeases = (input: {
     humanInput: () => Effect.die("unused"),
     agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
-    turnEnded: () => Effect.die("unused"),
+    // Every attachment here is for a turn whose run is open.
+    turnEnded: () => Effect.succeed(false),
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
