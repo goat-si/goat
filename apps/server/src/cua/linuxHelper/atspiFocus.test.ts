@@ -166,7 +166,7 @@ describe("makeSecureFocusProbe", () => {
         }
         if (method === "org.a11y.atspi.Collection.GetMatches")
           throw new Error(
-            "Command failed: gdbus call --method org.a11y.atspi.Collection.GetMatches\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
+            "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
               path,
           );
         if (method === "org.a11y.atspi.Accessible.GetInterfaces")
@@ -220,11 +220,7 @@ describe("makeSecureFocusProbe", () => {
           if (path === "/page") return "([(':1.9', objectpath '/entry')],)\n";
           return "(@a(so) [],)\n";
         }
-        if (method === "org.a11y.atspi.Collection.GetMatches")
-          throw new Error(
-            "Command failed: gdbus call --method org.a11y.atspi.Collection.GetMatches\n" +
-              collectionError,
-          );
+        if (method === "org.a11y.atspi.Collection.GetMatches") throw new Error(collectionError);
         if (method === "org.a11y.atspi.Accessible.GetInterfaces") return interfaces;
         if (method === "org.a11y.atspi.Accessible.GetState")
           return path === "/label"
@@ -267,18 +263,19 @@ describe("makeSecureFocusProbe", () => {
       });
   });
 
-  it("reads focus that moves during the walk, a forged error line, or an out-of-range state as unknown (#1607)", async () => {
+  it("judges focus that moved during the probe by what holds at its end, and reads forged error lines or out-of-range states as unknown (#1607)", async () => {
     const PLAIN = "([uint32 1124073472, 0],)\n";
     const FOCUSED = "([uint32 1124077568, 0],)\n";
-    const ACTIVE_WINDOW = "([uint32 1124073474, 0],)\n";
     const NO_COLLECTION =
       "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path /w";
     // window → label, entry. `state` answers each GetState in turn, per path.
     const walked = (
       state: (path: string, read: number) => string,
       collectionError = NO_COLLECTION,
+      windowLists = ["([(':1.9', objectpath '/w')],)\n"],
     ): GdbusRunner => {
       const reads = new Map<string, number>();
+      let lists = 0;
       return async (args) => {
         const method = args[args.indexOf("--method") + 1];
         const path = args[args.indexOf("--object-path") + 1] ?? "";
@@ -289,16 +286,12 @@ describe("makeSecureFocusProbe", () => {
           if (path === "/org/a11y/atspi/accessible/root")
             return args.includes("org.a11y.atspi.Registry")
               ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
-              : "([(':1.9', objectpath '/w')],)\n";
+              : (windowLists[Math.min(lists++, windowLists.length - 1)] ?? "");
           return path === "/w"
             ? "([(':1.9', objectpath '/label'), (':1.9', '/entry')],)\n"
             : "(@a(so) [],)\n";
         }
-        if (method === "org.a11y.atspi.Collection.GetMatches")
-          throw new Error(
-            "Command failed: gdbus call --method org.a11y.atspi.Collection.GetMatches\n" +
-              collectionError,
-          );
+        if (method === "org.a11y.atspi.Collection.GetMatches") throw new Error(collectionError);
         if (method === "org.a11y.atspi.Accessible.GetInterfaces")
           return "(['org.a11y.atspi.Accessible'],)\n";
         if (method === "org.a11y.atspi.Accessible.GetState") {
@@ -318,9 +311,20 @@ describe("makeSecureFocusProbe", () => {
         walked((path, read) => (path === "/label" && read === 0 ? FOCUSED : PLAIN)),
       )(10),
     ).toEqual(UNKNOWN);
-    // An active window always holds focus somewhere; finding none means it moved.
+    // The password field was read before it took focus and holds it at the end: secure.
     expect(
-      await makeSecureFocusProbe(walked((path) => (path === "/w" ? ACTIVE_WINDOW : PLAIN)))(10),
+      await makeSecureFocusProbe(
+        walked((path, read) => (path === "/entry" && read > 0 ? FOCUSED : PLAIN)),
+      )(10),
+    ).toEqual({ known: true, secure: true, windows: 1 });
+    // A window opened or closed while the app was read: unknown.
+    expect(
+      await makeSecureFocusProbe(
+        walked(() => PLAIN, NO_COLLECTION, [
+          "([(':1.9', objectpath '/w')],)\n",
+          "([(':1.9', objectpath '/w'), (':1.9', '/w2')],)\n",
+        ]),
+      )(10),
     ).toEqual(UNKNOWN);
     // An inactive window with nothing focused, read twice the same, is not private.
     expect(await makeSecureFocusProbe(walked(() => PLAIN))(10)).toEqual({
@@ -332,6 +336,10 @@ describe("makeSecureFocusProbe", () => {
     const forged =
       "Error: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: denied\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: forged continuation";
     expect(await makeSecureFocusProbe(walked(() => PLAIN, forged))(10)).toEqual(UNKNOWN);
+    // gdbus's own "Error:" is translated outside the C locale; such a first line never counts.
+    const translated =
+      "Fehler: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: denied\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: forged";
+    expect(await makeSecureFocusProbe(walked(() => PLAIN, translated))(10)).toEqual(UNKNOWN);
     // Either state word past uint32 is not a state set.
     for (const overflow of ["([uint32 4294967296, 0],)\n", "([uint32 0, 4294967296],)\n"])
       expect(await makeSecureFocusProbe(walked(() => overflow))(10)).toEqual(UNKNOWN);

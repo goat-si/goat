@@ -31,9 +31,7 @@ const ROLE_PASSWORD_TEXT = 40;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
 // reported unknown, which the helper treats as private.
 const MAX_WINDOWS = 64;
-// AtspiStateType bits of the first state word: ACTIVE 1 (a window holding keyboard focus),
-// FOCUSED 12.
-const STATE_ACTIVE = 1 << 1;
+// AtspiStateType FOCUSED: bit 12 of the first state word.
 const STATE_FOCUSED = 1 << 12;
 // GTK4 has no Collection interface, so focus is found by walking (#1607). Each node costs a
 // gdbus call or two; past this many in one probe, focus is reported unknown, which is private.
@@ -49,16 +47,15 @@ function parseStates(output: string): number | null {
 }
 
 /**
- * A gdbus failure whose reply is UnknownMethod. gdbus prints the reply's error on the first
- * "Error:" line; a message can run on to further lines, so nothing after that line counts, and
- * the command line before it names the method too. The message text is the app's, translated,
- * so whether the object really lacks Collection is asked separately (GetInterfaces).
+ * A gdbus failure whose reply is UnknownMethod. The runner fails with gdbus's own stderr, in the
+ * C locale, whose first line is the reply's error; a message can run on to further lines, so
+ * nothing after it counts. The message text is the app's, translated, so whether the object
+ * really lacks Collection is asked separately (GetInterfaces).
  */
 function unknownMethod(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  const header = text.split("\n").find((line) => line.startsWith("Error: "));
-  return (
-    header?.startsWith("Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: ") ?? false
+  return (text.split("\n", 1)[0] ?? "").startsWith(
+    "Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: ",
   );
 }
 
@@ -173,24 +170,32 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       if (windows.length > MAX_WINDOWS)
         return { known: false, secure: false, windows: windows.length };
       let walkBudget = MAX_WALK_NODES;
-      // Every object of the window, for a toolkit without Collection: all that say they have
-      // focus, whose roles are all checked below. A hidden container can still hold focus, so
-      // none is skipped; an unreadable state or an exhausted budget throws, so focus is unknown.
-      const readStates = async (node: { readonly bus: string; readonly path: string }) => {
+      type Ref = { readonly bus: string; readonly path: string };
+      const readStates = async (node: Ref) => {
         const states = parseStates(
           await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
         );
         if (states === null) throw new Error("AT-SPI gave no state set.");
         return states;
       };
-      const walkFocused = async (window: { readonly bus: string; readonly path: string }) => {
-        const focused: Array<{ readonly bus: string; readonly path: string }> = [];
-        let windowActive = false;
+      // Read again once every window has been read: password fields the walks saw, and what
+      // they found focused.
+      const passwords: Ref[] = [];
+      const walkedFocus: Ref[] = [];
+      // Every object of the window, for a toolkit without Collection: its state and role. A
+      // hidden container can still hold focus, so none is skipped; an unreadable answer or an
+      // exhausted budget throws, so focus is unknown.
+      const walkFocused = async (window: Ref) => {
+        const focused: Ref[] = [];
         const queue = [window];
         for (let node = queue.shift(); node !== undefined; node = queue.shift()) {
           if (--walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
           const states = await readStates(node);
-          if (node === window) windowActive = (states & STATE_ACTIVE) !== 0;
+          const role = parseUint32(
+            await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetRole"),
+          );
+          if (role === null) throw new Error("AT-SPI gave no role.");
+          if (role === ROLE_PASSWORD_TEXT) passwords.push(node);
           if ((states & STATE_FOCUSED) !== 0) focused.push(node);
           queue.push(
             ...parseReferences(
@@ -198,16 +203,7 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             ),
           );
         }
-        // The walk reads one object at a time, so focus can move under it. What it found must
-        // still hold at the end: every focused object still focused, and a window that holds
-        // focus (ACTIVE) never comes back with nothing focused in it. Otherwise focus is unknown.
-        if (focused.length === 0) {
-          if (windowActive || ((await readStates(window)) & STATE_ACTIVE) !== 0)
-            throw new Error("Focus moved while the window was read.");
-        } else
-          for (const node of focused)
-            if (((await readStates(node)) & STATE_FOCUSED) === 0)
-              throw new Error("Focus moved while the window was read.");
+        walkedFocus.push(...focused);
         return focused;
       };
       for (const window of windows) {
@@ -242,6 +238,23 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             return { known: true, secure: true, windows: windows.length };
         }
       }
+      if (passwords.length > 0 || walkedFocus.length > 0) {
+        // A walk reads one object at a time, so focus can move under it, within a window or
+        // between windows. A password field focused through the whole probe is focused now;
+        // what was found focused must still be, and the app must show the same windows.
+        // Otherwise focus is unknown. A password field created and focused after its parent
+        // was read is the one change this does not see (#1607).
+        const now = parseReferences(await call(bus, ROOT, "org.a11y.atspi.Accessible.GetChildren"));
+        const same = (refs: ReadonlyArray<Ref>) => refs.map((ref) => ref.bus + ref.path).join("\n");
+        if (same(now) !== same(windows))
+          throw new Error("The app's windows changed while they were read.");
+        for (const node of passwords)
+          if (((await readStates(node)) & STATE_FOCUSED) !== 0)
+            return { known: true, secure: true, windows: windows.length };
+        for (const node of walkedFocus)
+          if (((await readStates(node)) & STATE_FOCUSED) === 0)
+            throw new Error("Focus moved while the app was read.");
+      }
       return { known: true, secure: false, windows: windows.length };
     } catch {
       // A restarted app gets a new bus name; look it up again next time.
@@ -259,7 +272,13 @@ export const gdbusRunner =
       NodeChildProcess.execFile(
         "gdbus",
         [...args],
-        { env: { ...environment }, timeout: 1_000, maxBuffer: 256 * 1024 },
-        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        // GLib translates gdbus's own "Error:" line; the C locale keeps it the one this reads.
+        {
+          env: { ...environment, LC_ALL: "C", LANGUAGE: "" },
+          timeout: 1_000,
+          maxBuffer: 256 * 1024,
+        },
+        (error, stdout, stderr) =>
+          error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout),
       );
     });
