@@ -19,7 +19,7 @@
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
   its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
-  decision; GOAT pins the fork's `cua-driver-rs-v0.37.0-goat.1` archives since #1591.
+  decision; GOAT pins the fork's `cua-driver-rs-v0.37.0-goat.2` archives since #1591.
 - Amended 2026-10-25, D16 (owner decision, Jun, 2026-10-25 18:15 KST, corrected 18:17; #1617,
   #1396): every run in full-access runtime mode uses apps without per-app approval, whoever or
   whatever started it, whatever `cuaFullAccessAutoAdmit` says. This replaces #1396's

@@ -265,8 +265,8 @@
       "bundles": ["desktop"],
       "license": "MIT AND MPL-2.0",
       "name": "Cua Driver",
-      "version": "0.37.0-goat.1",
-      "sourceUrl": "https://github.com/goat-si/cua-driver/tree/cua-driver-rs-v0.37.0-goat.1",
+      "version": "0.37.0-goat.2",
+      "sourceUrl": "https://github.com/goat-si/cua-driver/tree/cua-driver-rs-v0.37.0-goat.2",
       "noticeFiles": [
         "apps/desktop/src/cua/notices/LICENSE.md",
         "apps/desktop/src/cua/notices/THIRD_PARTY_NOTICES.md",

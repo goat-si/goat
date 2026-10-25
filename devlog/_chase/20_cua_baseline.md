@@ -18,8 +18,8 @@ upstream과 GOAT 저장소가 git 히스토리를 공유하지 않는다. upstre
 | 포크 저장소                 | `goat-si/cua-driver` (2026-10-25 생성, public). `upstream` = subtree split만, `main` = `upstream` + GOAT 변경(PR로만)                                  |
 | reviewed-through (split)    | 포크 `upstream` `0c0ffa5bc32e`, 태그 `upstream-v0.37.0`. trycua/cua `2d2f99228d`의 split이다                                                           |
 | 포크 `main`                 | `ec339be454a5`: split 위에 GOAT 커밋 2개 (`64ba7cd62620` standalone 빌드·`vendor/`·`LICENSE.md`, `ec339be454a5` GOAT.md). PR goat-si/cua-driver#1 열림 |
-| 포크 릴리스                 | `cua-driver-rs-v0.37.0-goat.1` (포크 `main` `2dd4a301ad94`, 2026-10-25). 서명 없음 + attestation. 태그 규약은 포크 GOAT.md                             |
-| GOAT가 실제로 쓰는 드라이버 | 포크 `0.37.0-goat.1` 아카이브를 크기·SHA-256으로 pin (#1591). 헬퍼 빌드가 Developer ID로 서명                                                          |
+| 포크 릴리스                 | `cua-driver-rs-v0.37.0-goat.2` (포크 `main` `fed205570015`, 2026-10-25). 서명 없음 + attestation. 태그 규약은 포크 GOAT.md                             |
+| GOAT가 실제로 쓰는 드라이버 | 포크 `0.37.0-goat.2` 아카이브를 크기·SHA-256으로 pin (#1591). 헬퍼 빌드가 Developer ID로 서명                                                          |
 | upstream 앞섬               | 0.38.0 (`85e2b1318bd7`, 2026-10-21) 경로 커밋 29개, `main` 기준 44개 (2026-10-25)                                                                      |
 
 reviewed-through는 포크 `upstream` 브랜치 tip과 그것이 split한 trycua/cua 커밋의 쌍이다. split 커밋은 upstream SHA와 다르므로
