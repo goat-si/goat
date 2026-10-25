@@ -117,6 +117,77 @@ describe("cuaDriverManifest", () => {
       expect(admittedCuaApplications(listed, host)).toEqual(["C:\\Apps\\notes.exe"]);
   });
 
+  it("admits a running Linux app with no desktop entry by its executable, one entry per path (#1513)", () => {
+    expect(
+      admittedCuaApplications(
+        [
+          { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+          { bundle_id: null, name: "python3", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "fixture.py", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "cua-driver", executable: "/opt/goat/cua-driver/cua-driver" },
+          { bundle_id: null, name: "keepassxc", executable: "/usr/bin/keepassxc" },
+          { bundle_id: null, name: "node", executable: "/usr/bin/node" },
+        ],
+        ["/usr/bin/node"],
+      ),
+    ).toEqual([
+      { executable: "/usr/bin/python3.12", names: ["fixture.py", "python3"] },
+      "org.gnome.Calculator",
+    ]);
+  });
+
+  it("writes a Linux executable grant the driver matches, and reads back the names approvals use (#1513)", () => {
+    const text = cuaDriverCapabilityManifest({
+      applications: [
+        "org.gnome.Calculator",
+        { executable: "/usr/bin/python3.12", names: ["python3"] },
+      ],
+      tools: ["list_apps"],
+    });
+    expect(text).toContain('    - executable: "/usr/bin/python3.12" # names: ["python3"]');
+    expect(cuaDriverManifestApplications(text)).toEqual([
+      "org.gnome.Calculator",
+      "/usr/bin/python3.12",
+      "python3",
+    ]);
+    expect(
+      missingCuaDriverApplications(["python3", "gedit"], cuaDriverManifestApplications(text)),
+    ).toEqual(["gedit"]);
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "reads a windowed Linux app's executable from /proc, never GOAT's own process or a windowless one (#1513)",
+    async () => {
+      const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-"));
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const pid = child.pid ?? 0;
+        const path = await prepareCuaDriverCapabilityManifest({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          path: NodePath.join(directory, "manifest.yaml"),
+          listApplications: async () => [
+            { bundle_id: null, name: "sleep", pid, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "windowless", pid, windows: [] },
+            { bundle_id: null, name: "goat", pid: process.pid, windows: [{ window_id: 2 }] },
+          ],
+        });
+        const text = await NodeFSP.readFile(path, "utf8");
+        const sleep = await NodeFSP.realpath(`/proc/${pid}/exe`);
+        expect(text).toContain(`    - executable: ${JSON.stringify(sleep)} # names: ["sleep"]`);
+        expect(text).not.toContain("windowless");
+        expect(text).not.toContain(JSON.stringify(await NodeFSP.realpath(process.execPath)));
+      } finally {
+        child.kill();
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("writes a v3 manifest: tools, display, admitted apps and no file or profile scope", () => {
     const text = cuaDriverCapabilityManifest({
       applications: ['com.example."quoted"'],

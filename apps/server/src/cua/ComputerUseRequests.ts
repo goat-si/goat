@@ -28,6 +28,25 @@ import { computerUseOrigin, projectionOriginReads } from "./ComputerUseOrigin.ts
 
 const DEFAULT_MINUTES = 30;
 
+/**
+ * What an approval card says, once: the summary names the thread, turn, apps and span, and the
+ * details shown after "Review request" say what approving does. Cards show the expiry in the
+ * reader's own time, so neither carries a clock time, and neither names the internal run id.
+ */
+const grantText = (input: {
+  readonly title: string;
+  readonly turn: number;
+  readonly apps: ReadonlyArray<string> | undefined;
+  readonly minutes: number;
+  readonly purpose: string;
+}) => ({
+  reason: `${input.title} (turn ${input.turn}) asks to ${input.apps === undefined ? "see and control this computer's screen" : `control ${input.apps.join(", ")}`} for ${input.minutes} minutes: ${input.purpose}`,
+  details:
+    input.apps === undefined
+      ? "Approving admits this thread's turns until the request expires. It does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too."
+      : "Approving admits this thread's turns to these apps' windows until the request expires. It does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
+});
+
 export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (input: {
   readonly threadId: ThreadId;
   readonly providerInstanceId: ProviderInstanceId;
@@ -105,16 +124,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     } satisfies ComputerUseRequestResult;
   const minutes = input.request.minutes ?? DEFAULT_MINUTES;
   const expiresAt = DateTime.add(yield* DateTime.now, { minutes });
-  const until = DateTime.formatIso(expiresAt);
-  // Cards show the expiry in the reader's own time; the text gives the span and a UTC clock time.
-  const span = `for ${minutes} minutes, until ${until.slice(11, 16)} UTC`;
   const host = yield* HostProcess.Hostname;
   const environmentId = yield* (yield* ServerEnvironment.ServerEnvironment).getEnvironmentId;
-  const title = view.projection.thread.title.trim() || "A thread";
-  const what =
-    wanted === undefined
-      ? "see and control this computer's screen"
-      : `control ${wanted.join(", ")}`;
+  const text = grantText({
+    title: view.projection.thread.title.trim() || "A thread",
+    turn: run.ordinal,
+    apps: wanted,
+    minutes,
+    purpose: input.request.purpose,
+  });
   const handoffs = yield* Handoffs.Handoffs;
   const handoff = yield* handoffs.create({
     kind: "approval",
@@ -122,7 +140,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       wanted === undefined
         ? `Allow computer use on ${host}?`
         : `Allow ${wanted.join(", ")} on ${host}?`,
-    reason: `${title} (turn ${run.ordinal}) asks to ${what} ${span}: ${input.request.purpose}`,
+    reason: text.reason,
     requestedBy: {
       threadId: input.threadId,
       providerInstanceId: input.providerInstanceId,
@@ -131,15 +149,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     target: { environmentId, path: COMPUTER_USE_GRANT_HANDOFF_PATH },
     runId: run.id,
     nodeId: run.rootNodeId,
-    human: {
-      location: [
-        `${title}, turn ${run.ordinal} (run ${run.id}), asks to ${what} on ${host} ${span} (${until}).`,
-        `Its stated purpose: ${input.request.purpose}`,
-        wanted === undefined
-          ? "Approving admits this thread's turns until then; it does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too."
-          : "Approving admits this thread's turns to these apps' windows until then; it does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
-      ].join("\n\n"),
-    },
+    human: { location: text.details },
     args: {
       purpose: input.request.purpose,
       minutes,
