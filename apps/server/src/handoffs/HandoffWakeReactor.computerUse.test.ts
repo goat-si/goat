@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { COMPUTER_USE_GRANT_HANDOFF_PATH } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
@@ -35,7 +36,7 @@ it.effect("consumes an approval in the waiting turn and keeps later reconciles q
       );
       expect(yield* Fiber.join(waiting)).toMatchObject({
         handoff: { state: "completed" },
-        consumed: true,
+        usable: true,
       });
       yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
       expect(yield* wakes(world)).toHaveLength(0);
@@ -47,7 +48,7 @@ it.effect("consumes an approval in the waiting turn and keeps later reconciles q
   ),
 );
 
-it.effect("consumes an earlier approval and cancels its wake queued behind the asking turn", () =>
+it.effect("an approval that lands before the call waits still reaches it and keeps its wake", () =>
   withWorld((world) =>
     Effect.gen(function* () {
       yield* startEpoch(world);
@@ -60,10 +61,6 @@ it.effect("consumes an earlier approval and cancels its wake queued behind the a
       yield* world.reactor.handle(event);
       const sent = yield* wakes(world);
       expect(sent).toHaveLength(1);
-      const wakeRun = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
-        (run) => run.userMessageId === sent[0]!.id,
-      );
-      expect(wakeRun?.status).toBe("queued");
       const answer = yield* world.handoffs.awaitComputerUseAnswer(
         {
           threadId,
@@ -72,50 +69,47 @@ it.effect("consumes an earlier approval and cancels its wake queued behind the a
         },
         () => Effect.succeed(true),
       );
-      expect(answer).toMatchObject({ handoff: { state: "completed" }, consumed: true });
-      for (const deliver of [world.reactor.handle(event), world.reactor.reconcile]) {
-        yield* deliver;
-        expect(yield* wakes(world)).toHaveLength(1);
-        const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs.filter(
-          (run) => run.userMessageId === sent[0]!.id,
-        );
-        expect(runs.map((run) => run.status)).toEqual(["cancelled"]);
-      }
+      expect(answer).toMatchObject({ handoff: { state: "completed" }, usable: true });
+      // The wake went out before the call owned the request; it stays, so nothing is lost.
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toHaveLength(1);
+      const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs.filter(
+        (run) => run.userMessageId === sent[0]!.id,
+      );
+      expect(runs.map((run) => run.status)).toEqual(["queued"]);
     }),
   ),
 );
 
 it.effect(
-  "an answer whose queued wake cannot be withdrawn still reaches the call and keeps that wake",
+  "a call interrupted while it records an answer gives the answer back to the reactor",
   () =>
     withWorld((world) =>
       Effect.gen(function* () {
         yield* startEpoch(world);
+        const now = yield* DateTime.now;
         const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
-        yield* world.handoffs.respond(
-          { threadId, handoffId: summary.handoffId, action: "completed" },
-          person,
+        const waiting = yield* waitForComputerUse(
+          world,
+          summary.handoffId,
+          DateTime.add(now, { minutes: 1 }),
         );
-        yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
-        const sent = yield* wakes(world);
-        expect(sent).toHaveLength(1);
-        world.outage.failWithdraw = true;
-        const answer = yield* world.handoffs.awaitComputerUseAnswer(
-          {
-            threadId,
-            handoffId: summary.handoffId,
-            until: DateTime.add(yield* DateTime.now, { minutes: 1 }),
-          },
-          () => Effect.succeed(true),
+        const gate = yield* Deferred.make<void>();
+        world.outage.storeGate = gate;
+        yield* world.handoffs
+          .respond({ threadId, handoffId: summary.handoffId, action: "completed" }, person)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        // The waiting call is writing its record of the answer when its turn is stopped.
+        yield* Deferred.await(world.outage.stored);
+        const stopping = yield* Fiber.interrupt(waiting).pipe(
+          Effect.forkChild({ startImmediately: true }),
         );
-        expect(answer).toMatchObject({ handoff: { state: "completed" }, consumed: true });
-        // Nothing recorded the answer as taken, so the thread keeps the wake it was sent.
-        world.outage.failWithdraw = false;
+        world.outage.storeGate = undefined;
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(stopping);
         yield* world.reactor.reconcile;
-        const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs.filter(
-          (run) => run.userMessageId === sent[0]!.id,
-        );
-        expect(runs.map((run) => run.status)).toEqual(["queued"]);
+        expect(yield* wakes(world)).toHaveLength(1);
+        yield* world.reactor.reconcile;
         expect(yield* wakes(world)).toHaveLength(1);
       }),
     ),
@@ -137,7 +131,7 @@ it.effect("a repeated decline keeps a decline the waiting call already returned 
         person,
       );
       yield* decline;
-      expect(yield* Fiber.join(waiting)).toMatchObject({ consumed: true });
+      expect(yield* Fiber.join(waiting)).toMatchObject({ usable: true });
       // A client retrying the same answer must not clear the record of it.
       yield* decline;
       yield* world.reactor.reconcile;
@@ -161,7 +155,7 @@ it.effect.each(["declined", "cancelled"] as const)(
         yield* world.handoffs.respond({ threadId, handoffId: summary.handoffId, action }, person);
         expect(yield* Fiber.join(waiting)).toMatchObject({
           handoff: { state: action, actor: { type: "client" } },
-          consumed: true,
+          usable: true,
         });
         yield* world.reactor.handle(yield* resolution(world, summary.handoffId, action));
         expect(yield* wakes(world)).toHaveLength(0);
@@ -191,7 +185,7 @@ it.effect(
         yield* TestClock.adjust("2 minutes");
         expect(yield* Fiber.join(waiting)).toMatchObject({
           handoff: { state: "pending" },
-          consumed: false,
+          usable: false,
         });
         expect(yield* wakes(world)).toHaveLength(0);
         yield* world.handoffs.respond(
@@ -223,7 +217,7 @@ it.effect("wakes once when the asking turn cannot consume an answer it waited fo
       );
       expect(yield* Fiber.join(waiting)).toMatchObject({
         handoff: { state: "completed" },
-        consumed: false,
+        usable: false,
       });
       yield* world.reactor.handle(yield* resolution(world, summary.handoffId));
       expect(yield* wakes(world)).toHaveLength(1);
@@ -251,7 +245,7 @@ it.effect("consumes expiry before the wait budget without waking another turn", 
       yield* TestClock.adjust("2 minutes");
       expect(yield* Fiber.join(waiting)).toMatchObject({
         handoff: { state: "expired" },
-        consumed: true,
+        usable: true,
       });
       yield* world.reactor.handle(yield* resolution(world, summary.handoffId, "expired"));
       expect(yield* wakes(world)).toHaveLength(0);
@@ -319,7 +313,7 @@ it.effect(
         );
         expect(yield* Fiber.join(waiting)).toMatchObject({
           handoff: { state: "cancelled", actor: { type: "agent" } },
-          consumed: true,
+          usable: true,
         });
         yield* world.reactor.handle(yield* resolution(world, summary.handoffId, "cancelled"));
         expect(yield* wakes(world)).toHaveLength(0);

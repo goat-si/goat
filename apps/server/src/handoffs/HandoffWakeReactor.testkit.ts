@@ -56,8 +56,9 @@ export interface World {
   readonly outage: {
     failing: number;
     slowMs: number;
-    /** Withdrawing a queued wake run fails. */
-    failWithdraw: boolean;
+    /** Holds the next secret-store write until it completes; `stored` says it arrived. */
+    storeGate: Deferred.Deferred<void> | undefined;
+    stored: Deferred.Deferred<void>;
     arrived: Deferred.Deferred<void>;
     readonly sent: Array<string>;
   };
@@ -111,7 +112,8 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       const outage: World["outage"] = {
         failing: 0,
         slowMs: 0,
-        failWithdraw: false,
+        storeGate: undefined,
+        stored: yield* Deferred.make<void>(),
         arrived: yield* Deferred.make<void>(),
         sent: [],
       };
@@ -129,13 +131,6 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
       };
       const threads = Layer.mock(ThreadManagement.ThreadManagementService)({
         dispatch: (command) => {
-          if (command.type === "queued-run.cancel" && outage.failWithdraw)
-            return Effect.fail(
-              new Orchestrator.OrchestratorCommandRejectedError({
-                commandId: command.commandId,
-                commandType: command.type,
-              }),
-            );
           if (command.type !== "message.dispatch" || !command.commandId.startsWith("server:"))
             return orchestrator.dispatch(command);
           outage.sent.push(command.commandId);
@@ -185,7 +180,15 @@ export const withWorld = <A, E>(body: (world: World) => Effect.Effect<A, E>) =>
                   SecretStore.ServerSecretStore,
                   SecretStore.ServerSecretStore.of({
                     get: (name) => Effect.sync(() => Option.fromNullishOr(secrets.get(name))),
-                    set: (name, value) => Effect.sync(() => void secrets.set(name, value)),
+                    set: (name, value) =>
+                      Effect.gen(function* () {
+                        const gate = outage.storeGate;
+                        if (gate !== undefined) {
+                          yield* Deferred.succeed(outage.stored, undefined);
+                          yield* Deferred.await(gate);
+                        }
+                        secrets.set(name, value);
+                      }),
                     create: (name, value) => Effect.sync(() => void secrets.set(name, value)),
                     remove: (name) => Effect.sync(() => void secrets.delete(name)),
                     getOrCreateRandom: (_name, size) =>

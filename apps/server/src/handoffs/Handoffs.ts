@@ -373,8 +373,14 @@ const make = Effect.gen(function* () {
     consumed: (id) =>
       loadPrivate(id).pipe(Effect.map((payload) => payload?.kind === CONSUMED.kind)),
     markConsumed: (id) => savePrivate(id, CONSUMED, true),
-    threads,
-    unavailable,
+    clearConsumed: (id) =>
+      loadPrivate(id).pipe(
+        Effect.flatMap((payload) =>
+          payload?.kind === CONSUMED.kind
+            ? store.remove(storeName(id)).pipe(Effect.mapError(unavailable))
+            : Effect.void,
+        ),
+      ),
   });
   /**
    * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)

@@ -1,41 +1,39 @@
 /**
- * A computer use request whose call is still waiting in its turn owns the person's answer:
- * the wake reactor delivers nothing for it, and once the call returns the answer it records that
- * durably and withdraws any wake already sent. Every step that reads or changes that ownership
- * runs under the Handoffs lock, so a wake is either sent before the call takes the answer (and
- * withdrawn by it) or never sent.
+ * A computer use request whose call is waiting in its turn owns the person's answer: the wake
+ * reactor sends nothing for it while the call owns it. When the call returns an answer that came
+ * in while it owned the request, it records that durably, so no later reconcile wakes the thread
+ * for it; if the call then fails or is interrupted, it removes that record again and the reactor
+ * delivers the wake it never sent. Ownership, answers, expiry and wake delivery all run under the
+ * Handoffs lock.
  *
  * @module computerUseContinuations
  */
 import {
-  CommandId,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   type Handoff,
   type HandoffError,
   type HandoffReadInput,
   isHandoffPending,
-  MessageId,
   type ThreadId,
 } from "@goat/contracts";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- withdrawal command ids are random.
-import * as NodeCrypto from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as PubSub from "effect/PubSub";
 import type * as Semaphore from "effect/Semaphore";
 
-import type * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
-
 export const CONSUMED = { version: 1, kind: "computer_use_consumed" } as const;
-const RESOLVED = ["completed", "declined", "cancelled", "expired"] as const;
 
 export interface ComputerUseAnswer {
   readonly handoff: Handoff;
-  /** The call returned this answer in its turn; no wake follows. */
-  readonly consumed: boolean;
+  /** The asking turn can still act on this answer; when false, a later turn gets it. */
+  readonly usable: boolean;
 }
 
 type E = HandoffError;
+
+const logged = (message: string, handoffId: string) =>
+  Effect.catchCause((cause: unknown) => Effect.logWarning(message, { handoffId, cause }));
 
 export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseContinuations")(
   function* (deps: {
@@ -45,188 +43,130 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
     readonly cancelAsAgent: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
     readonly consumed: (handoffId: string) => Effect.Effect<boolean, E>;
     readonly markConsumed: (handoffId: string) => Effect.Effect<void, E>;
-    readonly threads: ThreadManagement.ThreadManagementService["Service"];
-    readonly unavailable: (cause: unknown) => E;
+    readonly clearConsumed: (handoffId: string) => Effect.Effect<void, E>;
   }) {
-    {
-      const answers = yield* PubSub.unbounded<string>();
-      const owners = new Map<string, number>();
-      const own = (id: string) => owners.set(id, (owners.get(id) ?? 0) + 1);
-      const release = (id: string) => {
-        const left = (owners.get(id) ?? 1) - 1;
-        if (left > 0) owners.set(id, left);
-        else owners.delete(id);
+    const answers = yield* PubSub.unbounded<string>();
+    const owners = new Map<string, number>();
+    const locked = deps.lock.withPermits(1);
+
+    /**
+     * Waits until a person answers the request, it expires, or `until`. `settle` judges, under
+     * the lock, whether the asking turn can still use an answer. A request still pending at
+     * `until` stays open and wakes the thread when answered.
+     */
+    const awaitAnswer = Effect.fn("Handoffs.awaitComputerUseAnswer")(function* (
+      input: HandoffReadInput & { readonly until: DateTime.Utc },
+      settle: (handoff: Handoff) => Effect.Effect<boolean, E>,
+    ) {
+      // Subscribed before ownership, so an answer after it is never missed.
+      const subscription = yield* PubSub.subscribe(answers);
+      let held = false;
+      let recorded = false;
+      // Only an answer that came in while this call owned the request was never woken for.
+      let ownedWhilePending = false;
+      const release = () => {
+        if (!held) return;
+        held = false;
+        const left = (owners.get(input.handoffId) ?? 1) - 1;
+        if (left > 0) owners.set(input.handoffId, left);
+        else owners.delete(input.handoffId);
       };
-      const locked = deps.lock.withPermits(1);
-
-      /** Cancels a wake the reactor already sent, while it has not started acting. */
-      const withdraw = Effect.fn("Handoffs.withdrawAnsweredWake")(function* (
-        input: HandoffReadInput,
-      ) {
-        const wakes = new Set(
-          RESOLVED.map((state) =>
-            MessageId.make(`message:handoff-wake:${input.handoffId}:${state}`),
-          ),
-        );
-        const records = yield* deps.threads
-          .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
-          .pipe(Effect.mapError(deps.unavailable));
-        for (const run of records.runs) {
-          if (!wakes.has(run.userMessageId)) continue;
-          const commandId = CommandId.make(
-            `handoff:${input.handoffId}:answered-in-turn:${NodeCrypto.randomUUID()}`,
+      yield* locked(
+        Effect.gen(function* () {
+          owners.set(input.handoffId, (owners.get(input.handoffId) ?? 0) + 1);
+          held = true;
+          ownedWhilePending = isHandoffPending((yield* deps.read(input)).state);
+        }),
+      );
+      const finish = Effect.fn("Handoffs.finishComputerUseAnswer")(function* (handoff: Handoff) {
+        release();
+        const usable = yield* settle(handoff);
+        if (usable && ownedWhilePending)
+          recorded = yield* deps.markConsumed(input.handoffId).pipe(
+            Effect.as(true),
+            logged("an answered computer use request was not recorded", input.handoffId),
+            Effect.map((done) => done === true),
           );
-          if (run.status === "queued")
-            yield* deps.threads
-              .dispatch({
-                type: "queued-run.cancel",
-                commandId,
-                threadId: input.threadId,
-                runId: run.id,
-              })
-              .pipe(Effect.mapError(deps.unavailable));
-          else if (run.status === "preparing" || run.status === "starting")
-            yield* deps.threads
-              .dispatch({
-                type: "run.interrupt",
-                commandId,
-                threadId: input.threadId,
-                runId: run.id,
-                reason: "The turn that asked already received this answer.",
-              })
-              .pipe(Effect.mapError(deps.unavailable));
-        }
+        return { handoff, usable } satisfies ComputerUseAnswer;
       });
-
-      /**
-       * Takes the answer for the call when `settle` says its turn can still use it. The record that
-       * keeps the reactor quiet is written only once every wake already sent is withdrawn, and
-       * neither step fails the call: at worst the thread gets a second wake, never none.
-       */
-      const finish = Effect.fn("Handoffs.finishComputerUseAnswer")(function* (
-        input: HandoffReadInput,
-        handoff: Handoff,
-        settle: Effect.Effect<boolean, E>,
-      ) {
-        if (!(yield* settle)) return { handoff, consumed: false } satisfies ComputerUseAnswer;
-        const withdrawn = yield* withdraw(input).pipe(
-          Effect.as(true),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("an answered computer use wake could not be withdrawn", {
-              handoffId: input.handoffId,
-              cause,
-            }).pipe(Effect.as(false)),
-          ),
-        );
-        if (withdrawn)
-          yield* deps.markConsumed(input.handoffId).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("an answered computer use request was not recorded", {
-                handoffId: input.handoffId,
-                cause,
-              }),
-            ),
+      return yield* Effect.gen(function* () {
+        for (;;) {
+          const step = yield* locked(
+            Effect.gen(function* () {
+              let handoff = yield* deps.read(input);
+              const now = yield* DateTime.now;
+              if (
+                isHandoffPending(handoff.state) &&
+                handoff.expiresAt !== null &&
+                DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)
+              )
+                handoff = yield* deps.expire(input);
+              if (!isHandoffPending(handoff.state)) return { done: yield* finish(handoff) };
+              if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.until)) {
+                release();
+                return { done: { handoff, usable: false } satisfies ComputerUseAnswer };
+              }
+              const wakeAt = Math.min(
+                DateTime.toEpochMillis(input.until),
+                handoff.expiresAt === null ? Infinity : DateTime.toEpochMillis(handoff.expiresAt),
+              );
+              return { wait: wakeAt - DateTime.toEpochMillis(now) };
+            }).pipe(Effect.uninterruptible),
           );
-        return { handoff, consumed: true } satisfies ComputerUseAnswer;
-      }, Effect.uninterruptible);
-
-      /**
-       * Waits until a person answers the request, it expires, or `until`. `settle` judges, under
-       * the lock, whether the asking turn can still use an answer: only then is it consumed. A
-       * request still pending at `until` stays open and wakes the thread when answered.
-       */
-      const awaitAnswer = Effect.fn("Handoffs.awaitComputerUseAnswer")(function* (
-        input: HandoffReadInput & { readonly until: DateTime.Utc },
-        settle: (handoff: Handoff) => Effect.Effect<boolean, E>,
-      ) {
-        // Subscribed before the first read, so an answer between them is not missed.
-        const subscription = yield* PubSub.subscribe(answers);
-        let held = false;
-        const releaseOnce = () => {
-          if (held) release(input.handoffId);
-          held = false;
-        };
-        yield* locked(
-          Effect.sync(() => {
-            own(input.handoffId);
-            held = true;
-          }),
-        );
-        return yield* Effect.gen(function* () {
-          for (;;) {
-            const step = yield* locked(
-              Effect.gen(function* () {
-                let handoff = yield* deps.read(input);
-                const now = yield* DateTime.now;
-                if (
-                  isHandoffPending(handoff.state) &&
-                  handoff.expiresAt !== null &&
-                  DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)
-                )
-                  handoff = yield* deps.expire(input);
-                if (!isHandoffPending(handoff.state)) {
-                  releaseOnce();
-                  return { done: yield* finish(input, handoff, settle(handoff)) };
-                }
-                if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.until)) {
-                  releaseOnce();
-                  return { done: { handoff, consumed: false } satisfies ComputerUseAnswer };
-                }
-                const wakeAt = Math.min(
-                  DateTime.toEpochMillis(input.until),
-                  handoff.expiresAt === null ? Infinity : DateTime.toEpochMillis(handoff.expiresAt),
-                );
-                return { wait: wakeAt - DateTime.toEpochMillis(now) };
-              }),
-            );
-            if ("done" in step) return step.done;
-            yield* Effect.race(
-              PubSub.take(subscription).pipe(
-                Effect.repeat({ until: (id) => id === input.handoffId }),
-                Effect.asVoid,
-              ),
-              Effect.sleep(step.wait),
-            );
-          }
-        }).pipe(
-          // A call that stops waiting (its turn was stopped) leaves the answer to the reactor.
-          Effect.onExit(() => locked(Effect.sync(releaseOnce))),
-        );
-      }, Effect.scoped);
-
-      return {
-        awaitAnswer,
-        /** Signals waiting calls that a request may have been answered. */
-        answered: (handoffId: string) => PubSub.publish(answers, handoffId).pipe(Effect.asVoid),
-        /** Sends a computer use wake only when no call owns or already returned the answer. */
-        deliverWake: <A, E2>(handoff: Handoff, dispatch: Effect.Effect<A, E2>) =>
+          if ("done" in step) return step.done;
+          yield* Effect.race(
+            PubSub.take(subscription).pipe(
+              Effect.repeat({ until: (id) => id === input.handoffId }),
+              Effect.asVoid,
+            ),
+            Effect.sleep(step.wait),
+          );
+        }
+      }).pipe(
+        // A call that does not return its answer gives it back: the reactor wakes for it.
+        Effect.onExit((exit) =>
           locked(
             Effect.gen(function* () {
-              if (owners.has(handoff.handoffId)) return;
-              if (yield* deps.consumed(handoff.handoffId)) return;
-              yield* dispatch;
+              release();
+              if (recorded && !Exit.isSuccess(exit))
+                yield* deps
+                  .clearConsumed(input.handoffId)
+                  .pipe(logged("a computer use answer could not be given back", input.handoffId));
             }),
           ),
-        /**
-         * A newer, different request replaces the thread's other pending ones, ended by the agent so
-         * nothing wakes; their waiting calls report it. Runs inside create, under the lock.
-         */
-        supersede: Effect.fn("Handoffs.supersedeComputerUse")(function* (
-          threadId: ThreadId,
-          pending: ReadonlyArray<Handoff>,
-          keep: string,
-        ) {
-          for (const handoff of pending) {
-            if (
-              handoff.handoffId === keep ||
-              handoff.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH
-            )
-              continue;
-            yield* deps.cancelAsAgent({ threadId, handoffId: handoff.handoffId });
-            yield* PubSub.publish(answers, handoff.handoffId);
-          }
-        }),
-      };
-    }
+        ),
+      );
+    }, Effect.scoped);
+
+    return {
+      awaitAnswer,
+      /** Signals waiting calls that a request may have been answered. */
+      answered: (handoffId: string) => PubSub.publish(answers, handoffId).pipe(Effect.asVoid),
+      /** Sends a computer use wake only when no call owns or already returned the answer. */
+      deliverWake: <A, E2>(handoff: Handoff, dispatch: Effect.Effect<A, E2>) =>
+        locked(
+          Effect.gen(function* () {
+            if (owners.has(handoff.handoffId)) return;
+            if (yield* deps.consumed(handoff.handoffId)) return;
+            yield* dispatch;
+          }),
+        ),
+      /**
+       * A newer, different request replaces the thread's other pending ones, ended by the agent so
+       * nothing wakes; their waiting calls report it. Runs inside create, under the lock.
+       */
+      supersede: Effect.fn("Handoffs.supersedeComputerUse")(function* (
+        threadId: ThreadId,
+        pending: ReadonlyArray<Handoff>,
+        keep: string,
+      ) {
+        for (const handoff of pending) {
+          if (handoff.handoffId === keep || handoff.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH)
+            continue;
+          yield* deps.cancelAsAgent({ threadId, handoffId: handoff.handoffId });
+          yield* PubSub.publish(answers, handoff.handoffId);
+        }
+      }),
+    };
   },
 );

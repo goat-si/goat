@@ -295,14 +295,14 @@ const answered = (
     readonly approvedUntil: string;
   },
 ): ComputerUseRequestResult => {
-  const { handoff, consumed } = answer;
+  const { handoff, usable } = answer;
   const refused = (
     reason: "declined" | "cancelled" | "expired" | "superseded" | "interrupted",
     message: string,
   ) => ({ kind: "refused", reason, message }) satisfies ComputerUseRequestResult;
   switch (handoff.state) {
     case "completed": {
-      if (!consumed)
+      if (!usable)
         return refused(
           "interrupted",
           "A person approved this, but this turn's computer use was stopped, paused or replaced meanwhile. Do not act on the screen in this turn; a later turn has the approval while it lasts.",
