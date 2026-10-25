@@ -112,7 +112,6 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     runtimeMode: input.runtimeMode,
     unattended,
     personStarted: input.personStarted === true && input.runId !== undefined,
-    setting: current?.cuaFullAccessAutoAdmit === true,
   });
   const everyApp = kind !== undefined;
   const leases = input.leases;

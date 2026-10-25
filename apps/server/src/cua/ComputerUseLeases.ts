@@ -46,7 +46,6 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { markActed, nextTurn } from "./ComputerUseControl.ts";
 import type {
@@ -146,9 +145,9 @@ export class ComputerUseLeases extends Context.Service<
       runId?: RunId,
     ) => Effect.Effect<ComputerUseControl>;
     /**
-     * A control on every app without a grant, for a full access thread on a host that admits
-     * those. It ends once the host stops admitting them or the thread leaves full access. None
-     * for unattended work while another thread holds the screen for its own.
+     * A control on every app without a grant, for a run whose thread is in full access (D16). It
+     * ends once the thread leaves full access. None for unattended work while another thread
+     * holds the screen for its own.
      */
     readonly everyAppControl: (
       threadId: ThreadId,
@@ -289,8 +288,7 @@ const make = Effect.gen(function* () {
   const watchKick = yield* PubSub.sliding<void>(1);
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
-  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const fullAccessAdmitted = makeFullAccessAdmitted(sql, settings);
+  const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
@@ -351,7 +349,7 @@ const make = Effect.gen(function* () {
     } as const;
   });
 
-  /** Another thread acting on the screen for unattended work admitted by the setting. */
+  /** Another thread acting on the screen for unattended work admitted by full access. */
   const unattendedEveryApp = (except: ThreadId | undefined, now: DateTime.Utc) =>
     [...controls.values()].find(
       (record) =>
@@ -479,7 +477,7 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
-    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId, record.everyApp))) {
+    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }

@@ -31,49 +31,36 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
-      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+      // Off, as on a fresh host: since D16 the setting decides nothing for full access threads.
+      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
     ),
   ),
 );
 
-it.effect(
-  "gives a full access thread every app until it leaves full access or the host stops allowing it",
-  () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const settings = yield* ServerSettings.ServerSettingsService;
-      const auto = ThreadId.make("thread-auto");
-      yield* threadIn(auto, "full-access");
-      const claim = () =>
-        leases
-          .everyAppControl(auto, false)
-          .pipe(Effect.map((control) => Option.getOrThrow(control)));
-      const first = yield* claim();
-      const state = yield* leases.controlState(auto, first.controlId);
-      assert.equal(state._tag, "active");
-      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // A turn outside full access gets a control of its own, limited to its grants.
-      const scoped = yield* leases.control(auto, Option.none());
-      assert.notEqual(scoped.controlId, first.controlId);
+it.effect("gives a full access thread every app until it leaves full access", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const auto = ThreadId.make("thread-auto");
+    yield* threadIn(auto, "full-access");
+    const claim = () =>
+      leases.everyAppControl(auto, false).pipe(Effect.map((control) => Option.getOrThrow(control)));
+    const first = yield* claim();
+    const state = yield* leases.controlState(auto, first.controlId);
+    assert.equal(state._tag, "active");
+    assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+    // A turn outside full access gets a control of its own, limited to its grants.
+    const scoped = yield* leases.control(auto, Option.none());
+    assert.notEqual(scoped.controlId, first.controlId);
 
-      // Leaving full access ends it, with the provider session and its proxy still alive.
-      const second = yield* claim();
-      yield* threadIn(auto, "auto");
-      assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-
-      yield* threadIn(auto, "full-access");
-      const third = yield* claim();
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      assert.deepEqual(yield* leases.controlState(auto, third.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
-    }).pipe(Effect.provide(everyAppLayer)),
+    // Leaving full access ends it, with the provider session and its proxy still alive.
+    const second = yield* claim();
+    yield* threadIn(auto, "auto");
+    assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
+      _tag: "ended",
+      reason: "revoked",
+    });
+  }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("lists a full access thread's session as soon as it is admitted", () =>
@@ -206,39 +193,43 @@ it.effect(
 );
 
 it.effect(
-  "keeps a person-directed full access control without the host's unattended setting, but not unattended work",
+  "D16: keeps full access controls of a person, an interactive wake and unattended work with the host setting off, until each thread leaves full access",
   () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
       const directed = ThreadId.make("thread-directed-no-setting");
+      const woken = ThreadId.make("thread-woken-no-setting");
       const scheduled = ThreadId.make("thread-scheduled-no-setting");
-      yield* threadIn(directed, "full-access");
-      yield* threadIn(scheduled, "full-access");
-      const person = Option.getOrThrow(
-        yield* leases.everyAppControl(directed, false, {
-          person: true,
-          runId: RunId.make("run:directed"),
-        }),
-      );
-      const unattendedWork = Option.getOrThrow(yield* leases.everyAppControl(scheduled, true));
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      const state = yield* leases.controlState(directed, person.controlId);
-      assert.equal(state._tag, "active");
-      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // The setting only decides unattended work.
-      assert.deepEqual(yield* leases.controlState(scheduled, unattendedWork.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      // Leaving full access still ends a person-directed control at once.
-      yield* threadIn(directed, "approval-required");
-      assert.deepEqual(yield* leases.controlState(directed, person.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
+      for (const id of [directed, woken, scheduled]) yield* threadIn(id, "full-access");
+      const controls = [
+        [
+          directed,
+          yield* leases.everyAppControl(directed, false, {
+            person: true,
+            runId: RunId.make("run:directed"),
+          }),
+        ],
+        [woken, yield* leases.everyAppControl(woken, false, { runId: RunId.make("run:woken") })],
+        [scheduled, yield* leases.everyAppControl(scheduled, true)],
+      ] as const;
+      // Turning the old setting on and off again changes nothing for any of them.
       yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
+      for (const [threadId, control] of controls) {
+        const state = yield* leases.controlState(threadId, Option.getOrThrow(control).controlId);
+        assert.equal(state._tag, "active");
+        assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+      }
+      // Leaving full access still ends each control at once.
+      for (const [threadId, control] of controls) {
+        yield* threadIn(threadId, "approval-required");
+        assert.deepEqual(
+          yield* leases.controlState(threadId, Option.getOrThrow(control).controlId),
+          { _tag: "ended", reason: "revoked" },
+        );
+      }
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
 );
