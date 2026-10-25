@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   computerUseDisplayInput,
+  computerUseItemResult,
   computerUseObservedTarget,
   computerUseResult,
   computerUseRun,
@@ -177,6 +178,19 @@ describe("computerUseResult", () => {
       status: "unsettled",
       note: "Window did not settle: notification unsupported:AXMoved",
     });
+  });
+
+  it("a card keeps the wire's outcome when the fetched detail was cut short", () => {
+    const wire = { settle: { outcome: "pending", reason: "deadline" } };
+    // Detail over its byte limit arrives as a truncated string with neither the block nor the line.
+    const truncated = '{"content":[{"type":"text","text":"{\\"tree\\":\\"xxxx…';
+    expect(computerUseItemResult(settle, "succeeded", wire, truncated)).toEqual({
+      status: "unsettled",
+      note: "Window did not settle before the deadline",
+    });
+    // Without a wire outcome, as from an older server, the fetched detail still counts.
+    const full = "Notification settle: unsupported (observer_unavailable).";
+    expect(computerUseItemResult(settle, "succeeded", undefined, full).status).toBe("unsettled");
   });
 
   it("a settled wait, other tools and other lifecycles keep their status", () => {

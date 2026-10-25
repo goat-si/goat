@@ -243,3 +243,19 @@ export function computerUseResult(
         : `Window did not settle: ${SETTLE_REASONS[settle.reason] ?? (settle.reason.replaceAll("_", " ") || settle.outcome)}`;
   return { status: "unsettled", note };
 }
+
+/**
+ * A card's status from its row: the wire item's compact output keeps the settle outcome even when
+ * fetched detail was cut at its byte limit, so it is read first and the detail only fills a gap.
+ */
+export function computerUseItemResult(
+  run: ComputerUseRun | undefined,
+  status: ComputerUseRunStatus | null,
+  wireOutput: unknown,
+  fetchedOutput: unknown,
+): { readonly status: ComputerUseRunStatus | null; readonly note: string | null } {
+  const fromWire = computerUseResult(run, status, wireOutput);
+  return fromWire.note !== null || fetchedOutput === undefined
+    ? fromWire
+    : computerUseResult(run, status, fetchedOutput);
+}

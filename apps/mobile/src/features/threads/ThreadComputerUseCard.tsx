@@ -2,7 +2,7 @@ import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/cont
 import {
   COMPUTER_USE_RUN_STATUS_LABELS,
   computerUseObservedTarget,
-  computerUseResult,
+  computerUseItemResult,
   type ComputerUseRun,
   type ComputerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
@@ -50,10 +50,11 @@ export function ThreadComputerUseCard(props: {
   const target =
     (item.type === "dynamic_tool" ? computerUseObservedTarget(item.output) : null) ??
     props.run.target;
-  const { status, note } = computerUseResult(
+  const { status, note } = computerUseItemResult(
     props.run,
     props.status,
-    item.type === "dynamic_tool" ? item.output : undefined,
+    props.row.item.type === "dynamic_tool" ? props.row.item.output : undefined,
+    fetched?.type === "dynamic_tool" ? fetched.output : undefined,
   );
   if (status === null && target === null && images.length === 0) return null;
   return (
