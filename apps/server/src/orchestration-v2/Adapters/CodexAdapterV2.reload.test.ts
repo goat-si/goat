@@ -1,10 +1,17 @@
 import { assert, describe, it } from "@effect/vitest";
+import { CheckpointId, NodeId, ProviderTurnId, RunAttemptId } from "@goat/contracts";
 import type * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 
-import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
+import {
+  CODEX_TEST_MODEL_SELECTION,
+  CODEX_TEST_RUNTIME_POLICY,
+  withReplayRequestId,
+} from "./CodexAdapterV2.testkit.ts";
+import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 import {
   GOAT_MEMORY_TOOLS,
   codexReloadFixture,
@@ -266,6 +273,189 @@ describe("Codex GOAT authority reload (#1569)", () => {
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "keeps a thread held when unloading it fails, so a later resume still leaves a change to a quiet reload",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = codexReloadFixture("authority-unload-failed");
+          const rotated = {
+            ...f.config,
+            providerSessionId: "credential-rotated",
+            authorizationHeader: "Bearer rotated",
+          };
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 4,
+                method: "thread/unsubscribe",
+                params: { threadId: f.nativeThreadId },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 4, error: { code: -32603, message: "busy" } } },
+          );
+          const params = f.threadParams(undefined, rotated);
+          f.resume(5, params);
+          yield* f.turnStart(f.reload(6, undefined, undefined, undefined, params), 2, false);
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          const unload = replay.runtime.unloadThread!({ providerThread: replay.providerThread });
+          assert.isTrue(Exit.isFailure(yield* unload.pipe(Effect.exit)));
+          yield* sessions.set(rotated);
+          yield* replay.runtime.resumeThread({
+            threadId: f.config.threadId,
+            providerThread: replay.providerThread,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+          });
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((config) => goatServer(config).http_headers.Authorization),
+            ["Bearer fixture-cua", "Bearer rotated", "Bearer rotated"],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("records what a rollback load applies to a thread a failed reload dropped", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = codexReloadFixture("authority-rollback-load");
+        const credential = (name: string) => ({
+          ...f.config,
+          providerSessionId: `credential-${name}`,
+          authorizationHeader: `Bearer ${name}`,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        const threadResult = f.entries.at(-1)!;
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        // Turn 2's reload drops the thread and fails to load it again.
+        const failure = { code: -32603, message: "rollout unavailable" };
+        f.reload(
+          4,
+          undefined,
+          undefined,
+          undefined,
+          f.threadParams(undefined, credential("b")),
+          failure,
+        );
+        // Rollback finds the thread unloaded and loads it with credential b before reverting.
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 7,
+              method: "thread/read",
+              params: { threadId: f.nativeThreadId, includeTurns: false },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 7,
+              result: {
+                thread: {
+                  id: f.nativeThreadId,
+                  historyMode: "paginated",
+                  status: { type: "notLoaded" },
+                },
+              },
+            },
+          },
+        );
+        f.resume(8, f.threadParams(undefined, credential("b")));
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 9,
+              method: "thread/turns/list",
+              params: {
+                threadId: f.nativeThreadId,
+                cursor: null,
+                limit: 1,
+                sortDirection: "desc",
+                itemsView: "summary",
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              id: 9,
+              result: {
+                data: [makeCodexReplayTurn({ id: "turn-1", status: "completed" })],
+                nextCursor: null,
+              },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 10,
+              method: "thread/revert",
+              params: { threadId: f.nativeThreadId, beforeTurnId: "turn-1" },
+            },
+          },
+          withReplayRequestId(threadResult, 10),
+        );
+        // Now held with b: a resume with c changes nothing, and the next turn reloads c.
+        const params = f.threadParams(undefined, credential("c"));
+        f.resume(11, params);
+        yield* f.turnStart(f.reload(12, undefined, undefined, undefined, params), 3, false);
+        f.turnCompleted(3);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(credential("b"));
+        assert.isTrue(Exit.isFailure(yield* replay.startTurn(2).pipe(Effect.exit)));
+        const now = yield* DateTime.now;
+        yield* replay.runtime.rollbackThread({
+          providerThread: replay.providerThread,
+          target: { type: "thread_start", checkpointId: CheckpointId.make("checkpoint-rollback") },
+          providerThreadTurns: [
+            {
+              id: ProviderTurnId.make("provider-turn-rollback"),
+              providerThreadId: replay.providerThread.id,
+              nodeId: NodeId.make("node-rollback"),
+              runAttemptId: RunAttemptId.make("attempt-rollback"),
+              nativeTurnRef: { driver: "codex", nativeId: "turn-1", strength: "strong" },
+              ordinal: 1,
+              status: "completed",
+              startedAt: now,
+              completedAt: now,
+            },
+          ],
+        });
+        yield* sessions.set(credential("c"));
+        yield* replay.runtime.resumeThread({
+          threadId: f.config.threadId,
+          providerThread: replay.providerThread,
+          runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          modelSelection: CODEX_TEST_MODEL_SELECTION,
+        });
+        yield* replay.startTurn(3);
+        yield* replay.terminal;
+        assert.deepEqual(
+          replay.threadConfigs.map((config) => goatServer(config).http_headers.Authorization),
+          ["Bearer fixture-cua", "Bearer b", "Bearer b", "Bearer c", "Bearer c"],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("defers a memory grant or revocation while the thread works, then reloads it", () =>

@@ -1316,8 +1316,13 @@ const approvalOwnerCodexTurn = (
 };
 
 /** Whether a subagent thread descends, however deeply, from a turn of this provider thread. */
-const ownsCodexSubagent = (providerThreadId: string, subagent: CodexSubagentThreadContext) =>
-  approvalOwnerCodexTurn(subagent.parentContext).owner.providerThread.id === providerThreadId;
+const ownsCodexSubagent = (providerThreadId: string, subagent: CodexSubagentThreadContext) => {
+  for (let parent: ActiveCodexTurnContext | undefined = subagent.parentContext; parent;) {
+    if (parent.providerThread.id === providerThreadId) return true;
+    parent = parent.subagent?.parentContext;
+  }
+  return false;
+};
 
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
@@ -2020,10 +2025,22 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const appliedSubagentsByThread = new Map<string, string>();
         /** The managed driver each live native thread's config carries now. */
         const managedCuaByThread = new Map<string, CuaDriverMcpConfiguration>();
-        const rememberCuaDriver = (
+        const threadStatuses = makeCodexThreadStatuses();
+        /** Records what a thread Codex just loaded from these overrides carries. */
+        const recordLoaded = (
           nativeThreadId: string,
-          cuaDriver: CuaDriverMcpConfiguration | undefined,
+          runtime: {
+            readonly subagentKey: string;
+            readonly cuaDriver: CuaDriverMcpConfiguration | undefined;
+          },
+          mcpSession: McpProviderSession.McpProviderSessionConfig | undefined,
         ) => {
+          threadStatuses.resumed(nativeThreadId);
+          appliedSubagentsByThread.set(nativeThreadId, runtime.subagentKey);
+          const cuaDriver = mcpSession && runtime.cuaDriver;
+          if (mcpSession)
+            credentialsByThread.set(nativeThreadId, attachmentKey(mcpSession, cuaDriver));
+          else credentialsByThread.delete(nativeThreadId);
           if (cuaDriver === undefined) managedCuaByThread.delete(nativeThreadId);
           else managedCuaByThread.set(nativeThreadId, cuaDriver);
         };
@@ -5778,7 +5795,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
-        const threadStatuses = makeCodexThreadStatuses();
         yield* client.handleServerNotification("thread/status/changed", (payload) =>
           Effect.sync(() => threadStatuses.record(payload.threadId, payload.status.type)),
         );
@@ -7215,10 +7231,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   ? {}
                   : { config: { ...runtime.params.config, mcp_servers: detached } }),
               });
-              appliedSubagentsByThread.set(threadId, runtime.subagentKey);
-              if (next === undefined) credentialsByThread.delete(threadId);
-              else credentialsByThread.set(threadId, next);
-              rememberCuaDriver(threadId, mcpSession ? runtime.cuaDriver : undefined);
+              recordLoaded(threadId, runtime, mcpSession);
             }
             const memoryContext = turnInput.refreshMemoryContext
               ? yield* turnInput.refreshMemoryContext()
@@ -7565,14 +7578,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     client.request("thread/start", runtime.params).pipe(
                       Effect.tap((response) =>
                         Effect.sync(() => {
-                          appliedSubagentsByThread.set(response.thread.id, runtime.subagentKey);
                           threadStatuses.record(response.thread.id, response.thread.status.type);
-                          if (!mcpSession) return;
-                          credentialsByThread.set(
-                            response.thread.id,
-                            attachmentKey(mcpSession, runtime.cuaDriver),
-                          );
-                          rememberCuaDriver(response.thread.id, runtime.cuaDriver);
+                          recordLoaded(response.thread.id, runtime, mcpSession);
                         }),
                       ),
                     ),
@@ -7639,18 +7646,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
-              threadStatuses.resumed(nativeThreadId);
               // A held thread keeps the config it has; the next quiet turn reloads any change (#1569).
-              if (!held) {
-                appliedSubagentsByThread.set(nativeThreadId, resumedRuntime.subagentKey);
-                if (resumedMcp)
-                  credentialsByThread.set(
-                    nativeThreadId,
-                    attachmentKey(resumedMcp, resumedRuntime.cuaDriver),
-                  );
-                else credentialsByThread.delete(nativeThreadId);
-                rememberCuaDriver(nativeThreadId, resumedMcp && resumedRuntime.cuaDriver);
-              }
+              if (!held) recordLoaded(nativeThreadId, resumedRuntime, resumedMcp);
               // Codex follows a resume with a goal snapshot notification; the
               // run's first turn writes it if it differs from the stored goal.
               return {
@@ -7867,9 +7864,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (unloadInput) {
               const nativeThreadId = yield* getNativeThreadId(unloadInput.providerThread);
               yield* clearMemoryDelivery(nativeThreadId);
-              credentialsByThread.delete(nativeThreadId);
-              managedCuaByThread.delete(nativeThreadId);
-              appliedSubagentsByThread.delete(nativeThreadId);
               yield* Ref.update(additionalContextByThread, (current) => {
                 const next = new Map(current);
                 next.delete(nativeThreadId);
@@ -7877,6 +7871,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               sessionApprovals.delete(nativeThreadId);
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
+              // Only now has Codex let the thread go; until then it is held with its old config.
+              credentialsByThread.delete(nativeThreadId);
+              managedCuaByThread.delete(nativeThreadId);
+              appliedSubagentsByThread.delete(nativeThreadId);
             },
             (effect, unloadInput) =>
               effect.pipe(
@@ -8454,8 +8452,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               // process. After a restart or idle release, load it the same way
               // the next turn would before reverting.
               if (!loaded) {
+                const loadMcp = yield* readMcpSession(threadInput.providerThread.appThreadId);
                 const loadRuntime = yield* threadRuntimeParams({
-                  mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                  mcpSession: loadMcp,
                   modelSelection: input.modelSelection,
                   runtimePolicy: input.runtimePolicy,
                 });
@@ -8464,7 +8463,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   excludeTurns: true,
                   ...loadRuntime.params,
                 });
-                appliedSubagentsByThread.set(threadId, loadRuntime.subagentKey);
+                recordLoaded(threadId, loadRuntime, loadMcp);
               }
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(revertCodexThread(client, threadId, numTurns)),

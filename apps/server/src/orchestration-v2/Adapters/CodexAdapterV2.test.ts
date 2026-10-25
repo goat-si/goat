@@ -6358,6 +6358,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           const harness = yield* makeCodexReplayHarness(lateGrandchildTranscript(childFirst));
           const pendingFor = (id = harness.providerThread.id) =>
             harness.runtime.hasPendingBackgroundWorkForThread!({ ...harness.providerThread, id });
+          // The child is a parent too: its thread stays pending while the grandchild runs.
+          const childThread = (yield* IdAllocator.IdAllocatorV2).derive.providerThread({
+            driver: harness.providerThread.driver,
+            nativeThreadId: RESUME_CHILD_THREAD,
+          });
           const finished = () =>
             new Set(
               harness
@@ -6378,17 +6383,20 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           // The root turn kept no work of its own, so only its running descendants hold it.
           assert.isTrue(yield* harness.hasPendingBackgroundWork);
           assert.isTrue(yield* pendingFor());
+          assert.isTrue(yield* pendingFor(childThread));
           assert.isFalse(yield* pendingFor(ProviderThreadId.make("unrelated-provider-thread")));
 
           yield* TestClock.adjust("30 seconds");
           yield* harness.awaitUntil(() => finished() === 1, "first descendant finished");
           assert.isTrue(yield* harness.hasPendingBackgroundWork);
           assert.isTrue(yield* pendingFor());
+          assert.isTrue(yield* pendingFor(childThread));
 
           yield* TestClock.adjust("30 seconds");
           yield* harness.awaitUntil(() => finished() === 2, "both descendants finished");
           assert.isFalse(yield* harness.hasPendingBackgroundWork);
           assert.isFalse(yield* pendingFor());
+          assert.isFalse(yield* pendingFor(childThread));
         }).pipe(Effect.provide(layerAdapterTest)),
       ),
   );
