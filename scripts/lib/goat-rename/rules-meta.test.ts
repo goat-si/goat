@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Reads repository test files to check the title table; a maintenance-script test.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
