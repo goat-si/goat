@@ -352,6 +352,8 @@ it.effect(
         yield* Queue.take(reads);
         yield* handoffs.respond({ ...declined.address, action: "declined" }, reviewer);
         yield* TestClock.adjust("3 seconds");
+        // Consume the terminal read, so the expiry wait below starts from an empty queue.
+        yield* Queue.take(reads);
         expect(yield* Fiber.join(waitingDecline)).toMatchObject({
           operation: { state: "cancelled" },
           result: { value: { handoff: { state: "declined" } } },
