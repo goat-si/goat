@@ -31,7 +31,7 @@ import {
   NOT_SENT,
   type WorkerRecord,
 } from "./GoalStore.ts";
-import { branchFor, launchActionId, nextAttempt, rescheduleActionId } from "./goalWorkers.ts";
+import { launchActionId, rescheduleActionId, successorBranch, successorOf } from "./goalWorkers.ts";
 import type { GoalWorkerRuntime, OwnerAccess } from "./GoalWorkerRuntime.ts";
 
 /** Records that a move stopped its own attempt; claimed as an interrupt, so it takes no turn. */
@@ -97,7 +97,8 @@ export const makeGoalMoves = (deps: {
       threadId: to.threadId,
     });
     deps.setWorker({
-      ...nextAttempt(goal, worker, why),
+      // A successor that launched is the slot's attempt even if the cap was lowered since.
+      ...successorOf(goal, worker, why),
       host: to.host,
       threadId: to.threadId as WorkerRecord["threadId"],
       branch: to.branch,
@@ -161,7 +162,7 @@ export const makeGoalMoves = (deps: {
       } satisfies RescheduleResult;
     const may = allowed.success;
     const project = yield* runtime.project(goal);
-    const branch = branchFor(goal, worker.slot, worker.attempt + 1);
+    const branch = successorBranch(goal, worker);
     return yield* rescheduler.reschedule({
       ref: { host: worker.host, threadId: worker.threadId, watchId: worker.watchId },
       owner,

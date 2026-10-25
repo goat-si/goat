@@ -903,6 +903,7 @@ const make = Effect.gen(function* () {
       // A finished goal keeps its passes while it still has slots to stop or launches to resolve.
       const cleanup =
         plan.truncated ||
+        plan.actions.some((action) => action.type === "resolve_move") ||
         [...workers.values()].some(
           (worker) =>
             worker.slot >= desiredSlots(goal).length &&

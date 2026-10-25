@@ -410,6 +410,46 @@ describe("goal moves across a restart (#1451)", () => {
   );
 
   it.effect(
+    "adopts a launched successor as the next attempt after the attempt cap was lowered",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const world = newWorld();
+          const fake = makeFake();
+          const path = yield* databaseFile;
+          const id = "goal_cap_lowered";
+          yield* Effect.gen(function* () {
+            yield* insert(goalWith(id));
+            yield* startThenFail(world, fake, id);
+            world.loseNextLaunchAnswer = true;
+            yield* pass(id);
+            const store = yield* GoalStore;
+            const { goal } = yield* record(id);
+            yield* store.updateSpec(
+              {
+                ...goal,
+                spec: {
+                  ...goal.spec,
+                  limits: { ...goal.spec.limits, maxAttemptsPerWorker: 1 },
+                },
+                generation: goal.generation + 1,
+              },
+              goal.generation,
+            );
+            yield* pass(id);
+            expect((yield* record(id)).workers[0]).toMatchObject({
+              attempt: 2,
+              host: "B",
+              threadId: "thread:B-1",
+              launchClientRequestId: "goal:" + id + ":s0:a2:launch",
+            });
+            expect(world.launches).toHaveLength(1);
+          }).pipe(Effect.provide(server(fake, world, path)));
+        }),
+      ),
+  );
+
+  it.effect(
     "keeps a confirmed successor through more restarts, passes and a lost status write, launching nothing again",
     () =>
       Effect.scoped(

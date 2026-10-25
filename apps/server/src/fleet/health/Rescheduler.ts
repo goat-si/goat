@@ -316,6 +316,15 @@ const make = Effect.gen(function* () {
       if (status === null) {
         return refused("host_still_answers", "Could not read the attempt on " + where + ".");
       }
+      const runId = status.run?.runId ?? null;
+      // Checked before a stopped attempt is taken over: a run a person started since, even one
+      // that already ended, is the caller's to read before anything moves.
+      if (request.stopRunId !== undefined && runId !== null && runId !== request.stopRunId) {
+        return refused(
+          "host_still_answers",
+          "The attempt on " + where + " is on another run now, so it stays.",
+        );
+      }
       if (isStopped(status)) return null;
       if (request.reason === "drain") {
         // Drain never interrupts a turn; the controller asks again between runs.
@@ -328,13 +337,6 @@ const make = Effect.gen(function* () {
         return refused(
           "host_still_answers",
           "The attempt is still active on this machine; stop it first.",
-        );
-      }
-      const runId = status.run?.runId ?? null;
-      if (request.stopRunId !== undefined && runId !== request.stopRunId) {
-        return refused(
-          "host_still_answers",
-          "The attempt on " + host + " is on another run now, so it stays.",
         );
       }
       const recorded = yield* (request.beforeStop ?? Effect.void).pipe(Effect.result);

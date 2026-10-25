@@ -690,6 +690,43 @@ describe("moves to another host (#1451)", () => {
     );
   });
 
+  it("calls off a move that never launched once the goal is done, still looking it up", () => {
+    const issueGoal = testGoal("goal_mv", {
+      spec: testSpec({
+        targets: [{ type: "issue", number: 9 }],
+        doneWhen: [{ type: "issues_closed" }],
+      }),
+    });
+    const plan = planGoal(
+      issueGoal,
+      [onA],
+      observe({
+        workers: new Map([[0, seen({ runId: RunId.make("run:5"), runStatus: "failed" })]]),
+        pendingMoves: pending,
+        issues: new Map([[9, "closed"]]),
+      }),
+    );
+    expect(plan.status.phase).toBe("succeeded");
+    expect(plan.actions).toEqual([
+      expect.objectContaining({ type: "resolve_move", actionId: moveId, proceed: false }),
+    ]);
+  });
+
+  it("rebuilds a moved successor on its source's branch family after branchPrefix changed", () => {
+    const renamed = {
+      ...goal,
+      spec: {
+        ...goal.spec,
+        workers: {
+          ...goal.spec.workers,
+          workspace: { ...goal.spec.workers.workspace, branchPrefix: "goal/renamed" },
+        },
+      },
+    };
+    const rebuilt = repairWorkers(renamed, [onA], [move("thread:b", "2026-10-20T00:00:03.000Z")]);
+    expect(rebuilt[0]).toMatchObject({ attempt: 2, branch: "goal/test/s0-a2" });
+  });
+
   it("follows the model a remote thread reports, and asks a person when a remote run is held at its usage limit", () => {
     const remote = running(goal, 0, { host: "B", followedUpRunId: RunId.make("run:5") });
     const plan = planGoal(

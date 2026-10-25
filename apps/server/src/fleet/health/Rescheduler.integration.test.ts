@@ -685,4 +685,20 @@ describe("Rescheduler", () => {
         expect(world.threads[0]?.phase).toBe("interrupted");
       }),
   );
+
+  testScoped(
+    "regression #1451: leaves a stopped attempt alone when it ended on a run the move was not taken for",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        // A person resumed the attempt, and that run already completed.
+        world.threads[0]!.phase = "completed";
+        expect(
+          yield* rescheduler.reschedule(
+            request({ reason: "stalled", stopRunId: RunId.make("run:0") }),
+          ),
+        ).toMatchObject({ _tag: "Refused", reason: "host_still_answers" });
+        expect(world.launches).toEqual([]);
+      }),
+  );
 });

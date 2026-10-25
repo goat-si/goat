@@ -114,6 +114,21 @@ export const interruptActionId = (
 export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>
   goal.spec.workers.workspace.branchPrefix.replace(/\/+$/, "") + "/s" + slot + "-a" + attempt;
 
+/**
+ * The branch a move gives worker's next attempt: the slot keeps the branch family it started
+ * with, so a restart that rebuilds the successor from its source names the branch it really uses
+ * even after branchPrefix changed.
+ */
+export const successorBranch = (
+  goal: Pick<FleetGoal, "spec">,
+  worker: Pick<WorkerRecord, "slot" | "attempt" | "branch">,
+) => {
+  const suffix = "/s" + worker.slot + "-a" + worker.attempt;
+  return worker.branch?.endsWith(suffix) === true
+    ? worker.branch.slice(0, -suffix.length) + "/s" + worker.slot + "-a" + (worker.attempt + 1)
+    : branchFor(goal, worker.slot, worker.attempt + 1);
+};
+
 export const targetKey = (target: FleetGoalTarget) =>
   target.type === "issue"
     ? "issue:" + target.number
@@ -188,7 +203,10 @@ export function repairWorkers(
             }),
         host: launch.host,
         threadId: launch.threadId as WorkerRecord["threadId"],
-        branch: move.branch,
+        branch:
+          current !== undefined && current.attempt === move.attempt
+            ? successorBranch(goal, current)
+            : move.branch,
         state: "running",
       };
       if (current !== undefined && current.attempt > move.attempt) orphan(successor, move.slot);
@@ -261,14 +279,17 @@ export const newWorker = (
   note: null,
 });
 
+/** The slot record for the attempt after worker's, whatever the cap says now: it has started. */
+export const successorOf = (goal: FleetGoal, worker: WorkerRecord, note: string): WorkerRecord => ({
+  ...newWorker(goal, worker.slot, null, worker.attempt + 1),
+  target: worker.target,
+  modelSelection: worker.modelSelection,
+  tried: worker.tried,
+  note,
+});
+
 /** The slot record for the next attempt, or a failed one when attempts are spent. */
 export const nextAttempt = (goal: FleetGoal, worker: WorkerRecord, note: string): WorkerRecord =>
   worker.attempt >= goal.spec.limits.maxAttemptsPerWorker
     ? { ...worker, state: "failed", note: note + " No attempts left." }
-    : {
-        ...newWorker(goal, worker.slot, null, worker.attempt + 1),
-        target: worker.target,
-        modelSelection: worker.modelSelection,
-        tried: worker.tried,
-        note,
-      };
+    : successorOf(goal, worker, note);

@@ -701,8 +701,13 @@ export function planGoal(
     : spec.paused || !owner.available
       ? []
       : done
-        ? // Done stops new work, but threads it may have started are still found and stopped.
-          actions.filter(cleanup)
+        ? // Done stops new work, but threads it may have started are still found and stopped;
+          // a move that never launched is called off.
+          actions
+            .filter(cleanup)
+            .map((action) =>
+              action.type === "resolve_move" ? { ...action, proceed: false } : action,
+            )
         : // A spent budget refuses new work; finding what a move already started is not new work.
           budgetSpent
           ? actions.filter(cleanup)
