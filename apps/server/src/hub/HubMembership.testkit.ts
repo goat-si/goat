@@ -223,6 +223,10 @@ export const setup = Effect.fn("HubMembershipTest.setup")(function* (fixture: Fi
           HubOcx,
           HubOcx.of({
             home,
+            homeAdmitted: (args, _timeoutMs, admit) =>
+              Effect.flatMap(admit, (admitted) =>
+                admitted ? home(args) : Effect.succeed(undefined),
+              ),
             device,
             devicePlatform: (alias) =>
               Effect.sync(() => {

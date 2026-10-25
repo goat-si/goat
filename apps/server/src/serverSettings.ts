@@ -791,6 +791,8 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
+    readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
 
     readonly updateSettings: (
       patch: ServerSettingsPatch,
@@ -1059,6 +1061,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateTestSettings((currentSettings) =>
         (authorizeAtCommit ?? Effect.void).pipe(
@@ -2348,6 +2351,7 @@ const make = Effect.gen(function* () {
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
+    committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     updateSettings: (patch, authorizeAtCommit) =>
       updateAndPersistSettings(
         (current) =>

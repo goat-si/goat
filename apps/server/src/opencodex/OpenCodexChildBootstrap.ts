@@ -171,10 +171,10 @@ const make = Effect.gen(function* () {
       return rest;
     });
 
-  const hubSettings = settings.getSettings.pipe(
-    Effect.map((configured) => configured.hub),
-    Effect.option,
-  );
+  // As last committed: a full read can wait on secrets and answer from before a change.
+  const hubSettings = (
+    settings.committedHub ?? settings.getSettings.pipe(Effect.map((configured) => configured.hub))
+  ).pipe(Effect.option);
   const hubEnabled = hubSettings.pipe(Effect.map((hub) => Option.isSome(hub) && hub.value.enabled));
   const cloudAllowed = hubSettings.pipe(
     Effect.map((hub) => Option.isSome(hub) && hub.value.enabled && hub.value.autoJoinCloudMachines),
@@ -313,16 +313,15 @@ const make = Effect.gen(function* () {
     generation: number,
     grantId: string,
   ) {
-    // The settings read can wait on storage, so it goes first and session authority after it.
+    // Reads that can wait come first: the alias's files, then the committed hub settings.
+    const checked = yield* consents.check(alias);
+    if (checked.state === "revoked") return checked;
     if (!(yield* hubEnabled)) return { state: "withdrawn" } as const;
-    const consent = yield* consents.check(alias);
-    // After every read that yields, with nothing in between that does: a Forget or a withdrawal
-    // made during those reads ends this job's permission.
-    const held = yield* consents.held(alias);
+    // Then memory only, so a Forget, withdrawal or sign-out during those reads still counts.
     if ((yield* ssh.aliasGeneration(alias)) !== generation) return { state: "withdrawn" } as const;
+    const consent = yield* consents.confirm(alias, grantId);
     if (consent.state === "revoked") return consent;
-    if (consent.state === "none" || consent.grant.grantId !== grantId || held?.grantId !== grantId)
-      return { state: "withdrawn" } as const;
+    if (consent.state === "none") return { state: "withdrawn" } as const;
     return { state: "allowed", person: consent.person } as const;
   });
   const sshGate = (alias: string, generation: number, grantId: string): Gate => {

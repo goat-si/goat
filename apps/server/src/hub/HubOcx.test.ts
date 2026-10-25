@@ -11,6 +11,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
+import { fleetSnapshot } from "./parity.testkit.ts";
 import {
   countLinkTunnels,
   deviceScript,
@@ -349,4 +350,59 @@ it.live("passes on OpenCodex's notice that it kept the last remote catalog", () 
 
 it.effect("refuses a link id the guard could not match literally", () =>
   Effect.sync(() => expect(() => guardedSyncScript("lnk.1'", true)).toThrow(TypeError)),
+);
+
+it.effect("reads a join's permission after OpenCodex is found, right before ocx starts", () =>
+  Effect.gen(function* () {
+    const started: Array<ReadonlyArray<string>> = [];
+    let admitted = true;
+    let revokeWhileLookingUp = true;
+    const ocx = yield* HubOcx.pipe(
+      Effect.provide(
+        hubOcxLayer.pipe(
+          Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+          Layer.provide(
+            Layer.mock(ProcessRunner.ProcessRunner)({
+              run: (input) =>
+                Effect.sync(() => {
+                  started.push(input.args);
+                  return {
+                    stdout: "{}",
+                    stderr: "",
+                    code: null,
+                    timedOut: false,
+                    stdoutTruncated: false,
+                    stderrTruncated: false,
+                    stdoutInvalidUtf8: false,
+                    stderrInvalidUtf8: false,
+                  };
+                }),
+            }),
+          ),
+          // Finding the binary can wait on a refresh; a revocation can land during it.
+          Layer.provide(
+            Layer.mock(Inventory.OpenCodexInventory)({
+              read: Effect.sync(() => {
+                if (revokeWhileLookingUp) admitted = false;
+                return {
+                  ...fleetSnapshot("home"),
+                  binaries: [{ path: "/usr/local/bin/ocx", version: "2.91.0" }],
+                };
+              }),
+            }),
+          ),
+          Layer.provide(Layer.mock(Dispatch.SshRemoteDispatch)({})),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    );
+    const add = ["link", "add", "lidge-ts", "--json"];
+    const permission = Effect.sync(() => admitted);
+    expect(yield* ocx.homeAdmitted(add, 1_000, permission)).toBeUndefined();
+    expect(started).toEqual([]);
+    revokeWhileLookingUp = false;
+    admitted = true;
+    expect(yield* ocx.homeAdmitted(add, 1_000, permission)).toMatchObject({ code: 1 });
+    expect(started).toEqual([add]);
+  }),
 );

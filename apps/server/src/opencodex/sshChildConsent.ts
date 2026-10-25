@@ -153,6 +153,17 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
       return { state: "none" } satisfies SshChildConsent;
     }
+    // The file read above yields: a withdrawal or a new grant made meanwhile wins over this one.
+    return yield* confirm(alias, grant.grantId);
+  });
+
+  /**
+   * The grant still held and its session's live authority, from memory only, so a caller can
+   * read it last, after every read that waits.
+   */
+  const confirm = Effect.fn("SshChildConsent.confirm")(function* (alias: string, grantId: string) {
+    const grant = (yield* Ref.get(grants))[alias];
+    if (grant?.grantId !== grantId) return { state: "none" } satisfies SshChildConsent;
     const scopes = yield* scopesOf(grant.sessionId);
     if (!scopes.includes(AuthSettingsWriteScope)) {
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
@@ -162,9 +173,6 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         message: `The session that turned this on is signed out or lost settings permission, so GOAT turned it off. Turn it on again to keep joining ${alias}.`,
       } satisfies SshChildConsent;
     }
-    // The reads above yield: a withdrawal or a new grant made meanwhile wins over this one.
-    if ((yield* Ref.get(grants))[alias]?.grantId !== grant.grantId)
-      return { state: "none" } satisfies SshChildConsent;
     return {
       state: "granted",
       grant,
@@ -175,6 +183,7 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
   return {
     set,
     check,
+    confirm,
     /** Durable before it returns; a failure means the grant may still be on disk. */
     forget: (alias: string) => drop(alias),
     held: (alias: string) => Ref.get(grants).pipe(Effect.map((current) => current[alias])),

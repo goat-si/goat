@@ -75,6 +75,10 @@ interface Machine {
   duringSessionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
   /** Runs inside the nth settings read, which can wait on storage, before it answers. */
   duringSettingsRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
+  /** Runs inside the nth read of the alias's SSH files, before it answers. */
+  duringRevisionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
+  /** A full settings read answers from this captured hub state while it is set. */
+  capturedHub: { readonly enabled: boolean; readonly autoJoin: boolean } | undefined;
   /** Runs while OpenCodex is being prepared on the machine. */
   duringPrepare: Effect.Effect<void>;
 }
@@ -107,6 +111,7 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
   let sshEvent: SshAliasListener = () => Effect.void;
   let sessionReads = 0;
   let settingsReads = 0;
+  let revisionReads = 0;
   let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
   let invalidated: (
     alias: string,
@@ -176,7 +181,11 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
         Layer.mock(SshHostSetup.SshHostSetup)({
           aliasRevision: (alias) =>
             machine.revisionReadable
-              ? Effect.succeed(machine.revisions.get(alias))
+              ? Effect.gen(function* () {
+                  const hook = machine.duringRevisionRead;
+                  if (hook !== undefined && ++revisionReads === hook.at) yield* hook.run;
+                  return machine.revisions.get(alias);
+                })
               : Effect.fail(
                   PlatformError.systemError({
                     _tag: "PermissionDenied",
@@ -217,16 +226,22 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(Settings.ServerSettingsService)({
-          getSettings: Effect.gen(function* () {
+          // As in serverSettings: a full read can answer from state captured before it waited.
+          getSettings: Effect.sync(() => ({
+            ...DEFAULT_SERVER_SETTINGS,
+            hub: {
+              ...DEFAULT_SERVER_SETTINGS.hub,
+              enabled: machine.capturedHub?.enabled ?? machine.hub,
+              autoJoinCloudMachines: machine.capturedHub?.autoJoin ?? machine.autoJoin,
+            },
+          })),
+          committedHub: Effect.gen(function* () {
             const hook = machine.duringSettingsRead;
             if (hook !== undefined && ++settingsReads === hook.at) yield* hook.run;
             return {
-              ...DEFAULT_SERVER_SETTINGS,
-              hub: {
-                ...DEFAULT_SERVER_SETTINGS.hub,
-                enabled: machine.hub,
-                autoJoinCloudMachines: machine.autoJoin,
-              },
+              ...DEFAULT_SERVER_SETTINGS.hub,
+              enabled: machine.hub,
+              autoJoinCloudMachines: machine.autoJoin,
             };
           }),
         }),
@@ -278,6 +293,8 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     expired: new Set(),
     duringSessionRead: undefined,
     duringSettingsRead: undefined,
+    duringRevisionRead: undefined,
+    capturedHub: undefined,
     duringPrepare: Effect.void,
     ...overrides,
   };
@@ -761,6 +778,30 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
         });
         expect(home.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as nobody"]);
       }
+    }),
+  );
+
+  it.effect("a hub turned off while the alias's files are read last still stops the join", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      // Read when consent is given, before the setup, after preparing, and last by the join.
+      home.machine.duringRevisionRead = {
+        at: 4,
+        run: Effect.sync(() => void (home.machine.hub = false)),
+      };
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as nobody"]);
+    }),
+  );
+
+  it.effect("joins follow the committed hub settings, not a read captured before a change", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.capturedHub = { enabled: true, autoJoin: true };
+      home.machine.duringPrepare = Effect.sync(() => void (home.machine.autoJoin = false));
+      expect(yield* home.bootstrap.ensure("boat-builder")).toBeUndefined();
+      expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
     }),
   );
 });

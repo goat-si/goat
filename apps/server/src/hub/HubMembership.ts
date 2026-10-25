@@ -322,15 +322,16 @@ const make = Effect.gen(function* () {
       steps.push({ step: "link_add", outcome: "failed", detail });
       return result(action, alias, "failed", detail, steps, { transport: "remote-link" });
     }
-    // The last read before the link exists, so a withdrawal during any earlier step stops it.
-    if (!(yield* permitted(caller))) {
+    const add = ["link", "add", alias, "--expect-fingerprint", fingerprint, "--json"];
+    // A join nobody is asked about reads its permission last, inside, right before ocx starts.
+    const added =
+      caller.gate === undefined
+        ? yield* ocx.home(add, LINK_ADD_TIMEOUT_MS)
+        : yield* ocx.homeAdmitted(add, LINK_ADD_TIMEOUT_MS, permitted(caller));
+    if (added === undefined) {
       if (caller.provisioning) yield* provisioned.abandonAdd(alias);
       return yield* withdrawn(caller, alias, steps);
     }
-    const added = yield* ocx.home(
-      ["link", "add", alias, "--expect-fingerprint", fingerprint, "--json"],
-      LINK_ADD_TIMEOUT_MS,
-    );
     const linkId = added.code === 0 ? decodeJson(Added, added.stdout)?.linkId : undefined;
     if (caller.provisioning) yield* provisioned.finishAdd(alias, linkId, homeLinks());
     if (linkId === undefined) {

@@ -105,6 +105,10 @@ const setup = Effect.fn("HubProvisionedLinksTest.setup")(function* (fixture: Fix
           HubOcx,
           HubOcx.of({
             home,
+            homeAdmitted: (args, _timeoutMs, admit) =>
+              Effect.flatMap(admit, (admitted) =>
+                admitted ? home(args) : Effect.succeed(undefined),
+              ),
             device: () => Effect.succeed({ code: 0, stdout: "opencodex 2.91.0" }),
             devicePlatform: () => Effect.succeed("posix"),
             connectHubClient: () => Effect.die("unused"),
