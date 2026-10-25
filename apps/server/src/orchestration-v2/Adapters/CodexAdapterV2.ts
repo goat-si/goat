@@ -7128,6 +7128,29 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           );
         });
 
+        const hasPendingBackgroundWorkForThread = Effect.fn(
+          "CodexAdapterV2.hasPendingBackgroundWorkForThread",
+        )(function* (providerThread: OrchestrationV2ProviderThread) {
+          const contexts = [
+            ...(yield* Ref.get(activeTurns)).values(),
+            ...(yield* Ref.get(settledTurns)).values(),
+          ];
+          const roots = contexts.filter(
+            (context) => context.providerThread.id === providerThread.id,
+          );
+          for (const context of contexts) {
+            if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
+              continue;
+            if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+            if (
+              context.subagent !== null &&
+              (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
+            )
+              return true;
+          }
+          return false;
+        });
+
         const startNativeTurn = Effect.fn("CodexAdapterV2.startNativeTurn")(
           function* (
             turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -7159,24 +7182,35 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 managedCuaByThread.delete(threadId);
               }
             }
+            // Codex ignores resume overrides on a thread a client still holds, so changed MCP
+            // servers (a new computer use control after Stop, #1564) need a cold reload. A turn or
+            // background work still running keeps its subscription; the next idle turn reloads.
+            const turnRunning =
+              Array.from((yield* Ref.get(activeTurns)).values()).some(
+                (active) => active.providerThread.id === turnInput.providerThread.id,
+              ) || (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));
+            const reload = (params: Record<string, unknown>) =>
+              client.request("thread/unsubscribe", { threadId }).pipe(
+                Effect.andThen(
+                  client.raw.request("thread/resume", {
+                    threadId,
+                    excludeTurns: true,
+                    ...params,
+                  }),
+                ),
+              );
             if (
               mcpSession &&
+              !turnRunning &&
               credentialsByThread.get(threadId) !== attachmentKey(mcpSession, runtime.cuaDriver)
             ) {
-              // Reconfigure the same native conversation; stale credentials are already denied by the registry.
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
-                ...runtime.params,
-              });
+              yield* reload(runtime.params);
               credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
               rememberCuaDriver(threadId, runtime.cuaDriver);
             }
-            if (!mcpSession && credentialsByThread.has(threadId)) {
+            if (!mcpSession && !turnRunning && credentialsByThread.has(threadId)) {
               const previousCuaDriver = managedCuaByThread.get(threadId);
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
+              yield* reload({
                 config: {
                   ...CODEX_THREAD_CONFIG,
                   mcp_servers: {
@@ -7487,28 +7521,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             return false;
           }),
-          hasPendingBackgroundWorkForThread: Effect.fn(
-            "CodexAdapterV2.hasPendingBackgroundWorkForThread",
-          )(function* (providerThread) {
-            const contexts = [
-              ...(yield* Ref.get(activeTurns)).values(),
-              ...(yield* Ref.get(settledTurns)).values(),
-            ];
-            const roots = contexts.filter(
-              (context) => context.providerThread.id === providerThread.id,
-            );
-            for (const context of contexts) {
-              if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
-                continue;
-              if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
-              if (
-                context.subagent !== null &&
-                (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
-              )
-                return true;
-            }
-            return false;
-          }),
+          hasPendingBackgroundWorkForThread,
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
               Effect.andThen(
