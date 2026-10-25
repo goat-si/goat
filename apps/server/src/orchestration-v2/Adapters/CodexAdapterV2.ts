@@ -3106,7 +3106,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               subagent.parentContext.providerThread,
             );
             const currentParent = yield* findActiveTurnByNativeThreadId(parentNativeThreadId);
-            if (currentParent !== undefined) subagent.parentContext = currentParent;
+            if (currentParent !== undefined) CodexSubagents.reparent(subagent, currentParent);
             if (
               CodexSubagents.stoppedLineage(
                 [subagent.parentContext],

@@ -30,6 +30,19 @@ interface TurnLike {
 }
 
 /**
+ * This turn and every parent turn it runs under. Reparenting never forms a cycle (reparent), but
+ * a walk still stops at a turn it has seen: a cycle would otherwise spin forever on the event
+ * loop and block even Stop.
+ */
+function* turnsUp(turn: TurnLike): Generator<TurnLike> {
+  const seen = new Set<TurnLike>();
+  for (let at: TurnLike | undefined = turn; at && !seen.has(at); at = at.subagent?.parentContext) {
+    seen.add(at);
+    yield at;
+  }
+}
+
+/**
  * Registered subagents under the stopped turn that are still active but run no known turn,
  * marked endedByStop so that their first real turn reopens them.
  */
@@ -48,41 +61,30 @@ export const stopped = <
   [...subagents.values()].filter((subagent) => {
     if (subagent.task.status !== "running" && subagent.task.status !== "pending") return false;
     if ([...subagent.nativeTurnIds].some((turnId) => activeTurns.has(turnId))) return false;
-    for (let parent: TurnLike | undefined = subagent.parentContext; parent;) {
+    for (const parent of turnsUp(subagent.parentContext))
       if (parent === turn) return (subagent.endedByStop = true);
-      parent = parent.subagent?.parentContext;
-    }
     return false;
   });
 
 /** The native turn ids from this turn up through every parent turn it runs under. */
-export const lineage = (turn: TurnLike) => {
-  const turnIds: Array<string> = [];
-  for (let at: TurnLike | undefined = turn; at; at = at.subagent?.parentContext)
-    turnIds.push(at.nativeTurnId);
-  return turnIds;
-};
+export const lineage = (turn: TurnLike) => [...turnsUp(turn)].map((at) => at.nativeTurnId);
 
 /** Whether any of these lineages runs through a turn that Stop or a failure ended. */
 export const stoppedLineage = (
   starts: ReadonlyArray<TurnLike>,
   terminalized: ReadonlySet<string>,
 ) =>
-  starts.some((start) => {
-    for (let turn: TurnLike | undefined = start; turn; turn = turn.subagent?.parentContext)
-      if (terminalized.has(turn.nativeTurnId)) return true;
-    return false;
-  });
+  starts.some((start) => [...turnsUp(start)].some((turn) => terminalized.has(turn.nativeTurnId)));
 
 /**
- * Whether this turn runs under the given subagent: a child's own descendant messaging it. Moving
- * the child under that turn would make its parent chain a cycle, which every walk up would
- * follow forever.
+ * Moves a subagent under a new parent turn, unless that turn runs under the subagent itself (its
+ * own descendant, directly or through a thread it messaged): the parent chain would become a
+ * cycle. Returns whether it moved (#1643).
  */
-const descendsFrom = (turn: TurnLike, subagent: object) => {
-  for (let at: TurnLike | undefined = turn; at; at = at.subagent?.parentContext)
-    if (at.subagent === subagent) return true;
-  return false;
+export const reparent = <T extends TurnLike>(subagent: { parentContext: T }, turn: T) => {
+  if ([...turnsUp(turn)].some((at) => at.subagent === subagent)) return false;
+  subagent.parentContext = turn;
+  return true;
 };
 
 /**
@@ -98,9 +100,7 @@ export const assign = <T extends TurnLike>(
   if (item.tool !== "sendInput" && item.tool !== "resumeAgent") return;
   for (const childThreadId of item.receiverThreadIds) {
     const subagent = subagents.get(childThreadId);
-    if (subagent === undefined || descendsFrom(turn, subagent)) continue;
-    subagent.parentContext = turn;
-    subagent.workLineage = lineage(turn);
+    if (subagent !== undefined && reparent(subagent, turn)) subagent.workLineage = lineage(turn);
   }
 };
 
