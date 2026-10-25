@@ -367,6 +367,15 @@ const make = Effect.gen(function* () {
     return null;
   });
 
+  /** Why a folder's contents may be a repository's work: a checkout holds it from above. */
+  const aroundCheckout = Effect.fn("StorageReclaim.aroundCheckout")(function* (folder: string) {
+    const around = yield* withinCheckout(path.dirname(folder));
+    if (around === false) return null;
+    return around === null
+      ? "the folders above it could not be checked for a git checkout"
+      : "it sits in a git checkout, which may track its files";
+  });
+
   const act = Effect.fn("StorageReclaim.act")(function* (
     item: StorageItem,
     target: StorageTarget,
@@ -383,11 +392,11 @@ const make = Effect.gen(function* () {
           const masked = yield* maskedIndexEntry(item.path);
           if (masked !== null) return masked;
           const nested = yield* holdsGitCheckout(item.path, { skipOwn: true });
-          return nested === false
-            ? null
-            : nested === null
+          if (nested !== false)
+            return nested === null
               ? "it could not be searched for git checkouts inside it"
               : "it holds another git checkout, whose work its own git status cannot see";
+          return yield* aroundCheckout(item.path);
         }).pipe(Effect.provideContext(context));
         return yield* holdingWhole(
           item.path,
@@ -425,11 +434,8 @@ const make = Effect.gen(function* () {
               const changed = yield* changedSinceReview(item.path, target.stamp);
               if (changed !== null) return changed;
               // A folder of a repository is that repository's work, whatever GOAT folder holds it.
-              const around = yield* withinCheckout(path.dirname(item.path));
-              if (around !== false)
-                return around === null
-                  ? "the folders above it could not be checked for a git checkout"
-                  : "it sits in a git checkout, whose work it may be";
+              const around = yield* aroundCheckout(item.path);
+              if (around !== null) return around;
               return yield* removeChecked(target.root, item.path, target.identity);
             }),
           );
@@ -471,6 +477,8 @@ const make = Effect.gen(function* () {
                 return between === null
                   ? "the folders above it could not be checked for a git checkout"
                   : "it sits in a git checkout nested in its worktree, whose work its worktree's git cannot see";
+              const around = yield* aroundCheckout(worktree);
+              if (around !== null) return around;
               return yield* removeChecked(target.root, item.path, target.identity);
             }),
           ),
@@ -521,6 +529,8 @@ const make = Effect.gen(function* () {
               return "it holds another GOAT server's home or data";
             if ((yield* holdsGitCheckout(item.path)) !== false)
               return "it holds a git checkout now, or could not be searched for one";
+            const around = yield* aroundCheckout(item.path);
+            if (around !== null) return around;
             return yield* removeUnusedPinnedRuntime({
               baseDir: config.baseDir,
               keep: [packageJson.version],

@@ -459,4 +459,58 @@ describe("StorageReclaim leaves GOAT's own data alone", () => {
       expect(yield* logs()).toMatchObject({ state: "needs_attention" });
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
+
+  it.live("keeps runtimes, worktrees and build outputs once a checkout appears around them", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, worktrees, reclaim, find } = yield* setup;
+      const versions = pinnedRuntimeVersionsDir(path, config.baseDir);
+      for (const version of ["0.0.1", "0.0.2"]) {
+        const sentinel = path.join(versions, version, ".install-complete");
+        yield* fs.makeDirectory(path.dirname(sentinel), { recursive: true });
+        yield* fs.writeFileString(sentinel, version + "\n");
+        yield* fs.utimes(sentinel, version === "0.0.1" ? 1 : 2, version === "0.0.1" ? 1 : 2);
+      }
+      const notes = path.join(versions, "0.0.1", "notes.txt");
+      yield* fs.writeFileString(notes, "tracked and edited\n");
+      const { checkout, output } = yield* buildOutputWorktree(worktrees);
+      machine.facts = [
+        {
+          entry: {
+            path: checkout,
+            repository: path.join(worktrees, "repo"),
+            branch: "idle-branch",
+            main: false,
+            missing: false,
+            managed: true,
+            threads: [],
+            dirtyCount: 0,
+            aheadCount: 0,
+          },
+          head: "abc",
+          holdsProject: false,
+          leaseKeys: [checkout],
+        },
+      ];
+      const targets = [path.join(versions, "0.0.1"), checkout, output];
+      const items = (yield* reclaim.usage({ rescan: true })).items;
+      const offered = targets.map((target) => find(items, target)!);
+      expect(offered.map((item) => item.state)).toEqual(["removable", "removable", "removable"]);
+      // The GOAT home turns out to be in a repository, which may track any of their files.
+      yield* fs.makeDirectory(path.join(config.baseDir, ".git"));
+      const result = yield* reclaim.clean({
+        items: offered.map((item) => ({ id: item.id, token: item.token })),
+        actor: "test",
+      });
+      expect(result.results.map((entry) => entry.outcome)).toEqual([
+        "skipped",
+        "skipped",
+        "skipped",
+      ]);
+      expect(yield* fs.readFileString(notes)).toBe("tracked and edited\n");
+      for (const target of targets) expect(yield* fs.exists(target)).toBe(true);
+      const again = (yield* reclaim.usage({ rescan: true })).items;
+      for (const target of targets)
+        expect(find(again, target)).toMatchObject({ state: "needs_attention" });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
 });

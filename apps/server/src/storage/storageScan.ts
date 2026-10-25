@@ -326,6 +326,17 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
       otherServerReason(other, entry.path, rules) ?? otherServerReason(other, realEntry, rules);
     const working = processInside(cwds, [entry.path, realEntry], rules);
     const goatReason = goatDataReason(entry.path, goat, rules);
+    // A repository around the worktree may track files in it that the worktree's git cannot see.
+    const enclosed = yield* withinCheckout(path.dirname(entry.path));
+    const enclosedState =
+      enclosed === false
+        ? null
+        : state(
+            "needs_attention",
+            enclosed === null
+              ? "The folders above it could not be checked for a git checkout"
+              : "It sits in another git checkout, which may track its files",
+          );
     const decision =
       goatReason !== null
         ? state("protected", sentenceCase(goatReason))
@@ -339,17 +350,19 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                 other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
                 sentenceCase(otherReason),
               )
-            : working === null
-              ? state("needs_attention", "Running processes could not be listed")
-              : working
-                ? state("protected", "A process is running in it")
-                : state(
-                    "removable",
-                    entry.threads.length === 0
-                      ? "No thread uses it; no uncommitted changes and every commit is on a remote"
-                      : "Only archived threads used it; no uncommitted changes and every commit is on a remote",
-                    true,
-                  );
+            : enclosedState !== null
+              ? enclosedState
+              : working === null
+                ? state("needs_attention", "Running processes could not be listed")
+                : working
+                  ? state("protected", "A process is running in it")
+                  : state(
+                      "removable",
+                      entry.threads.length === 0
+                        ? "No thread uses it; no uncommitted changes and every commit is on a remote"
+                        : "Only archived threads used it; no uncommitted changes and every commit is on a remote",
+                      true,
+                    );
     add(
       {
         kind: "worktree",
@@ -385,21 +398,23 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                   other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
                   sentenceCase(otherReason),
                 )
-              : working === null
-                ? state("needs_attention", "Running processes could not be listed")
-                : working
-                  ? state("protected", "A process is running in this worktree")
-                  : keeps !== null
-                    ? state(
-                        "needs_attention",
-                        sentenceCase(keeps) + "; check it before deleting it yourself",
-                      )
-                    : state(
-                        "removable",
-                        path.basename(output) === "target"
-                          ? "Rust build output; cargo rebuilds it"
-                          : "Installed packages; an install brings them back",
-                      );
+              : enclosedState !== null
+                ? enclosedState
+                : working === null
+                  ? state("needs_attention", "Running processes could not be listed")
+                  : working
+                    ? state("protected", "A process is running in this worktree")
+                    : keeps !== null
+                      ? state(
+                          "needs_attention",
+                          sentenceCase(keeps) + "; check it before deleting it yourself",
+                        )
+                      : state(
+                          "removable",
+                          path.basename(output) === "target"
+                            ? "Rust build output; cargo rebuilds it"
+                            : "Installed packages; an install brings them back",
+                        );
       add(
         {
           kind: "build_output",
@@ -619,6 +634,12 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                       ? state(
                           "needs_attention",
                           "It holds a git checkout; check it for work before deleting it yourself",
+                        )
+                      : null) ??
+                    ((yield* withinCheckout(path.dirname(runtime.directory))) !== false
+                      ? state(
+                          "needs_attention",
+                          "It sits in a git checkout, which may track its files",
                         )
                       : null) ??
                     state("removable", "No service, process, launcher or thread uses it", true));

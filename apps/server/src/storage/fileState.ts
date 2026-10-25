@@ -156,9 +156,13 @@ export const insideCheckout = Effect.fn("storage.insideCheckout")(function* (
 
 /**
  * Whether folder or any folder above it holds a .git entry, so its contents may be a repository's
- * work. Null when a folder cannot be read, which callers treat as yes.
+ * work. Walks the real path, so a linked folder is judged by where it really is. Null when a
+ * folder cannot be read, which callers treat as yes.
  */
 export const withinCheckout = Effect.fn("storage.withinCheckout")(function* (folder: string) {
-  const resolved = NodePath.resolve(folder);
+  const resolved = yield* Effect.tryPromise(() => NodeFSP.realpath(folder)).pipe(
+    Effect.orElseSucceed(() => null),
+  );
+  if (resolved === null) return null;
   return yield* insideCheckout(NodePath.parse(resolved).root, NodePath.join(resolved, "-"));
 });
