@@ -91,6 +91,7 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  let humanReports = 0;
   const taken = yield* Queue.unbounded<string>();
   const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
@@ -130,7 +131,8 @@ export const harness = Effect.fn(function* (
     ...(options.humanInput
       ? {
           onHumanInput: (input: { source: ComputerUseHumanInputSource; at: number }) =>
-            Queue.offer(people, input.source).pipe(
+            Effect.sync(() => void humanReports++).pipe(
+              Effect.andThen(Queue.offer(people, input.source)),
               Effect.andThen(
                 options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
               ),
@@ -270,6 +272,8 @@ export const harness = Effect.fn(function* (
       }),
     /** The next person's input the proxy reported to the server. */
     person: Queue.take(people),
+    /** How many reports of a person's input the proxy has made so far. */
+    humanReports: Effect.sync(() => humanReports),
     /** The next input call start or end the proxy told the server about, as "start 1". */
     agentCall: Queue.take(agentCalls),
     agentCallsQueued: Queue.size(agentCalls),

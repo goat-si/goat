@@ -57,6 +57,27 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
       }),
   );
 
+  it.effect(
+    "events that arrive behind a slow report go to the server together in the next one, so a person's waits one report at most",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const h = yield* harness({ humanInput: true, acceptHuman: () => false, humanGate: gate });
+        yield* h.push(active());
+        yield* h.hid("pointer");
+        assert.equal(yield* h.person, "pointer");
+        // A pointer moving at 120 Hz for a third of a second while the server is slow, then a key.
+        for (let move = 0; move < 40; move++)
+          yield* TestClock.adjust(8).pipe(Effect.andThen(h.hid("pointer")));
+        yield* TestClock.adjust(8).pipe(Effect.andThen(h.hid("keyboard")));
+        yield* Deferred.succeed(gate, undefined);
+        const reported: Array<string> = [];
+        while (reported.at(-1) !== "keyboard") reported.push(yield* h.person);
+        assert.lengthOf(reported, 41);
+        assert.equal(yield* h.humanReports, 2);
+      }),
+  );
+
   it.effect("a report the server did not take is offered again with the next event", () =>
     Effect.gen(function* () {
       let accepted = false;
