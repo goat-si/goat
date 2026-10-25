@@ -269,7 +269,6 @@ const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi")
 // A scheme word alone on its line, "authorization=Bearer" then a line break, still leads the
 // credential on the next line. Sticky, so it is tried once at the value's start.
 const LONE_SCHEME_WORD = /[A-Za-z][\w+.~-]*[ \t]*(?:\r\n?|\n)[ \t]*(?=[^\s])/y;
-const LINE_BREAK = /[\r\n]/g;
 
 /**
  * Every assignment to a credential name with its whole value masked: a JSON value up to its
@@ -292,10 +291,10 @@ function maskAssignments(text: string): string {
       lead === "{" || lead === "["
         ? valueEnd(text, start, false)
         : /^authorization$/i.test(key)
-          ? lineEnd(text, start + loneSchemeLength(text, start))
+          ? wordEnd(text, start + loneSchemeLength(text, start), /[\r\n]/)
           : /^cookie$/i.test(key)
-            ? lineEnd(text, start)
-            : shellWordEnd(text, start);
+            ? wordEnd(text, start, /[\r\n]/)
+            : wordEnd(text, start, /\s/);
     if (end === start) continue;
     out += text.slice(shown, start) + MASK;
     shown = end;
@@ -309,17 +308,15 @@ function loneSchemeLength(text: string, start: number): number {
   return LONE_SCHEME_WORD.exec(text)?.[0].length ?? 0;
 }
 
-function lineEnd(text: string, start: number): number {
-  LINE_BREAK.lastIndex = start;
-  return LINE_BREAK.exec(text)?.index ?? text.length;
-}
-
-/** The end of a shell word: up to unquoted whitespace, with quoted segments and escapes inside. */
-function shellWordEnd(text: string, start: number): number {
+/**
+ * The end of an unbracketed value: up to an unquoted, unescaped stop character (whitespace for a
+ * shell word, a line break for a line), with quoted segments and escapes inside.
+ */
+function wordEnd(text: string, start: number, stop: RegExp): number {
   let index = start;
   while (index < text.length) {
     const char = text.charAt(index);
-    if (/\s/.test(char)) break;
+    if (stop.test(char)) break;
     if (char === "\\") {
       index += 2;
       continue;
@@ -334,33 +331,35 @@ function shellWordEnd(text: string, start: number): number {
   return Math.min(index, text.length);
 }
 
-const PRIVATE_KEY_LABEL = String.raw`(?:[A-Z0-9]{1,16} ){0,3}PRIVATE KEY(?: BLOCK)?-----`;
-const PRIVATE_KEY_BEGIN = new RegExp(`-----BEGIN ${PRIVATE_KEY_LABEL}`, "g");
-const PRIVATE_KEY_END = new RegExp(`-----END ${PRIVATE_KEY_LABEL}`, "g");
+const PRIVATE_KEY_MARKER =
+  /-----(BEGIN|END) ((?:[A-Z0-9]{1,16} ){0,3}PRIVATE KEY(?: BLOCK)?)-----/g;
 
 /**
- * Every PEM private-key block with its body masked and its markers kept. A block whose END marker
- * never comes, cut or malformed, is masked to the end of the text. Each search starts past the
- * previous block, so scanning stays linear.
+ * Every PEM private-key block with its body masked and its outer markers kept. A block ends only at
+ * the END marker of its own label, after the blocks nested in it; a block that never ends, cut or
+ * malformed, is masked to the end of the text. Markers are read in one pass, so scanning stays
+ * linear.
  */
 function maskPrivateKeys(text: string): string {
   let out = "";
   let shown = 0;
-  PRIVATE_KEY_BEGIN.lastIndex = 0;
+  const open: Array<string> = [];
+  PRIVATE_KEY_MARKER.lastIndex = 0;
   for (
-    let begin = PRIVATE_KEY_BEGIN.exec(text);
-    begin !== null;
-    begin = PRIVATE_KEY_BEGIN.exec(text)
+    let marker = PRIVATE_KEY_MARKER.exec(text);
+    marker !== null;
+    marker = PRIVATE_KEY_MARKER.exec(text)
   ) {
-    const body = begin.index + begin[0].length;
-    PRIVATE_KEY_END.lastIndex = body;
-    const end = PRIVATE_KEY_END.exec(text);
-    out += text.slice(shown, body) + MASK;
-    if (end === null) return out;
-    shown = end.index;
-    PRIVATE_KEY_BEGIN.lastIndex = end.index + end[0].length;
+    const [whole, kind, label = ""] = marker;
+    if (kind === "BEGIN") {
+      if (open.length === 0) out += text.slice(shown, marker.index + whole.length) + MASK;
+      open.push(label);
+    } else if (open.at(-1) === label) {
+      open.pop();
+      if (open.length === 0) shown = marker.index;
+    }
   }
-  return out + text.slice(shown);
+  return open.length > 0 ? out : out + text.slice(shown);
 }
 
 // The start of every provider token REDACTIONS recognizes by its prefix.

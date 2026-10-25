@@ -147,13 +147,25 @@ describe("redactLogText", () => {
       `${pemBegin} PGP PRIVATE KEY BLOCK-----\nCANARY\n-----END PGP PRIVATE KEY BLOCK-----`,
       `${pemBegin} PGP PRIVATE KEY BLOCK-----***-----END PGP PRIVATE KEY BLOCK-----`,
     ],
-    // Each block ends at the first END marker after it, whatever its label.
+    // A block ends only at the END marker of its own label, after any block nested in it.
     [
-      `${pemBegin} ENCRYPTED PRIVATE KEY-----\nCANARY\n-----END EC PRIVATE KEY-----\nkept\n${pemBegin} PRIVATE KEY-----\n${pemBegin} PRIVATE KEY-----\nCANARY`,
-      `${pemBegin} ENCRYPTED PRIVATE KEY-----***-----END EC PRIVATE KEY-----\nkept\n${pemBegin} PRIVATE KEY-----***`,
+      `${pemBegin} RSA PRIVATE KEY-----\nA\n${pemBegin} EC PRIVATE KEY-----\nB\n-----END EC PRIVATE KEY-----\nCANARY\n-----END RSA PRIVATE KEY-----\nkept`,
+      `${pemBegin} RSA PRIVATE KEY-----***-----END RSA PRIVATE KEY-----\nkept`,
+    ],
+    [
+      `${pemBegin} RSA PRIVATE KEY-----\nA\n-----END EC PRIVATE KEY-----\nCANARY`,
+      `${pemBegin} RSA PRIVATE KEY-----***`,
+    ],
+    [
+      `${pemBegin} EC PRIVATE KEY-----\nCANARY\n-----END EC PRIVATE KEY-----\nkept\n-----END EC PRIVATE KEY-----\n${pemBegin} PRIVATE KEY-----\nCANARY`,
+      `${pemBegin} EC PRIVATE KEY-----***-----END EC PRIVATE KEY-----\nkept\n-----END EC PRIVATE KEY-----\n${pemBegin} PRIVATE KEY-----***`,
     ],
     // A cookie assignment, unlike an authorization one, takes no scheme from the line before.
     ["cookie=sid\nnext line", "cookie=***\nnext line"],
+    // A quoted or escaped line break inside the value does not end its line.
+    ['authorization="first\nCANARY" next\nkept', "authorization=***\nkept"],
+    ['cookie="sid=first\r\nCANARY" next\r\nkept', "cookie=***\r\nkept"],
+    ["authorization=first\\\nCANARY next\nkept", "authorization=***\nkept"],
   ])("redacts %j", (text, expected) => {
     expect(redactLogText(text)).toBe(expected);
   });
