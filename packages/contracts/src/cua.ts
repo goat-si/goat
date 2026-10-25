@@ -633,6 +633,11 @@ export const DesktopCuaReadinessReport = Schema.Struct({
   signals: ComputerUseCapabilities.fields.signals,
   /** Whether the helper sends live frames of one window (#1370); absent from older helpers. */
   frames: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Whether this desktop answers cuaAppsRequest (#1536). Older desktops ignore the request, so
+   * the server asks only a desktop that says it answers; absent means it does not (#1567).
+   */
+  appsListing: Schema.optionalKey(Schema.Boolean),
 });
 export type DesktopCuaReadinessReport = typeof DesktopCuaReadinessReport.Type;
 

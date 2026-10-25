@@ -761,6 +761,11 @@ export const makeDesktopAppsListing = Effect.fn("CuaDriver.makeDesktopAppsListin
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
   return Effect.gen(function* () {
+    // An older desktop ignores the request, which would hold the approval card for the whole
+    // deadline; only a desktop that says it answers is asked (#1567).
+    const readiness = yield* receiver.cuaReadiness;
+    if (Option.isNone(readiness) || readiness.value.appsListing !== true)
+      return Option.none<ReadonlyArray<string>>();
     const requestId = yield* crypto.randomUUIDv4();
     const ready = yield* Deferred.make<Option.Option<ReadonlyArray<string>>>();
     // Subscribe before sending: a desktop can answer during the write itself.
