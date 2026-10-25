@@ -421,7 +421,7 @@ const make = Effect.gen(function* () {
     };
     if (existing !== undefined) {
       reservations.forgetClosed(threadId, existing.controlId);
-      foreground.replaceControl(threadId, existing.controlId);
+      foreground.revokeControl(threadId, existing.controlId);
     }
     controls.set(threadId, next);
     foreground.bindPending(
@@ -747,6 +747,7 @@ const make = Effect.gen(function* () {
       after.idle === true
     )
       return false;
+    foreground.revokeControl(threadId, after.controlId);
     controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
     yield* changed;
     return true;

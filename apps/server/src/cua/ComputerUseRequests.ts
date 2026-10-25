@@ -104,7 +104,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     return {
       kind: "available",
       message: foreground
-        ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop or control replacement requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
+        ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop, control replacement or turn end requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
         : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
@@ -129,7 +129,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       ? "see and control this computer's screen"
       : `control ${wanted.join(", ")}`;
   const delivery = foreground
-    ? `Whole-desktop foreground approval may bring apps forward and take keyboard or pointer focus for this purpose until ${until}. Pause, Stop, takeover or control replacement revokes foreground authority and requires approval again.`
+    ? `Whole-desktop foreground approval may bring apps forward and take keyboard or pointer focus for this purpose until ${until}. Foreground input can briefly take and return the screen. Only one input action already sent under live approval may finish its own focus return. GOAT does not restore focus when approval ends, and refuses later foreground input until new approval. Pause, Stop, takeover, control replacement or turn end revokes foreground authority and requires approval again.`
     : "Background-only: this approval does not allow bringing apps forward or taking keyboard or pointer focus.";
   const handoffs = yield* Handoffs.Handoffs;
   const handoff = yield* handoffs.create({

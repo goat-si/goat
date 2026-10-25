@@ -70,7 +70,7 @@ export const makeForegroundApprovals = () => {
         else bindings.set(id, { ...binding, controlId });
       }
     },
-    replaceControl(threadId: ThreadId, controlId: string) {
+    revokeControl(threadId: ThreadId, controlId: string) {
       revision++;
       for (const [id, binding] of bindings)
         if (binding.threadId === threadId && binding.controlId === controlId) bindings.delete(id);

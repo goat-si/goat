@@ -20,6 +20,7 @@ import * as Stream from "effect/Stream";
 import type { NamedWindow } from "./x11WindowPlacement.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
+import type { AgentInputReport } from "./agentInputReports.ts";
 
 export const CONTROL = "control:one";
 export const call = (id: number | string, name: string, args: object = {}) =>
@@ -86,6 +87,11 @@ export const harness = Effect.fn(function* (
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
+    readonly onHumanInput?: (input: {
+      readonly source: ComputerUseHumanInputSource;
+      readonly at: number;
+    }) => Effect.Effect<boolean>;
+    readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<void>;
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
     readonly manifestStamp?: () => string | undefined;
     /** Holds the first driver's kill open until done, as a child slow to stop would. */
@@ -163,15 +169,18 @@ export const harness = Effect.fn(function* (
               Effect.andThen(
                 options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
               ),
-              Effect.as(options.acceptHuman?.() ?? true),
+              Effect.andThen(
+                options.onHumanInput?.(input) ?? Effect.succeed(options.acceptHuman?.() ?? true),
+              ),
             ),
-          onAgentInput: (report: { call: string; state: "start" | "end"; at: number }) =>
+          onAgentInput: (report: AgentInputReport) =>
             Queue.offer(agentCalls, report.state + " " + report.call).pipe(
               Effect.andThen(
                 report.state === "start" && options.agentInputGate !== undefined
                   ? Deferred.await(options.agentInputGate)
                   : Effect.void,
               ),
+              Effect.andThen(options.onAgentInput?.(report) ?? Effect.void),
             ),
         }
       : {}),

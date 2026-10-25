@@ -1,7 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
+import { runMigrations } from "../persistence/Migrations.ts";
+import { foregroundProxy, foregroundProxyLayer } from "./ComputerUseForeground.testkit.ts";
 import {
   active,
   call,
@@ -19,6 +24,123 @@ const shortForeground = () => {
 };
 
 describe("proxy lifecycle ownership across foreground expiry", () => {
+  it.effect.each(["expiry", "stop", "pause", "replacement", "idle"] as const)(
+    "GOAT release at %s sends no focus restore and refuses later foreground dispatch",
+    (ending) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const cutoff = yield* Deferred.make<void>();
+        const thread = ThreadId.make("thread:foreground-release");
+        const { h, leases, control, admission } = yield* foregroundProxy(thread, {
+          kill: (index) => (index === 0 ? Deferred.await(cutoff) : Effect.void),
+        });
+        const original = call(1, "type_text", {
+          pid: 42,
+          window_id: 7,
+          text: "approved foreground work",
+          delivery_mode: "foreground",
+        });
+        yield* h.send(original);
+        const observed = yield* Effect.raceFirst(
+          h.nextDispatch.pipe(Effect.map((dispatch) => ({ kind: "dispatch", ...dispatch }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message, index: -1 }))),
+        );
+        assert.equal(observed.kind, "dispatch");
+        const first = observed;
+        assert.deepEqual(first.message, JSON.parse(original));
+        const ticket = yield* h.nextReservation;
+        assert.equal(ticket.action, "reserve");
+        assert.equal((yield* h.nextValidation).action, "validate");
+        if (ending === "expiry") yield* TestClock.adjust("5 minutes");
+        else if (ending === "stop") assert.isTrue(yield* leases.stop(thread));
+        else if (ending === "pause") yield* leases.pause("takeover");
+        else if (ending === "replacement") yield* leases.control(thread, Option.none());
+        else assert.isTrue(yield* leases.turnEnded(thread));
+        yield* h.killed;
+        const cancellation = yield* h.nextDispatch;
+        assert.equal(cancellation.index, first.index);
+        assert.equal(cancellation.message.method, "notifications/cancelled");
+        assert.deepInclude(cancellation.message.params, { requestId: 1 });
+        assert.deepEqual(
+          h.reservations.map((request) => request.action),
+          ["reserve", "validate"],
+        );
+        yield* Deferred.succeed(cutoff, undefined);
+        const closed = yield* h.nextReservation;
+        assert.equal(closed.action, "close");
+        assert.equal(closed.connectionId, ticket.connectionId);
+        assert.equal((yield* h.nextToProvider).id, 1);
+        yield* h.send(
+          call(2, "type_text", {
+            pid: 42,
+            window_id: 7,
+            text: "after release",
+            delivery_mode: "foreground",
+          }),
+        );
+        const refused = yield* h.nextToProvider;
+        assert.equal(refused.id, 2);
+        const result = refused.result as {
+          structuredContent: { detail: string };
+          isError: boolean;
+        };
+        assert.isTrue(result.isError);
+        assert.equal(
+          result.structuredContent.detail,
+          ending === "expiry"
+            ? "foreground_not_approved"
+            : ending === "pause"
+              ? "waiting_for_human"
+              : ending === "idle"
+                ? "control_idle"
+                : ending === "replacement"
+                  ? "replaced"
+                  : "stopped",
+        );
+        assert.deepEqual(
+          h.log.filter((entry) => entry.startsWith("send ")),
+          ["send type_text"],
+        );
+        const outbound = (yield* Effect.forEach(h.drivers, (driver) =>
+          Queue.size(driver.toDriver).pipe(
+            Effect.flatMap((count) => Queue.takeN(driver.toDriver, count)),
+          ),
+        ))
+          .flat()
+          .map((line) => JSON.parse(line));
+        assert.deepEqual(outbound, [JSON.parse(original), cancellation.message]);
+        if (ending === "pause" || ending === "idle" || ending === "expiry") {
+          if (ending === "pause") yield* leases.resume;
+          if (ending === "idle") {
+            const reused = yield* leases.control(thread, Option.some(admission));
+            assert.equal(reused.controlId, control.controlId);
+          }
+          yield* h.restarted;
+          yield* h.send(
+            call(3, "type_text", {
+              pid: 42,
+              window_id: 7,
+              text: "old authority after resume",
+              delivery_mode: "foreground",
+            }),
+          );
+          const afterResume = yield* h.nextToProvider;
+          assert.equal(afterResume.id, 3);
+          assert.deepInclude(
+            (afterResume.result as { structuredContent: object }).structuredContent,
+            { detail: "foreground_not_approved" },
+          );
+          yield* h.send(call(4, "type_text", { pid: 42, window_id: 7, text: "background" }));
+          assert.equal((yield* h.nextDispatch).message.id, 4);
+          assert.equal((yield* h.nextReservation).action, "reserve");
+          assert.equal((yield* h.nextValidation).action, "validate");
+          yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 4, result: { content: [] } }));
+          assert.equal((yield* h.nextToProvider).id, 4);
+          assert.equal((yield* h.nextReservation).action, "release");
+        }
+      }).pipe(Effect.provide(foregroundProxyLayer)),
+  );
+
   it.effect.each(["pause", "idle", "end"] as const)(
     "disposes a replacement acquired across %s and Stop leaves no stale child",
     (interruption) =>

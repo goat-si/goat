@@ -10,7 +10,7 @@ export function computerUseGrantLabel(
     const delivery =
       handoff.computerUseForeground === undefined
         ? "Background delivery only."
-        : "Foreground was approved; pause or Stop requires approval again.";
+        : "Foreground was approved; pause, Stop or finishing this turn requires new approval.";
     return `Allowed until ${liveUntil.toLocaleTimeString()}${by}. ${delivery}`;
   }
   if (handoff.state === "completed") return "Ended at its time limit";

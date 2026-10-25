@@ -326,6 +326,8 @@ it.effect(
           assert.isUndefined(backgroundCard.handoff.computerUseForeground);
           assert.include(backgroundCard.handoff.reason, "Background-only");
           assert.include(backgroundCard.human?.location ?? "", "Background-only");
+          assert.notInclude(backgroundCard.handoff.reason, "already sent");
+          assert.notInclude(backgroundCard.human?.location ?? "", "already sent");
           const card = yield* handoffs.open(
             { threadId, handoffId: foreground.handoff.handoffId },
             sessionId,
@@ -340,6 +342,9 @@ it.effect(
               "Pause",
               "Stop",
               "replacement",
+              "turn end",
+              "one input action already sent under live approval",
+              "GOAT does not restore focus when approval ends",
               DateTime.formatIso(card.handoff.expiresAt!),
             ])
               assert.include(disclosure, required);

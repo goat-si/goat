@@ -4,6 +4,7 @@ import { ThreadId, TurnItemId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -35,6 +36,105 @@ const reserve = (
   });
 
 describe("foreground approval authority", () => {
+  it.effect(
+    "turn end irrevocably revokes bound foreground authority while the reused control admits background",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const background = yield* foregroundGrant(thread, "handoff:turn-background", {
+          foreground: false,
+          minutes: 60,
+          apps: ["com.example.Build"],
+        });
+        const admission = yield* leases.state(thread, background.handoffId);
+        if (admission._tag !== "active") return assert.fail("expected background admission");
+        const control = yield* leases.control(thread, Option.some(admission.lease));
+        const grant = yield* foregroundGrant(thread, "handoff:turn-foreground");
+        assert.isTrue(yield* leases.foregroundAvailable(thread, "Check the build status"));
+        assert.isTrue(yield* leases.turnEnded(thread));
+        assert.isFalse(yield* leases.turnEnded(thread));
+        const resumed = yield* leases.control(thread, Option.some(admission.lease));
+        assert.equal(resumed.controlId, control.controlId);
+        assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
+        yield* leases.approveForeground(grant, yield* leases.foregroundApprovalEpoch);
+        const state = yield* leases.controlState(thread, resumed.controlId);
+        if (state._tag !== "active") return assert.fail("expected reused background control");
+        assert.isUndefined(state.foreground);
+        assert.deepEqual(state.apps, ["com.example.Build"]);
+        const request = {
+          action: "reserve" as const,
+          controlId: resumed.controlId,
+          connectionId: "driver:turn-reuse",
+          callId: "type",
+          interruptions: state.interruptions.count,
+          idleEpoch: state.idleEpoch ?? 0,
+          name: "type_text",
+          args: { pid: 42, window_id: 7, text: "work", delivery_mode: "foreground" },
+        };
+        assert.deepEqual(
+          yield* leases.callReservation(thread, { ...request, foregroundGrantId: grant.handoffId }),
+          { status: "refused", detail: "foreground_not_approved" },
+        );
+        const admitted = yield* leases.callReservation(thread, {
+          ...request,
+          args: { pid: 42, window_id: 7, text: "background" },
+        });
+        assert.equal(admitted.status, "admitted");
+      }).pipe(Effect.provide(foregroundServiceLayer)),
+  );
+
+  it.effect("turn end preserves a new approval pending its own next control", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const background = yield* foregroundGrant(thread, "handoff:pending-background", {
+        foreground: false,
+        minutes: 10,
+      });
+      const admission = yield* leases.state(thread, background.handoffId);
+      if (admission._tag !== "active") return assert.fail("expected background admission");
+      const control = yield* leases.control(thread, Option.some(admission.lease));
+      const old = yield* foregroundGrant(thread, "handoff:pending-old", { minutes: 5 });
+      const pending = yield* foregroundGrant(thread, "handoff:pending-new");
+      assert.isTrue(yield* leases.turnEnded(thread));
+      yield* leases.approveForeground(old, yield* leases.foregroundApprovalEpoch);
+      const nextAdmission = yield* leases.state(thread, pending.handoffId);
+      if (nextAdmission._tag !== "active") return assert.fail("expected next admission");
+      const next = yield* leases.control(thread, Option.some(nextAdmission.lease));
+      assert.notEqual(next.controlId, control.controlId);
+      const state = yield* leases.controlState(thread, next.controlId);
+      if (state._tag !== "active") return assert.fail("expected next control");
+      assert.deepEqual(
+        state.foreground?.map((grant) => grant.handoffId),
+        [pending.handoffId],
+      );
+      assert.deepEqual(yield* reserve(leases, next.controlId, old.handoffId), {
+        status: "refused",
+        detail: "foreground_not_approved",
+      });
+      assert.equal((yield* reserve(leases, next.controlId, pending.handoffId)).status, "admitted");
+    }).pipe(Effect.provide(foregroundServiceLayer)),
+  );
+
+  it.effect("a queued next turn keeps the current control's foreground authority", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const { leases, control } = yield* controlWithForeground(thread);
+      const grant = yield* foregroundGrant(thread, "handoff:open-work");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('run:next', ${thread}, 1, 'codex', 'queued', '2026-01-01', '{}')`;
+      assert.isFalse(yield* leases.turnEnded(thread));
+      assert.isTrue(yield* leases.foregroundAvailable(thread, "Check the build status"));
+      assert.equal((yield* reserve(leases, control.controlId, grant.handoffId)).status, "admitted");
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run:next'`;
+      assert.isTrue(yield* leases.turnEnded(thread));
+      assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
+    }).pipe(Effect.provide(foregroundServiceLayer)),
+  );
+
   it.effect("does not derive foreground authority from persisted admission metadata", () =>
     Effect.gen(function* () {
       yield* runMigrations();
