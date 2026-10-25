@@ -288,6 +288,12 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  /**
+   * A control a person stopped, kept for the session list after a newer control of the same
+   * thread replaced it: a turn whose attachment was under way at the Stop mints one afterwards,
+   * and the stopped card must stay until the person closes it (#1521). One per thread.
+   */
+  const stoppedEarlier = new Map<ThreadId, ControlRecord>();
   const reservations = makeCallReservations();
   const foreground = makeForegroundApprovals();
   /** Turns the desktop gave no driver for want of a grant, while they run (#1399). */
@@ -391,6 +397,8 @@ const make = Effect.gen(function* () {
     if (existing !== undefined) {
       reservations.forgetClosed(threadId, existing.controlId);
       foreground.revokeControl(threadId, existing.controlId);
+      if (existing.ended === "stopped" || existing.ended === "stopped_all")
+        stoppedEarlier.set(threadId, existing);
     }
     controls.set(threadId, next);
     foreground.bindPending(
@@ -962,6 +970,21 @@ const make = Effect.gen(function* () {
             return { control: latest as ComputerUseControl, state };
           }),
         ),
+      ).pipe(
+        // Each stopped control a newer one replaced, listed first as it was, stopped.
+        Effect.map((live) => [
+          ...[...stoppedEarlier.values()].flatMap((record) =>
+            record.ended === "stopped" || record.ended === "stopped_all"
+              ? [
+                  {
+                    control: record as ComputerUseControl,
+                    state: { _tag: "ended", reason: record.ended } as ComputerUseControlState,
+                  },
+                ]
+              : [],
+          ),
+          ...live,
+        ]),
       ),
     ),
     subscribe: PubSub.subscribe(signals),

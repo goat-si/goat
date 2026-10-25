@@ -372,6 +372,14 @@ const make = Effect.gen(function* () {
     const wake = MessageId.make(`message:handoff-wake:${input.handoffId}:completed`);
     const run = records.runs.find((candidate) => candidate.userMessageId === wake);
     if (run === undefined) return;
+    // A wake run that started only after the grant ended is a turn the Stop should have kept from
+    // starting. One already working before the Stop keeps going, like every other turn then.
+    const ended = (yield* read(input)).resolvedAt;
+    const startedAfterEnd =
+      (run.status === "running" || run.status === "waiting") &&
+      run.startedAt !== null &&
+      ended !== undefined &&
+      DateTime.toEpochMillis(run.startedAt) >= DateTime.toEpochMillis(ended);
     // A retry after a rejection needs a fresh id; the run's state decides whether one is due.
     const commandId = CommandId.make(
       `handoff:${input.handoffId}:withdraw-wake:${run.status}:${NodeCrypto.randomUUID()}`,
@@ -380,14 +388,14 @@ const make = Effect.gen(function* () {
       yield* threads
         .dispatch({ type: "queued-run.cancel", commandId, threadId: input.threadId, runId: run.id })
         .pipe(Effect.mapError(unavailable));
-    else if (run.status === "preparing" || run.status === "starting")
+    else if (run.status === "preparing" || run.status === "starting" || startedAfterEnd)
       yield* threads
         .dispatch({
           type: "run.interrupt",
           commandId,
           threadId: input.threadId,
           runId: run.id,
-          reason: "A person ended this thread's computer use before the turn started.",
+          reason: "A person ended this thread's computer use before this turn started.",
         })
         .pipe(Effect.mapError(unavailable));
   });
