@@ -243,6 +243,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   // macOS has not granted what computer use needs; a person allows it in System Settings (#1399).
   not_granted: before("failed_precondition"),
   unknown_app: before("invalid_request"),
+  // A newer, different request from the same thread replaced this one before anyone answered.
+  superseded: before("cancelled"),
   // Browser preview control (PreviewAutomationControlReason)
   agentMismatch: before("conflict"),
   humanControl: before("conflict"),

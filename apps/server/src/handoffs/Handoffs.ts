@@ -48,6 +48,7 @@ import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
+import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -110,6 +111,7 @@ const PrivatePayload = Schema.fromJsonString(
     }),
     // A person ended this computer use grant after approving it; the sweep drops it with the rest.
     Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
+    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_consumed") }),
   ]),
 );
 const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
@@ -130,6 +132,8 @@ const targetKey = (args: Readonly<Record<string, unknown>>) =>
       ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
       : value,
   );
+
+type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations>>;
 
 export class Handoffs extends Context.Service<
   Handoffs,
@@ -152,6 +156,9 @@ export class Handoffs extends Context.Service<
       readonly computerUseForeground?: Handoff["computerUseForeground"];
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    /** A computer use request's answer for its waiting call; see computerUseContinuations. */
+    readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
+    readonly deliverComputerUseWake: Continuations["deliverWake"];
     /** Client-only; caller supplies an authenticated, server-resolved label. */
     readonly open: (
       input: HandoffReadInput,
@@ -358,6 +365,19 @@ const make = Effect.gen(function* () {
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     return handoff;
   });
+  const continuations = yield* makeComputerUseContinuations({
+    lock,
+    read,
+    expire: (input) => transition(input, "expired", { type: "server" }),
+    cancelAsAgent: (input) =>
+      transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
+    recordKind: (id) =>
+      loadPrivate(id).pipe(
+        Effect.map((payload) => (payload !== null && "kind" in payload ? payload.kind : null)),
+      ),
+    markConsumed: (id) => savePrivate(id, CONSUMED, true),
+    removeRecord: (id) => store.remove(storeName(id)).pipe(Effect.mapError(unavailable)),
+  });
   /**
    * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
    * stops that agent (#1521). The wake reactor withdraws the grant's approval wake while it has
@@ -367,6 +387,7 @@ const make = Effect.gen(function* () {
   const withdrawComputerUseWake = Effect.fn("Handoffs.withdrawComputerUseWake")(function* (
     input: HandoffReadInput,
   ) {
+    yield* continuations.forget(input.handoffId);
     const records = yield* threads
       .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
       .pipe(Effect.mapError(unavailable));
@@ -502,7 +523,8 @@ const make = Effect.gen(function* () {
         input,
         input.action,
         { type: "client", label },
-        endsApproved || (isComputerUseGrant && record.state === "cancelled"),
+        // A resolved grant's payload is already settled: it may record how it ended.
+        isComputerUseGrant && !isHandoffPending(record.state),
       );
       if (
         foregroundEpoch !== undefined &&
@@ -515,6 +537,7 @@ const make = Effect.gen(function* () {
         yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
       if (isComputerUseGrant && Option.isSome(computerUseLeases))
         yield* computerUseLeases.value.changed;
+      if (isComputerUseGrant) yield* continuations.answered(input.handoffId);
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
       if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
       return result;
@@ -631,6 +654,8 @@ const make = Effect.gen(function* () {
           handoff,
         })
         .pipe(Effect.mapError(unavailable));
+      if (input.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
+        yield* continuations.supersede(input.requestedBy.threadId, pending, handoff.handoffId);
       return handoffSummary(handoff);
     }).pipe(lock.withPermits(1));
 
@@ -665,6 +690,8 @@ const make = Effect.gen(function* () {
           handoffId: row.turn_item_id,
         }).pipe(Effect.mapError(unavailable));
         yield* transition(input, "expired", { type: "server" });
+        if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
+          yield* continuations.answered(input.handoffId);
       }
     }
   });
@@ -961,6 +988,8 @@ const make = Effect.gen(function* () {
             Effect.map((payload) => payload?.kind === "computer_use_ended"),
           ),
     withdrawComputerUseWake,
+    awaitComputerUseAnswer: continuations.awaitAnswer,
+    deliverComputerUseWake: continuations.deliverWake,
   });
 });
 export const layer = Layer.effect(Handoffs, make);

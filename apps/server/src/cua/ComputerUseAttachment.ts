@@ -5,6 +5,7 @@ import {
   type CuaDriverMcpConfiguration,
   type ProviderDriverKind,
   type ProviderInteractionMode,
+  type RunId,
   type RuntimeMode,
   type ThreadId,
   type TurnCapability,
@@ -19,6 +20,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import { everyAppKind } from "./ComputerUseFullAccess.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseOrigin } from "./ComputerUseOrigin.ts";
 
@@ -67,8 +69,12 @@ export interface ComputerUseAttachmentInput {
   readonly threadId: ThreadId;
   readonly driver: ProviderDriverKind | undefined;
   readonly interactionMode: ProviderInteractionMode | undefined;
-  /** The thread's mode; full access may skip grants when the host allows it. */
+  /** The thread's mode; full access skips grants for a person's runs, and when the host allows it. */
   readonly runtimeMode?: RuntimeMode | undefined;
+  /** The run this session is prepared for; absent outside a turn. */
+  readonly runId?: RunId | undefined;
+  /** A person caused that run (ComputerUseOrigin.personStarted). */
+  readonly personStarted?: boolean | undefined;
   readonly readOnly: boolean;
   readonly origin: ComputerUseOrigin;
   /** Absent only in test assemblies, where no turn gets computer use. */
@@ -102,7 +108,13 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   const current = Option.isNone(settings)
     ? undefined
     : yield* settings.value.getSettings.pipe(Effect.orElseSucceed(() => undefined));
-  const everyApp = input.runtimeMode === "full-access" && current?.cuaFullAccessAutoAdmit === true;
+  const kind = everyAppKind({
+    runtimeMode: input.runtimeMode,
+    unattended,
+    personStarted: input.personStarted === true && input.runId !== undefined,
+    setting: current?.cuaFullAccessAutoAdmit === true,
+  });
+  const everyApp = kind !== undefined;
   const leases = input.leases;
   const lease =
     unattended && !everyApp && Option.isSome(leases)
@@ -161,9 +173,12 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   // refuses unattended work that lost a race for the screen.
   const control = everyApp
     ? yield* leases.value
-        .everyAppControl(input.threadId, unattended)
+        .everyAppControl(input.threadId, unattended, {
+          person: kind === "person",
+          ...(input.runId === undefined ? {} : { runId: input.runId }),
+        })
         .pipe(Effect.orElseSucceed(() => Option.none()))
-    : Option.some(yield* leases.value.control(input.threadId, lease));
+    : Option.some(yield* leases.value.control(input.threadId, lease, input.runId));
   if (Option.isNone(control)) return none("held", unattended);
   // Sessions are also prepared outside a turn: a re-attach, a rollback, a memory policy
   // rotation. With no run open, no turn end will settle the control this minted or reused,

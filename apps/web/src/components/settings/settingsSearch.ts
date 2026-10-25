@@ -854,7 +854,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "computer-use-full-access",
-    title: "Full access without approval",
+    title: "Unattended work without approval",
     to: "/settings/integrations",
     searchTerms: ["computer use approval grant admission allow every app full access unattended"],
   },
