@@ -607,7 +607,7 @@ describe("Codex computer use attachment", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
   it.effect.each(["approval", "user input"] as const)(
-    "keeps the reload deferred while a settled subagent's %s request is unanswered (#1564)",
+    "defers the reload while Codex holds a settled subagent's %s request open, and reloads once it resolves (#1564)",
     (kind) =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -684,9 +684,20 @@ describe("Codex computer use attachment", () => {
           yield* f.turnStart(4, 2, true);
           f.entries.push(childTurn("completed"));
           f.turnCompleted(2);
-          // The child has settled, but nobody has answered its request yet: still no reload.
+          // The child has settled, but Codex still holds its request open: still no reload.
           yield* f.turnStart(5, 3, true);
+          // Codex then resolves the request (answered, interrupted or dismissed alike).
+          f.entries.push({
+            type: "emit_inbound",
+            frame: {
+              method: "serverRequest/resolved",
+              params: { threadId: child, requestId: 101 },
+            },
+          });
           f.turnCompleted(3);
+          f.reload(6, f.managed("control:c"));
+          yield* f.turnStart(8, 4, true);
+          f.turnCompleted(4);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
           yield* replay.requested;
@@ -698,9 +709,11 @@ describe("Codex computer use attachment", () => {
           yield* sessions.set(withCua("control:c"));
           yield* replay.startTurn(3);
           yield* replay.terminal;
+          yield* replay.startTurn(4);
+          yield* replay.terminal;
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-            [f.managed("control:a")],
+            [f.managed("control:a"), f.managed("control:c")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),

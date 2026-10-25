@@ -88,6 +88,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
+import { trackOpenServerRequests } from "./codexOpenServerRequests.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -1328,14 +1329,12 @@ type PendingCodexRuntimeRequest =
   | {
       readonly type: "approval";
       readonly requestId: RuntimeRequestId;
-      readonly owner: ActiveCodexTurnContext;
       readonly requestKind: ProviderRequestKind;
       readonly decision: Deferred.Deferred<ProviderApprovalDecision, never>;
     }
   | {
       readonly type: "user_input";
       readonly requestId: RuntimeRequestId;
-      readonly owner: ActiveCodexTurnContext;
       readonly answers: Deferred.Deferred<ProviderUserInputAnswers, never>;
     };
 
@@ -5760,7 +5759,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
-        yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
+        const requests = yield* trackOpenServerRequests(client);
+        yield* requests.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5792,7 +5792,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind: "command",
                 decision,
               });
@@ -5833,7 +5832,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
+        yield* requests.handleServerRequest("item/fileChange/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5866,7 +5865,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind: "file-change",
                 decision,
               });
@@ -5907,7 +5905,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("item/permissions/requestApproval", (payload) =>
+        yield* requests.handleServerRequest("item/permissions/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -5931,7 +5929,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind,
                 decision,
               });
@@ -5970,7 +5967,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("mcpServer/elicitation/request", (payload) =>
+        yield* requests.handleServerRequest("mcpServer/elicitation/request", (payload) =>
           Effect.gen(function* () {
             if (toMcpElicitationResponse(payload, "accept").action !== "accept") {
               yield* Effect.logWarning("Declined an unsupported MCP elicitation.", {
@@ -6015,7 +6012,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind: "mcp-elicitation",
                 decision,
               });
@@ -6051,7 +6047,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("execCommandApproval", (payload) =>
+        yield* requests.handleServerRequest("execCommandApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -6081,7 +6077,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind: "command",
                 decision,
               });
@@ -6122,7 +6117,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("applyPatchApproval", (payload) =>
+        yield* requests.handleServerRequest("applyPatchApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* findActiveTurnByNativeThreadId(payload.conversationId);
             if (context === undefined) {
@@ -6151,7 +6146,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "approval",
                 requestId: artifacts.request.id,
-                owner: context,
                 requestKind: "file-change",
                 decision,
               });
@@ -6192,7 +6186,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie),
         );
 
-        yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
+        yield* requests.handleServerRequest("item/tool/requestUserInput", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
             if (context === undefined) {
@@ -6214,7 +6208,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.set(String(artifacts.request.id), {
                 type: "user_input",
                 requestId: artifacts.request.id,
-                owner: context,
                 answers,
               });
               return updated;
@@ -7176,7 +7169,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             // Codex ignores resume overrides on a held thread, so a changed computer use driver (a
             // new control after Stop, #1564) needs a cold reload, only while nothing of the thread
-            // runs or waits, its subagents included through their root. Stale records fail closed.
+            // runs or waits on an open request, subagents included through their root. Fails closed.
             const ownedHere = (context: ActiveCodexTurnContext) =>
               approvalOwnerCodexTurn(context).owner.providerThread.id ===
               turnInput.providerThread.id;
@@ -7191,16 +7184,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               return false;
             });
+            const subagents = yield* Ref.get(subagentThreads);
             const busy =
               Array.from((yield* Ref.get(activeTurns)).values()).some(ownedHere) ||
-              Array.from((yield* Ref.get(subagentThreads)).values()).some(
+              Array.from(subagents.values()).some(
                 (subagent) =>
                   (subagent.task.status === "running" || subagent.task.status === "pending") &&
                   ownedHere(subagent.parentContext),
               ) ||
-              Array.from((yield* Ref.get(pendingRuntimeRequests)).values()).some((request) =>
-                ownedHere(request.owner),
-              ) ||
+              requests.openThreads().some((nativeId) => {
+                const subagent = subagents.get(nativeId);
+                return (
+                  nativeId === threadId ||
+                  (subagent !== undefined && ownedHere(subagent.parentContext))
+                );
+              }) ||
               (yield* retainedWorkHere);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
