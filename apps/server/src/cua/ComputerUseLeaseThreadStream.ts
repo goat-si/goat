@@ -45,8 +45,16 @@ export const threadLeaseUpdates = (input: {
       let previous: string | undefined;
       let lastEnded: string | undefined;
       let waiting = false;
+      // inspect, unlike resolve, never renews the credential: watching is not using it.
+      const authorized = Effect.map(registry.inspect(input.token), (credential) =>
+        credential?.threadId === input.threadId ? credential : undefined,
+      );
+      // Credential expiry publishes nothing, so a quiet stream wakes for it on its own.
+      const until = (at: number) =>
+        Clock.currentTimeMillis.pipe(Effect.flatMap((now) => Effect.sleep(Math.max(0, at - now))));
       for (;;) {
-        if ((yield* registry.resolve(input.token))?.thread.threadId !== input.threadId) {
+        const credential = yield* authorized;
+        if (credential === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
           return yield* Queue.end(queue);
         }
@@ -68,7 +76,7 @@ export const threadLeaseUpdates = (input: {
           return yield* Queue.end(queue);
         }
         // controlState can suspend on grant reads. A revocation during that read must win.
-        if ((yield* registry.resolve(input.token))?.thread.threadId !== input.threadId) {
+        if ((yield* authorized) === undefined) {
           yield* Queue.offer(queue, { state: "ended", reason: "unauthorized" });
           return yield* Queue.end(queue);
         }
@@ -96,7 +104,7 @@ export const threadLeaseUpdates = (input: {
           previous = undefined;
           if (!waiting) yield* Queue.offer(queue, { state: "waiting" });
           waiting = true;
-          yield* Queue.take(wake);
+          yield* Effect.raceFirst(Queue.take(wake), until(credential.recheckAt));
           continue;
         }
         previous = current.controlId;
@@ -124,11 +132,11 @@ export const threadLeaseUpdates = (input: {
                 },
         );
         const deadline = DateTime.toEpochMillis(current.expiresAt);
-        const wakeAt = value._tag === "active" ? Math.min(deadline, value.wakeAt) : deadline;
-        yield* Effect.raceFirst(
-          Queue.take(wake),
-          Effect.sleep(Math.max(0, wakeAt - (yield* Clock.currentTimeMillis))),
+        const wakeAt = Math.min(
+          value._tag === "active" ? Math.min(deadline, value.wakeAt) : deadline,
+          credential.recheckAt,
         );
+        yield* Effect.raceFirst(Queue.take(wake), until(wakeAt));
       }
     }),
   );

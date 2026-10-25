@@ -456,6 +456,45 @@ it.effect("renews an idle credential while its session is attached and expires i
   }),
 );
 
+it.effect("inspect judges a credential as resolve would, without renewing it", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    let attached = true;
+    const registry = yield* makeRegistry(() => timestamp);
+    const tokenOf = (issued: { readonly config: { readonly authorizationHeader: string } }) =>
+      issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    const plainThread = ThreadId.make("thread-inspect-plain");
+    const plain = tokenOf(
+      yield* registry.issue({
+        threadId: plainThread,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      }),
+    );
+    const attachedThread = ThreadId.make("thread-inspect-attached");
+    const held = tokenOf(
+      yield* registry.issue({
+        threadId: attachedThread,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        isAttached: Effect.sync(() => attached),
+      }),
+    );
+    timestamp += 50;
+    expect(yield* registry.inspect(plain)).toEqual({ threadId: plainThread, recheckAt: 1_101 });
+    // Inspecting is not use: the plain credential still expires a window after its issue.
+    timestamp += 60;
+    expect(yield* registry.inspect(plain)).toBeUndefined();
+    expect(yield* registry.resolve(plain)).toBeUndefined();
+    // An idle credential whose session is attached stays valid, rechecked a window later.
+    expect(yield* registry.inspect(held)).toEqual({
+      threadId: attachedThread,
+      recheckAt: 1_210,
+    });
+    attached = false;
+    expect(yield* registry.inspect(held)).toBeUndefined();
+    expect(yield* registry.resolve(held)).toBeUndefined();
+  }),
+);
+
 it.effect(
   "gives concurrently started threads different TMPDIRs that end with the server (#1206)",
   () =>

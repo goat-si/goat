@@ -27,5 +27,6 @@ export const layer = Layer.succeed(
     revokeThread: () => Effect.void,
     revokeAll: Effect.void,
     subscribeChanges: Effect.die("unused"),
+    inspect: () => Effect.undefined,
   }),
 );

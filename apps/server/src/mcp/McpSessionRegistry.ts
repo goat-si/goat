@@ -110,6 +110,14 @@ export interface McpSessionRegistryShape {
   ) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
   readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
+  /**
+   * The thread a token still authorizes and when to ask again, judged as resolve would but
+   * without counting the check as use: a stream that only watches a credential must not keep
+   * it alive.
+   */
+  readonly inspect: (
+    rawToken: string,
+  ) => Effect.Effect<{ readonly threadId: ThreadId; readonly recheckAt: number } | undefined>;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -544,6 +552,27 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       ? Effect.undefined
       : hashToken(rawToken).pipe(Effect.flatMap(resolveHash));
 
+  const inspect: McpSessionRegistryShape["inspect"] = Effect.fn("McpSessionRegistry.inspect")(
+    function* (rawToken) {
+      if (rawToken.length === 0) return undefined;
+      const tokenHash = yield* hashToken(rawToken);
+      const timestamp = yield* currentTimeMillis;
+      const current = yield* SynchronizedRef.get(state);
+      const live = current.records.get(tokenHash);
+      if (live !== undefined && !isIdle(live, timestamp))
+        return {
+          threadId: live.scope.thread.threadId,
+          recheckAt: live.lastAliveAt + livenessWindowMs + 1,
+        };
+      const tombstone = current.tombstones.get(tokenHash);
+      // Idle, or expired for idleness: still valid while its session is attached, as resolve
+      // would renew it then; ask again after another window.
+      const record = live ?? (tombstone?.reason === "expired" ? tombstone.record : undefined);
+      if (!record?.isAttached || !(yield* record.isAttached)) return undefined;
+      return { threadId: record.scope.thread.threadId, recheckAt: timestamp + livenessWindowMs };
+    },
+  );
+
   const explainRefusal: NonNullable<McpSessionRegistryShape["explainRefusal"]> = Effect.fn(
     "McpSessionRegistry.explainRefusal",
   )(function* (rawToken) {
@@ -657,6 +686,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     }),
     revokeAll: revokeWhere(() => true),
     subscribeChanges: PubSub.subscribe(changes),
+    inspect,
   });
 });
 

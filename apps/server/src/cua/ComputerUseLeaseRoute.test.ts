@@ -124,8 +124,10 @@ const active = {
   apps: ["com.apple.calculator"],
 } as const;
 
-const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* () {
-  const registry = yield* McpSessionRegistry.__testing.make().pipe(
+const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
+  options: { readonly livenessWindowMs?: number } = {},
+) {
+  const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
     Effect.provideService(HttpServer.HttpServer, {
       address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
       serve: () => Effect.void,
@@ -362,6 +364,34 @@ describe("computer use lease route", () => {
         yield* f.set("control:two");
         assert.isUndefined(yield* next);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("watching a credential never keeps it alive past its liveness window", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture({ livenessWindowMs: 100 });
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* TestClock.adjust("90 millis");
+      yield* f.set(controlId);
+      assert.deepEqual(yield* next, active);
+      // Nothing used the credential since it was issued; the stream's own checks are not use.
+      yield* TestClock.adjust("60 millis");
+      yield* f.set(controlId, "paused");
+      assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+      assert.isUndefined(
+        yield* f.registry.resolve(f.credential.config.authorizationHeader.slice(7)),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a quiet waiting stream ends when its credential expires", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture({ livenessWindowMs: 100 });
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* TestClock.adjust("101 millis");
+      assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+    }).pipe(Effect.scoped),
   );
 
   it.effect("same-token renewal keeps the stream following controls", () =>
