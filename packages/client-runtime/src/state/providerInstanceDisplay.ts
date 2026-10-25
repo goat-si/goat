@@ -151,11 +151,6 @@ export function codexRouteErrorMessage(error: unknown): string {
 const isHandoffError = Schema.is(HandoffError);
 
 /**
- * What a person is told when their answer to a handoff fails. An approved provider change that
- * failed, or may have landed, says which, so nobody approves a half-applied change again; a
- * conflict the server explained, such as another thread holding an app, says what is in the way.
- */
-/**
  * When a pending handoff expires, in the reader's own time to the minute. Near a change of the
  * zone's UTC offset (any size: clocks fall back 30 minutes on Lord Howe, two hours at Troll) the
  * same wall time can mean two instants, so the label then names the zone. An expiry is always
@@ -182,6 +177,11 @@ export function handoffExpiryLabel(
   return `Expires ${clock.format(at)}`;
 }
 
+/**
+ * What a person is told when their answer to a handoff fails. An approved provider change that
+ * failed, or may have landed, says which, so nobody approves a half-applied change again; a
+ * conflict the server explained, such as another thread holding an app, says what is in the way.
+ */
 export function handoffRespondErrorMessage(error: unknown): string {
   return isHandoffError(error) &&
     (error.outcome !== undefined || (error.reason === "conflict" && error.detail !== undefined))
