@@ -213,4 +213,57 @@ describe("AT-SPI focus events", () => {
       bus.close();
     }
   });
+
+  it("drops a bus that never answers authentication at the setup limit, retries, and closes a connection still authenticating (#1644 r1)", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-silent-"));
+    const path = NodePath.join(dir, "bus");
+    const arrivals: Array<(socket: NodeNet.Socket) => void> = [];
+    const arrived = () =>
+      new Promise<NodeNet.Socket>((resolve) => {
+        arrivals.push(resolve);
+      });
+    // Accepts every connection and never says anything.
+    const server = NodeNet.createServer((socket) => {
+      socket.on("error", () => undefined);
+      arrivals.shift()?.(socket);
+    });
+    await new Promise<void>((resolve) => server.listen(path, resolve));
+    const limit = Promise.withResolvers<void>();
+    // Only the first connection's setup limit passes; the second waits on close alone.
+    const limits = [limit.promise, new Promise<void>(() => undefined)];
+    const retried = Promise.withResolvers<void>();
+    const retry = Promise.withResolvers<void>();
+    const closedSocket = (socket: NodeNet.Socket) =>
+      new Promise<void>((resolve) => {
+        socket.once("close", () => resolve());
+      });
+    const firstArrival = arrived();
+    const events = openFocusEvents({
+      address: async () => "unix:path=" + path,
+      uid: 1000,
+      setupLimit: () => limits.shift() ?? new Promise<void>(() => undefined),
+      retry: () => {
+        retried.resolve();
+        return retry.promise;
+      },
+    });
+    try {
+      const first = await firstArrival;
+      const firstClosed = closedSocket(first);
+      limit.resolve();
+      await firstClosed;
+      await retried.promise;
+      const secondArrival = arrived();
+      retry.resolve();
+      // Closing must end a connection that is still waiting for its auth answer.
+      const second = await secondArrival;
+      const secondClosed = closedSocket(second);
+      events.close();
+      await secondClosed;
+    } finally {
+      events.close();
+      server.close();
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

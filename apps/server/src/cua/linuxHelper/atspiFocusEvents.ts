@@ -27,6 +27,8 @@ export interface FocusEventsDependencies {
   readonly uid: number;
   /** Resolves when the next connection attempt may start. */
   readonly retry: () => Promise<void>;
+  /** Resolves when a connection still authenticating or registering has taken too long. */
+  readonly setupLimit?: () => Promise<void>;
 }
 
 const EVENTS = ["object:state-changed:focused", "window:activate"];
@@ -35,6 +37,8 @@ const RULES = [
   "type='signal',interface='org.a11y.atspi.Event.Window',member='Activate'",
 ];
 const CALL_TIMEOUT_MS = 2_000;
+/** Authentication and registration together; a bus that stalls longer is dropped and retried. */
+const SETUP_TIMEOUT_MS = 5_000;
 /** Far above any focus signal; a larger message means the stream is not what this expects. */
 const MAX_MESSAGE_BYTES = 1 << 20;
 
@@ -257,15 +261,19 @@ export function isFocusChange(message: Message): boolean {
   return message.iface === "org.a11y.atspi.Event.Window" && message.member === "Activate";
 }
 
-/** One authenticated connection: resolves once registered, rejects if setup fails. */
+/**
+ * One connection. Its socket is returned at once, so closing can end it at any stage; ready
+ * resolves once it is registered and rejects if setup fails or outlasts setupLimit.
+ */
 function connectOnce(
   path: string,
   uid: number,
+  setupLimit: Promise<void>,
   onFocus: () => void,
   onClose: () => void,
-): Promise<NodeNet.Socket> {
-  return new Promise((resolve, reject) => {
-    const socket = NodeNet.createConnection({ path });
+): { readonly socket: NodeNet.Socket; readonly ready: Promise<void> } {
+  const socket = NodeNet.createConnection({ path });
+  const ready = new Promise<void>((resolve, reject) => {
     let settled = false;
     let authenticated = false;
     let pending = Buffer.alloc(0);
@@ -366,7 +374,7 @@ function connectOnce(
             () => {
               if (settled) return;
               settled = true;
-              resolve(socket);
+              resolve();
             },
             (error: unknown) => fail(error instanceof Error ? error : new Error(String(error))),
           );
@@ -395,13 +403,20 @@ function connectOnce(
       fail(new Error("The accessibility bus connection closed."));
       onClose();
     });
+    void setupLimit.then(() => {
+      if (!settled) fail(new Error("The accessibility bus did not finish setting up in time."));
+    });
   });
+  return { socket, ready };
 }
 
 export function openFocusEvents(deps: FocusEventsDependencies): FocusEvents {
   const listeners = new Set<() => void>();
   let closed = false;
   let socket: NodeNet.Socket | undefined;
+  const setupLimit =
+    deps.setupLimit ??
+    (() => new Promise<void>((resolve) => setTimeout(resolve, SETUP_TIMEOUT_MS).unref()));
   const onFocus = () => {
     for (const listener of Array.from(listeners)) listener();
   };
@@ -411,8 +426,12 @@ export function openFocusEvents(deps: FocusEventsDependencies): FocusEvents {
       try {
         const path = busSocketPath(await deps.address());
         if (path === undefined) throw new Error("The accessibility bus address has no socket.");
-        socket = await connectOnce(path, deps.uid, onFocus, () => closedOnce.resolve());
-        if (closed) socket.destroy();
+        if (closed) break;
+        const connection = connectOnce(path, deps.uid, setupLimit(), onFocus, () =>
+          closedOnce.resolve(),
+        );
+        socket = connection.socket;
+        await connection.ready;
         // A focus change may have gone unheard while this was down.
         onFocus();
         await closedOnce.promise;
