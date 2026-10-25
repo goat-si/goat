@@ -220,6 +220,21 @@ it("tells Windows users about the security prompt, administrator apps and a bloc
   expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
 });
 
+it("calls an unchecked Windows desktop not checked, not unsupported or waiting for consent (#1520)", () => {
+  // What the Windows helper reports after it authenticated but before a check read a window.
+  const unchecked = { ...ready, capture: "pending", tree: "unavailable" } as const;
+  const step = view(unchecked, "win32").steps[2];
+  expect(step?.state).toBe("pending");
+  expect(step?.detail.join(" ")).not.toContain("consent");
+  expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
+  // A remote client cannot run the check, so the text names where it runs.
+  expect(step?.detail.join(" ")).toContain("in the GOAT desktop app on this computer");
+  // A tree that a check really could not read still says so.
+  expect(view({ ...ready, tree: "unavailable" }, "win32").steps[2]?.state).toBe("unsupported");
+  // macOS keeps its consent wording.
+  expect(view(unchecked, "darwin").steps[2]?.detail.join(" ")).toContain("consent");
+});
+
 it("uses host-specific names and reports the Linux display server", () => {
   expect(view(ready).steps[0]?.grants[1]?.title).toBe("Screen & System Audio Recording");
   expect(view(ready, "win32").steps[0]?.grants[0]?.title).toBe("UI Automation");

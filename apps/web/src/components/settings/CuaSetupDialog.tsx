@@ -26,6 +26,7 @@ export function CuaSetupDialog({
   hostLabel,
   status,
   localMac,
+  localCheck,
   onCheck,
   onAllow,
   onReveal,
@@ -39,6 +40,8 @@ export function CuaSetupDialog({
   status: CuaHostStatus;
   /** This desktop runs the host, so it can grant macOS permissions and prove them. */
   localMac: boolean;
+  /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
+  localCheck: boolean;
   /** The grants of the app computer use runs as: the helper when GOAT ships one. */
   onCheck: () => Promise<DesktopCuaGrants>;
   /** Opens the pane with the panel to drag that app into its list. */
@@ -129,8 +132,8 @@ export function CuaSetupDialog({
       } else setError(failure);
     });
     if (!saved) return;
-    // Only the Mac running the host can prove its grants; elsewhere the switch is the result.
-    if (localMac) await verify();
+    // Only the desktop running the host can prove it; elsewhere the switch is the result.
+    if (localCheck) await verify();
     else onClose("enabled");
   };
 
@@ -148,7 +151,7 @@ export function CuaSetupDialog({
           title={verified ? "Computer use is ready" : `Let agents use ${hostLabel}`}
           description={
             verified
-              ? "From their next turn, agents can see and use apps on this Mac."
+              ? `From their next turn, agents can see and use apps on ${hostLabel}.`
               : `Agents see and use apps on ${hostLabel} in the background, without taking over your cursor.`
           }
         />
@@ -280,7 +283,7 @@ export function CuaSetupDialog({
               <PermissionContinueButton
                 ready={granted && (isOn || !computerUseUnavailable(status))}
                 busy={busy !== null}
-                onClick={() => void (isOn && localMac ? verify() : turnOn())}
+                onClick={() => void (isOn && localCheck ? verify() : turnOn())}
               >
                 {busy === "enable"
                   ? "Turning on…"

@@ -1,3 +1,4 @@
+import { describeHolder } from "./computerUseGrants.ts";
 /**
  * A thread asking a person for computer use on this host, of the whole screen or of the apps it
  * names. The request is an approval handoff on the computer_use.grant path whose expiry is the
@@ -39,12 +40,23 @@ const grantText = (input: {
   readonly apps: ReadonlyArray<string> | undefined;
   readonly minutes: number;
   readonly purpose: string;
+  readonly foreground: boolean;
 }) => ({
-  reason: `${input.title} (turn ${input.turn}) asks to ${input.apps === undefined ? "see and control this computer's screen" : `control ${input.apps.join(", ")}`} for ${input.minutes} minutes: ${input.purpose}`,
-  details:
+  reason: `${input.title} (turn ${input.turn}) asks to ${input.apps === undefined ? "see and control this computer's screen" : `control ${input.apps.join(", ")}`} for ${input.minutes} minutes: ${input.purpose}. ${
+    input.foreground
+      ? "Whole-desktop foreground: it may bring apps forward and take keyboard or pointer focus for this purpose."
+      : "Background-only: it cannot bring apps forward or take keyboard or pointer focus."
+  }`,
+  details: [
+    ...(input.foreground
+      ? [
+          "Foreground input can briefly take and return the screen. Only one input action already sent under live approval may finish its own focus return. GOAT does not restore focus when approval ends, and refuses later foreground input until new approval. Pause, Stop, takeover, control replacement or turn end revokes foreground authority and requires approval again.",
+        ]
+      : []),
     input.apps === undefined
       ? "Approving admits this thread's turns until the request expires. It does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too."
       : "Approving admits this thread's turns to these apps' windows until the request expires. It does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
+  ].join("\n\n"),
 });
 
 export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (input: {
@@ -52,6 +64,15 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   readonly providerInstanceId: ProviderInstanceId;
   readonly request: ComputerUseRequestInput;
 }) {
+  const foreground = input.request.foreground === true;
+  const wanted = input.request.apps;
+  if (foreground && wanted !== undefined)
+    return {
+      kind: "refused",
+      reason: "unsupported",
+      message:
+        "Foreground approval supports whole-desktop access only. Omit apps to ask explicitly for the whole desktop, or omit foreground for background-only access to these apps. No app scope has been broadened.",
+    } satisfies ComputerUseRequestResult;
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   if (Option.isNone(cua) || !(yield* cua.value.enabled))
     return {
@@ -77,7 +98,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       kind: "refused",
       reason: "held",
       holderThreadId: held.value.threadId,
-      message: `${ComputerUseLeases.describeHolder(held.value)} ${
+      message: `${describeHolder(held.value)} ${
         held.value.apps === undefined
           ? "Ask again after it ends."
           : "Ask only for apps it does not hold, or ask again after it ends."
@@ -100,7 +121,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         "This host cannot yet tell when a person types a secret or uses the desktop, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
     } satisfies ComputerUseRequestResult;
   const own = yield* leases.active(input.threadId);
-  const wanted = input.request.apps;
   // A live admission answers the request only when it already covers what is asked.
   const granted = Option.isSome(own) ? own.value.apps : [];
   const covered =
@@ -108,10 +128,14 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     (granted === undefined ||
       (wanted !== undefined &&
         wanted.every((app) => granted.some((name) => name.toLowerCase() === app.toLowerCase()))));
-  if (Option.isSome(own) && covered)
+  const foregroundCovered =
+    foreground && (yield* leases.foregroundAvailable(input.threadId, input.request.purpose));
+  if (Option.isSome(own) && (foreground ? foregroundCovered : covered))
     return {
       kind: "available",
-      message: `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
+      message: foreground
+        ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop, control replacement or turn end requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
+        : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. The cua-driver tools are attached from your next turn if they are not already.`,
     } satisfies ComputerUseRequestResult;
 
   const view = yield* threads.getThreadSnapshot(input.threadId);
@@ -132,6 +156,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     apps: wanted,
     minutes,
     purpose: input.request.purpose,
+    foreground,
   });
   const handoffs = yield* Handoffs.Handoffs;
   const handoff = yield* handoffs.create({
@@ -153,9 +178,13 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     args: {
       purpose: input.request.purpose,
       minutes,
+      ...(foreground ? { foreground: true } : {}),
       ...(wanted === undefined ? {} : { apps: wanted }),
     },
     expiresAt,
+    ...(foreground
+      ? { computerUseForeground: { purpose: input.request.purpose, target: "desktop" as const } }
+      : {}),
     ...(wanted === undefined ? {} : { apps: wanted }),
   });
   // A repeated request returns the pending handoff with its original expiry.

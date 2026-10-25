@@ -91,10 +91,11 @@ function setupLine(input: {
   readonly status: CuaHostStatus | null;
   readonly error: string | null;
   readonly localMac: boolean;
+  readonly localCheck: boolean;
   readonly hostLabel: string;
   readonly readiness: Readiness;
 }): StatusLine | null {
-  const { setup, status, error, localMac } = input;
+  const { setup, status, error, localMac, localCheck } = input;
   const { phase } = setup;
   if (phase.step === "failed")
     return { text: phase.message, error: true, retry: true, relaunch: phase.relaunch };
@@ -118,7 +119,7 @@ function setupLine(input: {
     };
   if (error || status === null)
     return { text: computerUseStatusText({ enabled: true, status, error }) ?? "" };
-  if (status.failure) return { text: status.failure, error: true, retry: localMac };
+  if (status.failure) return { text: status.failure, error: true, retry: localCheck };
   if (status.display?.capability === "unavailable")
     return { text: status.display.reason, error: true };
   if (phase.step === "ready" || input.readiness.ready) {
@@ -174,6 +175,7 @@ export function ComputerUsePanel({
   status,
   error,
   localMac,
+  localCheck,
   disabledSkills,
   fullAccessAutoAdmit,
   save,
@@ -187,6 +189,8 @@ export function ComputerUsePanel({
   error: string | null;
   /** This desktop runs the host, so it can read, grant and prove its macOS permissions. */
   localMac: boolean;
+  /** This desktop runs the host, so it can restart and prove its helper: macOS or Windows. */
+  localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
   fullAccessAutoAdmit: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
@@ -198,6 +202,7 @@ export function ComputerUsePanel({
     queueKey: environmentId,
     enabled,
     localMac,
+    localCheck,
     hostRejects: hostRejects(status),
     actions: { ...bridge, save: (patch) => save(patch) },
   });
@@ -217,6 +222,7 @@ export function ComputerUsePanel({
     status,
     error,
     localMac,
+    localCheck,
     hostLabel,
     readiness: computerUseReadinessSteps(readinessInput),
   });

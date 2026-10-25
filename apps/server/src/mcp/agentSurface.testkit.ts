@@ -158,7 +158,10 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({}),
   // A live thread, so thread callers reach the handler instead of the inert services above.
   liveThreadsLayer,
-  Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined }),
+  Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+    proxy: undefined,
+    foregroundApprovalEpoch: Effect.succeed(0),
+  }),
   Layer.mock(Handoffs.Handoffs)({}),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
