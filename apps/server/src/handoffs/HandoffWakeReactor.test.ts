@@ -383,6 +383,35 @@ it.effect(
 );
 
 it.effect(
+  "a late approval event or a repeated end still wakes no agent whose grant a person ended",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        const approval = yield* resolution(world, approved.handoffId);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        // The approval's event reaches the reactor only now, after the end.
+        yield* world.reactor.handle(approval);
+        // A second end of the same grant, as a repeated Stop sends.
+        yield* world.handoffs
+          .respond({ threadId, handoffId: approved.handoffId, action: "cancelled" }, person)
+          .pipe(Effect.ignore);
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+      }),
+    ),
+);
+
+it.effect(
   "stays quiet when a person ends an approved computer use grant whose approval wake failed",
   () =>
     withWorld((world) =>
