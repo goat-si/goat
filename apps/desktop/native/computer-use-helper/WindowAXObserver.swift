@@ -336,64 +336,67 @@ final class WindowAXWatch: SettleWatch {
   }
 
   private func unknownFocusRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
-    if let refusal = unknownFocusPlacementRefusal(focused, app: app) { return refusal }
-    if let refusal = windowTreeRefusal(allowing: focused) { return refusal }
+    let (placement, ancestors) = unknownFocusPlacement(focused, app: app)
+    if let placement { return placement }
+    if let refusal = windowTreeRefusal(allowing: focused, roots: ancestors) { return refusal }
     guard isAdmitted else { return Self.privacy("invalidated") }
     switch api.attribute(app, "AXFocusedUIElement") {
     case .absent: return nil
     // The same element may have turned secure or moved while the window was read; check it again.
-    case .element(let now) where now.same(focused): return unknownFocusPlacementRefusal(focused, app: app)
+    case .element(let now) where now.same(focused): return unknownFocusPlacement(focused, app: app).0
     case .element(let now): return focusRefusal(now, app: app, allowUnknown: false)
     case .unsupported: return Self.privacy("focus_unsupported")
     default: return Self.privacy("focus_unreadable")
     }
   }
 
-  /// The unknown focus is not secure by subrole and sits inside the target window, under no secure
-  /// or unreadable ancestor: the window walk covers only the target window.
-  private func unknownFocusPlacementRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
-    guard let target else { return Self.privacy("tree_target_missing") }
-    guard isAdmitted else { return Self.privacy("invalidated") }
+  /// The unknown focus is not secure by subrole and sits inside the target window, under no secure,
+  /// unknown or unreadable ancestor. Returns the refusal, or the ancestors between the focus and the
+  /// window, which the walk also starts from so their other children are read too.
+  private func unknownFocusPlacement(_ focused: WindowAXElement, app: WindowAXElement)
+    -> (String?, [WindowAXElement]) {
+    guard let target else { return (Self.privacy("tree_target_missing"), []) }
+    guard isAdmitted else { return (Self.privacy("invalidated"), []) }
     switch api.attribute(focused, "AXRole") {
     case .string(let role) where role == "AXUnknown" || role.isEmpty: break
     case .absent: break
     // A role that became known since the first read is judged by nobody here, so it refuses.
-    default: return Self.privacy("focus_role_changed")
+    default: return (Self.privacy("focus_role_changed"), [])
     }
     switch api.attribute(focused, "AXSubrole") {
-    case .string(let subrole): if subrole == "AXSecureTextField" { return Self.privacy("focus_subrole:AXUnknown") }
+    case .string(let subrole): if subrole == "AXSecureTextField" { return (Self.privacy("focus_subrole:AXUnknown"), []) }
     case .absent, .unsupported: break
-    default: return Self.privacy("focus_subrole_unreadable:AXUnknown")
+    default: return (Self.privacy("focus_subrole_unreadable:AXUnknown"), [])
     }
     var node = focused
     var seen: [WindowAXElement] = []
     var inside = false
     for _ in 0..<128 {
-      guard isAdmitted else { return Self.privacy("invalidated") }
+      guard isAdmitted else { return (Self.privacy("invalidated"), []) }
       guard case .element(let parent) = api.attribute(node, "AXParent") else {
-        return Self.privacy("focus_parent_unreadable:AXUnknown")
+        return (Self.privacy("focus_parent_unreadable:AXUnknown"), [])
       }
       if parent.same(target) { inside = true; break }
-      if parent.same(app) { return Self.privacy("focus_outside_window") }
-      guard !seen.contains(where: { $0.same(parent) }) else { return Self.privacy("focus_chain_cycle") }
+      if parent.same(app) { return (Self.privacy("focus_outside_window"), []) }
+      guard !seen.contains(where: { $0.same(parent) }) else { return (Self.privacy("focus_chain_cycle"), []) }
       seen.append(parent)
       guard case .string(let role) = api.attribute(parent, "AXRole") else {
-        return Self.privacy("focus_ancestor_unreadable")
+        return (Self.privacy("focus_ancestor_unreadable"), [])
       }
       // Only the focused element itself may be unidentifiable; its ancestors must have known roles.
-      guard !role.isEmpty, role != "AXUnknown" else { return Self.privacy("focus_ancestor:AXUnknown") }
+      guard !role.isEmpty, role != "AXUnknown" else { return (Self.privacy("focus_ancestor:AXUnknown"), []) }
       switch api.attribute(parent, "AXSubrole") {
       case .string(let subrole):
         if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
-          return Self.privacy("focus_ancestor:" + Self.axName(role))
+          return (Self.privacy("focus_ancestor:" + Self.axName(role)), [])
         }
       case .absent, .unsupported:
-        if role == "AXSecureTextField" || role == "AXTextField" { return Self.privacy("focus_ancestor:" + Self.axName(role)) }
-      default: return Self.privacy("focus_ancestor_unreadable")
+        if role == "AXSecureTextField" || role == "AXTextField" { return (Self.privacy("focus_ancestor:" + Self.axName(role)), []) }
+      default: return (Self.privacy("focus_ancestor_unreadable"), [])
       }
       node = parent
     }
-    return inside ? nil : Self.privacy("focus_chain_limit")
+    return inside ? (nil, seen) : (Self.privacy("focus_chain_limit"), [])
   }
 
   private func focusChainRefusal(_ focused: WindowAXElement, app: WindowAXElement) -> String? {
@@ -440,9 +443,6 @@ final class WindowAXWatch: SettleWatch {
   /// Reads the whole target window, within bounds, and fails closed on anything it cannot read or
   /// identify (AXUnknown, a container hiding its children), a secure field, or a tree past its bounds.
   private static let maxReportedProblems = 8
-  /// Roles that can be a secure text input; only for these does an unreadable subrole leave the
-  /// secure-field question open. Any other role cannot be a secure field whatever its subrole.
-  private static let textInputRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField"]
 
   private static func token(_ attribute: WindowAXAttribute, _ name: String) -> String {
     switch attribute {
@@ -460,10 +460,12 @@ final class WindowAXWatch: SettleWatch {
   /// list it as a child. Every distinct problem is collected (up to a cap) instead of stopping at the
   /// first, and a refusal ends with "seen:" entries summarizing what each kind of node returned
   /// (role names, AX codes and counts only), so one live check shows every remaining blocker.
-  private func windowTreeRefusal(allowing allowed: WindowAXElement? = nil) -> String? {
+  private func windowTreeRefusal(allowing allowed: WindowAXElement? = nil, roots: [WindowAXElement] = []) -> String? {
     guard let target else { return Self.privacy("tree_target_missing") }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
     if let allowed { pending.insert((allowed, 0), at: 0) }
+    pending.insert(contentsOf: roots.map { ($0, 0) }, at: 0)
+    var walked: [WindowAXElement] = []
     var visited = 0
     var problems: [String] = []
     var seen: [String: Int] = [:]
@@ -480,6 +482,9 @@ final class WindowAXWatch: SettleWatch {
       guard visited <= Self.treeNodeLimit else { note("tree_node_limit"); break walk }
       guard depth <= Self.treeDepthLimit else { note("tree_depth_limit"); continue }
       guard isAdmitted else { return Self.privacy("invalidated") }
+      // Roots overlap whenever the window also lists them; each node is judged once.
+      if walked.contains(where: { $0.same(node) }) { visited -= 1; continue }
+      walked.append(node)
       let isAllowed = allowed?.same(node) == true
       let role: String
       switch api.attribute(node, "AXRole") {
@@ -499,8 +504,9 @@ final class WindowAXWatch: SettleWatch {
       case .absent, .unsupported:
         if role == "AXTextField" { note("tree_subrole:" + name); record(name + ":" + Self.token(subrole, "sub")); continue }
       default:
-        // The focused AXUnknown element is held to text-input rules: its kind is not known.
-        if Self.textInputRoles.contains(role) || isAllowed {
+        // Only a control known not to take input (a leaf role) can go without a readable subrole;
+        // a container, a custom role or the unknown focus could be a secure field.
+        if !Self.leafRoles.contains(role) || isAllowed {
           let code = { if case .error(let c) = subrole { return ":err\(abs(Int(c)))" }; return "" }()
           note("tree_subrole_unreadable:" + name + code); record(name + ":" + Self.token(subrole, "sub")); continue
         }

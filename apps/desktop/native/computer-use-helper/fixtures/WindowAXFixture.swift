@@ -601,6 +601,31 @@ private func runObserverFixture(_ scenario: String) {
     underFocus.start()
     check(underFocus.events == ["unsupported:private_or_unknown_focus:tree_subrole:AXTextField"],
       "a secure field under an unlisted focus refuses: \(underFocus.events)")
+    // An ancestor the window does not list is walked too, so a secure sibling of the focus refuses.
+    for container in ["AXGroup", "AXSheet", "AXPopover"] {
+      let f = WatchFixture()
+      calculator(f.api)
+      let el = { (name: String) in WindowAXElement(name as NSString) }
+      f.api.roles["pane"] = container; f.api.subroles["pane"] = .absent; f.api.parents["pane"] = "window"
+      f.api.roles["secret"] = "AXTextField"; f.api.subroles["secret"] = .string("AXSecureTextField")
+      f.api.parents["secret"] = "pane"
+      f.api.childrenMap["pane"] = .elements([el("calc-focus"), el("secret")])
+      f.api.parents["calc-focus"] = "pane"
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:tree_subrole:AXTextField"],
+        "a secure sibling of the focus under an unlisted \(container) refuses: \(f.events)")
+    }
+    // An unreadable subrole counts as none only on controls known not to take input.
+    for (role, name) in [("AXGroup", "AXGroup"), ("AXCustomVault", "other")] {
+      let f = WatchFixture()
+      calculator(f.api)
+      f.api.roles["label-0"] = role
+      f.api.subroles["label-0"] = .error(-25204)
+      f.api.childrenMap["label-0"] = .absent
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:tree_subrole_unreadable:\(name):err25204"],
+        "an unreadable subrole on \(role) refuses: \(f.events)")
+    }
     // A refusal summarizes what each kind of node returned, with roles, codes and counts only.
     check(textField.diagnostics.contains("seen:AXButton:sub_absent:kids_unsupported:x53")
       && textField.diagnostics.contains("seen:AXTextField:sub_err25204"),
