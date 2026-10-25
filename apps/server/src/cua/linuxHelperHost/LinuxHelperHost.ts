@@ -21,6 +21,7 @@ import * as NodeURL from "node:url";
 
 import {
   ComputerUseReadiness,
+  computerUseReady,
   type ComputerUseEvent,
   type ComputerUseWindowTarget,
   type DesktopCuaReadinessReport,
@@ -338,6 +339,11 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     reportFromCheck = true;
     yield* Ref.set(deps.report, Option.some(report));
     publish(report);
+    yield* Effect.logInfo("Checked Linux computer use readiness before the first turn", {
+      launch,
+      pid: process.pid,
+      ready: computerUseReady(report.readiness),
+    });
   });
 
   const checkBeforeTurn = Effect.fnUntraced(function* (now: number) {
