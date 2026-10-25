@@ -31,7 +31,9 @@ const ROLE_PASSWORD_TEXT = 40;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
 // reported unknown, which the helper treats as private.
 const MAX_WINDOWS = 64;
-// AtspiStateType FOCUSED: bit 12 of the first state word.
+// AtspiStateType bits of the first state word: ACTIVE 1 (a window holding keyboard focus),
+// FOCUSED 12.
+const STATE_ACTIVE = 1 << 1;
 const STATE_FOCUSED = 1 << 12;
 // GTK4 has no Collection interface, so focus is found by walking (#1607). Each node costs a
 // gdbus call or two; past this many in one probe, focus is reported unknown, which is private.
@@ -47,13 +49,17 @@ function parseStates(output: string): number | null {
 }
 
 /**
- * A gdbus failure whose reply's own error line (never the command line, which names the method
- * too) is UnknownMethod. Its message text is the app's, translated, so whether the object really
- * lacks Collection is asked separately (GetInterfaces).
+ * A gdbus failure whose reply is UnknownMethod. gdbus prints the reply's error on the first
+ * "Error:" line; a message can run on to further lines, so nothing after that line counts, and
+ * the command line before it names the method too. The message text is the app's, translated,
+ * so whether the object really lacks Collection is asked separately (GetInterfaces).
  */
 function unknownMethod(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  return /^Error: GDBus\.Error:org\.freedesktop\.DBus\.Error\.UnknownMethod: /mu.test(text);
+  const header = text.split("\n").find((line) => line.startsWith("Error: "));
+  return (
+    header?.startsWith("Error: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: ") ?? false
+  );
 }
 
 /** The interfaces in a `GetInterfaces` reply, `(['org.a11y.atspi.Accessible', ...],)`. */
@@ -170,15 +176,21 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       // Every object of the window, for a toolkit without Collection: all that say they have
       // focus, whose roles are all checked below. A hidden container can still hold focus, so
       // none is skipped; an unreadable state or an exhausted budget throws, so focus is unknown.
+      const readStates = async (node: { readonly bus: string; readonly path: string }) => {
+        const states = parseStates(
+          await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
+        );
+        if (states === null) throw new Error("AT-SPI gave no state set.");
+        return states;
+      };
       const walkFocused = async (window: { readonly bus: string; readonly path: string }) => {
         const focused: Array<{ readonly bus: string; readonly path: string }> = [];
+        let windowActive = false;
         const queue = [window];
         for (let node = queue.shift(); node !== undefined; node = queue.shift()) {
           if (--walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
-          const states = parseStates(
-            await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
-          );
-          if (states === null) throw new Error("AT-SPI gave no state set.");
+          const states = await readStates(node);
+          if (node === window) windowActive = (states & STATE_ACTIVE) !== 0;
           if ((states & STATE_FOCUSED) !== 0) focused.push(node);
           queue.push(
             ...parseReferences(
@@ -186,6 +198,16 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
             ),
           );
         }
+        // The walk reads one object at a time, so focus can move under it. What it found must
+        // still hold at the end: every focused object still focused, and a window that holds
+        // focus (ACTIVE) never comes back with nothing focused in it. Otherwise focus is unknown.
+        if (focused.length === 0) {
+          if (windowActive || ((await readStates(window)) & STATE_ACTIVE) !== 0)
+            throw new Error("Focus moved while the window was read.");
+        } else
+          for (const node of focused)
+            if (((await readStates(node)) & STATE_FOCUSED) === 0)
+              throw new Error("Focus moved while the window was read.");
         return focused;
       };
       for (const window of windows) {
