@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - The lock orders Playwright promises outside the Effect runtime.
 import { constVoid } from "effect/Function";
 
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
