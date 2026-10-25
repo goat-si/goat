@@ -1844,258 +1844,316 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  it.effect.each(["availability", "background-terminal", "resume-rotation"] as const)(
-    "replays successful native attachment authority (%s)",
-    (mode) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scenario = `wp4-attachment-${mode}`;
-          const nativeThreadId = scenario;
-          const threadId = ThreadId.make(`thread-${scenario}`);
-          const config: McpProviderSession.McpProviderSessionConfig = {
-            environmentId: M.EnvironmentId.make("fixture"),
-            threadId,
-            providerSessionId: "credential-1",
-            providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
-            endpoint: "http://127.0.0.1:43123/mcp",
-            authorizationHeader: "Bearer fixture-1",
-            browserToolsAvailable: false,
-            grantedScopes: ["memory:read", "memory:write", "orchestration:read"],
-          };
-          const next = {
-            ...config,
-            providerSessionId: "credential-2",
-            authorizationHeader: "Bearer fixture-2",
-          };
-          const stale = { ...config, grantedScopes: [] };
-          const sessions = yield* McpProviderSessions.McpProviderSessions;
-          yield* sessions.set(config);
-          let valid = true;
-          const preamble = codexReplayPreamble({
-            nativeThreadId,
-            nativeTurnId: "unused",
-            prompt: "unused",
-          });
-          const expectedThreadParams = (
-            attachment: McpProviderSession.McpProviderSessionConfig,
-            disabledTools: readonly string[] = [],
-          ) => ({
-            cwd: CODEX_TEST_RUNTIME_POLICY.cwd!,
-            model: CODEX_TEST_MODEL_SELECTION.model,
-            config: {
-              "tools.update_plan.enabled": true,
-              mcp_optional_startup_grace_ms: 10_000,
-              "mcp_servers.goat": {
-                url: attachment.endpoint,
-                disabled_tools: disabledTools,
-                tool_timeout_sec: 3900,
-                http_headers: { Authorization: attachment.authorizationHeader },
+  it.effect.each([
+    "availability",
+    "background-terminal",
+    "status-during-check",
+    "detach-terminal",
+    "resume-rotation",
+  ] as const)("replays successful native attachment authority (%s)", (mode) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = `wp4-attachment-${mode}`;
+        const nativeThreadId = scenario;
+        const threadId = ThreadId.make(`thread-${scenario}`);
+        const config: McpProviderSession.McpProviderSessionConfig = {
+          environmentId: M.EnvironmentId.make("fixture"),
+          threadId,
+          providerSessionId: "credential-1",
+          providerInstanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
+          endpoint: "http://127.0.0.1:43123/mcp",
+          authorizationHeader: "Bearer fixture-1",
+          browserToolsAvailable: false,
+          grantedScopes: ["memory:read", "memory:write", "orchestration:read"],
+        };
+        const next = {
+          ...config,
+          providerSessionId: "credential-2",
+          authorizationHeader: "Bearer fixture-2",
+        };
+        const stale = { ...config, grantedScopes: [] };
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(config);
+        let valid = true;
+        const preamble = codexReplayPreamble({
+          nativeThreadId,
+          nativeTurnId: "unused",
+          prompt: "unused",
+        });
+        const expectedThreadParams = (
+          attachment: McpProviderSession.McpProviderSessionConfig,
+          disabledTools: readonly string[] = [],
+        ) => ({
+          cwd: CODEX_TEST_RUNTIME_POLICY.cwd!,
+          model: CODEX_TEST_MODEL_SELECTION.model,
+          config: {
+            "tools.update_plan.enabled": true,
+            mcp_optional_startup_grace_ms: 10_000,
+            "mcp_servers.goat": {
+              url: attachment.endpoint,
+              disabled_tools: disabledTools,
+              tool_timeout_sec: 3900,
+              http_headers: { Authorization: attachment.authorizationHeader },
+            },
+          },
+        });
+        const threadResult = preamble[4]!;
+        const entries: CodexReplay.CodexAppServerReplayEntry[] = [
+          ...preamble.slice(0, 3),
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 2,
+              method: "thread/start",
+              params: expectedThreadParams(config),
+            },
+          },
+          threadResult,
+        ];
+        const resume = (
+          id: number,
+          attachment: McpProviderSession.McpProviderSessionConfig,
+          label?: string,
+          disabledTools: readonly string[] = [],
+        ) => {
+          entries.push({
+            type: "expect_outbound",
+            frame: {
+              id,
+              method: "thread/resume",
+              params: {
+                threadId: nativeThreadId,
+                excludeTurns: true,
+                ...expectedThreadParams(attachment, disabledTools),
               },
             },
           });
-          const threadResult = preamble[4]!;
-          const entries: CodexReplay.CodexAppServerReplayEntry[] = [
-            ...preamble.slice(0, 3),
+          entries.push({ ...withReplayRequestId(threadResult, id), ...(label ? { label } : {}) });
+        };
+        // Codex ignores resume overrides on a held thread, so new authority reloads it once
+        // the conversation is quiet and has no active goal (#1569).
+        // A background terminal, such as a dev server, would die with the reload: it waits.
+        const quietCheck = (id: number, terminals: ReadonlyArray<object> = []) =>
+          entries.push(
+            {
+              type: "expect_outbound",
+              frame: { id, method: "thread/goal/get", params: { threadId: nativeThreadId } },
+            },
+            { type: "emit_inbound", frame: { id, result: { goal: null } } },
             {
               type: "expect_outbound",
               frame: {
-                id: 2,
-                method: "thread/start",
-                params: expectedThreadParams(config),
+                id: id + 1,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: nativeThreadId },
               },
             },
-            threadResult,
-          ];
-          const resume = (
-            id: number,
-            attachment: McpProviderSession.McpProviderSessionConfig,
-            label?: string,
-            disabledTools: readonly string[] = [],
-          ) => {
-            entries.push({
+            {
+              type: "emit_inbound",
+              frame: { id: id + 1, result: { data: terminals, nextCursor: null } },
+            },
+          );
+        const reload = (
+          id: number,
+          attachment: McpProviderSession.McpProviderSessionConfig,
+          disabledTools: readonly string[] = [],
+        ) => {
+          quietCheck(id);
+          entries.push(
+            {
               type: "expect_outbound",
               frame: {
-                id,
+                id: id + 2,
+                method: "thread/unsubscribe",
+                params: { threadId: nativeThreadId },
+              },
+            },
+            { type: "emit_inbound", frame: { id: id + 2, result: { status: "unsubscribed" } } },
+          );
+          resume(id + 3, attachment, undefined, disabledTools);
+        };
+        const status = (type: "active" | "idle") => ({
+          type: "emit_inbound" as const,
+          frame: {
+            method: "thread/status/changed",
+            params: {
+              threadId: nativeThreadId,
+              status: type === "active" ? { type, activeFlags: [] } : { type },
+            },
+          },
+        });
+        const turn = (id: number, ordinal: number, hasGoatMcp = true) =>
+          Effect.gen(function* () {
+            const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
+              nativeThreadId,
+              codexInput: [{ type: "text", text: `turn-${ordinal}` }],
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+              hasGoatMcp,
+              browserToolsAvailable: false,
+            });
+            entries.push(
+              { type: "expect_outbound", frame: { id, method: "turn/start", params } },
+              {
+                type: "emit_inbound",
+                frame: {
+                  id,
+                  result: {
+                    turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+                  },
+                },
+              },
+              status("active"),
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "turn/started",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+                  },
+                },
+              },
+              status("idle"),
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "turn/completed",
+                  params: {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
+                  },
+                },
+              },
+            );
+          });
+        if (mode === "availability") {
+          yield* turn(3, 1);
+          reload(4, stale, GOAT_MEMORY_TOOLS);
+          yield* turn(8, 2);
+          reload(9, config);
+          yield* turn(13, 3);
+        } else if (mode === "status-during-check") {
+          // A turn Codex starts while the terminals are read makes the reload wait.
+          yield* turn(3, 1);
+          entries.push(
+            {
+              type: "expect_outbound",
+              frame: { id: 4, method: "thread/goal/get", params: { threadId: nativeThreadId } },
+            },
+            { type: "emit_inbound", frame: { id: 4, result: { goal: null } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 5,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: nativeThreadId },
+              },
+            },
+            status("active"),
+            { type: "emit_inbound", frame: { id: 5, result: { data: [], nextCursor: null } } },
+          );
+          yield* turn(6, 2);
+          reload(7, stale, GOAT_MEMORY_TOOLS);
+          yield* turn(11, 3);
+        } else if (mode === "detach-terminal") {
+          // Detaching GOAT MCP without computer use is other authority: it waits as well.
+          yield* turn(3, 1);
+          quietCheck(4, [{ processId: "dev-server" }]);
+          yield* turn(6, 2, false);
+          quietCheck(7);
+          entries.push(
+            {
+              type: "expect_outbound",
+              frame: { id: 9, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
+            },
+            { type: "emit_inbound", frame: { id: 9, result: { status: "unsubscribed" } } },
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 10,
                 method: "thread/resume",
                 params: {
                   threadId: nativeThreadId,
                   excludeTurns: true,
-                  ...expectedThreadParams(attachment, disabledTools),
+                  config: {
+                    ...CodexAdapterV2.CODEX_THREAD_CONFIG,
+                    mcp_servers: { goat: { enabled: false } },
+                  },
                 },
-              },
-            });
-            entries.push({ ...withReplayRequestId(threadResult, id), ...(label ? { label } : {}) });
-          };
-          // Codex ignores resume overrides on a held thread, so new authority reloads it once
-          // the conversation is quiet and has no active goal (#1569).
-          // A background terminal, such as a dev server, would die with the reload: it waits.
-          const quietCheck = (id: number, terminals: ReadonlyArray<object> = []) =>
-            entries.push(
-              {
-                type: "expect_outbound",
-                frame: { id, method: "thread/goal/get", params: { threadId: nativeThreadId } },
-              },
-              { type: "emit_inbound", frame: { id, result: { goal: null } } },
-              {
-                type: "expect_outbound",
-                frame: {
-                  id: id + 1,
-                  method: "thread/backgroundTerminals/list",
-                  params: { threadId: nativeThreadId },
-                },
-              },
-              {
-                type: "emit_inbound",
-                frame: { id: id + 1, result: { data: terminals, nextCursor: null } },
-              },
-            );
-          const reload = (
-            id: number,
-            attachment: McpProviderSession.McpProviderSessionConfig,
-            disabledTools: readonly string[] = [],
-          ) => {
-            quietCheck(id);
-            entries.push(
-              {
-                type: "expect_outbound",
-                frame: {
-                  id: id + 2,
-                  method: "thread/unsubscribe",
-                  params: { threadId: nativeThreadId },
-                },
-              },
-              { type: "emit_inbound", frame: { id: id + 2, result: { status: "unsubscribed" } } },
-            );
-            resume(id + 3, attachment, undefined, disabledTools);
-          };
-          const status = (type: "active" | "idle") => ({
-            type: "emit_inbound" as const,
-            frame: {
-              method: "thread/status/changed",
-              params: {
-                threadId: nativeThreadId,
-                status: type === "active" ? { type, activeFlags: [] } : { type },
               },
             },
-          });
-          const turn = (id: number, ordinal: number) =>
-            Effect.gen(function* () {
-              const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
-                nativeThreadId,
-                codexInput: [{ type: "text", text: `turn-${ordinal}` }],
-                runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-                modelSelection: CODEX_TEST_MODEL_SELECTION,
-                hasGoatMcp: true,
-                browserToolsAvailable: false,
-              });
-              entries.push(
-                { type: "expect_outbound", frame: { id, method: "turn/start", params } },
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    id,
-                    result: {
-                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
-                    },
-                  },
-                },
-                status("active"),
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    method: "turn/started",
-                    params: {
-                      threadId: nativeThreadId,
-                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
-                    },
-                  },
-                },
-                status("idle"),
-                {
-                  type: "emit_inbound",
-                  frame: {
-                    method: "turn/completed",
-                    params: {
-                      threadId: nativeThreadId,
-                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
-                    },
-                  },
-                },
-              );
-            });
-          if (mode === "availability") {
-            yield* turn(3, 1);
-            reload(4, stale, GOAT_MEMORY_TOOLS);
-            yield* turn(8, 2);
-            reload(9, config);
-            yield* turn(13, 3);
-          } else if (mode === "background-terminal") {
-            yield* turn(3, 1);
-            quietCheck(4, [{ processId: "dev-server" }]);
-            yield* turn(6, 2);
-            reload(7, stale, GOAT_MEMORY_TOOLS);
-            yield* turn(11, 3);
-          } else {
-            resume(3, config, "delayed-resume");
-            reload(4, next);
-            yield* turn(8, 1);
-          }
-          const entered = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          const terminals = yield* Queue.unbounded<void>();
-          const harness = yield* makeCodexReplayHarness(
-            makeCodexReplayTranscript({ scenario, entries }),
-            (event) =>
-              event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
-            undefined,
-            undefined,
-            (entry) =>
-              entry.label === "delayed-resume"
-                ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
-                : Effect.void,
-          ).pipe(
-            Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
-              issue: () => Effect.die("unused"),
-              resolve: () => Effect.succeed(undefined),
-              touch: () => Effect.void,
-              revokeProviderSession: () => Effect.void,
-              revokeThread: () => Effect.void,
-              revokeAll: Effect.void,
-              currentMemoryPolicy: () =>
-                Effect.sync(() =>
-                  valid ? { grant: "read_write" as const, policyEpoch: 1 } : undefined,
-                ),
+            withReplayRequestId(threadResult, 10),
+          );
+          yield* turn(11, 3, false);
+        } else if (mode === "background-terminal") {
+          yield* turn(3, 1);
+          quietCheck(4, [{ processId: "dev-server" }]);
+          yield* turn(6, 2);
+          reload(7, stale, GOAT_MEMORY_TOOLS);
+          yield* turn(11, 3);
+        } else {
+          resume(3, config, "delayed-resume");
+          reload(4, next);
+          yield* turn(8, 1);
+        }
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const terminals = yield* Queue.unbounded<void>();
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({ scenario, entries }),
+          (event) =>
+            event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+          undefined,
+          undefined,
+          (entry) =>
+            entry.label === "delayed-resume"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+        ).pipe(
+          Effect.provideService(McpSessionRegistry.McpSessionRegistry, {
+            issue: () => Effect.die("unused"),
+            resolve: () => Effect.succeed(undefined),
+            touch: () => Effect.void,
+            revokeProviderSession: () => Effect.void,
+            revokeThread: () => Effect.void,
+            revokeAll: Effect.void,
+            currentMemoryPolicy: () =>
+              Effect.sync(() =>
+                valid ? { grant: "read_write" as const, policyEpoch: 1 } : undefined,
+              ),
+          }),
+        );
+        if (mode === "resume-rotation") {
+          const resumed = yield* harness.runtime
+            .resumeThread({
+              threadId,
+              providerThread: harness.providerThread,
+              runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+              modelSelection: CODEX_TEST_MODEL_SELECTION,
+            })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(entered);
+          yield* sessions.set(next);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(resumed);
+        }
+        for (let ordinal = 1; ordinal <= (mode === "resume-rotation" ? 1 : 3); ordinal++) {
+          valid = mode === "availability" ? ordinal !== 2 : ordinal === 1;
+          if (mode === "detach-terminal" && ordinal === 2) yield* sessions.clear(threadId);
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId,
+              providerThread: harness.providerThread,
+              now: yield* DateTime.now,
+              attemptId: RunAttemptId.make(`attachment-${ordinal}`),
+              text: `turn-${ordinal}`,
             }),
           );
-          if (mode === "resume-rotation") {
-            const resumed = yield* harness.runtime
-              .resumeThread({
-                threadId,
-                providerThread: harness.providerThread,
-                runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
-                modelSelection: CODEX_TEST_MODEL_SELECTION,
-              })
-              .pipe(Effect.forkChild);
-            yield* Deferred.await(entered);
-            yield* sessions.set(next);
-            yield* Deferred.succeed(release, undefined);
-            yield* Fiber.join(resumed);
-          }
-          for (let ordinal = 1; ordinal <= (mode === "resume-rotation" ? 1 : 3); ordinal++) {
-            valid = mode === "background-terminal" ? ordinal === 1 : ordinal !== 2;
-            yield* harness.runtime.startTurn(
-              makeCodexTestTurnInput({
-                threadId,
-                providerThread: harness.providerThread,
-                now: yield* DateTime.now,
-                attemptId: RunAttemptId.make(`attachment-${ordinal}`),
-                text: `turn-${ordinal}`,
-              }),
-            );
-            yield* Queue.take(terminals);
-          }
-        }),
-      ).pipe(Effect.provide(layerAdapterTest)),
+          yield* Queue.take(terminals);
+        }
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("rebuilds a live thread when its goatclaw subagent limit changes", () =>

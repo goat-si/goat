@@ -7205,10 +7205,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
             const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
             // Other authority waits for background terminals too; a new driver does not (#1569).
+            const driverChanged = mcpSession ? cuaChanged : managedCuaByThread.has(threadId);
             const busy =
               (mcpSession ? applied !== next : applied !== undefined) &&
-              ((yield* threadStatuses.busy(client, conversation)) ||
-                (!cuaChanged && (yield* threadStatuses.terminalsRunning(client, conversation))));
+              (yield* threadStatuses.busy(client, conversation, !driverChanged));
             const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
             if (mcpSession && applied !== next && !busy) {
               yield* reload(runtime.params);

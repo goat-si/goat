@@ -27,45 +27,30 @@ export function makeCodexThreadStatuses() {
   };
   return {
     /**
-     * Whether a reload now could drop work: a thread is not reported quiet before and after the
-     * goal reads, or one has an active goal. An unloaded thread cannot start a turn, so only loaded ones are asked about goals.
+     * Whether a reload now could drop work or be ignored: a thread is not reported quiet, a goal
+     * is active, or (with terminals) a background terminal runs. The statuses are read again after
+     * every request to Codex, since a turn can start meanwhile. An unloaded thread cannot run, so
+     * only loaded ones are asked.
      */
     busy: (
       client: CodexClient.CodexAppServerClient["Service"],
       threadIds: ReadonlyArray<string>,
-    ) =>
+      terminals: boolean,
+    ) => {
       // Codex resumes a thread cold only from idle: a root left in systemError keeps its old
       // configuration through unsubscribe and resume, so it waits for its next turn (#1569).
-      statuses.get(threadIds[0] ?? "") !== "systemError" && threadIds.every(quiet)
-        ? codexGoalsActive(
-            client,
-            threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
-            // A continuation admitted earlier can report active while the goals are read, and
-            // pausing or clearing its goal does not stop it.
-          ).pipe(Effect.map((active) => active || !threadIds.every(quiet)))
-        : Effect.succeed(true),
-    /**
-     * Whether a loaded thread keeps a background terminal, such as a dev server, which a reload
-     * would stop. Asked of Codex; only an older Codex without the method counts as none.
-     */
-    terminalsRunning: (
-      client: CodexClient.CodexAppServerClient["Service"],
-      threadIds: ReadonlyArray<string>,
-    ) =>
-      Effect.forEach(
-        threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded"),
-        (threadId) =>
-          client.raw.request("thread/backgroundTerminals/list", { threadId }).pipe(
-            Effect.map((page) => {
-              const data = (page as { readonly data?: unknown } | null)?.data;
-              return !Array.isArray(data) || data.length > 0;
-            }),
-            Effect.catchTags({
-              CodexAppServerRequestError: (error) => Effect.succeed(error.code !== -32601),
-            }),
-            Effect.catch(() => Effect.succeed(true)),
-          ),
-      ).pipe(Effect.map((running) => running.includes(true))),
+      const settled = () =>
+        statuses.get(threadIds[0] ?? "") !== "systemError" && threadIds.every(quiet);
+      const loaded = threadIds.filter((threadId) => statuses.get(threadId) !== "notLoaded");
+      return settled()
+        ? codexGoalsActive(client, loaded).pipe(
+            Effect.flatMap((active) =>
+              active || !terminals ? Effect.succeed(active) : terminalsRunning(client, loaded),
+            ),
+            Effect.map((busy) => busy || !settled()),
+          )
+        : Effect.succeed(true);
+    },
     record: (threadId: string, status: string) => void statuses.set(threadId, status),
     turnStarted: (threadId: string, turnId: string) => {
       lastStarted.set(threadId, turnId);
@@ -111,3 +96,24 @@ const codexGoalsActive = (
       Effect.catch(() => Effect.succeed(true)),
     ),
   ).pipe(Effect.map((active) => active.includes(true)));
+
+/**
+ * Whether any of these threads keeps a background terminal, such as a dev server, which a reload
+ * would stop. Asked of Codex; only an older Codex without the method counts as none.
+ */
+const terminalsRunning = (
+  client: CodexClient.CodexAppServerClient["Service"],
+  threadIds: ReadonlyArray<string>,
+) =>
+  Effect.forEach(threadIds, (threadId) =>
+    client.raw.request("thread/backgroundTerminals/list", { threadId }).pipe(
+      Effect.map((page) => {
+        const data = (page as { readonly data?: unknown } | null)?.data;
+        return !Array.isArray(data) || data.length > 0;
+      }),
+      Effect.catchTags({
+        CodexAppServerRequestError: (error) => Effect.succeed(error.code !== -32601),
+      }),
+      Effect.catch(() => Effect.succeed(true)),
+    ),
+  ).pipe(Effect.map((running) => running.includes(true)));
