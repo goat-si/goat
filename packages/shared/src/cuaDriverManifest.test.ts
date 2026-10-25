@@ -17,6 +17,8 @@ import {
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
+  cuaDriverSessionListingEnvironment,
+  listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
 } from "./cuaDriverManifest.ts";
@@ -426,4 +428,156 @@ describe("cuaDriverManifest app listing", () => {
     await expect(prepareCuaDriverCapabilityManifest(driver.input)).rejects.toThrow();
     expect(driver.ran()).toBe(true);
   });
+});
+
+describe("request-time listing on standalone servers (#1561)", () => {
+  it("names the apps a request may ask for, from the same listing the manifest uses, without GOAT or credential stores", async () => {
+    const names = await listCuaRequestableApplications({
+      binaryPath: "/nonexistent/cua-driver",
+      platform: "darwin",
+      environment: {},
+      hostBundleIds: ["si.goat.server"],
+      listApplications: async () => [
+        { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        { bundle_id: "si.goat.server", name: "GOAT" },
+        { bundle_id: "com.1password.1password", name: "1Password" },
+        { bundle_id: null, name: "python3" },
+      ],
+    });
+    expect(names).toEqual(["com.apple.TextEdit", "python3"]);
+  });
+});
+
+describe("request-time listing on standalone servers, failure paths (#1561)", () => {
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a driver that answers once and exits is a failed listing, never an uncaught pipe error",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-listing-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // It answers initialize and is gone before GOAT asks for list_apps.
+      NodeFS.writeFileSync(
+        binaryPath,
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"jsonrpc":"2.0","id":1,"result":{}}\'\nexec 0<&-\nexit 0\n',
+        { mode: 0o755 },
+      );
+      const uncaught: Array<unknown> = [];
+      const onUncaught = (error: unknown) => uncaught.push(error);
+      process.on("uncaughtException", onUncaught);
+      onTestFinished(() => void process.off("uncaughtException", onUncaught));
+      for (let run = 0; run < 5; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+          }),
+        ).rejects.toThrow();
+      expect(uncaught).toEqual([]);
+    },
+  );
+});
+
+describe("request-time listing on standalone servers, review round 1 (#1574)", () => {
+  it("lists on the probed session only: a session variable the probe left out is withheld, as for the daemon", () => {
+    const env = cuaDriverSessionListingEnvironment(
+      {
+        PATH: "/usr/bin",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/stale/bus",
+        GOAT_AUTH_TOKEN: "secret",
+      },
+      [{ name: "DISPLAY", value: ":7" }],
+      "linux",
+    );
+    expect(env).toMatchObject({ PATH: "/usr/bin", DISPLAY: ":7", DBUS_SESSION_BUS_ADDRESS: "" });
+    expect(env).not.toHaveProperty("GOAT_AUTH_TOKEN");
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a cancelled listing stops its driver instead of waiting out its own timeout",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-cancel-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // Never answers, so only cancellation can end the listing before its 15 s timeout.
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+      const controller = new AbortController();
+      const listing = listCuaRequestableApplications({
+        binaryPath,
+        platform: "linux",
+        environment: { PATH: "/usr/bin:/bin" },
+        hostBundleIds: [],
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(listing).rejects.toThrow(/cancel/i);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a signal shared by many finished listings keeps none of their abort handlers",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-signal-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const controller = new AbortController();
+      const held = new Set<unknown>();
+      const add = controller.signal.addEventListener.bind(controller.signal);
+      const remove = controller.signal.removeEventListener.bind(controller.signal);
+      controller.signal.addEventListener = ((
+        type: string,
+        listener: unknown,
+        options?: unknown,
+      ) => {
+        held.add(listener);
+        add(type, listener as EventListener, options as AddEventListenerOptions);
+      }) as AbortSignal["addEventListener"];
+      controller.signal.removeEventListener = ((type: string, listener: unknown) => {
+        held.delete(listener);
+        remove(type, listener as EventListener);
+      }) as AbortSignal["removeEventListener"];
+      for (let run = 0; run < 3; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+            signal: controller.signal,
+          }),
+        ).rejects.toThrow();
+      expect(held.size).toBe(0);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "on Linux a request may name only what the manifest would grant: never GOAT itself or an app with no identity",
+    async () => {
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const names = await listCuaRequestableApplications({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          listApplications: async () => [
+            { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+            { bundle_id: null, name: "sleep", pid: child.pid ?? 0, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "node", pid: process.pid, windows: [{ window_id: 2 }] },
+            { bundle_id: null, name: "bash", pid: child.pid ?? 0, windows: [] },
+          ],
+        });
+        expect(names).toContain("org.gnome.Calculator");
+        expect(names).toContain("sleep");
+        expect(names).not.toContain("node");
+        expect(names).not.toContain("bash");
+      } finally {
+        child.kill();
+      }
+    },
+  );
 });
