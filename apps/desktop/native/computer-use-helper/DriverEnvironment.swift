@@ -10,11 +10,16 @@ let hostSettableNames: Set<String> = [
   "CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS", "CUA_DRIVER_WINDOW_CHANGE_POLL_MS",
   "CUA_DRIVER_KEY_GAP_MS", "CUA_LOG",
 ]
-/// Telemetry and the GitHub update check stay off whatever the host or user set.
+/// Telemetry and the GitHub update check stay off whatever the host or user set, and so does
+/// the driver's `screencapture` fallback: when ScreenCaptureKit cannot capture a window, the
+/// driver would run /usr/sbin/screencapture, which writes the window to a temporary PNG outside
+/// GOAT's response checks (#1688) and can ask for the Microphone as this helper (#1588). With it
+/// off, that capture fails instead. Drivers before goat-si/cua-driver 0.37.0-goat.2 ignore it.
 let privacyEnvironment = [
   "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
   "CUA_TELEMETRY_ENABLED": "false",
   "CUA_DRIVER_RS_UPDATE_CHECK": "false",
+  "CUA_DRIVER_DISABLE_SCREENCAPTURE": "1",
 ]
 
 /// What a driver this helper runs inherits from `process` and the host's `settable` knobs, with
