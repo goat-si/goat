@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 import {
   type HelperInstallDependencies,
@@ -16,7 +17,7 @@ import {
  * returns before it on Windows), and it swaps the current link with rename(2), which Windows
  * refuses over an existing link with EPERM (#1378).
  */
-const itSwitches = it.skipIf(NodeOS.platform() === "win32");
+const itSwitches = it.skipIf(HostProcess.Platform.defaultValue() === "win32");
 
 const TEAM = "U9ATA49N28";
 const ID = "si.goat.desktop.computer-use";
