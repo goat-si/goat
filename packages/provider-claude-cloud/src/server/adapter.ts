@@ -25,6 +25,7 @@ import {
 import * as Cli from "./cli.ts";
 import type { ClaudeCloudLogin } from "./cli.ts";
 import {
+  confirmedFailure,
   FOLLOW_UP_ACCEPTED,
   isShortenedReply,
   OBSERVATION_WINDOW_MS,
@@ -33,6 +34,7 @@ import {
   type Observation,
   runAnchor,
   UNKNOWN_RUN,
+  withoutFailureEvidence,
 } from "./observe.ts";
 import {
   ClaudeCloudError,
@@ -381,7 +383,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             status: "idle",
             updatedAt: yield* DateTime.now,
             cloudTask: {
-              ...thread.cloudTask,
+              ...withoutFailureEvidence(thread.cloudTask),
               status: error.outcome === "uncertain" ? "unknown" : "failed",
               tracking: "polled",
               error: error.detail,
@@ -496,7 +498,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             task &&
             (task.status === "unknown" ||
               (thread.nativeThreadRef &&
-                (task.status === "failed" || task.status === "cancelled")) ||
+                ((task.status === "failed" && !confirmedFailure(task)) ||
+                  task.status === "cancelled")) ||
               (task.status === "submitting" &&
                 (task.progress === "Submitting follow-up" ||
                   (!thread.nativeThreadRef && task.taskId !== i.runId))));
@@ -594,7 +597,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
             thread = {
               ...thread,
               cloudTask: {
-                ...prior,
+                ...withoutFailureEvidence(prior),
                 status: "submitting",
                 tracking: "polled",
                 progress: "Submitting follow-up",
@@ -612,7 +615,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 status: "idle",
                 updatedAt: yield* DateTime.now,
                 cloudTask: {
-                  ...prior,
+                  ...withoutFailureEvidence(prior),
                   status: "running",
                   tracking: "polled",
                   progress: "Follow-up rejected",
@@ -625,7 +628,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               yield* settle(i, reply.failure);
               return "settled" as const;
             }
-            const retained = { ...prior };
+            const retained = withoutFailureEvidence(prior);
             delete retained.prUrl;
             delete retained.branch;
             delete retained.summary;
@@ -797,7 +800,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 yield* commit(i, {
                   ...saved,
                   cloudTask: {
-                    ...saved.cloudTask!,
+                    ...withoutFailureEvidence(saved.cloudTask!),
                     status: "running",
                     progress: "Follow-up rejected",
                     summary: `Follow-up rejected: ${error.detail}`,
@@ -877,6 +880,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
               const thread = { ...i.providerThread, cloudTask: i.cloudTask };
               threads.set(thread.id, thread);
               const task = i.cloudTask;
+              const failure = confirmedFailure(task);
               const identity = yield* Effect.try({
                 try: () => sessionUrl(task.url ?? ""),
                 catch: (cause) =>
@@ -894,7 +898,7 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 task.status === "unknown" ||
                 !SESSION_ID.test(task.taskId) ||
                 thread.nativeThreadRef?.nativeId !== task.taskId ||
-                task.status === "failed" ||
+                (task.status === "failed" && !failure) ||
                 task.status === "cancelled"
               ) {
                 yield* failObservation(
@@ -910,6 +914,8 @@ export const makeClaudeCloudAdapter = Effect.fn("makeClaudeCloudAdapter")(functi
                 );
                 return;
               }
+              // The run's own prompt failed for certain; settle it again, as the session left it.
+              if (failure) return yield* settle(i, failure);
               if (task.status === "succeeded") {
                 // A session reply has a summary; a PR result also has its PR and branch.
                 if (!task.summary || !task.prUrl !== !task.branch)
