@@ -27,7 +27,8 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
-import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
@@ -142,6 +143,60 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   const manifestFlag = descriptor.args.indexOf("--capability-manifest");
   const manifestPath = manifestFlag >= 0 ? descriptor.args[manifestFlag + 1] : undefined;
 
+  const startDriver = (overlay: boolean) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const child = spawnDriverProcess(
+          platform,
+          descriptor.command,
+          descriptor.args,
+          childEnvironment,
+          overlay,
+        );
+        drivers.add(child);
+        child.once("exit", () => drivers.delete(child));
+        return child;
+      }),
+      (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
+    ).pipe(
+      Effect.flatMap((child) =>
+        Effect.gen(function* () {
+          // Ownership is released only after both the process and its pipes close.
+          const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+          // The helper's input reports, every one of them: a person's may be among a burst.
+          const seen = yield* makeHelperInputFeed();
+          const channel = child.stdio[3];
+          return {
+            ...(overlay && channel instanceof NodeStream.Duplex
+              ? {
+                  // Dated the moment the line is read, on the clock the server compares with.
+                  overlay: overlayChannel(channel, (input) =>
+                    seen.offer({
+                      source: input.source,
+                      at: Date.now() - input.ageMs,
+                    }),
+                  ),
+                  humanInput: seen.events,
+                }
+              : {}),
+            send: (line: string) =>
+              Effect.sync(() => {
+                if (child.stdin.writable) child.stdin.write(line + "\n");
+              }),
+            lines: Stream.fromAsyncIterable(
+              NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+              () => undefined,
+            ).pipe(Stream.catchCause(() => Stream.empty)),
+            kill: Effect.promise(() => {
+              child.stdin.end();
+              killDriverGroup(platform, child, "SIGKILL");
+              return closed;
+            }),
+          };
+        }),
+      ),
+    );
+
   const leaseUrl = new URL(url);
   leaseUrl.searchParams.set("control", controlId);
   const abort = new AbortController();
@@ -182,58 +237,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           (cause) => cause,
         ),
       ),
-      startDriver: Effect.acquireRelease(
-        Effect.sync(() => {
-          const child = spawnDriverProcess(
-            platform,
-            descriptor.command,
-            descriptor.args,
-            childEnvironment,
-            drawsOverlay,
-          );
-          drivers.add(child);
-          child.once("exit", () => drivers.delete(child));
-          return child;
-        }),
-        (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
-      ).pipe(
-        Effect.flatMap((child) =>
-          Effect.gen(function* () {
-            // Ownership is released only after both the process and its pipes close.
-            const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
-            // The helper's input reports, every one of them: a person's may be among a burst.
-            const seen = yield* makeHelperInputFeed();
-            const channel = child.stdio[3];
-            return {
-              ...(drawsOverlay && channel instanceof NodeStream.Duplex
-                ? {
-                    // Dated the moment the line is read, on the clock the server compares with.
-                    overlay: overlayChannel(channel, (input) =>
-                      seen.offer({
-                        source: input.source,
-                        at: Date.now() - input.ageMs,
-                      }),
-                    ),
-                    humanInput: seen.events,
-                  }
-                : {}),
-              send: (line: string) =>
-                Effect.sync(() => {
-                  if (child.stdin.writable) child.stdin.write(line + "\n");
-                }),
-              lines: Stream.fromAsyncIterable(
-                NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
-                () => undefined,
-              ).pipe(Stream.catchCause(() => Stream.empty)),
-              kill: Effect.promise(() => {
-                child.stdin.end();
-                killDriverGroup(platform, child, "SIGKILL");
-                return closed;
-              }),
-            };
-          }),
-        ),
-      ),
+      startDriver: startDriver(drawsOverlay),
+      // A handshake child never draws or watches input (#1604): on macOS the helper starts its
+      // overlay and input feed only when the proxy opens their channel.
+      startHandshakeDriver: startDriver(false),
       ...(placement === undefined
         ? {}
         : { placement: (windows) => Effect.promise(() => placement(windows)) }),
