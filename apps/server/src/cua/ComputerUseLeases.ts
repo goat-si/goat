@@ -46,7 +46,6 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { markActed, nextTurn } from "./ComputerUseControl.ts";
 import type {
@@ -57,7 +56,7 @@ import type {
 import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeForegroundApprovals, makeForegroundAuthority } from "./ComputerUseForeground.ts";
 import { type EveryAppKind, makeFullAccessAdmitted } from "./ComputerUseFullAccess.ts";
-import { openRuns } from "./ComputerUseOpenWork.ts";
+import { IMPLIED_RECHECK_MS, makeRunEnd } from "./ComputerUseOpenWork.ts";
 import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts";
@@ -146,9 +145,9 @@ export class ComputerUseLeases extends Context.Service<
       runId?: RunId,
     ) => Effect.Effect<ComputerUseControl>;
     /**
-     * A control on every app without a grant, for a full access thread on a host that admits
-     * those. It ends once the host stops admitting them or the thread leaves full access. None
-     * for unattended work while another thread holds the screen for its own.
+     * A control on every app without a grant, for a run whose thread is in full access (D16). It
+     * ends once the thread leaves full access. None for unattended work while another thread
+     * holds the screen for its own.
      */
     readonly everyAppControl: (
       threadId: ThreadId,
@@ -289,8 +288,7 @@ const make = Effect.gen(function* () {
   const watchKick = yield* PubSub.sliding<void>(1);
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
-  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const fullAccessAdmitted = makeFullAccessAdmitted(sql, settings);
+  const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
@@ -300,6 +298,13 @@ const make = Effect.gen(function* () {
   const admission = yield* Semaphore.make(1);
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
+  const { settle, openWork, turnEnded } = makeRunEnd({
+    sql,
+    foreground,
+    controls,
+    changed,
+    error: (cause) => new ComputerUseLeaseError({ cause }),
+  });
 
   const live = Effect.fn("ComputerUseLeases.live")(function* (
     threadId?: ThreadId,
@@ -351,7 +356,7 @@ const make = Effect.gen(function* () {
     } as const;
   });
 
-  /** Another thread acting on the screen for unattended work admitted by the setting. */
+  /** Another thread acting on the screen for unattended work admitted by full access. */
   const unattendedEveryApp = (except: ThreadId | undefined, now: DateTime.Utc) =>
     [...controls.values()].find(
       (record) =>
@@ -363,9 +368,9 @@ const make = Effect.gen(function* () {
 
   // A person's full access run takes the foreground without asking; see ComputerUseForeground.
   const implyFocus = (record: ControlRecord) => {
-    if (record.everyApp !== "person" || record.runId === undefined) return;
-    if (paused !== undefined || privateHost) return;
-    foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
+    if (record.everyApp !== "person" || record.runId === undefined) return false;
+    if (paused !== undefined || privateHost) return false;
+    return foreground.imply(record.threadId, record.controlId, record.runId, record.expiresAt);
   };
 
   const mint = Effect.fn("ComputerUseLeases.mint")(function* (
@@ -395,8 +400,12 @@ const make = Effect.gen(function* () {
         ...(runId === undefined ? {} : { runId }),
       };
       controls.set(threadId, reused);
-      implyFocus(reused);
-      if (existing.idle === true) yield* changed;
+      // Proxies must hear of an earlier run's grant this dropped (#1617), with no gap to interrupt.
+      yield* Effect.uninterruptible(
+        Effect.suspend(() =>
+          implyFocus(reused) || existing.idle === true ? changed : Effect.void,
+        ),
+      );
       return reused as ComputerUseControl;
     }
     const next: ControlRecord = {
@@ -479,7 +488,7 @@ const make = Effect.gen(function* () {
     const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
-    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId, record.everyApp))) {
+    if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
@@ -495,9 +504,15 @@ const make = Effect.gen(function* () {
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
     const own = stoppedCards.own(grants, threadId);
+    yield* settle(threadId);
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
-    const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
+    // While a run holds implied foreground, re-check soon so a missed run end still ends it.
+    const recheck = foreground.impliedRuns(threadId).length > 0 ? IMPLIED_RECHECK_MS : Infinity;
+    const focusWake = Math.min(
+      DateTime.toEpochMillis(now) + recheck,
+      ...focus.map((grant) => grant.expiresAtMillis),
+    );
     // Other threads' grants hold apps on this screen until they end, which this state outlasts.
     const active = (apps: ReadonlyArray<string> | undefined, wakeAt: number) =>
       ({
@@ -726,29 +741,6 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.forkScoped);
   }
 
-  /** Whether the thread still has work open; see ComputerUseOpenWork. */
-  const openWork = (threadId: ThreadId) =>
-    openRuns(sql, threadId).pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
-
-  const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
-    const before = controls.get(threadId);
-    if (before === undefined || before.ended !== undefined) return false;
-    if (yield* openWork(threadId)) return false;
-    // The read yields: a turn that minted or reused the control since then keeps it.
-    const after = controls.get(threadId);
-    if (
-      after?.controlId !== before.controlId ||
-      after.uses !== before.uses ||
-      after.ended !== undefined ||
-      after.idle === true
-    )
-      return false;
-    foreground.revokeControl(threadId, after.controlId);
-    controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
-    yield* changed;
-    return true;
-  });
-
   return ComputerUseLeases.of({
     active: (threadId) =>
       live(threadId).pipe(Effect.map((leases) => Option.fromNullishOr(leases[0]))),
@@ -787,6 +779,7 @@ const make = Effect.gen(function* () {
       live,
       blocked: () => paused !== undefined || privateHost,
       changed,
+      settle,
     }),
     callReservation: Effect.fn("ComputerUseLeases.callReservation")(function* (threadId, request) {
       if (request.action === "release" || request.action === "close") {

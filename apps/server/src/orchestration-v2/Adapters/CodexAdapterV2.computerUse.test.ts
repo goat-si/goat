@@ -1,10 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ThreadId } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
 import { TestClock } from "effect/testing";
 
-import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
+import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
+import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 
 describe("Codex computer use attachment", () => {
   it.effect.each(["managed", "user", "override"] as const)(
@@ -164,7 +166,11 @@ describe("Codex computer use attachment", () => {
           yield* f.turnStart(4, 2, true, true);
           f.status(child, "idle");
           f.turnCompleted(2);
-          yield* f.turnStart(f.reload(5, f.managed("control:b"), [root, child]), 3, true);
+          yield* f.turnStart(
+            f.reload(5, f.managed("control:b"), { threads: [root, child] }),
+            3,
+            true,
+          );
           f.turnCompleted(3);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -417,7 +423,11 @@ describe("Codex computer use attachment", () => {
           goalNotice(childGoal(child, "active", 101));
           f.status(child, "idle");
           f.turnCompleted(1);
-          yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+          yield* f.turnStart(
+            f.reload(4, f.managed("control:b"), { threads: [root, child] }),
+            2,
+            true,
+          );
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
@@ -497,7 +507,11 @@ describe("Codex computer use attachment", () => {
         // Codex keeps a loaded child whose turn failed in systemError until it runs again.
         f.status(child, "systemError");
         f.turnCompleted(1);
-        yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+        yield* f.turnStart(
+          f.reload(4, f.managed("control:b"), { threads: [root, child] }),
+          2,
+          true,
+        );
         f.turnCompleted(2);
         const replay = yield* f.open;
         yield* replay.startTurn(1);
@@ -511,6 +525,103 @@ describe("Codex computer use attachment", () => {
         );
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = fixture("cua-goals-off");
+        const withCua = (control: string) => ({
+          ...f.config,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a"));
+        f.start(f.managed("control:a"));
+        yield* f.turnStart(3, 1, true);
+        f.turnCompleted(1);
+        const off = { error: { code: -32600, message: "goals feature is disabled" } };
+        yield* f.turnStart(f.reload(4, f.managed("control:b"), { goal: off }), 2, true);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b"));
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [f.managed("control:a"), f.managed("control:b")],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "switches off a fork's managed driver when computer use is removed, after the held fork was resumed (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = fixture("cua-fork");
+          const forked = "cua-fork-copy";
+          const target = ThreadId.make(`thread-${forked}`);
+          const attachment = (threadId: ThreadId, control?: string) => ({
+            ...f.config,
+            threadId,
+            ...(control === undefined
+              ? {}
+              : { cuaDriver: f.driver(control), cuaDriverOverridesUserConfig: true }),
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(attachment(f.config.threadId, "control:a"));
+          yield* sessions.set(attachment(target, "control:a"));
+          f.start(f.managed("control:a"));
+          const params = f.threadParams(f.managed("control:a"));
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 3,
+                method: "thread/fork",
+                params: { threadId: f.nativeThreadId, ...params },
+              },
+            },
+            f.answer(3, forked),
+          );
+          // Resuming the fork this client holds changes nothing in Codex.
+          f.resume(4, params, undefined, forked);
+          // With computer use removed, the quiet fork reloads with the managed driver switched off.
+          const off = f.threadParams({ ...f.managed("control:a"), enabled: false });
+          const turn = f.reload(5, undefined, { threads: [forked], params: off });
+          yield* f.turnStart(turn, 1, false, false, forked);
+          f.turnCompleted(1, forked);
+          const replay = yield* f.open;
+          const fork = yield* replay.runtime.forkThread({
+            sourceProviderThread: replay.providerThread,
+            targetThreadId: target,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          yield* replay.runtime.resumeThread({
+            threadId: target,
+            providerThread: fork,
+            modelSelection: CODEX_TEST_MODEL_SELECTION,
+            runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+          });
+          yield* sessions.set(attachment(target));
+          yield* replay.startTurn(1, "turn-1", { threadId: target, providerThread: fork });
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [
+              f.managed("control:a"),
+              f.managed("control:a"),
+              { ...f.managed("control:a"), enabled: false },
+            ],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("waits for a root left in systemError to run a turn before reloading it (#1569)", () =>
@@ -541,37 +652,6 @@ describe("Codex computer use attachment", () => {
           yield* replay.startTurn(ordinal);
           yield* replay.terminal;
         }
-        assert.deepEqual(
-          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
-          [f.managed("control:a"), f.managed("control:b")],
-        );
-      }),
-    ).pipe(Effect.provide(layerAdapterTest)),
-  );
-
-  it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = fixture("cua-goals-off");
-        const withCua = (control: string) => ({
-          ...f.config,
-          cuaDriver: f.driver(control),
-          cuaDriverOverridesUserConfig: true,
-        });
-        const sessions = yield* McpProviderSessions.McpProviderSessions;
-        yield* sessions.set(withCua("control:a"));
-        f.start(f.managed("control:a"));
-        yield* f.turnStart(3, 1, true);
-        f.turnCompleted(1);
-        const off = { error: { code: -32600, message: "goals feature is disabled" } };
-        yield* f.turnStart(f.reload(4, f.managed("control:b"), undefined, off), 2, true);
-        f.turnCompleted(2);
-        const replay = yield* f.open;
-        yield* replay.startTurn(1);
-        yield* replay.terminal;
-        yield* sessions.set(withCua("control:b"));
-        yield* replay.startTurn(2);
-        yield* replay.terminal;
         assert.deepEqual(
           replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
           [f.managed("control:a"), f.managed("control:b")],

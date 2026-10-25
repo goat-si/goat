@@ -571,4 +571,86 @@ describe("Codex native subagents as their thread's background work", () => {
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
+
+  it.effect(
+    "Stop after the parent turn finished still ends a subagent that never started a turn (#1645)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "stop-after-root-finished";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, root + "-agent");
+          f.turnCompleted(1);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          assert.isTrue(yield* replay.runtime.hasPendingBackgroundWork!);
+          // Nothing of the thread runs a turn, so Stop has no turn to interrupt.
+          const allocator = yield* IdAllocator.IdAllocatorV2;
+          yield* replay.runtime.interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-1",
+            }),
+            requestRuntimeRestart: true,
+          });
+          assert.isFalse(yield* replay.runtime.hasPendingBackgroundWork!);
+          assert.isFalse(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect(
+    "a child swept by a Stop after its root finished stays stopped when its turn starts late (#1643, #1645)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "late-child-after-finished-root";
+          const child = root + "-agent";
+          const f = fixture(root);
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(f.config);
+          f.start();
+          yield* f.turnStart(3, 1, false);
+          spawnChild(f, root, child);
+          f.turnCompleted(1);
+          // Stop comes after turn 1 finished; the child's spawned work starts during turn 2.
+          yield* f.turnStart(4, 2, false);
+          f.entries.push(childTurn(child, "child-late", "inProgress"), {
+            type: "expect_outbound",
+            frame: {
+              id: 5,
+              method: "turn/interrupt",
+              params: { threadId: child, turnId: "child-late" },
+            },
+          });
+          f.entries.push({ type: "emit_inbound", frame: { id: 5, result: {} } });
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          const allocator = yield* IdAllocator.IdAllocatorV2;
+          yield* replay.runtime.interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-1",
+            }),
+            requestRuntimeRestart: true,
+          });
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.isFalse(
+            yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });

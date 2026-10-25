@@ -68,10 +68,13 @@ export const makeForegroundApprovals = () => {
         if (binding.threadId === threadId) return true;
       return false;
     },
+    /** Whether this dropped an earlier run's grant, which proxies must hear of. */
     imply(threadId: ThreadId, controlId: string, runId: RunId, expiresAt: DateTime.Utc) {
-      if (revokedRuns.get(threadId)?.has(runId) === true) return;
+      if (revokedRuns.get(threadId)?.has(runId) === true) return false;
+      const before = implied.size;
       // A newer run of the thread took over; the runs before it are over.
       dropImplied((entry) => entry.threadId !== threadId || entry.runId === runId);
+      const dropped = implied.size < before;
       revokedRuns.set(
         threadId,
         new Set([...(revokedRuns.get(threadId) ?? [])].filter((run) => run === runId)),
@@ -82,6 +85,7 @@ export const makeForegroundApprovals = () => {
         runId,
         expiresAtMillis: DateTime.toEpochMillis(expiresAt),
       });
+      return dropped;
     },
     approve(input: {
       readonly handoff: Handoff;
@@ -121,6 +125,14 @@ export const makeForegroundApprovals = () => {
       dropImplied((entry) => entry.threadId !== threadId || entry.controlId !== controlId);
       for (const [id, binding] of bindings)
         if (binding.threadId === threadId && binding.controlId === controlId) bindings.delete(id);
+    },
+    /** The runs holding implied foreground on this thread. */
+    impliedRuns: (threadId: ThreadId) =>
+      [...implied.values()].filter((entry) => entry.threadId === threadId).map((e) => e.runId),
+    /** A run that ended loses its implied foreground, whatever else the thread still runs. */
+    revokeRun(threadId: ThreadId, runId: RunId) {
+      revision++;
+      dropImplied((entry) => entry.threadId !== threadId || entry.runId !== runId);
     },
     revokeThread(threadId: ThreadId) {
       revision++;
@@ -199,6 +211,8 @@ export const makeForegroundAuthority = <E>(options: {
   readonly live: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<ComputerUseLease>, E>;
   readonly blocked: () => boolean;
   readonly changed: Effect.Effect<unknown>;
+  /** Ends the implied foreground of runs that are over before anything reads it. */
+  readonly settle: (threadId: ThreadId) => Effect.Effect<void>;
 }) => {
   const foreground = options.foreground;
   return {
@@ -244,6 +258,7 @@ export const makeForegroundAuthority = <E>(options: {
       threadId: ThreadId,
       purpose: string,
     ) {
+      yield* options.settle(threadId);
       if (!foreground.hasThread(threadId)) return false;
       const grants = yield* options.live(threadId);
       const now = DateTime.toEpochMillis(yield* DateTime.now);

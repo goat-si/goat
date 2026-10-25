@@ -319,8 +319,11 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 
 ## Safety
 
-- **Approvals.** A person approves apps per thread, or always, through a handoff that needs
-  `settings:write` in an authenticated client session. The capability manifest
+- **Approvals.** Outside full access, a person approves apps per thread, or always, through a
+  handoff that needs `settings:write` in an authenticated client session. A run in full-access
+  runtime mode skips these approvals whoever or whatever started it
+  ([ADR-0023](../../structure/decisions/ADR-0023-goat-computer-use-app.md), D16); everything else
+  on this page still applies to it. The capability manifest
   (`packages/shared/src/cuaDriverManifest.ts`) stays the ceiling: it excludes the GOAT host, the
   helper itself, the driver's app and credential stores, and it now adds the helper's bundle id.
   The approval card names the app and machine, warns when the app is high risk, explains on first
@@ -328,7 +331,7 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   "Always allow" and "Deny". An approval binds the app's canonical identity (bundle id or
   executable path) at approval time, and the action runs on that frozen target, so a request
   cannot be approved for one app and executed against another. "Always" approvals are listed in
-  Settings, where a person removes them; a removed app asks again.
+  Settings, where a person removes them; outside full access, a removed app asks again.
 - **Lease.** Control is a time-bounded lease per thread with a scope: approved apps and whether
   foreground delivery is allowed. Unattended origins keep ADR-0022's admission lease and driver
   ceiling unchanged.

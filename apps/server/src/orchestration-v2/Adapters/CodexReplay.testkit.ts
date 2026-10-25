@@ -173,3 +173,23 @@ export function makeCodexReplayTranscript(input: {
     },
   };
 }
+
+/** What Codex reports while a turn runs: its start, then the thread idle once the turn is over. */
+export function codexTurnReportedIdle(
+  threadId: string,
+  turnId: string,
+): Array<CodexReplay.CodexAppServerReplayEntry> {
+  return [
+    {
+      type: "emit_inbound",
+      frame: {
+        method: "turn/started",
+        params: { threadId, turn: makeCodexReplayTurn({ id: turnId, status: "inProgress" }) },
+      },
+    },
+    {
+      type: "emit_inbound",
+      frame: { method: "thread/status/changed", params: { threadId, status: { type: "idle" } } },
+    },
+  ];
+}

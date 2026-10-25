@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -31,49 +32,36 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
-      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: true }),
+      // Off, as on a fresh host: since D16 the setting decides nothing for full access threads.
+      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
     ),
   ),
 );
 
-it.effect(
-  "gives a full access thread every app until it leaves full access or the host stops allowing it",
-  () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const settings = yield* ServerSettings.ServerSettingsService;
-      const auto = ThreadId.make("thread-auto");
-      yield* threadIn(auto, "full-access");
-      const claim = () =>
-        leases
-          .everyAppControl(auto, false)
-          .pipe(Effect.map((control) => Option.getOrThrow(control)));
-      const first = yield* claim();
-      const state = yield* leases.controlState(auto, first.controlId);
-      assert.equal(state._tag, "active");
-      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // A turn outside full access gets a control of its own, limited to its grants.
-      const scoped = yield* leases.control(auto, Option.none());
-      assert.notEqual(scoped.controlId, first.controlId);
+it.effect("gives a full access thread every app until it leaves full access", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const auto = ThreadId.make("thread-auto");
+    yield* threadIn(auto, "full-access");
+    const claim = () =>
+      leases.everyAppControl(auto, false).pipe(Effect.map((control) => Option.getOrThrow(control)));
+    const first = yield* claim();
+    const state = yield* leases.controlState(auto, first.controlId);
+    assert.equal(state._tag, "active");
+    assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+    // A turn outside full access gets a control of its own, limited to its grants.
+    const scoped = yield* leases.control(auto, Option.none());
+    assert.notEqual(scoped.controlId, first.controlId);
 
-      // Leaving full access ends it, with the provider session and its proxy still alive.
-      const second = yield* claim();
-      yield* threadIn(auto, "auto");
-      assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-
-      yield* threadIn(auto, "full-access");
-      const third = yield* claim();
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      assert.deepEqual(yield* leases.controlState(auto, third.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
-    }).pipe(Effect.provide(everyAppLayer)),
+    // Leaving full access ends it, with the provider session and its proxy still alive.
+    const second = yield* claim();
+    yield* threadIn(auto, "auto");
+    assert.deepEqual(yield* leases.controlState(auto, second.controlId), {
+      _tag: "ended",
+      reason: "revoked",
+    });
+  }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("lists a full access thread's session as soon as it is admitted", () =>
@@ -206,39 +194,109 @@ it.effect(
 );
 
 it.effect(
-  "keeps a person-directed full access control without the host's unattended setting, but not unattended work",
+  "D16: keeps full access controls of a person, an interactive wake and unattended work with the host setting off, until each thread leaves full access",
   () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
       const directed = ThreadId.make("thread-directed-no-setting");
+      const woken = ThreadId.make("thread-woken-no-setting");
       const scheduled = ThreadId.make("thread-scheduled-no-setting");
-      yield* threadIn(directed, "full-access");
-      yield* threadIn(scheduled, "full-access");
-      const person = Option.getOrThrow(
-        yield* leases.everyAppControl(directed, false, {
-          person: true,
-          runId: RunId.make("run:directed"),
-        }),
-      );
-      const unattendedWork = Option.getOrThrow(yield* leases.everyAppControl(scheduled, true));
-      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
-      const state = yield* leases.controlState(directed, person.controlId);
-      assert.equal(state._tag, "active");
-      assert.isUndefined(state._tag === "active" ? state.apps : "not active");
-      // The setting only decides unattended work.
-      assert.deepEqual(yield* leases.controlState(scheduled, unattendedWork.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
-      // Leaving full access still ends a person-directed control at once.
-      yield* threadIn(directed, "approval-required");
-      assert.deepEqual(yield* leases.controlState(directed, person.controlId), {
-        _tag: "ended",
-        reason: "revoked",
-      });
+      for (const id of [directed, woken, scheduled]) yield* threadIn(id, "full-access");
+      const controls = [
+        [
+          directed,
+          yield* leases.everyAppControl(directed, false, {
+            person: true,
+            runId: RunId.make("run:directed"),
+          }),
+        ],
+        [woken, yield* leases.everyAppControl(woken, false, { runId: RunId.make("run:woken") })],
+        [scheduled, yield* leases.everyAppControl(scheduled, true)],
+      ] as const;
+      // Turning the old setting on and off again changes nothing for any of them.
       yield* settings.updateSettings({ cuaFullAccessAutoAdmit: true });
+      yield* settings.updateSettings({ cuaFullAccessAutoAdmit: false });
+      for (const [threadId, control] of controls) {
+        const state = yield* leases.controlState(threadId, Option.getOrThrow(control).controlId);
+        assert.equal(state._tag, "active");
+        assert.isUndefined(state._tag === "active" ? state.apps : "not active");
+      }
+      // Leaving full access still ends each control at once.
+      for (const [threadId, control] of controls) {
+        yield* threadIn(threadId, "approval-required");
+        assert.deepEqual(
+          yield* leases.controlState(threadId, Option.getOrThrow(control).controlId),
+          { _tag: "ended", reason: "revoked" },
+        );
+      }
       yield* leases.stopAll;
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "a person's full access run loses its implied foreground when it ends, though a queued run keeps the control (#1617)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-person-run-ends");
+      yield* threadIn(threadId, "full-access");
+      const run = (id: string, status: string, ordinal: number) =>
+        sql`INSERT INTO orchestration_v2_projection_runs
+          (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+          VALUES (${id}, ${threadId}, ${ordinal}, 'codex', ${status}, '2026-01-01', '{}')
+          ON CONFLICT (run_id) DO UPDATE SET status = excluded.status`;
+      yield* run("run:R", "running", 1);
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(threadId, false, {
+          person: true,
+          runId: RunId.make("run:R"),
+        }),
+      );
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      // R ends while Q waits in the queue: the control stays for Q, R's foreground does not.
+      yield* run("run:Q", "queued", 2);
+      yield* run("run:R", "completed", 1);
+      const signals = yield* leases.subscribe;
+      if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
+      assert.isFalse(yield* leases.turnEnded(threadId));
+      assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      // Proxies learn of the revocation from this update and stop a script already under way.
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
+      const state = yield* leases.controlState(threadId, control.controlId);
+      assert.equal(state._tag, "active");
+      assert.isUndefined(state._tag === "active" ? state.foreground : "not active");
+      yield* leases.stopAll;
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "a run's end tells proxies its implied foreground is gone even when reading the thread's open work fails (#1617)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-person-run-ends-read-fails");
+      yield* threadIn(threadId, "full-access");
+      yield* sql`INSERT INTO orchestration_v2_projection_runs
+        (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+        VALUES ('run:R2', ${threadId}, 1, 'codex', 'running', '2026-01-01', '{}')`;
+      yield* leases.everyAppControl(threadId, false, { person: true, runId: RunId.make("run:R2") });
+      assert.isTrue(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE run_id = 'run:R2'`;
+      const signals = yield* leases.subscribe;
+      if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
+      // The open-work read fails after the ended run was found; the revocation must still publish.
+      yield* sql`ALTER TABLE orchestration_v2_projection_subagents RENAME TO subagents_unavailable`;
+      const failed = yield* Effect.exit(leases.turnEnded(threadId));
+      yield* sql`ALTER TABLE subagents_unavailable RENAME TO orchestration_v2_projection_subagents`;
+      assert.isTrue(Exit.isFailure(failed));
+      assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
+      assert.isAbove(yield* PubSub.remaining(signals), 0);
+      yield* leases.stopAll;
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );

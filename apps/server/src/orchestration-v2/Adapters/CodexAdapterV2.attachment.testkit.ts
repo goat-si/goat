@@ -1,4 +1,4 @@
-/** The replayed Codex thread the attachment and subagent tests drive. */
+/** The replayed Codex thread the attachment, reload and subagent tests drive. */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as M from "@goat/contracts";
 import { CodexSettings, ProviderSessionId, RunAttemptId, ThreadId } from "@goat/contracts";
@@ -33,7 +33,6 @@ import {
   makeCodexReplayTranscript,
   makeCodexReplayTurn,
 } from "./CodexReplay.testkit.ts";
-
 export const layerAdapterTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
   IdAllocator.layer,
@@ -42,7 +41,7 @@ export const layerAdapterTest = Layer.mergeAll(
 );
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 // Every memory tool by the name /mcp lists, which is what Codex disables.
-const GOAT_MEMORY_TOOLS = [
+export const GOAT_MEMORY_TOOLS = [
   "goat_memory_list",
   "goat_memory_search",
   "goat_memory_read",
@@ -53,7 +52,7 @@ const GOAT_MEMORY_TOOLS = [
   "goat_memory_forget",
   "goat_memory_revert_resolution",
 ];
-const unusedRegistry = {
+export const unusedRegistry = {
   issue: () => Effect.die("unused"),
   resolve: () => Effect.succeed(undefined),
   touch: () => Effect.void,
@@ -143,12 +142,18 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     ),
     Effect.forkScoped,
   );
-  const startTurn = (ordinal: number, text = `turn-${ordinal}`) =>
+  const startTurn = (
+    ordinal: number,
+    text = `turn-${ordinal}`,
+    target: { readonly threadId: ThreadId; readonly providerThread: typeof providerThread } = {
+      threadId,
+      providerThread,
+    },
+  ) =>
     Effect.gen(function* () {
       yield* runtime.startTurn(
         makeCodexTestTurnInput({
-          threadId,
-          providerThread,
+          ...target,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make(`${transcript.scenario}-${ordinal}`),
           text,
@@ -193,17 +198,25 @@ export const fixture = (scenario: string) => {
     args: ["mcp", "--socket", "/tmp/cua.sock", "--control", control],
     env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
   });
-  const threadParams = (cua?: Record<string, unknown>) => ({
+  // The thread params Codex receives: which credential and memory tools GOAT's server carries,
+  // the computer use server, and any further config such as subagent limits.
+  const threadParams = (
+    cua?: Record<string, unknown>,
+    attachment: Pick<McpProviderSession.McpProviderSessionConfig, "authorizationHeader"> = config,
+    disabledTools: ReadonlyArray<string> = GOAT_MEMORY_TOOLS,
+    extra: Record<string, unknown> = {},
+  ) => ({
     cwd: "/workspace",
     model: CODEX_TEST_MODEL_SELECTION.model,
     config: {
       "tools.update_plan.enabled": true,
       mcp_optional_startup_grace_ms: 10_000,
+      ...extra,
       "mcp_servers.goat": {
         url: config.endpoint,
-        disabled_tools: GOAT_MEMORY_TOOLS,
+        disabled_tools: disabledTools,
         tool_timeout_sec: 3900,
-        http_headers: { Authorization: config.authorizationHeader },
+        http_headers: { Authorization: attachment.authorizationHeader },
       },
       ...(cua === undefined ? {} : { "mcp_servers.cua-driver": cua }),
     },
@@ -214,13 +227,13 @@ export const fixture = (scenario: string) => {
     prompt: "unused",
   });
   const threadResult = preamble[4];
-  if (threadResult === undefined) throw new Error("The replay preamble has no thread result.");
-  const entries: CodexReplay.CodexAppServerReplayEntry[] = [...preamble.slice(0, 3)];
-  const start = (cua?: Record<string, unknown>) =>
+  if (threadResult === undefined) throw new Error("The replay preamble answers thread/start.");
+  const entries: CodexReplay.CodexAppServerReplayEntry[] = preamble.slice(0, 3);
+  const start = (cua?: Record<string, unknown>, params = threadParams(cua)) =>
     entries.push(
       {
         type: "expect_outbound",
-        frame: { id: 2, method: "thread/start", params: threadParams(cua) },
+        frame: { id: 2, method: "thread/start", params },
       },
       threadResult,
     );
@@ -232,36 +245,84 @@ export const fixture = (scenario: string) => {
     );
   // Codex ignores resume overrides on a thread a client holds: a reload unsubscribes first.
   // Returns the next request id.
-  const reload = (
-    first: number,
-    cua: Record<string, unknown>,
-    threads: ReadonlyArray<string> = [nativeThreadId],
-    goalResponse: Record<string, unknown> = { result: { goal: null } },
-  ) => {
-    threads.forEach((threadId, index) => goalGet(first + index, threadId, goalResponse));
-    const id = first + threads.length;
+  // A thread/resume Codex answers with the idle thread; `error` answers it with that failure.
+  // Codex's answer to a request that loads a thread: the idle thread it names.
+  const answer = (id: number, thread = nativeThreadId): CodexReplay.CodexAppServerReplayEntry => {
+    const entry = withReplayRequestId(threadResult, id);
+    if (entry.type !== "emit_inbound" || thread === nativeThreadId) return entry;
+    const frame = entry.frame as { result: { thread: Record<string, unknown> } };
+    const named = { ...frame.result.thread, id: thread, sessionId: thread };
+    return { ...entry, frame: { ...frame, result: { ...frame.result, thread: named } } };
+  };
+  const resume = (
+    id: number,
+    params: Record<string, unknown>,
+    error?: Record<string, unknown>,
+    thread = nativeThreadId,
+  ) =>
     entries.push(
       {
         type: "expect_outbound",
-        frame: { id, method: "thread/unsubscribe", params: { threadId: nativeThreadId } },
-      },
-      { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
-      {
-        type: "expect_outbound",
         frame: {
-          id: id + 1,
+          id,
           method: "thread/resume",
-          params: { threadId: nativeThreadId, excludeTurns: true, ...threadParams(cua) },
+          params: { threadId: thread, excludeTurns: true, ...params },
         },
       },
-      withReplayRequestId(threadResult, id + 1),
+      error === undefined ? answer(id, thread) : { type: "emit_inbound", frame: { id, error } },
     );
+  const reload = (
+    first: number,
+    cua?: Record<string, unknown>,
+    options: {
+      /** The conversation Codex is asked about; the reload unsubscribes and resumes the first. */
+      readonly threads?: ReadonlyArray<string>;
+      readonly goal?: Record<string, unknown>;
+      readonly params?: Record<string, unknown>;
+      /** Answers the resume with this error instead of the thread. */
+      readonly error?: Record<string, unknown>;
+      /** Any change but a new driver also waits for background terminals (#1569). */
+      readonly terminals?: boolean;
+    } = {},
+  ) => {
+    const threads = options.threads ?? [nativeThreadId];
+    const thread = threads[0] ?? nativeThreadId;
+    threads.forEach((threadId, index) =>
+      goalGet(first + index, threadId, options.goal ?? { result: { goal: null } }),
+    );
+    let id = first + threads.length;
+    if (options.terminals)
+      for (const threadId of threads) {
+        entries.push(
+          {
+            type: "expect_outbound",
+            frame: { id, method: "thread/backgroundTerminals/list", params: { threadId } },
+          },
+          { type: "emit_inbound", frame: { id, result: { data: [], nextCursor: null } } },
+        );
+        id++;
+      }
+    entries.push(
+      {
+        type: "expect_outbound",
+        frame: { id, method: "thread/unsubscribe", params: { threadId: thread } },
+      },
+      { type: "emit_inbound", frame: { id, result: { status: "unsubscribed" } } },
+    );
+    resume(id + 1, options.params ?? threadParams(cua), options.error, thread);
     return id + 2;
   };
-  const turnStart = (id: number, ordinal: number, computerUse: boolean, deferred = false) =>
+  // Each helper below drives the fixture's thread unless given another native thread.
+  const turnStart = (
+    id: number,
+    ordinal: number,
+    computerUse: boolean,
+    deferred = false,
+    thread = nativeThreadId,
+  ) =>
     Effect.gen(function* () {
       const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
-        nativeThreadId,
+        nativeThreadId: thread,
         codexInput: [{ type: "text", text: `turn-${ordinal}` }],
         runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
         modelSelection: CODEX_TEST_MODEL_SELECTION,
@@ -279,13 +340,13 @@ export const fixture = (scenario: string) => {
         },
       });
       // Codex answers turn/start before its task reports the thread active and the turn started.
-      status(nativeThreadId, "active");
+      status(thread, "active");
       entries.push({
         type: "emit_inbound",
         frame: {
           method: "turn/started",
           params: {
-            threadId: nativeThreadId,
+            threadId: thread,
             turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
           },
         },
@@ -307,36 +368,41 @@ export const fixture = (scenario: string) => {
         },
       },
     });
-  const turnCompleted = (ordinal: number) => {
-    status(nativeThreadId, "idle");
+  const turnCompleted = (ordinal: number, thread = nativeThreadId) => {
+    status(thread, "idle");
     entries.push({
       type: "emit_inbound",
       frame: {
         method: "turn/completed",
         params: {
-          threadId: nativeThreadId,
+          threadId: thread,
           turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "completed" }),
         },
       },
     });
   };
-  const open = Effect.gen(function* () {
-    return yield* openReplay(makeCodexReplayTranscript({ scenario, entries })).pipe(
-      Effect.provideService(McpSessionRegistry.McpSessionRegistry, unusedRegistry),
+  const openWith = (registry: McpSessionRegistry.McpSessionRegistry["Service"]) =>
+    openReplay(makeCodexReplayTranscript({ scenario, entries })).pipe(
+      Effect.provideService(McpSessionRegistry.McpSessionRegistry, registry),
     );
-  });
+  const open = openWith(unusedRegistry);
   return {
     config,
+    nativeThreadId,
+    threadParams,
     driver,
     managed,
     entries,
     start,
     goalGet,
+    answer,
+    resume,
     reload,
     turnStart,
     turnCompleted,
     status,
     open,
+    openWith,
   };
 };
 

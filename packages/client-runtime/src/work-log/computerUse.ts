@@ -240,8 +240,28 @@ export function computerUseResult(
       ? "Window did not settle before the deadline"
       : settle.outcome === "destroyed"
         ? "Window closed before it settled"
-        : `Window did not settle: ${SETTLE_REASONS[settle.reason] ?? (settle.reason.replaceAll("_", " ") || settle.outcome)}`;
+        : `Window did not settle: ${settleReason(settle.reason) || settle.outcome}`;
   return { status: "unsettled", note };
+}
+
+/** A known reason reads as words; a privacy refusal adds the check that failed, as in "(tree children unsupported: AXGroup)". */
+function settleReason(reason: string): string {
+  const known = SETTLE_REASONS[reason];
+  if (known !== undefined) return known;
+  const split = reason.indexOf(":");
+  const head = split < 0 ? undefined : SETTLE_REASONS[reason.slice(0, split)];
+  if (head === undefined) return reason.replaceAll("_", " ");
+  const detail = reason
+    .slice(split + 1)
+    .split(",")
+    // "seen:" entries summarize the helper's reads for diagnosis; the card shows only the problems.
+    .filter((problem) => !problem.startsWith("seen:"))
+    .map((problem) => {
+      const [check = "", ...names] = problem.split(":");
+      return [check.replaceAll("_", " "), ...names].join(": ");
+    })
+    .join("; ");
+  return `${head} (${detail})`;
 }
 
 /**
