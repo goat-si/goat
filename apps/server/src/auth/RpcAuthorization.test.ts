@@ -207,6 +207,39 @@ describe("RPC scope middleware", () => {
       expect(handled).toEqual([]);
     }).pipe(Effect.scoped),
   );
+
+  // Turning a host's Child setup on is a person's standing consent to join it to the hub.
+  it.effect("rejects an SSH host's Child setup switch without settings:write", () =>
+    Effect.gen(function* () {
+      const child = WsRpcGroup.omit(
+        ...[...WsRpcGroup.requests.keys()].filter(
+          (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, "hub.deviceChildOptIn"> =>
+            tag !== WS_METHODS.hubDeviceChildOptIn,
+        ),
+      );
+      const handled: Array<string> = [];
+      const client = yield* RpcTest.makeClient(child).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            child.toLayerHandler(WS_METHODS.hubDeviceChildOptIn, (input) =>
+              Effect.sync(() => handled.push(input.deviceAlias)).pipe(Effect.as(input)),
+            ),
+            RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+          ),
+        ),
+      );
+      expect(
+        yield* client[WS_METHODS.hubDeviceChildOptIn]({
+          deviceAlias: "lidge-ts",
+          enabled: true,
+        }).pipe(Effect.flip),
+      ).toMatchObject({
+        _tag: "EnvironmentAuthorizationError",
+        requiredPermission: AuthSettingsWriteScope,
+      });
+      expect(handled).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
 });
 
 describe("settings mutation authorization", () => {

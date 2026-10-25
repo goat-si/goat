@@ -128,10 +128,14 @@ const make = Effect.gen(function* () {
     const child = Option.isSome(childBootstrap)
       ? yield* childBootstrap.value.status(entry.host)
       : undefined;
+    const optIn = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.sshOptIn(entry.host)
+      : undefined;
     return {
       ...entry,
       ...(goatclaw === undefined ? {} : { goatclaw }),
       ...(child === undefined ? {} : { opencodexChild: child }),
+      ...(optIn === undefined ? {} : { opencodexChildOptIn: optIn }),
     } satisfies HostStatusEntry;
   });
   const clock = yield* Clock.Clock;

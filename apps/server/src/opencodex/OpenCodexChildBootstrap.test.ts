@@ -1,18 +1,24 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AuthSessionId,
   DEFAULT_SERVER_SETTINGS,
   CloudMachineError,
   EnvironmentId,
+  type AuthClientSession,
+  type AuthEnvironmentScope,
   type HubDeviceOperationResult,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -20,11 +26,25 @@ import * as HubMembership from "../hub/HubMembership.ts";
 import { type DevicePlatform, HubOcx } from "../hub/HubOcx.ts";
 import { fleetSnapshot } from "../hub/parity.testkit.ts";
 import * as Settings from "../serverSettings.ts";
+import type { SshAliasEvent, SshAliasListener } from "../sshRemote/SshAliasEvents.ts";
+import * as SshHostSetup from "../sshRemote/SshHostSetup.ts";
 import { PREPARE_EXIT } from "./childPrepare.ts";
 import * as Bootstrap from "./OpenCodexChildBootstrap.ts";
 import * as Inventory from "./OpenCodexInventory.ts";
 
 const MINUTE = 60_000;
+
+const joinResult = (
+  alias: string,
+  allowed: boolean,
+  joined: HubDeviceOperationResult["state"],
+) => ({
+  deviceAlias: alias,
+  action: "join" as const,
+  state: allowed ? joined : ("failed" as const),
+  message: allowed ? `${alias} is linked to this Home.` : "Permission was withdrawn.",
+  steps: [],
+});
 
 interface Machine {
   hub: boolean;
@@ -41,7 +61,36 @@ interface Machine {
   revokes: boolean;
   /** Each catalog check and release the bootstrap ran, in order. */
   hubEvents: Queue.Queue<string>;
+  autoJoin: boolean;
+  /** SSH hosts GOAT set up, by the revision of their config and pinned key. */
+  revisions: Map<string, string>;
+  revisionReadable: boolean;
+  /** Bumped by each Forget, as SshHostSetup does. */
+  generations: Map<string, number>;
+  /** Live client sessions and their scopes. */
+  sessions: Map<string, ReadonlyArray<AuthEnvironmentScope>>;
+  sessionsReadable: boolean;
+  /** Runs while OpenCodex is being prepared on the machine. */
+  duringPrepare: Effect.Effect<void>;
 }
+
+const PERSON = { kind: "client" as const, sessionId: AuthSessionId.make("person") };
+
+const clientSession = (
+  sessionId: string,
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): AuthClientSession => ({
+  sessionId: AuthSessionId.make(sessionId),
+  subject: "person",
+  scopes: [...scopes],
+  method: "browser-session-cookie",
+  client: { deviceType: "desktop" },
+  issuedAt: DateTime.makeUnsafe(0),
+  expiresAt: DateTime.makeUnsafe(86_400_000),
+  lastConnectedAt: null,
+  connected: true,
+  current: false,
+});
 
 /** Boat, the machine and the Home's OpenCodex as doubles; the bootstrap and its file are real. */
 const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
@@ -50,6 +99,7 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
   calls: string[],
 ) {
   let ready: (alias: string) => Effect.Effect<void> = () => Effect.void;
+  let sshEvent: SshAliasListener = () => Effect.void;
   let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
   let invalidated: (
     alias: string,
@@ -83,21 +133,22 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
                 code: machine.prepareExit,
                 stdout: machine.prepareExit === 0 ? "2.91.0" : "",
               };
-            }),
+            }).pipe(Effect.tap(() => Effect.suspend(() => machine.duringPrepare))),
         }),
       ),
       Layer.provide(
         Layer.mock(HubMembership.HubMembership)({
-          joinProvisioned: (_scope, alias) =>
-            Effect.sync(() => {
+          // Like HubMembership, each reads its permission once more before linking.
+          joinProvisioned: (_scope, alias, gate) =>
+            Effect.gen(function* () {
               calls.push(`join ${alias}`);
-              return {
-                deviceAlias: alias,
-                action: "join" as const,
-                state: machine.joined,
-                message: `${alias} is linked to this Home.`,
-                steps: [],
-              };
+              return joinResult(alias, yield* gate, machine.joined);
+            }),
+          joinWithConsent: (_scope, alias, consent) =>
+            Effect.gen(function* () {
+              const person = yield* consent;
+              calls.push(`join ${alias} as ${person?.sessionId ?? "nobody"}`);
+              return joinResult(alias, person !== undefined, machine.joined);
             }),
           requestRelease: (alias) => Effect.sync(() => void machine.pending.add(alias)),
           pendingReleases: Effect.sync(() => [...machine.pending]),
@@ -115,6 +166,34 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
         }),
       ),
       Layer.provide(
+        Layer.mock(SshHostSetup.SshHostSetup)({
+          aliasRevision: (alias) =>
+            machine.revisionReadable
+              ? Effect.succeed(machine.revisions.get(alias))
+              : Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "readFileString",
+                  }),
+                ),
+          aliasGeneration: (alias) => Effect.sync(() => machine.generations.get(alias) ?? 0),
+          onAlias: (listener) => Effect.sync(() => void (sshEvent = listener)),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(SessionStore.SessionStore)({
+          cookieName: "goat_session",
+          legacyCookieName: undefined,
+          listActive: () =>
+            machine.sessionsReadable
+              ? Effect.sync(() =>
+                  [...machine.sessions].map(([id, scopes]) => clientSession(id, scopes)),
+                )
+              : Effect.fail(new SessionStore.ActiveSessionsListError({ cause: "unreadable" })),
+        }),
+      ),
+      Layer.provide(
         Layer.mock(Inventory.OpenCodexInventory)({
           read: Effect.sync(() => ({
             ...fleetSnapshot("home"),
@@ -126,7 +205,11 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
         Layer.mock(Settings.ServerSettingsService)({
           getSettings: Effect.sync(() => ({
             ...DEFAULT_SERVER_SETTINGS,
-            hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled: machine.hub },
+            hub: {
+              ...DEFAULT_SERVER_SETTINGS.hub,
+              enabled: machine.hub,
+              autoJoinCloudMachines: machine.autoJoin,
+            },
           })),
         }),
       ),
@@ -135,17 +218,20 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
           getEnvironmentId: Effect.succeed(EnvironmentId.make("home")),
         }),
       ),
-      Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
     ),
   );
   return {
     bootstrap: Context.get(context, Bootstrap.OpenCodexChildBootstrap),
+    stateDir: Context.get(context, ServerConfig.ServerConfig).stateDir,
     /** Boat finished readying the machine, as CloudMachineService reports it. */
     ready: (alias: string) => ready(alias),
     /** CloudMachineService is about to delete or forget the machine. */
     removing: (alias: string) => removing(alias),
     invalidated: (alias: string, cause: CloudMachines.CloudAliasInvalidation) =>
       invalidated(alias, cause),
+    /** SshHostSetup finished a setup, or began a Forget. */
+    ssh: (alias: string, event: SshAliasEvent) => sshEvent(alias, event),
   };
 });
 
@@ -166,6 +252,13 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     pending: new Set(),
     revokes: true,
     hubEvents: yield* Queue.unbounded<string>(),
+    autoJoin: true,
+    revisions: new Map([["lidge-ts", "rev-1"]]),
+    revisionReadable: true,
+    generations: new Map(),
+    sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),
+    sessionsReadable: true,
+    duringPrepare: Effect.void,
     ...overrides,
   };
   const calls: string[] = [];
@@ -311,5 +404,235 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
       expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
       expect(home.machine.pending).toEqual(new Set());
     }),
+  );
+
+  it.effect(
+    "keeps joining cloud machines by default; with the cloud switch off GOAT leaves new ones alone",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ autoJoin: false });
+        yield* home.ready("boat-builder");
+        expect(yield* home.bootstrap.ensure("boat-builder")).toBeUndefined();
+        expect(home.calls).toEqual([]);
+        expect(yield* home.bootstrap.status("boat-builder")).toBeUndefined();
+      }),
+  );
+
+  it.effect("turning the cloud switch off while a machine is prepared stops before the join", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringPrepare = Effect.sync(() => void (home.machine.autoJoin = false));
+      expect(yield* home.bootstrap.ensure("boat-builder")).toBeUndefined();
+      expect(home.calls).toEqual(["prepare boat-builder 2.91.0"]);
+      expect(yield* home.bootstrap.status("boat-builder")).toBeUndefined();
+    }),
+  );
+
+  it.effect(
+    "the cloud switch stops only new joins: a Child stays and a removed one still releases",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup();
+        expect((yield* home.bootstrap.ensure("boat-builder"))?.state).toBe("child");
+        home.machine.autoJoin = false;
+        yield* home.ready("boat-builder");
+        expect((yield* home.bootstrap.status("boat-builder"))?.state).toBe("child");
+        yield* home.removing("boat-builder");
+        home.machine.removed.add("boat-builder");
+        yield* home.invalidated("boat-builder", "removed");
+        expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+        expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
+        expect(home.machine.pending).toEqual(new Set());
+      }),
+  );
+
+  it.effect("an SSH host GOAT set up stays standalone until a person opts it in", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      yield* home.ssh("lidge-ts", "ready");
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual([]);
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+      // Cloud machines follow the hub's switch, and hosts GOAT did not set up have no switch.
+      expect(yield* home.bootstrap.sshOptIn("boat-builder")).toBeUndefined();
+      expect(yield* home.bootstrap.sshOptIn("from-ssh-config")).toBeUndefined();
+    }),
+  );
+
+  it.effect("an opted-in SSH host joins on the person's consent now and after setups, once", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
+      expect(home.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as person"]);
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(true);
+      // Every later setup readies the host again: a Child is left alone.
+      yield* home.ssh("lidge-ts", "ready");
+      expect((yield* home.bootstrap.status("lidge-ts"))?.state).toBe("child");
+      // The consent outlives a GOAT restart.
+      const restarted = yield* build(home.baseDir, home.machine, home.calls);
+      expect(yield* restarted.bootstrap.sshOptIn("lidge-ts")).toBe(true);
+      expect(home.calls).toHaveLength(2);
+    }),
+  );
+
+  it.effect("only a live client session with settings:write can opt a host in", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ sessions: new Map([["reader", ["orchestration:read"]]]) });
+      const agent = {
+        kind: "mcp" as const,
+        scope: {
+          environmentId: EnvironmentId.make("home"),
+          capabilities: new Set(["orchestration" as const]),
+          issuedAt: 0,
+          requestNamespace: "agent",
+          thread: undefined,
+          client: { sessionId: "agent", label: "Agent", access: "full-access" as const },
+          grantedScopes: ["settings:write" as const],
+        },
+      };
+      const reader = { kind: "client" as const, sessionId: AuthSessionId.make("reader") };
+      for (const caller of [agent, reader, PERSON]) {
+        const refused = yield* home.bootstrap
+          .setSshOptIn("lidge-ts", true, caller)
+          .pipe(Effect.flip);
+        expect(refused._tag).toBe("EnvironmentAuthorizationError");
+      }
+      home.machine.sessions.set("person", ["settings:write"]);
+      for (const alias of ["boat-builder", "from-ssh-config", "../lidge-ts"]) {
+        const refused = yield* home.bootstrap.setSshOptIn(alias, true, PERSON).pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "invalid_request" });
+      }
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+      expect(home.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("opting out while the host is prepared stops the join; opting out never unlinks", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringPrepare = home.bootstrap
+        .setSshOptIn("lidge-ts", false, PERSON)
+        .pipe(Effect.orDie);
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual(["prepare lidge-ts 2.91.0"]);
+      expect(yield* home.bootstrap.status("lidge-ts")).toBeUndefined();
+
+      home.machine.duringPrepare = Effect.void;
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
+      yield* home.bootstrap.setSshOptIn("lidge-ts", false, PERSON);
+      // Nothing ran to remove the link: membership is a person's to end with Leave.
+      expect(home.calls.slice(1)).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as person"]);
+      expect((yield* home.bootstrap.status("lidge-ts"))?.state).toBe("child");
+    }),
+  );
+
+  it.effect("a session that loses its access ends the consent, and the host says why", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringPrepare = Effect.sync(() => void home.machine.sessions.delete("person"));
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
+        state: "blocked",
+        reason: "consent_revoked",
+      });
+      expect(home.calls).toEqual(["prepare lidge-ts 2.91.0"]);
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+    }),
+  );
+
+  it.effect("sessions GOAT cannot read block one attempt and keep the consent for the next", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.duringPrepare = Effect.sync(() => void (home.machine.sessionsReadable = false));
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
+        state: "blocked",
+        reason: "link_failed",
+      });
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(true);
+      home.machine.sessionsReadable = true;
+      home.machine.duringPrepare = Effect.void;
+      expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
+    }),
+  );
+
+  it.effect(
+    "a Forget ends the consent at once and for good, even while the host's files stay",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup();
+        // SshHostSetup bumps the alias generation, then tells listeners, before any teardown.
+        home.machine.duringPrepare = Effect.sync(
+          () => void home.machine.generations.set("lidge-ts", 1),
+        ).pipe(Effect.andThen(home.ssh("lidge-ts", "forgotten")), Effect.orDie);
+        yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+        expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+        expect(home.calls).toEqual(["prepare lidge-ts 2.91.0"]);
+        expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+        // The files and their revision are unchanged, yet a restart finds no consent.
+        const restarted = yield* build(home.baseDir, home.machine, home.calls);
+        yield* restarted.ssh("lidge-ts", "ready");
+        expect(yield* restarted.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+        expect(home.calls).toHaveLength(1);
+      }),
+  );
+
+  it.effect("a Forget whose consent cannot be cleared on disk stops that Forget", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      yield* home.bootstrap.ensure("lidge-ts");
+      const fs = yield* FileSystem.FileSystem;
+      // A directory where the next write goes makes that write fail.
+      yield* fs.makeDirectory(`${home.stateDir}/opencodex-child-ssh-consent.json.tmp`);
+      const refused = yield* home.ssh("lidge-ts", "forgotten").pipe(Effect.flip);
+      expect(refused.code).toBe("orchestration_error");
+      // This process stopped using it all the same.
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+      const refusedGrant = yield* home.bootstrap
+        .setSshOptIn("lidge-ts", true, PERSON)
+        .pipe(Effect.flip);
+      expect(refusedGrant).toMatchObject({ code: "orchestration_error" });
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+    }),
+  );
+
+  it.effect("an alias added again does not inherit consent given for the old one", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ hub: false });
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      // Not a hub: the consent waits, and nothing runs.
+      yield* home.ssh("lidge-ts", "ready");
+      expect(home.calls).toEqual([]);
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBeUndefined();
+      home.machine.hub = true;
+      home.machine.revisions.set("lidge-ts", "rev-2");
+      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+      yield* home.ssh("lidge-ts", "ready");
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(home.calls).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "consent given again during a setup stops that setup; one under the new consent joins",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup();
+        home.machine.duringPrepare = Effect.sync(
+          () => void (home.machine.duringPrepare = Effect.void),
+        ).pipe(Effect.andThen(home.bootstrap.setSshOptIn("lidge-ts", true, PERSON)), Effect.orDie);
+        yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+        expect(yield* home.bootstrap.ensure("lidge-ts")).toBeUndefined();
+        expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
+        expect(home.calls).toEqual([
+          "prepare lidge-ts 2.91.0",
+          "prepare lidge-ts 2.91.0",
+          "join lidge-ts as person",
+        ]);
+      }),
   );
 });

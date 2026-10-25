@@ -1,7 +1,7 @@
 import type { HostStatusEntry, HubNode, OpenCodexChildBootstrapStatus } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { hubDeviceList, presentChildSetup } from "./hubDevices.ts";
+import { cloudAutoJoinSaveError, hubDeviceList, presentChildSetup } from "./hubDevices.ts";
 import type { HubDevice, HubSnapshot } from "./state/hubFleet.ts";
 
 function node(
@@ -51,11 +51,16 @@ function snapshot(devices: ReadonlyArray<HubDevice>): HubSnapshot {
   return { homeName: "jun-mbp", homeVersion: "2.89.0", homeHealthy: true, homeKey: "", devices };
 }
 
-function host(alias: string, opencodexChild?: OpenCodexChildBootstrapStatus): HostStatusEntry {
+function host(
+  alias: string,
+  opencodexChild?: OpenCodexChildBootstrapStatus,
+  opencodexChildOptIn?: boolean,
+): HostStatusEntry {
   return {
     host: alias,
     reachability: "ok",
     ...(opencodexChild === undefined ? {} : { opencodexChild }),
+    ...(opencodexChildOptIn === undefined ? {} : { opencodexChildOptIn }),
   };
 }
 
@@ -165,5 +170,57 @@ describe("hubDeviceList", () => {
       hosts: [],
     });
     expect(rows.map((row) => row.key)).toEqual(["device:macmini-ts"]);
+  });
+
+  it("offers the Child setup switch only for SSH hosts the hub says it can join", () => {
+    const rows = hubDeviceList({
+      nodes: [node("n1", "Mac mini", [ssh("macmini-ts")])],
+      snapshot: null,
+      hosts: [
+        host("macmini-ts", undefined, true),
+        host("lidge-ts", undefined, false),
+        // An older hub sends no switch for its hosts, so none is offered.
+        host("studio-ts"),
+      ],
+    });
+    expect(rows.map((row) => [row.key, row.childOptIn])).toEqual([
+      ["node:n1", true],
+      ["setup:lidge-ts", false],
+    ]);
+  });
+
+  it("says why an SSH host's Child setup was turned off", () => {
+    const rows = hubDeviceList({
+      nodes: null,
+      snapshot: null,
+      hosts: [
+        host(
+          "lidge-ts",
+          {
+            state: "blocked",
+            reason: "consent_revoked",
+            message: "Turn it on again.",
+            checkedAt: 1,
+          },
+          false,
+        ),
+      ],
+    });
+    expect(rows[0]).toMatchObject({
+      childOptIn: false,
+      childSetup: {
+        label:
+          "OpenCodex Child setup blocked: turned off because the session that allowed it lost access",
+        detail: "Turn it on again.",
+      },
+    });
+  });
+});
+
+describe("cloudAutoJoinSaveError", () => {
+  it("flags an older hub that kept joining cloud machines after the switch was turned off", () => {
+    expect(cloudAutoJoinSaveError(false, true)).toMatch(/older GOAT/);
+    expect(cloudAutoJoinSaveError(false, false)).toBeNull();
+    expect(cloudAutoJoinSaveError(true, true)).toBeNull();
   });
 });
