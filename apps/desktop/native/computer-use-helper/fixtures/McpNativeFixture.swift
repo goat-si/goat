@@ -660,6 +660,30 @@ private func opaqueTraffic() throws {
   try require(unicode.driver.frames == [composed, decomposed], "Canonically equivalent Unicode IDs are distinct JSON-RPC identities")
 }
 
+private func numericIdentity() throws {
+  // 2^53 and 2^53 + 1 share one double; JSON-RPC treats them as different requests.
+  let h = Harness()
+  for id in ["9007199254740992", "9007199254740993"] {
+    try h.input(Data((#"{"jsonrpc":"2.0","id":"# + id + #","method":"fixture/ordinary"}"#).utf8))
+  }
+  try require(h.driver.frames.count == 2, "Distinct large numeric IDs are both outstanding")
+  for id in ["9007199254740993", "9007199254740992"] {
+    try h.driverReply(Data((#"{"jsonrpc":"2.0","id":"# + id + #","result":{}}"#).utf8))
+  }
+  try require(h.provider.frames.map { McpObject($0)?.raw("id") } == [Data("9007199254740993".utf8), Data("9007199254740992".utf8)],
+    "Each reply returns under its own exact ID")
+  let wait = Harness()
+  try wait.input(Data(#"{"jsonrpc":"2.0","id":9007199254740992,"method":"tools/call","params":{"name":"wait_for_window_settle","arguments":{"pid":41,"window_id":73}}}"#.utf8))
+  try wait.input(Data(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9007199254740993}}"#.utf8))
+  try require(wait.provider.frames.isEmpty, "Cancelling a neighbouring large ID leaves the settle running")
+  try wait.input(Data(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9007199254740992}}"#.utf8))
+  try wait.expectCode("cancelled")
+  let spelled = Harness()
+  try spelled.input(Data(#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"wait_for_window_settle","arguments":{"pid":41,"window_id":73}}}"#.utf8))
+  try spelled.input(Data(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":70e-1}}"#.utf8))
+  try spelled.expectCode("cancelled")
+}
+
 private func discovery() throws -> [String: Any] {
   let h = Harness()
   let request = Data(#"{"jsonrpc":"2.0","id":"list","method":"tools/list","params":{}}"#.utf8)
@@ -704,6 +728,7 @@ private struct McpNativeFixture {
       case "arguments": try arguments()
       case "collisions": try collisions()
       case "opaque": try opaqueTraffic()
+      case "numeric-identity": try numericIdentity()
       case "discovery": output["result"] = try discovery()
       default: throw ContractFailure(description: "Unknown fixture case \(name)")
       }

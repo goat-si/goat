@@ -115,6 +115,10 @@ describe.skipIf(platform !== "darwin")("injected production MCP window-settle se
       "opaque",
       "preserves opaque surrogate and overflow fields on ordinary traffic and numeric cancellation identity",
     ],
+    [
+      "numeric-identity",
+      "keeps large numeric request IDs distinct for replies and cancellation while 7 and 70e-1 match",
+    ],
   ])("%s: %s", async (name) => {
     await run(name);
   });

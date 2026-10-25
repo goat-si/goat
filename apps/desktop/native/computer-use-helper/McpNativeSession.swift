@@ -32,10 +32,52 @@ private struct McpIdentity {
     text = value as? String
     // Swift keys normalize Unicode equality; JSON-RPC identities preserve scalar sequences.
     if let text { key = "s:" + Data(text.utf8).base64EncodedString() }
-    else if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite {
-      key = "n:" + String(n.doubleValue == 0 ? 0 : n.doubleValue)
-    } else if value is NSNull { key = "null" }
+    else if let number = Self.numberKey(raw) { key = number }
+    else if value is NSNull { key = "null" }
     else { key = "opaque:" + raw.base64EncodedString() }
+  }
+
+  /// A double merges integers above 2^53, so numbers key by their exact decimal value read from
+  /// the JSON text: 7, 7.0 and 70e-1 match, 9007199254740992 and 9007199254740993 do not.
+  private static func numberKey(_ raw: Data) -> String? {
+    let bytes = Array(raw.drop { [0x20, 0x09, 0x0a, 0x0d].contains($0) }
+      .reversed().drop { [0x20, 0x09, 0x0a, 0x0d].contains($0) }.reversed())
+    var index = 0
+    let negative = bytes.first == 0x2d
+    if negative { index += 1 }
+    func digits() -> [UInt8] {
+      let start = index
+      while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+      return Array(bytes[start..<index])
+    }
+    let whole = digits()
+    guard !whole.isEmpty, whole.count == 1 || whole[0] != 0x30 else { return nil }
+    var fraction: [UInt8] = []
+    if index < bytes.count, bytes[index] == 0x2e {
+      index += 1
+      fraction = digits()
+      guard !fraction.isEmpty else { return nil }
+    }
+    var exponent = 0
+    if index < bytes.count, bytes[index] == 0x65 || bytes[index] == 0x45 {
+      index += 1
+      var sign = 1
+      if index < bytes.count, bytes[index] == 0x2b || bytes[index] == 0x2d {
+        if bytes[index] == 0x2d { sign = -1 }
+        index += 1
+      }
+      let written = digits()
+      // Longer exponents stay opaque: still exact identities, only without spelling equivalence.
+      guard !written.isEmpty, written.count <= 9, let value = Int(String(decoding: written, as: UTF8.self))
+      else { return nil }
+      exponent = sign * value
+    }
+    guard index == bytes.count else { return nil }
+    var significant = Array((whole + fraction).drop { $0 == 0x30 })
+    guard !significant.isEmpty else { return "n:0" }
+    exponent -= fraction.count
+    while significant.last == 0x30 { significant.removeLast(); exponent += 1 }
+    return "n:" + (negative ? "-" : "") + String(decoding: significant, as: UTF8.self) + "e" + String(exponent)
   }
 }
 
