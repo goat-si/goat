@@ -17,7 +17,9 @@ import {
   withCuaDriverPrivacyEnvironment,
 } from "@goat/shared/cuaDriverRelease";
 import {
+  cuaDriverSessionListingEnvironment,
   isCuaDriverStartupRefusal,
+  listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
 } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -227,6 +229,13 @@ const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapabi
 
 export interface CuaDriverOptions {
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  /**
+   * Where a server that runs the driver itself reads requestable apps when a request asks
+   * (#1561): a short-lived listing on the given display environment, never the shared daemon.
+   */
+  readonly requestListing?: (
+    display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
+  ) => Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
@@ -423,6 +432,21 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       ),
     ),
   );
+  /**
+   * A server running the driver itself lists apps when a request asks, on the screen a start
+   * would use. Requests in a burst share one listing; a slow or failed one counts as none.
+   */
+  const requestListing = options.requestListing;
+  const [standaloneListing] = yield* Effect.cachedInvalidateWithTTL(
+    requestListing === undefined
+      ? Effect.succeedNone
+      : Effect.gen(function* () {
+          const display = yield* freshProbe;
+          if (display.capability === "unavailable") return Option.none<ReadonlyArray<string>>();
+          return yield* requestListing(display.environment);
+        }).pipe(Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone })),
+    "5 seconds",
+  );
   /** Before the first agent turn: the session a start would use, for a readiness check (#1542). */
   const beforeTurn = (binary: Effect.Effect<string, CuaDriverHostError>) => ({
     wanted: Effect.map(enabled, (on) => on && active === undefined),
@@ -451,8 +475,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     enabled,
     listedApps: Effect.gen(function* () {
       if (!(yield* enabled)) return Option.none();
-      // Standalone/Linux hosts do not yet offer a fresh request-time listing.
-      const apps = yield* options.listedApps ?? Effect.succeedNone;
+      const apps = yield* options.listedApps ?? standaloneListing;
       return (yield* enabled) ? apps : Option.none();
     }),
     lastFailure: Effect.sync(() => failure),
@@ -850,7 +873,7 @@ export const layer = Layer.effect(
     const config = yield* ServerConfig.ServerConfig;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install, helperReadiness, binary } =
+    const { factory, install, helperReadiness, binary, requestListing } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
           {
@@ -858,6 +881,7 @@ export const layer = Layer.effect(
             install: undefined,
             helperReadiness: yield* desktopHelperReadiness,
             binary: undefined,
+            requestListing: undefined,
           }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
@@ -894,19 +918,45 @@ export const layer = Layer.effect(
                   Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
                 )
               : undefined;
-            // What a standalone start runs, for the Linux check before the first turn (#1542).
             const named = environment.GOAT_CUA_DRIVER_PATH?.trim();
-            const binary = Option.isSome(linuxHelper)
-              ? named
-                ? Effect.succeed(named)
-                : installation.executable.pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new CuaDriverHostError({ operation: "install", cause: error.message }),
-                    ),
-                  )
-              : undefined;
-            return { factory, install, helperReadiness, binary };
+            // What a standalone start runs.
+            const startBinary = named
+              ? Effect.succeed(named)
+              : installation.executable.pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new CuaDriverHostError({ operation: "install", cause: error.message }),
+                  ),
+                );
+            // The Linux check before the first turn (#1542) runs it.
+            const binary = Option.isSome(linuxHelper) ? startBinary : undefined;
+            // Requests are judged against a fresh listing of that binary on the probed screen
+            // (#1561), the same listing and identities the manifest is built from.
+            const requestListing = (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
+              startBinary.pipe(
+                Effect.flatMap((binaryPath) =>
+                  // Interrupting the request (its deadline, or the server stopping) ends the
+                  // listing's driver as well.
+                  Effect.tryPromise({
+                    try: (signal) =>
+                      listCuaRequestableApplications({
+                        binaryPath,
+                        platform,
+                        environment: cuaDriverSessionListingEnvironment(
+                          environment,
+                          display,
+                          platform,
+                        ),
+                        hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
+                        signal,
+                      }),
+                    catch: (cause) => new CuaDriverHostError({ operation: "start", cause }),
+                  }),
+                ),
+                Effect.map((apps) => Option.some(apps)),
+                Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
+              );
+            return { factory, install, helperReadiness, binary, requestListing };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -923,6 +973,7 @@ export const layer = Layer.effect(
       ...(install ? { install } : {}),
       ...(helperReadiness ? { helperReadiness } : {}),
       ...(binary ? { binary } : {}),
+      ...(requestListing ? { requestListing } : {}),
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
       ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
