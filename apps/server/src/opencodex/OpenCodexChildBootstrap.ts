@@ -313,11 +313,14 @@ const make = Effect.gen(function* () {
     generation: number,
     grantId: string,
   ) {
-    if (!(yield* hubEnabled) || (yield* ssh.aliasGeneration(alias)) !== generation)
-      return { state: "withdrawn" } as const;
     const consent = yield* consents.check(alias);
+    if (!(yield* hubEnabled)) return { state: "withdrawn" } as const;
+    // After every read that yields, with nothing in between that does: a Forget or a withdrawal
+    // made during those reads ends this job's permission.
+    const held = yield* consents.held(alias);
+    if ((yield* ssh.aliasGeneration(alias)) !== generation) return { state: "withdrawn" } as const;
     if (consent.state === "revoked") return consent;
-    if (consent.state === "none" || consent.grant.grantId !== grantId)
+    if (consent.state === "none" || consent.grant.grantId !== grantId || held?.grantId !== grantId)
       return { state: "withdrawn" } as const;
     return { state: "allowed", person: consent.person } as const;
   });
@@ -394,7 +397,15 @@ const make = Effect.gen(function* () {
       return undefined;
     const revision = yield* ssh.aliasRevision(alias).pipe(Effect.orElseSucceed(() => undefined));
     if (revision === undefined) return undefined;
-    return (yield* consents.held(alias))?.revision === revision;
+    if ((yield* consents.held(alias)) === undefined) return false;
+    // Reconciled on every read, so a signed-out or expired session turns the switch off and the
+    // host says why, without waiting for its next setup. A Child stays one.
+    const consent = yield* consents.check(alias);
+    if (consent.state === "revoked" && consent.dropped && !jobs.has(alias)) {
+      const previous = (yield* Ref.get(records))[alias]?.state;
+      if (previous !== "child" && previous !== "degraded") yield* stopped(alias, consent);
+    }
+    return consent.state === "granted" || (consent.state === "revoked" && !consent.dropped);
   });
 
   /**

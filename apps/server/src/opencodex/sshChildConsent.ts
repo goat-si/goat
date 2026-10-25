@@ -1,8 +1,10 @@
 import {
+  AuthSessionId,
   AuthSettingsWriteScope,
   EnvironmentAuthorizationError,
   OrchestratorMcpFailure,
   hasCloudMachineAliasPrefix,
+  type AuthEnvironmentScope,
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- opaque grant ids, never credentials.
 import * as NodeCrypto from "node:crypto";
@@ -29,7 +31,7 @@ import { authorizeSshHost, type SshHostCaller } from "../sshRemote/SshHostAuthor
 const Grant = Schema.Struct({
   grantId: Schema.String,
   revision: Schema.String,
-  sessionId: Schema.String,
+  sessionId: AuthSessionId,
   grantedAt: Schema.Number,
 });
 export type SshChildGrant = typeof Grant.Type;
@@ -72,19 +74,24 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
 
   /**
    * Removes the grant, in memory before on disk so this process stops using it at once. With a
-   * grantId, only that grant: a check that read an older one never removes a newer one.
+   * grantId, only that grant: a check that read an older one never removes a newer one. Without
+   * one it always writes, so a removal whose earlier write failed succeeds only once it is on disk.
    */
   const drop = (alias: string, grantId?: string) =>
     writing.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* Ref.get(grants);
-        const held = current[alias];
-        if (held === undefined || (grantId !== undefined && held.grantId !== grantId)) return;
+        if (grantId !== undefined && current[alias]?.grantId !== grantId) return;
         const { [alias]: _gone, ...rest } = current;
         yield* Ref.set(grants, rest);
         yield* persist(rest);
       }),
     );
+  /** Expiry counts: listActive still lists a connected session past it, this does not. */
+  const scopesOf = (sessionId: AuthSessionId) =>
+    options.sessions
+      .readActiveScopes(sessionId)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<AuthEnvironmentScope> => []));
 
   /** A person's own consent: a live client session with settings:write, for an alias GOAT set up. */
   const set = Effect.fn("SshChildConsent.set")(function* (
@@ -98,6 +105,11 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         message: "Only a person in a GOAT client can change this.",
       });
     yield* authorizeSshHost(options.sessions, caller, AuthSettingsWriteScope);
+    if (!(yield* scopesOf(caller.sessionId)).includes(AuthSettingsWriteScope))
+      return yield* new EnvironmentAuthorizationError({
+        requiredScope: AuthSettingsWriteScope,
+        message: "This session has expired or lost settings permission.",
+      });
     if (!SAFE_ALIAS.test(alias) || hasCloudMachineAliasPrefix(alias))
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
@@ -141,12 +153,8 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
       return { state: "none" } satisfies SshChildConsent;
     }
-    const active = yield* options.sessions.listActive().pipe(Effect.option);
-    if (Option.isNone(active))
-      return unchecked("GOAT could not read its sessions; it tries again next time.");
-    const session = active.value.find((entry) => entry.sessionId === grant.sessionId);
-    const scopes = session === undefined ? undefined : (session.permissions ?? session.scopes);
-    if (scopes === undefined || !scopes.includes(AuthSettingsWriteScope)) {
+    const scopes = yield* scopesOf(grant.sessionId);
+    if (!scopes.includes(AuthSettingsWriteScope)) {
       yield* drop(alias, grant.grantId).pipe(Effect.ignore({ log: true }));
       return {
         state: "revoked",
@@ -154,6 +162,9 @@ export const makeSshChildConsent = Effect.fn("SshChildConsent.make")(function* (
         message: `The session that turned this on is signed out or lost settings permission, so GOAT turned it off. Turn it on again to keep joining ${alias}.`,
       } satisfies SshChildConsent;
     }
+    // The reads above yield: a withdrawal or a new grant made meanwhile wins over this one.
+    if ((yield* Ref.get(grants))[alias]?.grantId !== grant.grantId)
+      return { state: "none" } satisfies SshChildConsent;
     return {
       state: "granted",
       grant,

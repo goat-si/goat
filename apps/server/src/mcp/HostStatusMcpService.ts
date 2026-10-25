@@ -125,11 +125,12 @@ const make = Effect.gen(function* () {
   const withGoatclaw = Effect.fn("HostStatus.withHostState")(function* (entry: HostStatusEntry) {
     if (entry.host === null) return entry;
     const goatclaw = Option.isSome(fleet) ? yield* fleet.value.hostState(entry.host) : undefined;
-    const child = Option.isSome(childBootstrap)
-      ? yield* childBootstrap.value.status(entry.host)
-      : undefined;
+    // The switch first: reading it can record why the host's consent ended.
     const optIn = Option.isSome(childBootstrap)
       ? yield* childBootstrap.value.sshOptIn(entry.host)
+      : undefined;
+    const child = Option.isSome(childBootstrap)
+      ? yield* childBootstrap.value.status(entry.host)
       : undefined;
     return {
       ...entry,

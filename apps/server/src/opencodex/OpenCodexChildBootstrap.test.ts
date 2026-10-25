@@ -69,7 +69,10 @@ interface Machine {
   generations: Map<string, number>;
   /** Live client sessions and their scopes. */
   sessions: Map<string, ReadonlyArray<AuthEnvironmentScope>>;
-  sessionsReadable: boolean;
+  /** Past their expiry: still listed while connected, refused by readActiveScopes. */
+  expired: Set<string>;
+  /** Runs inside the nth authority read, before it answers. */
+  duringSessionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
   /** Runs while OpenCodex is being prepared on the machine. */
   duringPrepare: Effect.Effect<void>;
 }
@@ -100,6 +103,7 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
 ) {
   let ready: (alias: string) => Effect.Effect<void> = () => Effect.void;
   let sshEvent: SshAliasListener = () => Effect.void;
+  let sessionReads = 0;
   let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
   let invalidated: (
     alias: string,
@@ -186,11 +190,18 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
           cookieName: "goat_session",
           legacyCookieName: undefined,
           listActive: () =>
-            machine.sessionsReadable
-              ? Effect.sync(() =>
-                  [...machine.sessions].map(([id, scopes]) => clientSession(id, scopes)),
-                )
-              : Effect.fail(new SessionStore.ActiveSessionsListError({ cause: "unreadable" })),
+            Effect.sync(() =>
+              [...machine.sessions].map(([id, scopes]) => clientSession(id, scopes)),
+            ),
+          readActiveScopes: (sessionId) =>
+            Effect.gen(function* () {
+              const hook = machine.duringSessionRead;
+              if (hook !== undefined && ++sessionReads === hook.at) yield* hook.run;
+              const scopes = machine.sessions.get(sessionId);
+              if (scopes === undefined || machine.expired.has(sessionId))
+                return yield* new SessionStore.UnknownSessionTokenError({ sessionId });
+              return scopes;
+            }),
         }),
       ),
       Layer.provide(
@@ -257,7 +268,8 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     revisionReadable: true,
     generations: new Map(),
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),
-    sessionsReadable: true,
+    expired: new Set(),
+    duringSessionRead: undefined,
     duringPrepare: Effect.void,
     ...overrides,
   };
@@ -543,20 +555,24 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
     }),
   );
 
-  it.effect("sessions GOAT cannot read block one attempt and keep the consent for the next", () =>
-    Effect.gen(function* () {
-      const home = yield* setup();
-      home.machine.duringPrepare = Effect.sync(() => void (home.machine.sessionsReadable = false));
-      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
-      expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
-        state: "blocked",
-        reason: "link_failed",
-      });
-      expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(true);
-      home.machine.sessionsReadable = true;
-      home.machine.duringPrepare = Effect.void;
-      expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
-    }),
+  it.effect(
+    "SSH settings GOAT cannot read block one attempt and keep the consent for the next",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup();
+        home.machine.duringPrepare = Effect.sync(
+          () => void (home.machine.revisionReadable = false),
+        );
+        yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+        expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
+          state: "blocked",
+          reason: "link_failed",
+        });
+        home.machine.revisionReadable = true;
+        expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(true);
+        home.machine.duringPrepare = Effect.void;
+        expect((yield* home.bootstrap.ensure("lidge-ts"))?.state).toBe("child");
+      }),
   );
 
   it.effect(
@@ -633,6 +649,89 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
           "prepare lidge-ts 2.91.0",
           "join lidge-ts as person",
         ]);
+      }),
+  );
+
+  it.effect("a withdrawal or Forget during the last consent read before linking wins", () =>
+    Effect.gen(function* () {
+      // Authority is read when consent is given, before the setup, after preparing, and last by
+      // the join itself under the hub permit; the change lands inside that last read.
+      const opted = yield* setup();
+      opted.machine.duringSessionRead = {
+        at: 4,
+        run: opted.bootstrap.setSshOptIn("lidge-ts", false, PERSON).pipe(Effect.orDie),
+      };
+      yield* opted.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* opted.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(opted.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as nobody"]);
+
+      const forgotten = yield* setup();
+      forgotten.machine.duringSessionRead = {
+        at: 4,
+        run: Effect.sync(() => void forgotten.machine.generations.set("lidge-ts", 1)).pipe(
+          Effect.andThen(forgotten.ssh("lidge-ts", "forgotten")),
+          Effect.orDie,
+        ),
+      };
+      yield* forgotten.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* forgotten.bootstrap.ensure("lidge-ts")).toBeUndefined();
+      expect(forgotten.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as nobody"]);
+    }),
+  );
+
+  it.effect("turning a host off after a failed write succeeds only once it is on disk", () =>
+    Effect.gen(function* () {
+      const home = yield* setup({ hub: false });
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      const fs = yield* FileSystem.FileSystem;
+      const blocker = `${home.stateDir}/opencodex-child-ssh-consent.json.tmp`;
+      yield* fs.makeDirectory(blocker);
+      for (const _attempt of [1, 2]) {
+        const refused = yield* home.bootstrap
+          .setSshOptIn("lidge-ts", false, PERSON)
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "orchestration_error" });
+      }
+      yield* fs.remove(blocker, { recursive: true });
+      yield* home.bootstrap.setSshOptIn("lidge-ts", false, PERSON);
+      home.machine.hub = true;
+      const restarted = yield* build(home.baseDir, home.machine, home.calls);
+      expect(yield* restarted.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+    }),
+  );
+
+  it.effect("an expired session neither gives consent nor keeps it", () =>
+    Effect.gen(function* () {
+      const home = yield* setup();
+      home.machine.expired.add("person");
+      const refused = yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON).pipe(Effect.flip);
+      expect(refused._tag).toBe("EnvironmentAuthorizationError");
+      home.machine.expired.delete("person");
+      home.machine.duringPrepare = Effect.sync(() => void home.machine.expired.add("person"));
+      yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+      expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
+        state: "blocked",
+        reason: "consent_revoked",
+      });
+      expect(home.calls).toEqual(["prepare lidge-ts 2.91.0"]);
+    }),
+  );
+
+  it.effect(
+    "a signed-out session turns the switch off when the host is next read, and says why",
+    () =>
+      Effect.gen(function* () {
+        const home = yield* setup({ hub: false });
+        yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+        home.machine.hub = true;
+        expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(true);
+        home.machine.sessions.delete("person");
+        expect(yield* home.bootstrap.sshOptIn("lidge-ts")).toBe(false);
+        expect(yield* home.bootstrap.status("lidge-ts")).toMatchObject({
+          state: "blocked",
+          reason: "consent_revoked",
+        });
+        expect(home.calls).toEqual([]);
       }),
   );
 });
