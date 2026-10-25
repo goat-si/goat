@@ -11,6 +11,7 @@ import * as ServerSecretStore from "../../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
+import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccessTestkit from "../../McpToolAccess.testkit.ts";
 
@@ -107,6 +108,8 @@ it.effect.each(obstacles)(
           Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+          // goat_describe reaches other hosts through it; this test never passes host.
+          Layer.provide(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
           Layer.provide(ServerSecretStore.layer),
           Layer.provide(Sqlite.layerMemory),
           Layer.provideMerge(

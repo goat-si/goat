@@ -452,11 +452,20 @@ schemas from the tools this server actually serves, with `surfaceVersion` at the
 client-only, read-only client, not served, and for a GOAT thread the goatclaw capability its
 effective profile lacks, judged as the call gate judges it. A profile that does not resolve
 reports its reason on every write that needs a capability. What depends on the call's
-arguments or the moment, such as a host allowlist, lanes left, and `host`, is still judged
+arguments or the moment, such as a host allowlist and lanes left, is still judged
 only when the call is made; examples and related paths are not in it yet. `query` returns up to 20 paths whose path,
 summary, or description contains every word, best first, and `truncated` when more match;
 with a resource as `path` it searches only that resource. See
 [handlers](../../apps/server/src/mcp/toolkits/agentSurface/handlers.ts).
+
+**Now.** `goat_describe { host }` asks that machine's own `goat_describe` through the same
+authenticated host read as `thread.read`, behind the same host-reaching gate. The host answers for
+the session this caller gets there, which carries no thread or profile, so this machine then
+refuses each path it would not carry there for this caller: one it lacks or that takes no `host`
+here, and for a write the interaction-mode, link-access and profile host checks a routed write
+meets. `coverage.hostOlder` orders the two GOAT builds with `compareRuntimeBuilds`;
+`surfaceVersion` is a hash and has no order. A host that predates reporting its build answers
+`null`. See [hostDescribe](../../apps/server/src/mcp/toolkits/agentSurface/hostDescribe.ts).
 
 **Now.** `tools/list` is filtered per caller around Effect's MCP core, which checks one
 visibility predicate for both `tools/list` and `tools/call` and so cannot hide a tool that stays

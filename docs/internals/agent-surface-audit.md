@@ -15,7 +15,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools, by enforced handler access             | 128              |
 | Mutating tools that accept clientRequestId             | 48               |
 | Mutating tools whose clientRequestId GOAT deduplicates | 35               |
-| Input parameters with a description                    | 162 of 761 (21%) |
+| Input parameters with a description                    | 162 of 762 (21%) |
 | Tool descriptions with an example                      | 3 of 200         |
 | CLI commands, listed / unlisted                        | 60 / 19          |
 | CLI commands with usage examples                       | 0 of 79          |
@@ -233,7 +233,7 @@ The server's `/llms.txt` lists every registry path with its summary, but argumen
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (159 `return`, 41 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
 3. **Serve the full tool reference from the registry.** 93 tools appear in no doc or prompt. `/llms.txt` now lists every path for the calling credential; `goat_describe` should serve arguments and examples from the same registry, with no committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 599 of 761 parameters have no description, and 135 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
+4. **Describe every parameter.** 600 of 762 parameters have no description, and 135 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/core.test.ts `publishes unique tool names` to fail on an undescribed field.
 5. **Publish the real argument contract.** 180 schemas advertise `additionalProperties: true` while the server refuses extra keys. Emit `false` so schema-validating clients reject a bad call before sending it.
 6. **Retry keys on every mutating tool.** 80 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 7. **One naming grammar.** Pick one shape for all 200 tools, keep old names as hidden aliases for a release, and drop the partial `goat_` prefix that the MCP server name already supplies.
