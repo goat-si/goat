@@ -148,6 +148,20 @@ describe("tools after a passing check, on every platform", () => {
           tools: "unavailable",
         }).startsWithNextTurn,
       ).toBe(false);
+      // A screen the host already says it cannot use is not waiting for a turn either, though
+      // no start has failed yet: another user took the console after the check.
+      const noScreen = computerUseReadinessSteps({
+        readiness: ready,
+        platform,
+        tools: "unavailable",
+        display: {
+          capability: "unavailable",
+          reason: "Another user is using this computer's screen.",
+        },
+      });
+      expect(noScreen.startsWithNextTurn).toBe(false);
+      expect(noScreen.steps[3]?.state).toBe("blocked");
+      expect(noScreen.steps[3]?.detail.join(" ")).toContain("Another user is using");
     },
   );
 });
