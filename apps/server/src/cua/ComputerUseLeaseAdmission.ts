@@ -15,6 +15,12 @@ import { markActed } from "./ComputerUseControl.ts";
 import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { takesScreen } from "./ComputerUseScope.ts";
 
+/**
+ * How long a call of a control that can no longer act still holds its app: longer than any proxy
+ * takes to cut its driver off (an overlay acknowledgement of at most 250 ms, then the kill).
+ */
+export const ORPHAN_CALL_GRACE_MS = 10_000;
+
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
   readonly ended?: ComputerUseControlEnd;
@@ -74,6 +80,25 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   readonly bound: (threadId: ThreadId, controlId: string, id: TurnItemId) => boolean;
 }) => {
   const { admission, controls, reservations, changed, controlState } = deps;
+  /**
+   * When each control with a call outstanding stopped being able to act: it ended, went idle or
+   * its proxy's lease stream ended. Recorded when first seen, so no timer runs; pruned once the
+   * control has no call left. Its calls hold their apps for ORPHAN_CALL_GRACE_MS after that.
+   */
+  const stoppedAt = new Map<string, number>();
+  const mayRun = (now: number) => (holder: ThreadId, controlId: string) => {
+    const record = controls.get(holder);
+    if (
+      !stoppedAt.has(controlId) &&
+      record?.controlId === controlId &&
+      record.ended === undefined &&
+      record.idle !== true
+    )
+      return true;
+    const since = stoppedAt.get(controlId) ?? now;
+    stoppedAt.set(controlId, since);
+    return now - since < ORPHAN_CALL_GRACE_MS;
+  };
   // A pause is host-wide and lifts for every holder at once, so it keeps the holder's apps. A
   // lease whose call carried no app id (an older proxy) holds its process while the control does.
   const appLeases = makeAppLeases({
@@ -127,7 +152,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         // call of another control still running in the app holds it like a lease.
         const inTheWay = reservations.targetBusy(threadId, call)
           ? undefined
-          : (appBusy ?? reservations.appTicket(threadId, call));
+          : (appBusy ?? reservations.appTicket(threadId, call, mayRun(now)));
         const detail = callAdmissionRefusal({
           call,
           state,
@@ -149,12 +174,22 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
             ? { status: "admitted", reservationId: request.reservationId }
             : reservations.reserve(threadId, call);
         if (decision.status === "admitted") appLeases.hold(threadId, call.controlId, need, now);
+        const outstanding = reservations.ticketControls();
+        for (const controlId of stoppedAt.keys())
+          if (!outstanding.has(controlId)) stoppedAt.delete(controlId);
         return withCallPermissions(decision, state);
       }),
     );
   });
   /** The control's proxy went away without closing its driver; its app leases end at once. */
   const releaseApps = (threadId: ThreadId, controlId: string) =>
-    Effect.sync(() => appLeases.release(threadId, controlId));
+    DateTime.now.pipe(
+      Effect.map((now) => {
+        appLeases.release(threadId, controlId);
+        // Its calls may still be stopping with their driver; they hold their apps briefly.
+        const at = DateTime.toEpochMillis(now);
+        stoppedAt.set(controlId, Math.min(stoppedAt.get(controlId) ?? at, at));
+      }),
+    );
   return { reserve, releaseApps };
 };

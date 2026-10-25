@@ -130,7 +130,11 @@ export const makeCallReservations = () => {
      * same app id. It holds the app whatever its control's state, until it answers or its driver
      * is closed, so a Stop cannot hand the app over before the driver is cut off (D17).
      */
-    appTicket(threadId: ThreadId, call: Call) {
+    appTicket(
+      threadId: ThreadId,
+      call: Call,
+      mayRun: (holder: ThreadId, controlId: string) => boolean,
+    ) {
       const resource = callResource(call);
       if (typeof resource !== "object") return undefined;
       for (const ticket of tickets.values()) {
@@ -140,13 +144,20 @@ export const makeCallReservations = () => {
           call.app !== undefined &&
           ticket.call.app !== undefined &&
           call.app.toLowerCase() === ticket.call.app.toLowerCase();
-        if (ticket.resource.pid === resource.pid || sameApp)
+        if (
+          (ticket.resource.pid === resource.pid || sameApp) &&
+          mayRun(ticket.threadId, ticket.call.controlId)
+        )
           return {
             holderThreadId: ticket.threadId,
             app: ticket.call.app ?? call.app ?? `the app with pid ${resource.pid}`,
           };
       }
       return undefined;
+    },
+    /** The controls that still have a call outstanding. */
+    ticketControls(): ReadonlySet<string> {
+      return new Set([...tickets.values()].map((ticket) => ticket.call.controlId));
     },
     reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))

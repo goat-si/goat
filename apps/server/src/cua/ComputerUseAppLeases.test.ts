@@ -16,7 +16,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import { APP_LEASE_IDLE_MS, makeAppLeases } from "./ComputerUseAppLeases.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
-import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
+import { makeCallReservation, ORPHAN_CALL_GRACE_MS } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
@@ -380,6 +380,54 @@ describe("app leases between threads (D17)", () => {
       });
       assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
+  );
+  it.effect(
+    "a call left behind by a proxy that exited without closing frees its app after the grace",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const settings = yield* ServerSettings.ServerSettingsService;
+          const a = yield* fullAccess("orphan-a");
+          const b = yield* fullAccess("orphan-b");
+          const reading = yield* Deferred.make<void>();
+          const exit = yield* Deferred.make<void>();
+          const proxy = yield* leaseUpdates({
+            threadId: a.threadId,
+            controlId: a.control.controlId,
+          }).pipe(
+            Stream.take(1),
+            Stream.runForEach(() =>
+              Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(exit))),
+            ),
+            Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+            Effect.provideService(ServerSettings.ServerSettingsService, settings),
+            Effect.forkChild,
+          );
+          yield* Deferred.await(reading);
+          const running = yield* leases.callReservation(a.threadId, {
+            action: "reserve",
+            controlId: a.control.controlId,
+            connectionId: `proxy:${a.threadId}`,
+            callId: "drag",
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "drag",
+            args: { pid: 42, window_id: 7, from: [1, 1], to: [2, 2] },
+            app: TEXTEDIT,
+          });
+          assert.equal(running.status, "admitted");
+          // A signal kills A's proxy: its driver dies with it, but it never sends close.
+          yield* Deferred.succeed(exit, undefined);
+          yield* Fiber.join(proxy);
+          // The left-behind ticket still covers a driver that may be stopping...
+          assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+          // ...for no longer than any proxy takes to cut its driver off.
+          yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
+          assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
+        }),
+      ).pipe(Effect.provide(layer)),
   );
 });
 
