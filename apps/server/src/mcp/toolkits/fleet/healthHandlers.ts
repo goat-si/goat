@@ -69,9 +69,11 @@ export const layer = McpToolAccess.toLayer(FleetHealthToolkit, {
         input.host,
         "No new goal work is placed on " +
           input.host +
-          ". Draining does not move goal attempts yet; a failed or lost one moves when its goal" +
-          " recovers it. goat_thread_reschedule moves another thread by hand; a goal keeps" +
-          " following the original thread, not the moved one.",
+          ". Its goal attempts move to another host between runs, one per goal at a time; a" +
+          " running turn is never interrupted and threads no goal owns stay. An attempt that" +
+          " cannot move stays and its goal says why. goat_host_uncordon stops further moves." +
+          " goat_thread_reschedule moves another thread by hand; a goal keeps following the" +
+          " original thread, not the moved one.",
       );
     }),
   ),

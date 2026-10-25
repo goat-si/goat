@@ -652,6 +652,29 @@ describe("GoalWorkerRuntime", () => {
       },
     );
 
+    it.effect("gives a drain off this machine no authority to stop the attempt it leaves", () => {
+      const seen = fullOwner();
+      return Effect.gen(function* () {
+        const runtime = yield* GoalWorkerRuntime;
+        const may = yield* runtime.moveAuthority(
+          ownerAccess("full-access"),
+          far,
+          confirmed(seen),
+          null,
+        );
+        expect(yield* may.authorizeSource.pipe(Effect.flip)).toMatchObject({
+          _tag: "RescheduleNotAllowed",
+        });
+        // Its launch elsewhere is still bound by the goal's hosts and checked again before writing.
+        expect(may.allowedHosts).toEqual(["mac-studio"]);
+        seen.narrowed = true;
+        expect(yield* may.authorize.pipe(Effect.flip)).toMatchObject({
+          _tag: "RescheduleNotAllowed",
+        });
+        expect(writes(seen)).toEqual([]);
+      }).pipe(Effect.provide(layerFor(seen)));
+    });
+
     it.effect("finds a projectId-only goal's folder on a later page of its host's projects", () =>
       Effect.gen(function* () {
         const runtime = yield* GoalWorkerRuntime;

@@ -30,6 +30,12 @@ import {
   testScoped,
 } from "./Rescheduler.testkit.ts";
 
+const drainA = FleetHostStates.FleetHostStates.pipe(
+  Effect.flatMap((states) =>
+    states.cordon({ host: "A", draining: true, reason: null, changedBy: null }),
+  ),
+);
+
 describe("Rescheduler", () => {
   it.effect(
     "resumes work from a Lost host on another host exactly once, across a lost answer and a restart",
@@ -386,6 +392,7 @@ describe("Rescheduler", () => {
   testScoped("drains between runs and never interrupts a running turn", (world) =>
     Effect.gen(function* () {
       const rescheduler = yield* Rescheduler.Rescheduler;
+      yield* drainA;
       expect(yield* rescheduler.reschedule(request({ reason: "drain" }))).toMatchObject({
         reason: "host_still_answers",
       });
@@ -396,6 +403,66 @@ describe("Rescheduler", () => {
         host: "B",
       });
     }),
+  );
+
+  testScoped(
+    "moves nothing off a host that stopped draining, or that does not answer even once Lost",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        world.threads[0]!.phase = "completed";
+        // Never drained, or uncordoned since the goal saw the drain.
+        expect(yield* rescheduler.reschedule(request({ reason: "drain" }))).toMatchObject({
+          reason: "host_still_answers",
+          message: expect.stringMatching(/no longer draining/),
+        });
+        yield* drainA;
+        yield* loseA(world);
+        expect(yield* rescheduler.reschedule(request({ reason: "drain" }))).toMatchObject({
+          reason: "host_still_answers",
+          message: expect.stringMatching(/does not answer/),
+        });
+        expect(world.launches).toHaveLength(0);
+      }),
+  );
+
+  testScoped(
+    "calls off a drain whose source runs again or stops draining while the launch is prepared",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        const claims = yield* FleetHostStates.FleetRescheduleClaims;
+        const states = yield* FleetHostStates.FleetHostStates;
+        world.threads[0]!.phase = "completed";
+        yield* drainA;
+        const preparing = (prepareCeiling: (host: string) => Effect.Effect<void>) =>
+          request({
+            reason: "drain",
+            permissionProfileCeiling: BUILTIN_PERMISSION_PROFILES["worker"]!,
+            prepareCeiling,
+          });
+        expect(
+          yield* rescheduler.reschedule(
+            preparing(() =>
+              Effect.sync(() => {
+                world.threads[0]!.phase = "running";
+              }),
+            ),
+          ),
+        ).toMatchObject({
+          reason: "host_still_answers",
+          message: expect.stringMatching(/running/),
+        });
+        expect(yield* claims.get("goal:g1:s0:a2:launch")).toBeNull();
+        world.threads[0]!.phase = "completed";
+        expect(yield* rescheduler.reschedule(preparing(() => states.uncordon("A")))).toMatchObject({
+          reason: "host_still_answers",
+          message: expect.stringMatching(/no longer draining/),
+        });
+        expect(yield* claims.get("goal:g1:s0:a2:launch")).toBeNull();
+        expect(world.launches).toHaveLength(0);
+        expect(world.calls.filter((call) => call.tool === "goat_thread_interrupt")).toHaveLength(0);
+      }),
   );
 
   testScoped("reads an older host's thread through goat_thread_read", (world) =>

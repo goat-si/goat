@@ -87,7 +87,7 @@ export const makeGoalMoves = (deps: {
   const moved = Effect.fn("GoalMoves.moved")(function* (
     worker: WorkerRecord,
     actionId: string,
-    to: { readonly host: string; readonly threadId: string; readonly branch: string },
+    to: { readonly host: string | null; readonly threadId: string; readonly branch: string },
     why: string,
     modelSelection?: ModelSelection,
   ) {
@@ -108,7 +108,13 @@ export const makeGoalMoves = (deps: {
     deps.note(
       "Normal",
       "Rescheduled",
-      "Slot " + worker.slot + " moved to attempt " + (worker.attempt + 1) + " on " + to.host + ".",
+      "Slot " +
+        worker.slot +
+        " moved to attempt " +
+        (worker.attempt + 1) +
+        " on " +
+        (to.host ?? "this machine") +
+        ".",
       worker,
       actionId,
     );
@@ -138,10 +144,10 @@ export const makeGoalMoves = (deps: {
 
   /** What the Rescheduler made of one move of worker off its host, under the owner's authority now. */
   const send = Effect.fn("GoalMoves.send")(function* (
-    worker: WorkerRecord & { readonly host: string; readonly threadId: ThreadId },
+    worker: WorkerRecord & { readonly host: string | null; readonly threadId: ThreadId },
     actionId: string,
     current: OwnerAccess,
-    reason: Exclude<RescheduleReason, "drain" | "manual">,
+    reason: Exclude<RescheduleReason, "manual">,
     selection: ModelSelection,
     stopRunId: RunId | null,
   ) {
@@ -222,17 +228,29 @@ export const makeGoalMoves = (deps: {
     deps.note("Normal", "MoveStopping", "Slot " + worker.slot + ": " + message, worker, actionId);
   };
 
-  /** Moves a stopped or lost worker; `handled` is the worker once this run counts as recovered. */
+  /**
+   * The source still runs, or no longer drains: the drain move is called off before it sent
+   * anything, and asked for again only while the host drains and the attempt is idle.
+   */
+  const deferred = (worker: WorkerRecord, actionId: string, message: string) => {
+    deps.setWorker({ ...worker, note: message });
+    deps.note("Normal", "MoveDeferred", "Slot " + worker.slot + ": " + message, worker, actionId);
+  };
+
+  /**
+   * Moves a stopped or lost worker; `handled` is the worker once this run counts as recovered.
+   * Only a drain moves a worker off this machine; ordinary recovery restarts it here.
+   */
   const move = Effect.fn("GoalMoves.move")(function* (input: {
     readonly worker: WorkerRecord;
     readonly handled: WorkerRecord;
-    readonly reason: Exclude<RescheduleReason, "drain" | "manual">;
+    readonly reason: Exclude<RescheduleReason, "manual">;
     readonly runId: RunId | null;
     readonly selection: ModelSelection;
   }) {
     const { worker } = input;
     const { host, threadId } = worker;
-    if (threadId === null || host === null) return;
+    if (threadId === null || (host === null && input.reason !== "drain")) return;
     const actionId = rescheduleActionId(
       goal,
       worker.slot,
@@ -264,6 +282,10 @@ export const makeGoalMoves = (deps: {
         return unconfirmed(worker, actionId, result.message);
       case "Refused":
         if (result.stopping === true) return stopped(worker, actionId, result.message);
+        if (input.reason === "drain" && result.reason === "host_still_answers") {
+          yield* store.settle(actionId, NOT_SENT, nowIso);
+          return deferred(worker, actionId, result.message);
+        }
         // Nothing was sent, or nothing launched: transient refusals may be asked again later.
         yield* store.settle(actionId, TRANSIENT.has(result.reason) ? NOT_SENT : "refused", nowIso);
         return refusal(

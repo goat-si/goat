@@ -381,8 +381,8 @@ field, and `goat_host_cordon`, `goat_host_uncordon`, `goat_host_drain` and `goat
 live in `apps/server/src/mcp/toolkits/fleet/`. Cordons persist in `fleet_host_states`. A failed,
 stalled or lost goal attempt on another host moves to another SSH host through `Rescheduler`
 (#1451); one on this machine restarts here from its replica (below, and
-`fleet/goals/GoalRecovery.ts`). Drain only cordons and marks the host Draining; moving idle goal
-attempts off a draining host is #1130. `goat_thread_reschedule` takes the
+`fleet/goals/GoalRecovery.ts`). A draining host's idle goal attempts move through the same path,
+off this machine too (#1130). `goat_thread_reschedule` takes the
 branch and folder from its caller. Channel tasks still heal through `ChannelRemoteWorkers.ts`; goal
 recovery reuses the replica helpers in `channels/channelReplica.ts` where they are.
 
@@ -443,7 +443,7 @@ traffic.
 | `Unreachable`     | ≥ 3 consecutive failed contacts (`OUTAGE_NOTICE_FAILURES`) across watches or host status | placement refused; attempts there are suspect                                      |
 | `Lost`            | `Unreachable` for ≥ `hostLostAfterMs` (default 300 s, same as `LAUNCH_GRACE_MS`)         | attempts there may be rescheduled                                                  |
 | `Cordoned`        | a person or agent ran `goat_host_cordon`                                                 | placement refused; running work untouched                                          |
-| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | placement refused; goal attempts stay until drain evacuation lands (#1130)         |
+| `Draining`        | `goat_host_drain` ran; implies Cordoned                                                  | placement refused; idle goal attempts move off, one per goal at a time             |
 | `VersionMismatch` | `markVersionMismatch` flagged it                                                         | warning only, as today                                                             |
 | `QuotaExhausted`  | per provider instance: a quota window at 100 % before `resetsAt` (`isExhausted` rule)    | that instance is filtered out on that host                                         |
 
@@ -453,13 +453,22 @@ and Nomad's `disconnect.lost_after`, which keeps an allocation `unknown` before 
 ([disconnect](https://developer.hashicorp.com/nomad/docs/job-specification/disconnect)).
 
 Cordon and drain state persists in `fleet_host_states` (host alias, cordoned, draining, reason, by,
-at). Cordon only stops new placement, like `kubectl cordon`. Drain is meant to also move goal
-attempts, but only between runs, one slot per goal at a time (a fixed `maxUnavailable: 1` in
-PodDisruptionBudget terms, [disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)),
-never interrupting a running turn or touching threads that no goal owns. The goal controller does not
-request those moves yet (#1130); goal workers on other hosts and their moves (#1451) are what it
-builds on. A drained host keeps its goal attempts. `goat_thread_reschedule` moves a thread by hand, but a goal keeps
-following the original thread. `goat_host_uncordon` clears both.
+at). Cordon only stops new placement, like `kubectl cordon`. Drain also moves goal attempts, but
+only between runs, one move per goal at a time (a fixed `maxUnavailable: 1` in PodDisruptionBudget
+terms, [disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)), never
+interrupting a running turn or touching threads that no goal owns. The goal controller asks for a
+`drain` reschedule, on #1451's move path, where it would otherwise give a finished attempt its next
+turn; an attempt that only waits for its pull request to merge stays, since nothing more runs there.
+Three things keep it safe across passes and restarts: the goal store admits a move only while no
+other move of the goal is unsettled, since an unsettled one may have started its successor; the
+Rescheduler checks that the source still drains and its attempt is stopped on the planned run right
+before every remote write, ahead of the owner's last authority check, so an uncordon or a new run
+calls the move off; and a move that may have started is only looked up, never sent again. An attempt
+on this machine moves too, from its pushed branch or the goal's base, never a replica. An attempt
+that cannot move (its last attempt, or a destination that refused it for good) waits for a person
+instead of starting new turns on the draining host. `goat_thread_reschedule` moves a thread by hand,
+but a goal keeps following the original thread. `goat_host_uncordon` clears both and stops further
+drain moves.
 
 ### Thread health
 
@@ -519,7 +528,8 @@ Delays between attempts use the same 30 s → 15 min exponential curve. Errors t
 
 Moving work off a host that still answers is allowed only once the old attempt is stopped: idle or
 finished, with nothing queued or pending. An active source on another host is asked to interrupt and
-moves on a later reschedule; `drain` never interrupts and waits for the run to end; an active source
+moves on a later reschedule; `drain` never interrupts, waits for the run to end and moves only
+from a host that still answers; an active source
 on this machine is refused until someone stops it. `host_unreachable` requires the host to be
 `Lost` and is refused with `host_still_answers` once it answers again. `manual` follows the rule
 for the observed state, and `force` skips only the `Lost` wait.
@@ -895,7 +905,7 @@ input, calls one service method, and maps errors.
 | `goat_goal_pause` / `goat_goal_resume`                | write        | T1    | pause stops actions, never threads                                                 |
 | `goat_goal_delete`                                    | destructive  | T1    | finalizer path above; work is kept                                                 |
 | `goat_host_cordon` / `goat_host_uncordon`             | write        | T2    | persisted per host                                                                 |
-| `goat_host_drain`                                     | write        | T2    | cordon plus Draining; goal attempts stay until drain evacuation lands (#1130)      |
+| `goat_host_drain`                                     | write        | T2    | cordon plus Draining; idle goal attempts move off, one per goal at a time          |
 | `goat_thread_reschedule`                              | write        | T2    | moves a thread once its source stops; the goal keeps following the original thread |
 | `goat_scheduler_status`                               | read         | T3    | per host: conditions, limits, counts, quota windows, last refusals                 |
 | `goat_fallback_chain_get` / `goat_fallback_chain_set` | read / write | T3    | settings-backed; set validates instances and models                                |

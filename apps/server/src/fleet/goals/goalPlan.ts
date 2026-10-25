@@ -20,6 +20,7 @@ import type {
 import * as DateTime from "effect/DateTime";
 
 import type { ThreadHealth } from "../health/Health.ts";
+import { nextHealingStep } from "../health/reschedulePolicy.ts";
 import { publicWorker, type WorkerRecord } from "./GoalStore.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import {
@@ -117,6 +118,10 @@ export interface GoalObservation {
   readonly turns: number;
   /** When the goal's first action was claimed; the wall-clock budget runs from here. */
   readonly firstClaimAt: number | null;
+  /** Hosts of the goal's workers that are Draining; null is this machine. */
+  readonly drainingHosts: ReadonlySet<string | null>;
+  /** Moves their destination refused for good, by action id; one is never asked for again. */
+  readonly refusedReschedules: ReadonlySet<string>;
 }
 
 export type GoalAction =
@@ -179,6 +184,14 @@ export type GoalAction =
        */
       readonly proceed: boolean;
     }
+  | {
+      /** Moves an attempt between runs off its draining host; never interrupts a run. */
+      readonly type: "drain";
+      readonly slot: number;
+      readonly attempt: number;
+      readonly runId: RunId;
+      readonly actionId: string;
+    }
   | { readonly type: "delete_row" };
 
 export interface GoalPlan {
@@ -240,6 +253,64 @@ export function planGoal(
   const prTargets = spec.targets.flatMap((target) =>
     target.type === "pull_request" ? [target.number] : [],
   );
+  let drainPlanned = false;
+  /**
+   * An attempt between runs on a draining host moves to another host before its next turn, one
+   * move per goal at a time. Nothing new starts on a draining host, so an attempt that cannot move
+   * waits for a person instead of being followed up there. Null when its host is not draining or
+   * it is not idle.
+   */
+  const drainStep = (
+    worker: WorkerRecord,
+    seen: Extract<SlotObservation, { readonly kind: "seen" }>,
+  ): WorkerRecord | null => {
+    if (!observation.drainingHosts.has(worker.host) || seen.runId === null) return null;
+    const step = nextHealingStep(seen.health, {
+      repeated: false,
+      fallbackExhausted: false,
+      hostDraining: true,
+    });
+    if (step._tag !== "reschedule" || step.reason !== "drain") return null;
+    const where = worker.host ?? "this machine";
+    const actionId = rescheduleActionId(goal, worker.slot, worker.attempt, seen.runId);
+    if (worker.attempt >= spec.limits.maxAttemptsPerWorker)
+      return {
+        ...worker,
+        state: "needs_human",
+        note:
+          where +
+          " is draining and this attempt cannot move: it is the last of " +
+          spec.limits.maxAttemptsPerWorker +
+          ". Uncordon the host or raise the attempt limit.",
+      };
+    if (observation.refusedReschedules.has(actionId))
+      return {
+        ...worker,
+        state: "needs_human",
+        note:
+          where +
+          " is draining and this attempt cannot move: its move was refused. Uncordon the host to let it continue there.",
+      };
+    if (drainPlanned || observation.pendingMoves.size > 0)
+      return {
+        ...worker,
+        state: "running",
+        note: where + " is draining; this attempt moves once the goal's other move settles.",
+      };
+    drainPlanned = true;
+    actions.push({
+      type: "drain",
+      slot: worker.slot,
+      attempt: worker.attempt,
+      runId: seen.runId,
+      actionId,
+    });
+    return {
+      ...worker,
+      state: "running",
+      note: where + " is draining; this attempt moves to another host between runs.",
+    };
+  };
 
   const judge = (start: WorkerRecord): WorkerRecord => {
     let worker = start;
@@ -422,31 +493,25 @@ export function planGoal(
         settledPr ||
         worker.pullRequest?.checks === "passing");
     if (done) return { ...worker, state: "succeeded" };
+    /** The attempt's next turn; on a draining host it moves to another host instead (#1130). */
+    const nextTurn = (message: string): WorkerRecord =>
+      (fresh ? drainStep(worker, seen) : null) ?? { ...followUp(message), state: "running" };
     // Built from numbers and fixed text only: check names and errors come from outside, and
     // the worker reads them itself, so they never become part of an instruction.
     if (worker.pullRequest?.state === "open" && worker.pullRequest.checks === "failing")
-      return {
-        ...followUp(
-          "CI failed on PR #" +
-            worker.pullRequest.number +
-            ". Read the failing checks on the pull request, fix them, push, and report again.",
-        ),
-        state: "running",
-      };
+      return nextTurn(
+        "CI failed on PR #" +
+          worker.pullRequest.number +
+          ". Read the failing checks on the pull request, fix them, push, and report again.",
+      );
     if (kinds.has("pull_requests_merged") && prTargets.length === 0 && prNumber === null)
-      return {
-        ...followUp(
-          `Open a pull request for your work, then report it with ${goatCallText("thread.report_result")}.`,
-        ),
-        state: "running",
-      };
+      return nextTurn(
+        `Open a pull request for your work, then report it with ${goatCallText("thread.report_result")}.`,
+      );
     if (kinds.has("thread_reported_result") && !reported)
-      return {
-        ...followUp(
-          `Report your result with ${goatCallText("thread.report_result")}: outcome, summary, and any pull request.`,
-        ),
-        state: "running",
-      };
+      return nextTurn(
+        `Report your result with ${goatCallText("thread.report_result")}: outcome, summary, and any pull request.`,
+      );
     return { ...worker, state: "running", note: "Waiting for the pull request to merge." };
   };
 

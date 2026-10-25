@@ -52,7 +52,7 @@ export const hostEntries = {
     toolkit: "fleetHealth",
     summary: "Allow placements on a cordoned host again",
     description:
-      "Clear a host's cordon and drain flags so goal placements can use it again. Previously moved work stays where it is.",
+      "Clear a host's cordon and drain flags so goal placements can use it again. Previously moved work stays where it is, and drain moves not yet started are called off.",
     guide:
       "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled.",
     effect: "write",
@@ -75,9 +75,9 @@ export const hostEntries = {
     toolkit: "fleetHealth",
     summary: "Cordon a host and mark it Draining",
     description:
-      "Persistently cordon a host and mark it Draining, excluding it from new placements. Draining does not move goal attempts yet. Use goat_host_uncordon to clear both flags.",
+      "Persistently cordon a host and mark it Draining, excluding it from new placements. Fleet goal attempts on it move to another host between runs, one per goal at a time; running turns and threads no goal owns stay. Use goat_host_uncordon to clear both flags and stop further moves.",
     guide:
-      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. goat_thread_reschedule moves another thread by hand; a goal keeps following the original thread, not the moved one.",
+      "Needs a live full-access/default calling thread or a full-access client, plus hub.manage for a GOAT thread when goatclaw is enabled. Moves run on later goal passes under each goal owner's authority; an attempt with no other allowed host, or on its last attempt, stays and its goal reports why. goat_thread_reschedule moves another thread by hand; a goal keeps following the original thread, not the moved one.",
     effect: "write",
     capability: "hub.manage",
     hostRoutable: false,
@@ -85,7 +85,7 @@ export const hostEntries = {
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason:
-      "The handler only calls FleetHostStates.cordon with draining:true, upserting one host row. Repeating sets the same flags and does not launch evacuation work.",
+      "The handler only calls FleetHostStates.cordon with draining:true, upserting one host row. Repeating sets the same flags; goal passes move idle attempts on their own schedule, so a repeat starts no extra moves.",
     annotations: {
       idempotentHint: false,
       openWorldHint: true,

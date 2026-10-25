@@ -92,7 +92,9 @@ export type ClaimRefusal =
   | "deleting"
   | "budget"
   | "already_claimed"
-  | "gone";
+  | "gone"
+  /** Another slot's move has not settled, and the goal makes one move at a time. */
+  | "move_in_flight";
 
 export interface LaunchClaim {
   readonly actionId: string;
@@ -617,6 +619,17 @@ const make = Effect.gen(function* () {
             if (request.kind !== "interrupt") {
               if (row.deletion_requested_at !== null) return "deleting" as const;
               if (row.paused === 1) return "paused" as const;
+              // One move at a time per goal: an unsettled move may have started its successor, so
+              // no other move, a replay of an earlier receipt included, starts until it settles.
+              if (request.actionId.endsWith(":reschedule")) {
+                const [moving] = yield* sql<{ readonly action_id: string }>`
+                  SELECT action_id FROM fleet_goal_actions
+                  WHERE goal_id = ${request.goalId} AND settled_at IS NULL
+                    AND action_id LIKE '%:reschedule' AND action_id <> ${request.actionId}
+                  LIMIT 1
+                `;
+                if (moving !== undefined) return "move_in_flight" as const;
+              }
               // An action already taken spends nothing more, so asking about it again is never
               // refused by the budget; only one never sent may be taken again, as new work.
               const [taken] = yield* sql<{ readonly outcome: string | null }>`
