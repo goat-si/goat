@@ -373,6 +373,14 @@ it("says when a card's Stop left the thread's apps held, and points to Stop all"
       expect.objectContaining({ title: "The agent stopped, but its apps are still reserved" }),
     ),
   );
+  // The header hides Stop all once no agent is active, so the toast carries it (#1521 review).
+  const offered = toast.mock.calls.at(-1)?.[0] as
+    | { readonly actionProps?: { readonly children?: unknown; readonly onClick?: () => void } }
+    | undefined;
+  expect(offered?.actionProps?.children).toBe("Stop all");
+  state.control.mockClear();
+  await act(() => offered?.actionProps?.onClick?.());
+  expect(state.control).toHaveBeenCalledWith({ environmentId, input: { control: "stopAll" } });
 });
 
 it("keeps the header's Stop all while the only agent tab plays in the thread's mini player", async () => {

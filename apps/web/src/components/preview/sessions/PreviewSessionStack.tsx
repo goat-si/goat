@@ -75,6 +75,7 @@ export function PreviewSessionStack(props: {
   );
   const sessions = useAgentScreenSessions(props.environmentId, props.threadRef);
   const control = useAtomCommand(previewSessionsEnvironment.control);
+  const stopAll = useStopAllAgents(props.environmentId);
   const shown = usePreviewSessionStack(selectAgentCardsShown);
   const dismiss = usePreviewSessionStack((state) => state.dismiss);
   const expand = usePreviewSessionStack((state) => state.expand);
@@ -117,13 +118,21 @@ export function PreviewSessionStack(props: {
     if (environmentId === null) return;
     const result = await control({ environmentId, input });
     // A failed call is reported by the command itself. A desktop Stop that could not end the
-    // thread's approval leaves its apps held from other threads (#1519); Stop all ends it.
+    // thread's approval leaves its apps held from other threads (#1519); Stop all ends it. The
+    // toast offers it, since the header drops Stop all once no agent is active.
     if (input.control !== "stop" || result._tag !== "Success" || result.value.applied) return;
     if (result.value.reason !== "not_allowed") return;
-    toastManager.add({
+    const id = toastManager.add({
       type: "error",
       title: "The agent stopped, but its apps are still reserved",
-      description: "Its computer use approval could not be ended. Use Stop all to release them.",
+      description: "Its computer use approval could not be ended. Stop all releases them.",
+      actionProps: {
+        children: "Stop all",
+        onClick: () => {
+          toastManager.close(id);
+          void stopAll();
+        },
+      },
     });
   };
   return (
