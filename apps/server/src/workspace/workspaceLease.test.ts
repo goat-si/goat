@@ -1,7 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
 import {
@@ -149,4 +151,59 @@ it.effect(
         assert.deepEqual(nested, Option.some(Option.none()));
       }),
     ),
+);
+
+it.effect("a folder held whole is held through every alias of it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const base = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "lease-alias-" }),
+      );
+      const real = base + "/real";
+      yield* fs.makeDirectory(real + "/pkg", { recursive: true });
+      yield* fs.symlink(real, base + "/alias");
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* tryWithWorkspaceSubtree(
+        real,
+        Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      assert.isTrue(Option.isNone(yield* tryWithWorkspaceLease(base + "/alias/pkg", Effect.void)));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      // And a lease taken through the alias keeps the real folder from being held whole.
+      const leased = yield* Deferred.make<void>();
+      const done = yield* Deferred.make<void>();
+      const worker = yield* withWorkspaceLease(
+        base + "/alias/pkg",
+        Deferred.succeed(leased, undefined).pipe(Effect.andThen(Deferred.await(done))),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(leased);
+      assert.isTrue(Option.isNone(yield* tryWithWorkspaceSubtree(real, Effect.void)));
+      yield* Deferred.succeed(done, undefined);
+      yield* Fiber.join(worker);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("interrupting a removal that holds a folder whole releases it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const root = "/lease-test/interrupted-hold";
+      const held = yield* Deferred.make<void>();
+      const holder = yield* tryWithWorkspaceSubtree(
+        root,
+        Deferred.succeed(held, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      yield* Fiber.interrupt(holder);
+      assert.deepEqual(
+        yield* tryWithWorkspaceLease(root + "/pkg", Effect.succeed("started")),
+        Option.some("started"),
+      );
+      assert.deepEqual(yield* tryWithWorkspaceSubtree(root, Effect.succeed(1)), Option.some(1));
+    }),
+  ),
 );
