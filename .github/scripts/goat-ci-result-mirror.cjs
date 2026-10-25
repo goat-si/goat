@@ -2,111 +2,125 @@
 
 // goat-ci-result for an ignored goat-ci event: a title or body edit, or a label other than ci:*.
 // GitHub reads a required check from the newest goat-ci check suite on the head commit, and an
-// ignored event creates one too (#1672). That run waits in the pull request's concurrency group
-// until the real run ends, then this script republishes the newest finished goat-ci-result of a real
-// pull_request run on the same head: success passes, any other conclusion fails, and a head without
-// one fails. A real run's suite has a goat-scope check, which leaves out other ignored runs; manual
-// runs are a different event. Both endpoints are public for a public repository, so the job needs
-// no permission beyond the workflow's.
+// ignored event creates one too (#1672). That run's republish job runs this script, which waits for
+// the governing run, the newest real goat-ci run of the same pull request on the same head (by
+// creation, so a newer run decides even when it was cancelled), and repeats its goat-ci-result:
+// success passes, anything else fails, and a head without a real run fails. It reads the job of
+// that run, so no check another job creates under the same name can stand in for it. Both
+// endpoints are public for a public repository, so the job needs no extra permission.
 
-const RESULT = "goat-ci-result";
-const SCOPE = "goat-scope";
 const WORKFLOW = "goat-ci.yml";
-// GitHub Actions, the app the dev ruleset requires goat-ci-result from.
-const ACTIONS_APP_ID = 15368;
+const RESULT = "goat-ci-result";
+const POLL_MS = 30_000;
+// Covers the moment between an opened or synchronize event and its run appearing in the API.
+const NO_RUN_GRACE_MS = 3 * 60_000;
 
-/** The newest finished goat-ci-result check run of a real pull_request goat-ci run, or null. */
-function newestRealResult({ runs, checkRuns }) {
-  const pullRequestSuites = new Set(
-    runs.filter((run) => run.event === "pull_request").map((run) => run.check_suite_id),
+/** The end of the run-name goat-ci.yml gives a real pull_request run of this pull request. */
+const realRunSuffix = (number) => " (#" + number + ")";
+
+/** The newest real goat-ci run of pull request number on sha, other than this run, or null. */
+function governingRun(runs, { number, sha, ownRunId }) {
+  const real = runs.filter(
+    (run) =>
+      run.event === "pull_request" &&
+      run.head_sha === sha &&
+      String(run.id) !== String(ownRunId) &&
+      run.display_title.endsWith(realRunSuffix(number)),
   );
-  const actions = checkRuns.filter((check) => check.app?.id === ACTIONS_APP_ID);
-  const realSuites = new Set(
-    actions
-      .filter((check) => check.name === SCOPE)
-      .map((check) => check.check_suite?.id)
-      .filter((suite) => pullRequestSuites.has(suite)),
-  );
-  const results = actions.filter(
-    (check) =>
-      check.name === RESULT &&
-      check.status === "completed" &&
-      realSuites.has(check.check_suite?.id),
-  );
-  results.sort((a, b) => Date.parse(b.completed_at) - Date.parse(a.completed_at) || b.id - a.id);
-  return results[0] ?? null;
+  real.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id - a.id);
+  return real[0] ?? null;
 }
 
-/** Only a real success passes; the message says where the verdict came from. */
-function verdict(result, sha) {
-  if (result === null) {
-    return {
-      code: 1,
-      message:
-        "no goat-ci run on " +
-        sha +
-        " has a finished goat-ci-result. Push, or re-run the newest goat-ci run of this pull request.",
-    };
+/** Only a finished, successful goat-ci-result job of the governing run passes. */
+function verdict(run, jobs) {
+  const results = jobs.filter((job) => job.name === RESULT);
+  const result = results.length === 1 ? results[0] : null;
+  if (result?.status === "completed" && result.conclusion === "success") {
+    return { code: 0, message: "goat-ci-result is success in " + result.html_url };
   }
-  const source = result.conclusion + " from " + result.html_url;
-  return result.conclusion === "success"
-    ? { code: 0, message: "goat-ci-result is " + source }
-    : {
-        code: 1,
-        message:
-          "goat-ci-result is " +
-          source +
-          ". A title or body edit, or a label other than ci:*, runs no CI; push a fix or re-run that run.",
-      };
+  const found = result
+    ? result.conclusion + " in " + result.html_url
+    : "missing in " + run.html_url;
+  return {
+    code: 1,
+    message:
+      "goat-ci-result is " +
+      found +
+      ". A title or body edit, or a label other than ci:*, runs no CI: push a fix, or re-run that run and then this one.",
+  };
 }
 
-async function pages(url, key, token, fetchImpl) {
+async function get(url, token, fetchImpl, wait) {
+  for (let attempt = 1; ; attempt += 1) {
+    const response = await fetchImpl(url, {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: "Bearer " + token,
+        "x-github-api-version": "2022-11-28",
+      },
+    }).catch(() => ({ ok: false, status: 0 }));
+    if (response.ok) return response.json();
+    const transient = response.status === 0 || response.status >= 500;
+    if (!transient || attempt >= 3) throw new Error("GET " + url + " returned " + response.status);
+    await wait(1000 * attempt);
+  }
+}
+
+/** Every item of a listing; an incomplete one throws, so a missing page never decides the result. */
+async function list(url, key, token, fetchImpl, wait) {
   const all = [];
+  let total = 0;
   for (let page = 1; page <= 10; page += 1) {
-    let response;
-    for (let attempt = 1; ; attempt += 1) {
-      response = await fetchImpl(url + "&per_page=100&page=" + page, {
-        headers: {
-          accept: "application/vnd.github+json",
-          authorization: "Bearer " + token,
-          "x-github-api-version": "2022-11-28",
-        },
-      }).catch(() => ({ ok: false, status: 0 }));
-      const transient = response.status === 0 || response.status >= 500;
-      if (response.ok || !transient || attempt >= 3) break;
-      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-    }
-    if (!response.ok) throw new Error("GET " + url + " returned " + response.status);
-    const items = (await response.json())[key];
-    all.push(...items);
-    if (items.length < 100) break;
+    const body = await get(url + "&per_page=100&page=" + page, token, fetchImpl, wait);
+    total = body.total_count;
+    all.push(...body[key]);
+    if (all.length >= total || body[key].length === 0) break;
   }
+  if (all.length < total) throw new Error(url + " listed " + all.length + " of " + total);
   return all;
 }
 
-async function main(env = process.env, fetchImpl = fetch) {
+async function main(env = process.env, io = {}) {
+  const fetchImpl = io.fetch ?? fetch;
+  const wait = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const now = io.now ?? Date.now;
+  const log = io.log ?? console.log;
   const sha = env.HEAD_SHA;
+  const number = Number(env.PR_NUMBER);
   const repo = (env.GITHUB_API_URL || "https://api.github.com") + "/repos/" + env.GITHUB_REPOSITORY;
-  const [runs, checkRuns] = await Promise.all([
-    pages(
-      repo + "/actions/workflows/" + WORKFLOW + "/runs?event=pull_request&head_sha=" + sha,
-      "workflow_runs",
-      env.GITHUB_TOKEN,
-      fetchImpl,
-    ),
-    pages(
-      repo + "/commits/" + sha + "/check-runs?filter=all&app_id=" + ACTIONS_APP_ID,
-      "check_runs",
-      env.GITHUB_TOKEN,
-      fetchImpl,
-    ),
-  ]);
-  const { code, message } = verdict(newestRealResult({ runs, checkRuns }), sha);
-  console.log((code === 0 ? "::notice" : "::error") + " title=goat-ci-result::" + message);
-  return code;
+  const runsUrl =
+    repo + "/actions/workflows/" + WORKFLOW + "/runs?event=pull_request&head_sha=" + sha;
+  const started = now();
+  let waitingFor = null;
+  for (;;) {
+    const runs = await list(runsUrl, "workflow_runs", env.GITHUB_TOKEN, fetchImpl, wait);
+    const run = governingRun(runs, { number, sha, ownRunId: env.GITHUB_RUN_ID });
+    if (run?.status === "completed") {
+      const jobsUrl = repo + "/actions/runs/" + run.id + "/jobs?filter=latest";
+      const jobs = await list(jobsUrl, "jobs", env.GITHUB_TOKEN, fetchImpl, wait);
+      const { code, message } = verdict(run, jobs);
+      log((code === 0 ? "::notice" : "::error") + " title=goat-ci-result::" + message);
+      return code;
+    }
+    if (run === null && now() - started >= NO_RUN_GRACE_MS) {
+      log(
+        "::error title=goat-ci-result::no goat-ci run of #" +
+          number +
+          " tested " +
+          sha +
+          ". Push, or re-run its goat-ci run.",
+      );
+      return 1;
+    }
+    if (run !== null && run.id !== waitingFor) {
+      waitingFor = run.id;
+      log("waiting for " + run.html_url);
+    }
+    await wait(POLL_MS);
+  }
 }
 
-module.exports = { newestRealResult, verdict, main };
+module.exports = { realRunSuffix, governingRun, verdict, main };
 
 if (require.main === module) {
   main().then(

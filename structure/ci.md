@@ -66,17 +66,19 @@ job summary lists each chosen server test file and the change that reached it.
 
 Labels widen a run as soon as they are added: `ci:full` runs everything, `ci:affected` what the
 changes reach, `ci:server` adds the full server suite, and `ci:memory` the memory growth suite.
-Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and
-supersedes the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub
-still creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite
-on the head commit (#1672). That run waits in the pull request's concurrency group without
-cancelling the real run, then its `goat-ci-result` republishes the newest real result on the same
-head: success passes, anything else fails. Its skipped tasks keep their raw name expressions, so no
-skipped check carries a real name. A re-run keeps its run's original suite, so after re-running a
-run that such an edit or label followed, re-run that later run too; it republishes the new result.
-`goat-ci-result` is the one check to read: it fails when goat-scope or any
-selected task failed or was cancelled, and its notice says whether the run was quick and names the
-label and the command that start the full run.
+Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and supersedes
+the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub still
+creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite on the
+head commit (#1672). So its `republish` job reports `goat-ci-result`: on a hosted runner, it waits
+for the newest real goat-ci run of the same pull request on the same head and repeats that run's
+`goat-ci-result`. Success passes and anything else fails, so a newer real run decides even when it
+was cancelled. Ignored runs take a concurrency group of their own per pull request, because a group
+holds one pending run and an ignored newcomer would cancel a real run waiting there. Skipped jobs
+keep their raw name expressions, so no skipped check carries a real name. A re-run keeps its run's
+original suite, so after re-running a run that such an edit or label followed, re-run that later run
+too; it republishes the new result. `goat-ci-result` is the one check to read: it fails when
+goat-scope or any selected task failed or was cancelled, and its notice says whether the run was
+quick and names the label and the command that start the full run.
 
 A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
 (the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
