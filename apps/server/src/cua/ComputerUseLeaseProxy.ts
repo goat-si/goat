@@ -130,7 +130,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
   const handshakeAnswers = makeLeaseProxyHandshake({
-    startDriver: options.startDriver,
+    startDriver: options.startHandshakeDriver ?? options.startDriver,
     handshake,
     ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
     output: options.output,
@@ -393,6 +393,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           );
         }
         yield* readLines(current).pipe(Effect.forkIn(scope));
+        yield* handshakeAnswers
+          .recheck(current.driver.send, (id) =>
+            Deferred.make<Envelope | undefined>().pipe(
+              Effect.tap((answered) => Effect.sync(() => ownAnswers.set(id, answered))),
+            ),
+          )
+          .pipe(Effect.forkIn(current.scope));
       },
     ),
   });

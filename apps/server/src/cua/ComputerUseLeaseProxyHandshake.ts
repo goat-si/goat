@@ -36,6 +36,8 @@ export const makeLeaseProxyHandshake = <E>(options: {
   readonly output: (line: string) => Effect.Effect<void>;
 }) => {
   const answers = new Map<string, unknown>();
+  /** The provider holds a tool list this module gave it, which the next child must confirm. */
+  let served = false;
   const reply = (id: JsonRpcId, result: unknown) =>
     options.output(JSON.stringify({ jsonrpc: "2.0", id, result }));
 
@@ -92,8 +94,9 @@ export const makeLeaseProxyHandshake = <E>(options: {
     covers: (method: string | undefined) => method !== undefined && HANDSHAKE.has(method),
     /** Keeps a child's answer to a handshake request, to answer it again while paused. */
     remember: (method: string, message: Envelope) => {
-      if (method !== "ping" && HANDSHAKE.has(method) && message.result !== undefined)
-        answers.set(method, message.result);
+      if (method === "ping" || !HANDSHAKE.has(method) || message.result === undefined) return;
+      answers.set(method, message.result);
+      if (method === "tools/list") served = false;
     },
     /**
      * Answers a handshake request without the control's driver, or runs the refusal when no
@@ -106,6 +109,7 @@ export const makeLeaseProxyHandshake = <E>(options: {
       refuse: Effect.Effect<void>,
     ) {
       if (method === "ping") return yield* reply(id, {});
+      if (method === "tools/list") served = true;
       if (answers.has(method)) return yield* reply(id, answers.get(method));
       // A request a pause cut off is asked again as the provider sent it.
       const request =
@@ -118,6 +122,28 @@ export const makeLeaseProxyHandshake = <E>(options: {
       if (answer?.result === undefined) return yield* refuse;
       answers.set(method, answer.result);
       yield* reply(id, answer.result);
+    }),
+    /**
+     * Asks a new child for its tools after the provider was given a remembered or borrowed list,
+     * and tells the provider to list again when they differ, as after a driver update.
+     */
+    recheck: Effect.fn("ComputerUseLeaseProxy.recheckTools")(function* (
+      send: (line: string) => Effect.Effect<void>,
+      register: (id: string) => Effect.Effect<Deferred.Deferred<Envelope | undefined>>,
+    ) {
+      if (!served) return;
+      const id = options.ownId("tools");
+      const answered = yield* register(id);
+      yield* send(JSON.stringify({ jsonrpc: "2.0", id, method: "tools/list", params: {} }));
+      const answer = yield* Deferred.await(answered);
+      if (answer?.result === undefined) return;
+      served = false;
+      const before = JSON.stringify(answers.get("tools/list"));
+      answers.set("tools/list", answer.result);
+      if (JSON.stringify(answer.result) !== before)
+        yield* options.output(
+          JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" }),
+        );
     }),
   };
 };

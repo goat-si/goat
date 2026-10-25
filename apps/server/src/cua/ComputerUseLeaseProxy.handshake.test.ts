@@ -19,6 +19,7 @@ const handshakeChild = (h: Effect.Success<ReturnType<typeof harness>>) =>
     h.nextToProvider.pipe(Effect.map((answer) => JSON.stringify(answer))),
   );
 const tools = { tools: [{ name: "list_windows", inputSchema: { type: "object" } }] };
+const newerTools = { tools: [...tools.tools, { name: "zoom", inputSchema: { type: "object" } }] };
 
 // A paused control has no driver, but MCP clients drop a server whose handshake fails, so the
 // agent would lose its tools for the session (#1604). Only tool calls wait for the person.
@@ -69,14 +70,39 @@ describe("proxy handshake while computer use is paused (#1604)", () => {
         assert.deepEqual(yield* h.nextToProvider, { jsonrpc: "2.0", id: 4, result: tools });
         assert.equal(yield* h.startedQueued, 0);
 
+        // The resumed child confirms the tools the provider was given; a changed driver's list
+        // tells the provider to list again.
         yield* h.push(active());
         yield* h.restarted;
-        yield* h.send(call(5, "list_windows"));
-        // Of every line any driver heard, the only tool call is this one, sent to the resumed child.
+        assert.equal((yield* h.nextToDriver).method, "initialize");
+        assert.equal((yield* h.nextToDriver).method, "notifications/initialized");
+        const recheck = yield* h.nextToDriver;
+        assert.equal(recheck.method, "tools/list");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: recheck.id, result: newerTools }));
+        assert.deepEqual(yield* h.nextToProvider, {
+          jsonrpc: "2.0",
+          method: "notifications/tools/list_changed",
+        });
+        yield* h.send(request(5, "tools/list"));
+        assert.equal((yield* h.nextToDriver).id, 5);
+        yield* h.send(call(6, "list_windows"));
+
+        // Every line the two short-lived children heard is handshake; the only tool call any
+        // driver heard is the one sent after the resume, to the resumed child.
+        const heard: Array<{ index: number; message: Record<string, unknown> }> = [];
         let dispatch = yield* h.nextDispatch;
-        while (dispatch.message.method !== "tools/call") dispatch = yield* h.nextDispatch;
-        assert.equal(dispatch.message.id, 5);
-        assert.equal(dispatch.index, h.drivers.length - 1);
+        while (dispatch.message.id !== 6) {
+          heard.push(dispatch);
+          dispatch = yield* h.nextDispatch;
+        }
+        assert.equal(dispatch.index, 3);
+        assert.isFalse(heard.some((line) => line.message.method === "tools/call"));
+        assert.deepEqual(
+          heard
+            .filter((line) => line.index === 1 || line.index === 2)
+            .map((line) => line.message.method),
+          ["initialize", "initialize", "notifications/initialized", "tools/list"],
+        );
       }),
   );
 
