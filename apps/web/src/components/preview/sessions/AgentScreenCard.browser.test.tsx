@@ -103,6 +103,7 @@ vi.mock("../../../browser/ServerBrowserSurface", async () => {
 });
 
 import { AgentScreenCardView } from "./AgentScreenCard";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
@@ -432,6 +433,37 @@ it("reveals the controls with a first tap on touch screens instead of enlarging"
     ),
   );
   await fadedControl(screen.getByRole("button", { name: "Stop" }));
+});
+
+// The stack moves its cards into the floating window's document without remounting them (#1518).
+it("puts tapped controls away with a tap outside, after the card moved to another document", async () => {
+  setup([]);
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  using _frame = { [Symbol.dispose]: () => frame.remove() };
+  const floatingDocument = frame.contentDocument!;
+  const card = cardView(browserTab());
+  const placed = (doc: Document) => (
+    <StackDocumentContext.Provider value={doc}>{card.element}</StackDocumentContext.Provider>
+  );
+  await using screen = await render(placed(document));
+  const picture = screen.getByRole("button", { name: "Open GOAT (Dev)" }).element();
+  await act(() =>
+    picture.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })),
+  );
+  await shownControl(screen.getByRole("button", { name: "Stop" }));
+  floatingDocument.body.append(screen.container);
+  await screen.rerender(placed(floatingDocument));
+  await act(() =>
+    floatingDocument.body.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }),
+    ),
+  );
+  // The frame has no stylesheet, so the class says whether the controls are put away.
+  const stop = [...screen.container.querySelectorAll("button")].find(
+    (button) => button.getAttribute("aria-label") === "Stop",
+  );
+  await vi.waitFor(() => expect(stop?.className).not.toContain("pointer-events-auto opacity-100"));
 });
 
 it("reveals the large view's controls with a tap on touch screens", async () => {
