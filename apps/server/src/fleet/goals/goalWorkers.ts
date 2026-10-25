@@ -226,6 +226,8 @@ export function repairWorkers(
           ...current,
           host: launch.host,
           threadId: launch.threadId as WorkerRecord["threadId"],
+          // The launch's own branch: a later move resumes from it.
+          branch: current.branch ?? branchFor(goal, slot, current.attempt),
           state: "running",
         });
         threads.add(launch.threadId);
@@ -240,6 +242,7 @@ export function repairWorkers(
       launchClientRequestId: launch.actionId,
       host: launch.host,
       threadId: launch.threadId as WorkerRecord["threadId"],
+      branch: launch.threadId === null ? null : branchFor(goal, slot, attemptOf(launch.actionId)),
       state: launch.threadId === null ? "launch_unknown" : "running",
     };
     if (current === undefined) bySlot.set(slot, record);

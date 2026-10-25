@@ -53,6 +53,8 @@ interface World {
   readonly noCeilingHosts: Set<string>;
   /** Interrupts land, but their answer is lost. */
   loseInterruptAnswers: boolean;
+  /** Branches never pushed: a destination cannot start a worktree from them. */
+  readonly unpushed: Set<string>;
 }
 
 export const newWorld = (): World => ({
@@ -66,6 +68,7 @@ export const newWorld = (): World => ({
   loseNextLaunchResponse: false,
   noCeilingHosts: new Set(),
   loseInterruptAnswers: false,
+  unpushed: new Set(),
 });
 
 const unavailable = (host: string) =>
@@ -233,6 +236,16 @@ const fakeDispatch = (world: World) =>
             reason: "remote_refused",
             remoteCode: "permission_profile_unsupported",
             message: "Remote GOAT cannot preserve a permission profile ceiling.",
+          });
+        const baseRef = input.workspace?.type === "worktree" ? input.workspace.baseRef : null;
+        if (baseRef != null && world.unpushed.has(baseRef))
+          return yield* new SshRemoteDispatch.SshRemoteDispatchError({
+            reason: "remote_refused",
+            remoteCode: "invalid_request",
+            message:
+              'Base ref "' +
+              baseRef +
+              '" does not resolve to a commit in project "repo" (/home/me/.goat/worktrees/repo). No thread was created.',
           });
         world.launches.push(input);
         const threadId = ThreadId.make("thread:" + host + world.launches.length);

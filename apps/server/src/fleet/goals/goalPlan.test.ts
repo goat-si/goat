@@ -449,7 +449,10 @@ describe("planGoal", () => {
     // No slot record at all: the launched thread becomes slot 0.
     expect(
       repairWorkers(goal, [], [launch(1, "thread:a", "2026-10-20T00:00:01.000Z")]),
-    ).toMatchObject([{ slot: 0, attempt: 1, threadId: "thread:a", state: "running" }]);
+    ).toMatchObject([
+      // With its launch's branch, so a later move resumes from the worker's work (#1451).
+      { slot: 0, attempt: 1, threadId: "thread:a", branch: "goal/test/s0-a1", state: "running" },
+    ]);
     // A claimed launch with no outcome stays unclear instead of being forgotten.
     expect(repairWorkers(goal, [], [launch(1, null)])).toMatchObject([
       { slot: 0, threadId: null, state: "launch_unknown" },

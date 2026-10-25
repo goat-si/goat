@@ -384,6 +384,7 @@ const make = Effect.gen(function* () {
                   ...worker,
                   host: thread.host,
                   threadId: thread.threadId,
+                  branch: worker.branch ?? branchFor(goal, worker.slot, worker.attempt),
                   lastRunId: thread.runId,
                   state: "running",
                 });

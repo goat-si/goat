@@ -701,4 +701,30 @@ describe("Rescheduler", () => {
         expect(world.launches).toEqual([]);
       }),
   );
+
+  testScoped(
+    "regression #1451: starts from the base when the earlier attempt's branch was never pushed",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        world.threads[0]!.phase = "failed";
+        world.unpushed.add("goal-g1-s0-a1");
+        const moved = request({
+          reason: "failed",
+          clientRequestId: "goal:g1:s0:a2:launch:unpushed",
+        });
+        expect(yield* rescheduler.reschedule(moved)).toMatchObject({
+          _tag: "Rescheduled",
+          resumedFrom: "base",
+        });
+        expect(
+          world.launches.map((launch) =>
+            launch.workspace?.type === "worktree" ? launch.workspace.baseRef : null,
+          ),
+        ).toEqual(["dev"]);
+        // The same request again finds that launch instead of starting another.
+        expect(yield* rescheduler.reschedule(moved)).toMatchObject({ _tag: "Rescheduled" });
+        expect(world.launches).toHaveLength(1);
+      }),
+  );
 });

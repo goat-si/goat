@@ -208,6 +208,9 @@ const refused = (reason: RescheduleRefusal, message: string): RescheduleResult =
 
 const clip = (text: string) => Array.from(text).slice(0, 300).join("");
 
+/** A launch refused only because target cannot see the earlier attempt's branch. */
+const UNPUBLISHED = { _tag: "Unpublished" } as const;
+
 const make = Effect.gen(function* () {
   const dispatch = yield* SshRemoteDispatch.SshRemoteDispatch;
   const monitor = yield* HostHealthMonitor;
@@ -390,7 +393,7 @@ const make = Effect.gen(function* () {
       } satisfies RescheduleResult;
     });
 
-  const launchOn = (
+  const launchOnce = (
     request: RescheduleRequest,
     target: string,
     title: string,
@@ -476,6 +479,15 @@ const make = Effect.gen(function* () {
             clip(error.message),
         );
       }
+      // Refused before creating anything because target cannot find the earlier attempt's
+      // branch: it was never pushed where target can fetch it, so there is nothing to resume.
+      if (
+        request.previousBranch !== null &&
+        error.remoteCode === "invalid_request" &&
+        error.launchMayHaveStarted !== true &&
+        error.message.includes('Base ref "' + request.previousBranch + '"')
+      )
+        return UNPUBLISHED;
       // Only a launch that provably never started frees the request to place again. A held request
       // counts every launch failure the destination did not flag as having started.
       const notStarted = request.holdUnconfirmed
@@ -514,6 +526,33 @@ const make = Effect.gen(function* () {
             : " It may have started; the next reschedule checks " + target + " for it."),
       );
     });
+
+  /** Resumes from the earlier attempt's branch, or from the base when target cannot see it. */
+  const launchOn = Effect.fn("Rescheduler.launchOn")(function* (
+    request: RescheduleRequest,
+    target: string,
+    title: string,
+    resumedFrom: "branch" | "base",
+    modelSelection: ModelSelection,
+  ) {
+    const first = yield* launchOnce(request, target, title, resumedFrom, modelSelection);
+    if (first._tag !== "Unpublished") return first;
+    yield* Effect.logInfo("fleet.reschedule.branch_unpublished", {
+      owner: request.owner,
+      target,
+      branch: request.previousBranch,
+    });
+    const fromBase = yield* launchOnce(
+      { ...request, previousBranch: null },
+      target,
+      title,
+      "base",
+      modelSelection,
+    );
+    return fromBase._tag === "Unpublished"
+      ? refused("no_resume_point", target + " cannot start from the base either.")
+      : fromBase;
+  });
 
   const reschedule: ReschedulerShape["reschedule"] = (request) =>
     lock
