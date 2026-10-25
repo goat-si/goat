@@ -62,3 +62,35 @@ export const buildOutputKeeps = Effect.fn("storage.buildOutputKeeps")(function* 
   if (tracked.stdout.length > 0 || tracked.stdoutTruncated) return "git tracks files in it";
   return null;
 });
+
+/**
+ * Why git status cannot vouch for a checkout's tracked files, or null when it can. A file marked
+ * assume-unchanged is never compared with the index, and a skip-worktree file that is present on
+ * disk is not compared either, so either can hold edits that git status and an unforced
+ * `git worktree remove` both miss. Sparse checkouts mark absent files skip-worktree; those are fine.
+ */
+export const maskedIndexEntry = Effect.fn("storage.maskedIndexEntry")(function* (worktree: string) {
+  const git = yield* GitVcsDriver.GitVcsDriver;
+  const path = yield* Path.Path;
+  const listed = yield* git
+    .execute({
+      operation: "storage.maskedIndexEntries",
+      cwd: worktree,
+      args: ["ls-files", "-v", "-z"],
+      allowNonZeroExit: true,
+      maxOutputBytes: 256 * 1024 * 1024,
+    })
+    .pipe(Effect.orElseSucceed(() => null));
+  if (listed === null || listed.exitCode !== 0 || listed.stdoutTruncated)
+    return "git could not list its tracked files";
+  for (const record of listed.stdout.split("\0")) {
+    if (record.length < 3) continue;
+    const tag = record.charAt(0);
+    const file = record.slice(2);
+    // ls-files -v prints a lower-case tag for an assume-unchanged entry.
+    if (tag !== tag.toUpperCase()) return "git is told to assume " + file + " is unchanged";
+    if (tag === "S" && (yield* lstatOf(path.join(worktree, file))) !== null)
+      return file + " is outside its sparse checkout but present, so git does not compare it";
+  }
+  return null;
+});

@@ -33,19 +33,27 @@ export interface OtherServerBindings {
 }
 
 /**
- * A GOAT server: `goat serve`, an older build StrayProcesses also recognises by its home, or the
- * server entry the desktop app and dev runner start.
+ * A GOAT server by its command line: `goat`, `goat start` or `goat serve`, an older build
+ * StrayProcesses also recognises by its home, or the server entry the desktop app and dev runner
+ * start. Discovery also counts any process holding a GOAT database open, whatever its arguments.
  */
 export function looksLikeGoatServer(command: string): boolean {
   return (
     serveBaseDir(command) !== null ||
     (/goat/iu.test(command) && /(?:^|\s)serve(?:\s|$)/u.test(command)) ||
-    // The entry with no subcommand, or serve/start, runs a server; others (cua-lease-proxy, pair) do not.
-    /[/\\]apps[/\\]server[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts)(?:$|\s+(?:-|(?:serve|start)(?:\s|$)))/u.test(
-      command,
-    )
+    // The entry with no subcommand, only flags, or serve/start runs a server; others (thread start,
+    // storage, cua-lease-proxy, pair) do not. Compiled builds name the binary in lower case; the
+    // desktop app's own GOAT executable is not a server.
+    SERVER_ENTRY.test(command)
   );
 }
+
+const SERVER_ARGUMENTS = String.raw`(?:$|\s+(?:-|(?:serve|start)(?:\s|$)))`;
+const SERVER_ENTRY = new RegExp(
+  String.raw`(?:^\S*(?:^|[/\\])(?:goat|t3)(?:\.exe)?|[/\\](?:apps[/\\]server|node_modules[/\\](?:goat|t3))[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts))` +
+    SERVER_ARGUMENTS,
+  "u",
+);
 
 /** `lsof -F pn` output: which database files each process holds open. */
 export function databasesByPid(lsofOutput: string): ReadonlyMap<number, ReadonlyArray<string>> {
@@ -135,39 +143,15 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       const rows: ReadonlyArray<ProcessRow> =
         listed._tag === "Some" && listed.value.code === 0 ? parsePsRows(listed.value.stdout) : [];
       if (rows.length === 0) unverified.push("the process list could not be read");
+      // Whatever its command line says, a process holding a GOAT database open is a server.
+      const open = yield* databasesOpenBy(uid);
+      if (open === null) unverified.push("the databases open on this machine could not be listed");
+      for (const files of open?.values() ?? []) for (const file of files) candidates.add(file);
       const servers = rows.filter(
         (row) => row.uid === uid && row.pid !== process.pid && looksLikeGoatServer(row.command),
       );
-      const open = new Map<number, ReadonlyArray<string>>();
-      if (servers.length > 0 && platform === "darwin") {
-        const lsof = yield* runner
-          .run({
-            command: "lsof",
-            args: ["-a", "-p", servers.map((row) => row.pid).join(","), "-F", "pn"],
-            env: { LC_ALL: "C" },
-            timeout: Duration.seconds(10),
-            maxOutputBytes: 16 * 1024 * 1024,
-          })
-          .pipe(Effect.option);
-        // lsof exits 1 when one of several pids has already exited; its output still holds the rest.
-        if (lsof._tag === "Some")
-          for (const [pid, files] of databasesByPid(lsof.value.stdout)) open.set(pid, files);
-      } else if (servers.length > 0) {
-        for (const row of servers) {
-          const fds = path.join("/proc", String(row.pid), "fd");
-          const names = yield* fs.readDirectory(fds).pipe(Effect.orElseSucceed(() => []));
-          const files: Array<string> = [];
-          for (const name of names) {
-            const target = yield* fs
-              .readLink(path.join(fds, name))
-              .pipe(Effect.orElseSucceed(() => ""));
-            if (target.endsWith("statev2.sqlite")) files.push(target);
-          }
-          open.set(row.pid, files);
-        }
-      }
       for (const row of servers) {
-        const files = open.get(row.pid) ?? [];
+        const files = open?.get(row.pid) ?? [];
         if (files.length === 0)
           unverified.push(
             "GOAT server process " + row.pid + " has no database this check could find",
@@ -200,6 +184,50 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
 );
 
 /**
+ * The GOAT databases every process of this user holds open, by pid; null when they cannot all be
+ * listed. A server keeps its database open while it runs, however it was started.
+ */
+const databasesOpenBy = Effect.fn("localGoatServers.databasesOpenBy")(function* (uid: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const runner = yield* ProcessRunner.ProcessRunner;
+  const platform = yield* HostProcess.Platform;
+  if (platform === "darwin") {
+    const listed = yield* runner
+      .run({
+        command: "lsof",
+        // -n and -P skip name lookups for sockets, which otherwise take most of the time.
+        args: ["-a", "-u", String(uid), "-n", "-P", "-b", "-w", "-F", "pn"],
+        env: { LC_ALL: "C" },
+        timeout: Duration.seconds(20),
+        maxOutputBytes: 64 * 1024 * 1024,
+      })
+      .pipe(Effect.option);
+    // lsof exits 1 when a process ends while it reads; the rest of its output still stands.
+    if (listed._tag === "None" || listed.value.stdout.length === 0) return null;
+    return databasesByPid(listed.value.stdout);
+  }
+  if (platform !== "linux") return null;
+  const pids = yield* fs.readDirectory("/proc").pipe(Effect.option);
+  if (pids._tag === "None") return null;
+  const result = new Map<number, ReadonlyArray<string>>();
+  for (const pid of pids.value) {
+    if (!/^\d+$/u.test(pid)) continue;
+    const owner = yield* fs.stat(path.join("/proc", pid)).pipe(Effect.option);
+    if (owner._tag === "None" || owner.value.uid._tag !== "Some" || owner.value.uid.value !== uid)
+      continue;
+    const fds = path.join("/proc", pid, "fd");
+    const files: Array<string> = [];
+    for (const name of yield* fs.readDirectory(fds).pipe(Effect.orElseSucceed(() => []))) {
+      const target = yield* fs.readLink(path.join(fds, name)).pipe(Effect.orElseSucceed(() => ""));
+      if (target.endsWith("statev2.sqlite")) files.push(target);
+    }
+    if (files.length > 0) result.set(Number(pid), files);
+  }
+  return result;
+});
+
+/**
  * The working folder of every process of this user, or null when they cannot all be listed.
  * A shell, an agent CLI or a build of any GOAT server running inside a checkout shows here.
  */
@@ -215,7 +243,7 @@ const processWorkingDirectories = Effect.fn("localGoatServers.processWorkingDire
       const listed = yield* runner
         .run({
           command: "lsof",
-          args: ["-a", "-d", "cwd", "-u", String(uid), "-F", "n"],
+          args: ["-a", "-d", "cwd", "-u", String(uid), "-n", "-P", "-F", "n"],
           env: { LC_ALL: "C" },
           timeout: Duration.seconds(15),
           maxOutputBytes: 32 * 1024 * 1024,

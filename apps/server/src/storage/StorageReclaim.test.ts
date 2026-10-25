@@ -61,6 +61,15 @@ const layer = (tempRoot: string) =>
         }),
         Layer.mock(WorktreeInventory.WorktreeInventoryService)({
           facts: Effect.sync(() => machine.facts),
+          // As the real one: the caller's final check runs under the leases, then git removes it.
+          removeAbandoned: (input) =>
+            input.verify.pipe(
+              Effect.map((reason) =>
+                reason === null
+                  ? ({ removed: true } as const)
+                  : ({ removed: false, reason } as const),
+              ),
+            ),
         }),
         Layer.mock(ThreadHistoryArchive.ThreadHistoryArchive)({
           mentions: (needles) =>
@@ -441,6 +450,59 @@ describe("StorageReclaim", () => {
         state: "needs_attention",
         reason: "It holds a git checkout; check it for work before deleting it yourself",
       });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps a clean, pushed worktree whose git status cannot see all of its work", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find } = yield* setup;
+      const { checkout, git } = yield* buildOutputWorktree(worktrees);
+      machine.facts = [
+        {
+          entry: {
+            path: checkout,
+            repository: path.join(worktrees, "repo"),
+            branch: "idle-branch",
+            main: false,
+            missing: false,
+            managed: true,
+            threads: [],
+            dirtyCount: 0,
+            aheadCount: 0,
+          },
+          head: "abc",
+          holdsProject: false,
+        },
+      ];
+      const clean = () =>
+        Effect.gen(function* () {
+          const item = find((yield* reclaim.usage({ rescan: true })).items, checkout)!;
+          expect(item).toMatchObject({ kind: "worktree", state: "removable" });
+          return (yield* reclaim.clean({
+            items: [{ id: item.id, token: item.token }],
+            actor: "test",
+          })).results[0];
+        });
+
+      // A package installed from git keeps its own history and edits under node_modules/.
+      const nested = path.join(checkout, "node_modules", "pkg", ".git");
+      yield* fs.makeDirectory(nested);
+      expect(yield* clean()).toMatchObject({
+        outcome: "skipped",
+        reason: "It holds another git checkout, whose work its own git status cannot see",
+      });
+      yield* fs.remove(nested, { recursive: true });
+
+      // An edited file git is told to assume unchanged.
+      yield* fs.writeFileString(path.join(checkout, "tracked.txt"), "edited\n");
+      yield* git(["add", "tracked.txt"]);
+      yield* git(["update-index", "--assume-unchanged", "tracked.txt"]);
+      expect(yield* clean()).toMatchObject({
+        outcome: "skipped",
+        reason: "Git is told to assume tracked.txt is unchanged",
+      });
+      yield* git(["update-index", "--no-assume-unchanged", "tracked.txt"]);
+      expect(yield* clean()).toMatchObject({ outcome: "removed" });
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 

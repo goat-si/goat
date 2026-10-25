@@ -15,6 +15,21 @@ describe("local GOAT server discovery", () => {
       ),
     ).toBe(true);
     expect(looksLikeGoatServer("node /work/goat/apps/server/src/bin.ts serve --port 1")).toBe(true);
+    // Every way the CLI runs a server: no subcommand, only flags, or start.
+    for (const command of [
+      "/usr/local/bin/goat start --base-dir /srv/goat-home",
+      "/usr/local/bin/goat --base-dir /srv/goat-home",
+      "goat",
+      "C:\\Tools\\goat.exe start",
+      "node /usr/local/lib/node_modules/goat/dist/bin.mjs --port 3774",
+    ])
+      expect(looksLikeGoatServer(command), command).toBe(true);
+    for (const command of [
+      "/usr/local/bin/goat thread start --title x",
+      "/usr/local/bin/goat storage --dry-run",
+      "/Applications/GOAT.app/Contents/MacOS/GOAT",
+    ])
+      expect(looksLikeGoatServer(command), command).toBe(false);
     // Helpers, test runners and editors that only mention a GOAT path are not servers.
     expect(
       looksLikeGoatServer(

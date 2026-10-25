@@ -35,7 +35,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
-import { buildOutputKeeps } from "./buildOutputs.ts";
+import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import { type FileIdentity, holdsGitCheckout, lstatOf, sameIdentity } from "./fileState.ts";
 import {
@@ -270,12 +270,25 @@ const make = Effect.gen(function* () {
   ) {
     switch (target.kind) {
       case "worktree": {
+        // Under the worktree's leases, right before git removes it: what git status cannot see.
+        const verify = Effect.gen(function* () {
+          const reason = yield* inUse(item.path);
+          if (reason !== null) return reason;
+          const masked = yield* maskedIndexEntry(item.path);
+          if (masked !== null) return masked;
+          const nested = yield* holdsGitCheckout(item.path, { skipOwn: true });
+          return nested === false
+            ? null
+            : nested === null
+              ? "it could not be searched for git checkouts inside it"
+              : "it holds another git checkout, whose work its own git status cannot see";
+        });
         const result = yield* worktrees
           .removeAbandoned({
             path: item.path,
             head: target.head,
             branch: target.branch,
-            verify: inUse(item.path),
+            verify,
           })
           .pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
         return result.removed ? null : result.reason;

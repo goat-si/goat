@@ -8,6 +8,7 @@
  * @module StorageConsent
  */
 import {
+  AuthEnvironmentMaintainScope,
   OrchestratorMcpFailure,
   STORAGE_CLEAN_HANDOFF_PATH,
   type HandoffSummary,
@@ -20,6 +21,7 @@ import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as SessionStore from "../auth/SessionStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as DecisionInbox from "../goatclaw/DecisionInbox.ts";
 import * as ApprovalHandoffs from "../handoffs/ApprovalHandoffs.ts";
@@ -94,6 +96,7 @@ export const makeStorageConsent = Effect.gen(function* () {
   const inbox = yield* DecisionInbox.DecisionInbox;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const sql = yield* SqlClient.SqlClient;
+  const sessions = yield* SessionStore.SessionStore;
 
   const bindingOf = (items: ReadonlyArray<StorageCleanItem>) =>
     environment.getEnvironmentId.pipe(Effect.map((id) => storageCleanBinding(id, items)));
@@ -189,9 +192,18 @@ export const makeStorageConsent = Effect.gen(function* () {
           "That decision does not cover these items as they are now. Call again without approvalId to ask for a new one.",
         );
       // Only a person's answer approves a deletion; an owner-profile agent's does not.
-      if (rows[0]?.answered_by?.startsWith("client:") !== true)
+      const answeredBy = rows[0]?.answered_by ?? "";
+      if (!answeredBy.startsWith("client:"))
         return yield* invalid(
           "That decision was answered by an agent; a person approves deletions.",
+        );
+      // Approving is the deletion itself, so it takes what deleting from Settings takes.
+      const responder = (yield* sessions.listActive().pipe(Effect.mapError(storageFailure))).find(
+        (session) => "client:" + session.sessionId === answeredBy,
+      );
+      if (responder === undefined || !responder.scopes.includes(AuthEnvironmentMaintainScope))
+        return yield* invalid(
+          "Whoever approved that decision may not delete GOAT storage on this machine (it takes environment:maintain), or is no longer signed in. Call again without approvalId to ask for a new one.",
         );
     }
     yield* consumeApproval(approvalId, "storage.clean").pipe(

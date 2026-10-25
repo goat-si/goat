@@ -90,17 +90,20 @@ export const contentStamp = Effect.fn("storage.contentStamp")(function* (
   return yield* Effect.tryPromise(() => walk(root, limit)).pipe(Effect.orElseSucceed(() => null));
 });
 
-/** Entries a build output may hold for the cleanup to look through it for checkouts. */
+/** Entries a folder may hold for the cleanup to look through it for checkouts. */
 const GIT_SEARCH_LIMIT = 2_000_000;
 
-const findGit = async (root: string, limit: number): Promise<boolean | null> => {
+const findGit = async (root: string, skipOwn: boolean): Promise<boolean | null> => {
   let entries = 0;
   const pending = [root];
   for (let folder = pending.pop(); folder !== undefined; folder = pending.pop()) {
     for (const entry of await NodeFSP.readdir(folder, { withFileTypes: true })) {
       entries += 1;
-      if (entries > limit) return null;
-      if (entry.name === ".git") return true;
+      if (entries > GIT_SEARCH_LIMIT) return null;
+      if (entry.name === ".git") {
+        if (skipOwn && folder === root) continue;
+        return true;
+      }
       // Dirent types come from the directory itself, so links are never followed.
       if (entry.isDirectory()) pending.push(NodePath.join(folder, entry.name));
     }
@@ -111,13 +114,14 @@ const findGit = async (root: string, limit: number): Promise<boolean | null> => 
 /**
  * Whether a folder holds a git checkout anywhere below it (a .git folder or file). Its own
  * history and uncommitted work are invisible to the enclosing repository's checks. Null when the
- * folder is too large or partly unreadable, which callers treat as holding one.
+ * folder is too large or partly unreadable, which callers treat as holding one. skipOwn leaves out
+ * the folder's own .git, for a checkout looking for others inside it.
  */
 export const holdsGitCheckout = Effect.fn("storage.holdsGitCheckout")(function* (
   root: string,
-  limit: number = GIT_SEARCH_LIMIT,
+  options: { readonly skipOwn?: boolean } = {},
 ) {
-  return yield* Effect.tryPromise(() => findGit(root, limit)).pipe(
+  return yield* Effect.tryPromise(() => findGit(root, options.skipOwn === true)).pipe(
     Effect.orElseSucceed(() => null),
   );
 });
