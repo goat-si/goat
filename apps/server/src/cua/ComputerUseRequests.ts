@@ -113,12 +113,12 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     { threadId: input.threadId },
   );
   const detection = yield* leases.detection;
-  if (origin._tag === "unattended" && (!detection.humanInput || !detection.privateMode))
+  if (origin._tag === "unattended" && !detection.privateMode)
     return {
       kind: "refused",
       reason: "detection_unsupported",
       message:
-        "This host cannot yet tell when a person types a secret or uses the desktop, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
+        "This host cannot yet tell when a person types a secret, so work that runs on its own cannot use the screen here. A person can still run computer use from a thread they direct.",
     } satisfies ComputerUseRequestResult;
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.

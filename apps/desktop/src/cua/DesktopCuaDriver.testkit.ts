@@ -109,6 +109,8 @@ export const fixture = Effect.fn(function* (
     helperWithoutInput?: boolean;
     /** The helper refuses to list apps, as it does for a driver that fails its seal check. */
     helperAppsFail?: boolean;
+    /** The app update puts a new helper generation beside the one already running. */
+    updatedHelper?: boolean;
   } = {},
 ) {
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
@@ -151,6 +153,7 @@ export const fixture = Effect.fn(function* (
   let allowed = !options.denyPermissions;
   let helperAnswer = typeof options.helper === "object" ? options.helper : undefined;
   let helperLost: "unusable" | "absent" | undefined;
+  let updatedHelper = options.updatedHelper === true;
   let starts = 0;
   let stops = 0;
   let destroys = 0;
@@ -203,11 +206,14 @@ export const fixture = Effect.fn(function* (
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
     },
-    helperBundlePath: async () =>
+    helperBundlePath: async ({ busy }) =>
       options.helper === "unusable" || helperLost === "unusable"
         ? { kind: "unusable", message: "GOAT Computer Use at /Helpers cannot be used (EACCES)." }
         : options.helper && helperLost === undefined
-          ? { kind: "found", path: HELPER_BUNDLE }
+          ? {
+              kind: "found",
+              path: updatedHelper && !busy ? HELPER_BUNDLE + "/generations/new" : HELPER_BUNDLE,
+            }
           : { kind: "absent" },
     helperHost: (helper) => {
       helperLaunches.push({
@@ -546,6 +552,9 @@ export const fixture = Effect.fn(function* (
     helperLaunches,
     readiness,
     /** The server says whether agents control the host. */
+    applyHelperUpdate: Effect.sync(() => {
+      updatedHelper = true;
+    }),
     setWatching: (active: boolean) => Queue.offer(watching, active).pipe(Effect.asVoid),
     nextHelperWatch: Queue.take(helperWatches),
     raisePrivateMode: (active: boolean, windowId: number) =>

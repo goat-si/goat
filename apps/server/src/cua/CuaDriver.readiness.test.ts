@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import * as ServerSettings from "../serverSettings.ts";
+import type { CuaDisplayProbe } from "./CuaDisplayCapability.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 type HelperReadiness = Pick<CuaHostStatus, "readiness" | "signals">;
@@ -167,4 +168,53 @@ it.effect("a grant block names only the grants still missing once some return", 
     Effect.provideService(HostProcess.Environment, {}),
     Effect.scoped,
   ),
+);
+
+it.effect(
+  "before the first turn it offers the session a start would use, only while on, idle and with a usable screen (#1542)",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const probe = yield* Ref.make<CuaDisplayProbe>({
+        capability: "available",
+        reason: "Uses :7.",
+        environment: [{ name: "DISPLAY", value: ":7" }],
+      });
+      let starts = 0;
+      const service = yield* CuaDriver.make(
+        () =>
+          Effect.sync(() => {
+            starts++;
+            return { start: Effect.never, stop: Effect.void, waitForExit: Effect.never };
+          }),
+        Ref.get(probe),
+        { binary: Effect.succeed("/opt/goat/cua-driver") },
+      );
+      const before = service.beforeTurn;
+      if (before === undefined) return expect.unreachable("a binary offers a check");
+      // Off: nothing to check.
+      expect(yield* before.wanted).toBe(false);
+      expect(yield* before.session).toEqual(Option.none());
+      yield* settings.updateSettings({ enableCua: true });
+      expect(yield* before.wanted).toBe(true);
+      expect(yield* before.session).toEqual(
+        Option.some({
+          command: "/opt/goat/cua-driver",
+          display: [{ name: "DISPLAY", value: ":7" }],
+        }),
+      );
+      // A screen that went away is not checked.
+      yield* Ref.set(probe, { capability: "unavailable", reason: "No display.", environment: [] });
+      expect(yield* before.session).toEqual(Option.none());
+      // Reading it never starts the driver; a start in progress ends the wish for a check.
+      expect(starts).toBe(0);
+      yield* Ref.set(probe, { capability: "available", reason: "Uses :7.", environment: [] });
+      yield* service.acquire.pipe(Effect.forkScoped({ startImmediately: true }));
+      expect(yield* before.wanted).toBe(false);
+    }).pipe(
+      Effect.provide(ServerSettings.layerTest()),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.scoped,
+    ),
 );
