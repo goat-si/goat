@@ -25,6 +25,7 @@ import * as Rescheduler from "../health/Rescheduler.ts";
 import { Placement } from "../resources/Placement.ts";
 import { layer as controllerLayer } from "./GoalController.ts";
 import {
+  access,
   failedRun,
   type Fake,
   freshStarts,
@@ -768,8 +769,12 @@ describe("goal moves across a restart (#1451)", () => {
             fake.crashFollowUp = true;
             yield* pass(id).pipe(Effect.exit);
           }).pipe(Effect.provide(server(fake, world, path)));
-          // A new process reaches A under a new session, which cannot dedupe a resend.
+          // A new process reaches A under a new session, which cannot dedupe a resend. Its owner
+          // drops out between the action's own check and the check after its claim, then
+          // returns: still nothing is resent.
+          fake.owners = [access(), access(), { unavailable: "plan mode" }, access()];
           yield* Effect.gen(function* () {
+            yield* pass(id);
             yield* pass(id);
             yield* pass(id);
             expect(fake.followUps).toEqual([]);

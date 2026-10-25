@@ -52,7 +52,7 @@ export const makeGoalMoves = (deps: {
     kind: "launch" | "interrupt",
     worker: WorkerRecord,
     host: string | null,
-  ) => Effect.Effect<ClaimRefusal | "uncertain" | "consumed" | null, GoalStoreError>;
+  ) => Effect.Effect<ClaimRefusal | "consumed" | null, GoalStoreError>;
   readonly setWorker: (worker: WorkerRecord) => void;
   readonly note: (
     type: FleetGoalEvent["type"],
