@@ -56,7 +56,11 @@ export const ownWorktreeRoots = Effect.fnUntraced(function* (input: {
   const real = (value: string) =>
     fs.realPath(value).pipe(Effect.orElseSucceed(() => path.resolve(value)));
   const ownBase = yield* real(input.baseDir);
-  if (yield* fs.exists(path.join(ownBase, CHANNEL_STATE_COPY_MARKER_FILE_NAME))) {
+  // A marker that cannot be checked counts as present: the narrower roots are the safe side.
+  const copied = yield* fs
+    .exists(path.join(ownBase, CHANNEL_STATE_COPY_MARKER_FILE_NAME))
+    .pipe(Effect.orElseSucceed(() => true));
+  if (copied) {
     return input.roots.filter((root) => inside(path, ownBase, root));
   }
   const others = yield* Effect.forEach(yield* localGoatHomes(), real);
@@ -108,7 +112,13 @@ export const readOtherHomeBindings = Effect.fn("otherGoatHomes.readOtherHomeBind
     for (const home of yield* localGoatHomes()) {
       for (const state of ["userdata", "dev"]) {
         const candidate = path.join(home, state, "statev2.sqlite");
-        if (!(yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false)))) continue;
+        // Only a confirmed absence is skipped; a home that cannot be checked holds every worktree.
+        const present = yield* fs.exists(candidate).pipe(Effect.result);
+        if (present._tag === "Failure") {
+          unreadable.push(candidate);
+          continue;
+        }
+        if (!present.success) continue;
         const file = yield* real(candidate);
         if (seen.has(file)) continue;
         seen.add(file);

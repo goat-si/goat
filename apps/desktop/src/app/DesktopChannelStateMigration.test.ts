@@ -10,6 +10,7 @@ import { AUTOMATION_HOLD_FILE_NAME, decodeAutomationHold } from "@goat/contracts
 import {
   CHANNEL_STATE_MIGRATION_MARKER,
   ChannelStateMigrationError,
+  copyFileWithin,
   migrateChannelState,
   resolveChannelStateMigration,
   type ChannelStateMigrationOps,
@@ -235,6 +236,64 @@ describe("migrateChannelState", () => {
         assert.notInclude(copied, "userdata/themes");
         assert.notInclude(copied, "userdata/attachments/linked");
         assert.include(copied, "userdata/attachments/thread-1/image.png");
+      } finally {
+        stable.db.close();
+      }
+    }));
+
+  it("copies nothing when stable's userdata is a link out of its home", () =>
+    withHome((home) => {
+      const outside = NodePath.join(home, "elsewhere", "userdata");
+      write(NodePath.join(outside, "settings.json"), "not GOAT's");
+      const source = NodePath.join(home, ".goat", "desktop");
+      NodeFS.mkdirSync(source, { recursive: true });
+      NodeFS.symlinkSync(outside, NodePath.join(source, "userdata"));
+      const destination = NodePath.join(home, ".goat", "desktop-nightly");
+
+      assert.equal(migrate({ source, destination })._tag, "SourceUnsafe");
+      assert.isFalse(NodeFS.existsSync(destination));
+    }));
+
+  it("copies a stable home that lives behind a link, such as on another disk", () =>
+    withHome((home) => {
+      const stable = seedStable(home);
+      try {
+        const linked = NodePath.join(home, "linked-desktop");
+        NodeFS.symlinkSync(stable.source, linked);
+        const result = migrate({ source: linked, destination: stable.destination });
+        assert.equal(result._tag, "Copied");
+        assert.equal(
+          read(NodePath.join(stable.destination, "userdata", "environment-id")),
+          "env-stable",
+        );
+      } finally {
+        stable.db.close();
+      }
+    }));
+
+  it("refuses a file swapped for a link after it was listed, and publishes nothing", () =>
+    withHome((home) => {
+      const stable = seedStable(home);
+      try {
+        const secret = NodePath.join(home, "outside-secret.txt");
+        write(secret, "not GOAT's");
+        let failure: unknown;
+        try {
+          migrate(stable, {
+            copyFile: (source, destination, sourceRoot) => {
+              if (source.endsWith("environment-id")) {
+                NodeFS.rmSync(source);
+                NodeFS.symlinkSync(secret, source);
+              }
+              copyFileWithin(source, destination, sourceRoot);
+            },
+          });
+        } catch (cause) {
+          failure = cause;
+        }
+        assert.instanceOf(failure, ChannelStateMigrationError);
+        assert.isFalse(NodeFS.existsSync(stable.destination));
+        assert.deepEqual(stagingEntries(home), []);
       } finally {
         stable.db.close();
       }

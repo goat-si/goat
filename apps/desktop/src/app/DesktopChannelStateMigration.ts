@@ -66,7 +66,8 @@ const BASE_DIRECTORIES = ["notes"] as const;
 const DATABASE_FILES = ["statev2.sqlite", "state.sqlite"] as const;
 
 export interface ChannelStateMigrationOps {
-  readonly copyFile: (source: string, destination: string) => void;
+  /** `sourceRoot` is the stable home's canonical path; nothing outside it may be read. */
+  readonly copyFile: (source: string, destination: string, sourceRoot: string) => void;
   readonly rename: (from: string, to: string) => void;
   readonly snapshotDatabase: (source: string, destination: string) => void;
   readonly verifyDatabase: (path: string) => void;
@@ -86,6 +87,8 @@ export interface ChannelStateMigrationInput {
 
 export type ChannelStateMigrationResult =
   | { readonly _tag: "NoSource" }
+  /** Stable's userdata resolves outside its home; a link is never followed, so nothing is copied. */
+  | { readonly _tag: "SourceUnsafe" }
   | { readonly _tag: "DestinationExists" }
   | { readonly _tag: "Copied"; readonly files: number; readonly bytes: number }
   | { readonly _tag: "CopiedByAnotherLaunch" };
@@ -180,9 +183,55 @@ const verifyDatabase = (path: string) => {
   }
 };
 
+const insideRoot = (root: string, path: string) => {
+  const relative = NodePath.relative(root, path);
+  return relative !== "" && !relative.startsWith("..") && !NodePath.isAbsolute(relative);
+};
+
+/**
+ * Copies one file without following a link at any step: the open refuses a final link, and the
+ * opened file must be the one its resolved path names inside the stable home, so a component
+ * swapped for a link after the listing fails the copy instead of reading outside it.
+ */
+export const copyFileWithin = (source: string, destination: string, sourceRoot: string) => {
+  // Windows has no O_NOFOLLOW; the resolved-path check below still applies there.
+  const input = NodeFS.openSync(
+    source,
+    NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = NodeFS.fstatSync(input);
+    if (!opened.isFile()) throw new Error("not a regular file");
+    const resolved = NodeFS.realpathSync(source);
+    const atResolved = NodeFS.statSync(resolved);
+    if (
+      !insideRoot(sourceRoot, resolved) ||
+      atResolved.ino !== opened.ino ||
+      atResolved.dev !== opened.dev
+    ) {
+      throw new Error("resolves outside GOAT's folder");
+    }
+    const output = NodeFS.openSync(destination, "wx", 0o600);
+    try {
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (;;) {
+        const read = NodeFS.readSync(input, buffer, 0, buffer.length, null);
+        if (read === 0) break;
+        for (let written = 0; written < read;) {
+          written += NodeFS.writeSync(output, buffer, written, read - written);
+        }
+      }
+      NodeFS.fchmodSync(output, opened.mode & 0o777);
+    } finally {
+      NodeFS.closeSync(output);
+    }
+  } finally {
+    NodeFS.closeSync(input);
+  }
+};
+
 const defaultOps: ChannelStateMigrationOps = {
-  copyFile: (source, destination) =>
-    NodeFS.copyFileSync(source, destination, NodeFS.constants.COPYFILE_EXCL),
+  copyFile: copyFileWithin,
   rename: NodeFS.renameSync,
   snapshotDatabase,
   verifyDatabase,
@@ -255,6 +304,7 @@ const removeAbandonedStaging = (destinationBaseDir: string, ops: ChannelStateMig
 };
 
 interface CopyTally {
+  readonly sourceRoot: string;
   files: number;
   bytes: number;
 }
@@ -267,7 +317,7 @@ const copyVerifiedFile = (
   tally: CopyTally,
 ) => {
   try {
-    ops.copyFile(source, destination);
+    ops.copyFile(source, destination, tally.sourceRoot);
     const expected = NodeFS.statSync(source).size;
     const actual = NodeFS.statSync(destination).size;
     if (actual !== expected) {
@@ -323,6 +373,9 @@ export function migrateChannelState(
   if (exists(destination)) return { _tag: "DestinationExists" };
   const sourceUserdata = NodePath.join(input.sourceBaseDir, "userdata");
   if (!exists(sourceUserdata)) return { _tag: "NoSource" };
+  // The home itself may live on another disk behind a link; nothing below it may leave it.
+  const sourceRoot = NodeFS.realpathSync(input.sourceBaseDir);
+  if (!insideRoot(sourceRoot, NodeFS.realpathSync(sourceUserdata))) return { _tag: "SourceUnsafe" };
 
   const parent = NodePath.dirname(destination);
   NodeFS.mkdirSync(parent, { recursive: true, mode: 0o700 });
@@ -332,7 +385,7 @@ export function migrateChannelState(
     `${stagingPrefix(destination)}${process.pid}-${NodeCrypto.randomUUID().slice(0, 8)}`,
   );
   const stagingUserdata = NodePath.join(staging, "userdata");
-  const tally: CopyTally = { files: 0, bytes: 0 };
+  const tally: CopyTally = { sourceRoot, files: 0, bytes: 0 };
   try {
     NodeFS.mkdirSync(stagingUserdata, { recursive: true, mode: 0o700 });
 
@@ -343,6 +396,9 @@ export function migrateChannelState(
       const from = NodePath.join(sourceUserdata, database);
       const to = NodePath.join(stagingUserdata, database);
       try {
+        if (!insideRoot(sourceRoot, NodeFS.realpathSync(from))) {
+          throw new Error("resolves outside GOAT's folder");
+        }
         ops.snapshotDatabase(from, to);
         ops.verifyDatabase(to);
         fsyncPath(platform, to, false);

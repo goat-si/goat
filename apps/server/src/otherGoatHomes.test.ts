@@ -7,6 +7,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 
 import { CHANNEL_STATE_COPY_MARKER_FILE_NAME } from "@goat/contracts";
 
@@ -79,6 +80,43 @@ describe("otherGoatHomes", () => {
         assert.deepEqual(bindings.unreadable, [broken]);
       }),
     ),
+  );
+
+  it.effect(
+    "treats another home it cannot check as unreadable, so cleanup keeps every worktree",
+    () =>
+      withHome((home) =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const fs = yield* FileSystem.FileSystem;
+          const stableDb = path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite");
+          yield* seedDatabase(stableDb, []);
+          const nightlyDb = path.join(
+            home,
+            ".goat",
+            "desktop-nightly",
+            "userdata",
+            "statev2.sqlite",
+          );
+          const bindings = yield* readOtherHomeBindings({ ownDatabase: stableDb }).pipe(
+            Effect.provideService(FileSystem.FileSystem, {
+              ...fs,
+              exists: (target) =>
+                target === nightlyDb
+                  ? Effect.fail(
+                      PlatformError.systemError({
+                        _tag: "PermissionDenied",
+                        module: "FileSystem",
+                        method: "exists",
+                        pathOrDescriptor: target,
+                      }),
+                    )
+                  : fs.exists(target),
+            }),
+          );
+          assert.deepEqual(bindings.unreadable, [nightlyDb]);
+        }),
+      ),
   );
 
   it.effect("keeps each app's automatic cleanup inside its own worktree folder", () =>
