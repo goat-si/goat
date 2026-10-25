@@ -8,6 +8,10 @@ name: Marketing site preview
 #
 # Nothing runs until the repository variable GOAT_MARKETING_PAGES is "true".
 #
+# To recover a failed deploy, re-run all jobs: the deploy job only accepts the cache entry its own
+# run attempt saved. If gh-pages was already pushed and only the Pages build request failed, request
+# the build by hand: gh api --method POST repos/goat-si/goat/pages/builds
+#
 # The build reaches the deploy job through the Actions cache under a key unique to this run, not an
 # artifact: goat-si's artifact storage quota is full, and the cache has its own per-repository limit.
 
@@ -113,7 +117,7 @@ jobs:
           for file in index.html 404.html ko/index.html .nojekyll; do
             test -f "$file" || { echo "The restored build has no $file." >&2; exit 1; }
           done
-          if [ -e .gitattributes ] || [ -e .gitmodules ] || [ -n "$(find . -name .git -print -quit)" ]; then
+          if [ -n "$(find . \( -name .git -o -name .gitattributes -o -name .gitmodules \) -print -quit)" ]; then
             echo "The restored build contains Git metadata; refusing to publish it." >&2
             exit 1
           fi
@@ -144,9 +148,26 @@ jobs:
           echo "Published ${commit} to gh-pages."
           echo "pushed=true" >> "$GITHUB_OUTPUT"
 
-      # A push made with GITHUB_TOKEN does not start a Pages build, so ask for one.
+      # A push made with GITHUB_TOKEN does not start a Pages build, so ask for one. Before Pages is
+      # set up (the first run creates gh-pages, then a maintainer points Pages at it), there is no
+      # build to request; the run says so with a warning. Pages pointing elsewhere is an error.
       - name: Request a Pages build
         if: steps.publish.outputs.pushed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds" --jq .status
+        run: |
+          set -euo pipefail
+          errors="$(mktemp)"
+          if ! branch="$(gh api "repos/${GITHUB_REPOSITORY}/pages" --jq .source.branch 2>"$errors")"; then
+            if grep -q "HTTP 404" "$errors"; then
+              echo "::warning::GitHub Pages is not set up yet. gh-pages is updated; point Pages at gh-pages / (root) to serve it."
+              exit 0
+            fi
+            cat "$errors" >&2
+            exit 1
+          fi
+          if [ "$branch" != "gh-pages" ]; then
+            echo "::error::GitHub Pages serves the ${branch} branch, not gh-pages."
+            exit 1
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds" --jq .status
