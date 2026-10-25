@@ -102,6 +102,11 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         assert.deepEqual(result, { stopped: true });
 
         assert.isTrue(Option.isNone(yield* leases.holder(otherThread, [app])));
+        // The stopped card stays listed as stopped until a person closes it.
+        const listed = (yield* leases.sessions).find(
+          ({ control }) => control.threadId === threadId,
+        );
+        assert.deepEqual(listed?.state, { _tag: "ended", reason: "stopped" });
         assert.equal(
           (yield* service.read({ threadId, handoffId: held.handoffId })).state,
           "cancelled",
