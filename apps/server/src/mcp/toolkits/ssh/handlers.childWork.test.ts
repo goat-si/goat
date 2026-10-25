@@ -18,6 +18,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelChildWork from "../../../channels/ChannelChildWork.ts";
@@ -28,6 +29,7 @@ import {
   contentHashFor,
   conversationIdFor,
   inputIdFor,
+  taskEventIdFor,
 } from "../../../channels/channelIds.ts";
 import {
   prepareTransition,
@@ -36,6 +38,7 @@ import {
 import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as PermissionSettings from "../../../serverSettings.ts";
+import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as CloudMachineService from "../../../cloudMachines/CloudMachineService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -219,6 +222,9 @@ interface LaunchFailures {
   readonly failValidationOnCalls?: ReadonlyArray<number>;
   /** 0-based coordinator.launch call indexes that fail in beforeLaunch, before any remote write. */
   readonly failAuthorizeOnCalls?: ReadonlyArray<number>;
+  readonly stopBeforeClaimOnCalls?: ReadonlyArray<number>;
+  readonly stopDuringLaunchOnCalls?: ReadonlyArray<number>;
+  readonly maxLanes?: number;
 }
 
 /** Runs goat_ssh_thread_launch with a channel-owned caller over one shared in-memory database. */
@@ -227,6 +233,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
     Effect.gen(function* () {
       const launches: Array<LaunchCapture> = [];
       const rows: Array<{ readonly state: string; readonly remoteThreadId: string | null }> = [];
+      const duringLaunchStates: Array<ReadonlyArray<string>> = [];
       let launchCalls = 0;
       let validationCalls = 0;
       const caller = {
@@ -264,10 +271,50 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         ),
         Layer.provideMerge(SqlitePersistence.layerMemory),
       );
+      const scope = yield* Effect.scope;
+      const channelDeps = yield* Layer.buildWithScope(channelStack, scope);
+      const channelServices = Layer.succeedContext(channelDeps);
+      const childWork = yield* ChannelChildWork.ChannelChildWork.pipe(Effect.provide(channelDeps));
+      const childWorkStore = yield* ChannelChildWorkStore.ChannelChildWorkStore.pipe(
+        Effect.provide(channelDeps),
+      );
+      const stopForCaller = Effect.gen(function* () {
+        const ownership = yield* childWork.ownershipForCaller(callerThreadId);
+        if (ownership._tag !== "worker") return yield* Effect.die("worker task missing");
+        const taskId = ownership.task.taskId;
+        yield* childWork.cancelForTask({
+          taskId,
+          generation: 1,
+          stopEventId: taskEventIdFor(taskId, 99),
+          attempt: 0,
+          reason: "Stopped.",
+        });
+        return taskId;
+      });
+      const settings = PermissionSettings.layerTest(
+        failures.maxLanes === undefined
+          ? {}
+          : {
+              goatclaw: {
+                enabled: true,
+                defaultProfile: "ssh-test",
+                profiles: {
+                  "ssh-test": {
+                    id: "ssh-test",
+                    capabilities: ["threads.launch", "threads.remote"],
+                    runtimeModeCeiling: "full-access",
+                    maxLanes: failures.maxLanes,
+                  },
+                },
+              },
+            },
+      );
       const dependencies = Layer.mergeAll(
-        channelStack,
-        profileLayer(undefined),
-        PermissionSettings.layerTest(),
+        channelServices,
+        failures.maxLanes === undefined
+          ? profileLayer(undefined)
+          : Profiles.layer.pipe(Layer.provide(channelServices), Layer.provide(settings)),
+        settings,
         NodeCrypto.layer,
         Layer.succeed(McpInvocationContext.McpInvocationContext, {
           environmentId: EnvironmentId.make("environment"),
@@ -297,14 +344,18 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
           validateLaunchAttachments: (requested) => {
             const call = validationCalls;
             validationCalls += 1;
-            return failures.failValidationOnCalls?.includes(call) === true
-              ? Effect.fail(
-                  new SshRemoteDispatch.SshRemoteDispatchError({
-                    reason: "invalid_request",
-                    message: "attachment refused",
-                  }),
-                )
-              : Effect.succeed(requested);
+            const validation =
+              failures.failValidationOnCalls?.includes(call) === true
+                ? Effect.fail(
+                    new SshRemoteDispatch.SshRemoteDispatchError({
+                      reason: "invalid_request",
+                      message: "attachment refused",
+                    }),
+                  )
+                : Effect.succeed(requested);
+            return failures.stopBeforeClaimOnCalls?.includes(call) === true
+              ? stopForCaller.pipe(Effect.orDie, Effect.andThen(validation))
+              : validation;
           },
         }),
         Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({
@@ -332,18 +383,25 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
                 }),
               );
             }
-            return Effect.sync(() => {
+            return Effect.gen(function* () {
+              if (failures.stopDuringLaunchOnCalls?.includes(call) === true) {
+                const taskId = yield* stopForCaller.pipe(Effect.orDie);
+                yield* move(taskId, {
+                  type: "task.cancelled",
+                  payload: { reason: "Stopped." },
+                }).pipe(Effect.provide(channelDeps), Effect.orDie);
+                yield* childWork.reconcile.pipe(Effect.orDie);
+                const records = yield* childWorkStore.listForTask(taskId).pipe(Effect.orDie);
+                duringLaunchStates.push(records.map((record) => record.state));
+              }
               rows.push({ state: "running", remoteThreadId: remoteResult.threadId });
-            }).pipe(
-              Effect.andThen(beforeLaunch),
-              Effect.andThen(
-                Effect.succeed({
-                  correlationId: input.correlationId ?? "rr-unrecorded",
-                  launch: remoteResult,
-                  reportsSupported: true,
-                }),
-              ),
-            );
+              yield* beforeLaunch;
+              return {
+                correlationId: input.correlationId ?? "rr-unrecorded",
+                launch: remoteResult,
+                reportsSupported: true,
+              };
+            });
           },
           get: (correlationId) =>
             Effect.sync(() => {
@@ -373,9 +431,16 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
           releaseRoute: () => Effect.void,
         }),
       );
-      const scope = yield* Effect.scope;
       const deps = yield* Layer.buildWithScope(dependencies, scope);
       const taskId = yield* seedWorkerTask.pipe(Effect.provide(deps));
+      if (failures.maxLanes !== undefined) {
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+            VALUES (${callerThreadId}, ${caller.projectId}, 'Bot worker', 'codex', 'full-access', 'default', ${NOW}, ${NOW}, '{}')`;
+        }).pipe(Effect.provide(deps));
+      }
       const toolkit = yield* SshToolkit.pipe(
         Effect.provide(
           McpToolAccess.HandlersLayer.layer(SshHandlers.layer).pipe(
@@ -399,7 +464,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         Effect.flatMap((store) => store.listForTask(taskId)),
         Effect.provide(deps),
       );
-      return { responses, launches, records };
+      return { responses, launches, records, duringLaunchStates };
     }),
   );
 
@@ -483,6 +548,49 @@ it.effect("a failure before the launch attempt releases the reservation", () =>
     expect(records.filter((record) => record.state === "released")).toHaveLength(1);
     expect(records.filter((record) => record.state === "bound")).toHaveLength(2);
   }),
+);
+
+it.effect(
+  "regression #1387: a task stop before the claim refuses the SSH launch and returns the slot",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records } = yield* launchFromWorker(
+        ["Stopped audit", "Audit one", "Audit two", "Audit three"],
+        { stopBeforeClaimOnCalls: [0], maxLanes: 1 },
+      );
+      expect(responses[0]).toMatchObject({
+        code: "orchestration_error",
+        message: expect.stringMatching(/^The launch could not claim its reserved slot/),
+      });
+      expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[3]).toMatchObject({ code: "capacity_exceeded" });
+      expect(records).toHaveLength(3);
+      const released = records.filter((record) => record.state === "released");
+      const bound = records.filter((record) => record.state === "bound");
+      expect(released).toHaveLength(1);
+      expect(bound).toHaveLength(2);
+      expect(launches).toHaveLength(2);
+      expect(launches.map((launch) => launch.correlationId)).not.toContain(
+        childWorkCorrelationIdFor(released[0]!.childWorkId),
+      );
+    }),
+);
+
+it.effect(
+  "a task stop during the SSH launch keeps its record in flight until the launch binds it",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records, duringLaunchStates } = yield* launchFromWorker(
+        ["Audit the release"],
+        { stopDuringLaunchOnCalls: [0] },
+      );
+      expect(duringLaunchStates).toEqual([["launched"]]);
+      expect(responses[0]).toMatchObject({ threadId: "remote-thread" });
+      expect(launches).toHaveLength(1);
+      expect(records).toHaveLength(1);
+      expect(records[0]!.state).toBe("bound");
+    }),
 );
 
 it.effect(
