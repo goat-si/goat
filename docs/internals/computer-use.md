@@ -474,9 +474,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split of trycua/cua
 `libs/cua-driver` at 0.37.0 that keeps upstream history, released as
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
-Downloads now target the fork's releases (`packages/shared/src/cuaDriverRelease.ts`). The first
-release, `0.37.0-goat.1`, awaits publication and verified archive pins; the old upstream version
-and five archive triples remain until then, so this prepared pin cannot install the fork yet.
+GOAT pins the fork's release archives by name, size and SHA-256
+(`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
+attestations. The first release is `0.37.0-goat.1`.
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
 embedded allowlist rejects that name, so the in-process dev path omits it and cannot disable
 screencapture. When the driver misbehaves, GOAT does not work around
