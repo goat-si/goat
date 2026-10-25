@@ -246,7 +246,7 @@ export const en = {
     githubPrivacy: "GitHub's privacy statement",
     usageTitle: "Product usage data",
     usage: [
-      "The GOAT server sends product usage events, associated with a hashed account or installation identifier, to GOAT's own endpoint, which keeps them for at most 180 days and forwards them to no one. Events include the provider, model, permission mode, turn result and duration.",
+      "The GOAT server sends product usage events, associated with a hashed account or installation identifier, to GOAT's own endpoint, which deletes them within 180 days of arrival and forwards them to no one. Deleted events can remain in the database's recovery backups for up to 30 more days, and deletion is delayed while cleanup is down. Events include the provider, model, permission mode, turn result and duration.",
       "Events do not include prompts, responses, file contents, authentication tokens or conversation IDs, and the endpoint does not store your IP address.",
       "Set GOAT_TELEMETRY_ENABLED=false in the server's environment to turn them off.",
     ],

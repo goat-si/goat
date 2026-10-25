@@ -1,9 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId, ThreadId, type ServerProvider } from "@goat/contracts";
-import {
-  ANALYTICS_COMMON_PROPERTIES,
-  ANALYTICS_EVENT_PROPERTIES,
-} from "@goat/shared/analyticsAllowlist";
+import { ingestDrops } from "./ingestAllowlist.testkit.ts";
 import { agentToolProperties, handoffSettings, type AgentThread } from "./ProviderDimensions.ts";
 
 const provider = (
@@ -81,11 +78,6 @@ it("drops input strings outside the schema's literals, since rejected calls are 
 });
 
 it("reports only properties GOAT's ingest stores for mcp.tool.invoked", () => {
-  // The ingest drops anything outside the allowlist, so a new property here must be added there.
-  const allowed = new Set([
-    ...ANALYTICS_COMMON_PROPERTIES,
-    ...(ANALYTICS_EVENT_PROPERTIES["mcp.tool.invoked"] ?? []),
-  ]);
   const settings = [
     handoffSettings("delegate_task", { target: {}, mode: "wait" }, { waitTimedOut: true }),
     handoffSettings("create_threads", { threads: [{ target: {} }] }, {}),
@@ -93,7 +85,7 @@ it("reports only properties GOAT's ingest stores for mcp.tool.invoked", () => {
     handoffSettings("goat_thread_send", {}, { delivery: "steer" }),
     handoffSettings("schedule_task", { bindToCurrentThread: false }, {}),
   ];
-  const keys = settings.flatMap((setting) =>
+  const recorded = settings.flatMap((setting) =>
     agentToolProperties({
       tool: "delegate_task",
       providers,
@@ -104,7 +96,7 @@ it("reports only properties GOAT's ingest stores for mcp.tool.invoked", () => {
       outcome: { outcome: "error", errorCode: "not_found" },
       settings: setting,
       durationMs: 12,
-    }).flatMap(Object.keys),
+    }).map((properties) => ({ event: "mcp.tool.invoked", properties })),
   );
-  expect(keys.filter((key) => !allowed.has(key))).toEqual([]);
+  expect(ingestDrops(recorded)).toEqual([]);
 });
