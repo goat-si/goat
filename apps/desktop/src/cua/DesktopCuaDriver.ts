@@ -128,6 +128,24 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   // Whether the running helper's agent connections report a person's input.
   let helperReportsInput = false;
   let helperCanFrame = false;
+  /**
+   * What a helper said it can do when it started, read from its hello: an agent turn's start and a
+   * readiness check's both start one (#1532), and either is the build that runs next.
+   */
+  const learnHelper = (
+    session:
+      | {
+          readonly canWatch?: boolean;
+          readonly reportsInput?: boolean;
+          readonly canFrame?: boolean;
+        }
+      | undefined,
+  ) => {
+    helperCanWatch = session?.canWatch === true;
+    // Only macOS agents run through a connection helper that sees a person's input.
+    helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
+    helperCanFrame = session?.canFrame === true;
+  };
   const followers = yield* makeHelperFollowers({
     publisher,
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
@@ -158,10 +176,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    * now, and nothing runs as it.
    */
   const forgetHelper = (chosen: Engine | string | undefined) =>
-    noteHelper((state) =>
-      withoutProof(
-        withRunning(state, false),
-        typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+    Effect.sync(() => learnHelper(undefined)).pipe(
+      Effect.andThen(
+        noteHelper((state) =>
+          withoutProof(
+            withRunning(state, false),
+            typeof chosen === "string" ? chosen : `${COMPUTER_USE_HELPER_NAME} could not be found.`,
+          ),
+        ),
       ),
     );
   const forgetCrash = (entry: OwnedHost) =>
@@ -450,6 +472,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const request = owned ? currentRequest : undefined;
     currentRequest = undefined;
     const stopped = yield* stop;
+    // The probe's own helper said what this build can do (#1532), on every platform; the
+    // check's own helper may not (the macOS readiness check runs it as an MCP child). It speaks
+    // for this desktop only once the helper running before is gone; a check that stopped
+    // earlier leaves that helper, and what it said, as they were.
+    if (stopped && selected?.kind === "helper") learnHelper(grants.features);
     if (request)
       yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
     const connection: Option.Option<EmbeddedDriverConnection> =
@@ -666,6 +693,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
     yield* Effect.gen(function* () {
       if (!owned) {
+        // A new helper starts: until its hello is read below, nothing it can do is known.
+        if (selected.kind === "helper") learnHelper(undefined);
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
           const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
@@ -707,10 +736,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       });
       const session = entry.host.session?.();
       if (entry.helper) {
-        helperCanWatch = session?.canWatch === true;
-        // Only macOS agents run through a connection helper that sees a person's input.
-        helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
-        helperCanFrame = session?.canFrame === true;
+        learnHelper(session);
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* followers.attach(session);

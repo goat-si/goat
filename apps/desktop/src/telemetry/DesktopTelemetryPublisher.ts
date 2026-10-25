@@ -561,7 +561,20 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         const subscription = yield* PubSub.subscribe(reports);
         const privateReports = Stream.fromSubscription(subscription).pipe(
           Stream.filter(() => cuaSource === source),
-          Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
+          Stream.mapEffect((message) =>
+            Ref.get(latestCuaReadiness).pipe(
+              Effect.map((readiness) =>
+                textEncoder.encode(
+                  // A ready driver goes out right behind the readiness of the helper that runs
+                  // it: the server admits unattended work on those signals once the driver is
+                  // ready, and the readiness stream below is merged in no particular order.
+                  (message.status === "ready" && Option.isSome(readiness)
+                    ? `${encodeMessage(readiness.value)}\n`
+                    : "") + `${encodeMessage(message)}\n`,
+                ),
+              ),
+            ),
+          ),
         );
         const readinessSubscription = yield* PubSub.subscribe(cuaReadinessChanges);
         const readiness = Stream.concat(
