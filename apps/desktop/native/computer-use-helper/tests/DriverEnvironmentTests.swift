@@ -25,8 +25,8 @@ struct DriverEnvironmentTests {
     check("keeps the locale", inherited["LC_ALL"] == "en_US.UTF-8")
     check("drops everything else", inherited["SECRET_TOKEN"] == nil)
     // The driver's window capture fallback runs `screencapture` by name (cua-driver 0.37.0
-    // platform-macos capture.rs). That Apple tool checks TCC on its responsible process, so it
-    // asked for the Microphone as the helper and took the screen (#1588).
+    // platform-macos capture.rs). That Apple tool is entitled to record audio and checks privacy
+    // grants against its responsible process, the helper; see #1588.
     check(
       "the driver cannot find screencapture on its search path",
       !resolves("screencapture", inherited["PATH"]))
