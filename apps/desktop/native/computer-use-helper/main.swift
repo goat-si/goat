@@ -246,11 +246,6 @@ struct HelperError: Error {
   let message: String
 }
 
-/// Names the daemon inherits, matching the macOS subset of @trycua/cua-driver's embedded host
-/// allowlist. Anything else in the helper's environment is dropped.
-let inheritedNames: Set<String> = [
-  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "CUA_LOG",
-]
 /// Driver tuning the host may set at launch. No tool argument can change these.
 let hostSettableNames: Set<String> = [
   "CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS", "CUA_DRIVER_WINDOW_CHANGE_POLL_MS",
@@ -367,11 +362,7 @@ final class DriverService {
   /// What every driver this helper runs inherits: the allowlisted names, the host's tuning
   /// knobs, privacy switches forced off, and embedded mode under this process.
   func driverEnvironment(_ settable: [[String: Any]]) -> [String: String] {
-    var environment: [String: String] = [:]
-    for (name, value) in ProcessInfo.processInfo.environment
-    where inheritedNames.contains(name) || name.hasPrefix("LC_") {
-      environment[name] = value
-    }
+    var environment = DriverEnvironment.inherited(ProcessInfo.processInfo.environment)
     for entry in settable {
       guard let name = entry["name"] as? String, let value = entry["value"] as? String,
         hostSettableNames.contains(name)

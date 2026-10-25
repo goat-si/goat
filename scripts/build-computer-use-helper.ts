@@ -337,6 +337,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "Frames.swift"),
       // GOAT's own windows, which the live picture never shows (#1321).
       path.join(sourceDir, "HostIdentity.swift"),
+      // What a driver inherits from the helper's environment (#1588).
+      path.join(sourceDir, "DriverEnvironment.swift"),
     ]);
     slices.push(slice);
   }
