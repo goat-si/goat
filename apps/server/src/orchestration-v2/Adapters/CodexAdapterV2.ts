@@ -7536,23 +7536,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           hasPendingBackgroundWorkForThread: Effect.fn(
             "CodexAdapterV2.hasPendingBackgroundWorkForThread",
           )(function* (providerThread) {
-            const contexts = [
-              ...(yield* Ref.get(activeTurns)).values(),
+            // Owned through its root turn, which may leave both maps while its work runs (#1571).
+            const owned = (context: ActiveCodexTurnContext) =>
+              approvalOwnerCodexTurn(context).owner.providerThread.id === providerThread.id;
+            const active = yield* Ref.get(activeTurns);
+            for (const context of [
+              ...active.values(),
               ...(yield* Ref.get(settledTurns)).values(),
-            ];
-            const roots = contexts.filter(
-              (context) => context.providerThread.id === providerThread.id,
-            );
-            for (const context of contexts) {
-              if (!roots.some((root) => context === root || isDescendantCodexTurn(context, root)))
-                continue;
+            ]) {
+              if (!owned(context)) continue;
               if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+              if (context.subagent !== null && active.has(context.nativeTurnId)) return true;
+            }
+            for (const subagent of (yield* Ref.get(subagentThreads)).values())
               if (
-                context.subagent !== null &&
-                (yield* Ref.get(activeTurns)).has(context.nativeTurnId)
+                (subagent.task.status === "running" || subagent.task.status === "pending") &&
+                owned(subagent.parentContext)
               )
                 return true;
-            }
             return false;
           }),
           ensureThread: (threadInput) =>
