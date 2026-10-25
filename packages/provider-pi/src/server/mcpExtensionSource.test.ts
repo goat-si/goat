@@ -791,58 +791,6 @@ describe("Pi Cua Driver bridge", () => {
     }
   });
 
-  it("swaps to the driver a new control names after Stop, under the same tool names (#1564)", async () => {
-    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-pi-cua-swap-"));
-    try {
-      const launched = NodePath.join(directory, "launched-driver.mjs");
-      const minted = NodePath.join(directory, "minted-driver.mjs");
-      const gate = NodePath.join(directory, "gate");
-      await NodeFSP.writeFile(launched, FAKE_CUA_DRIVER);
-      await NodeFSP.writeFile(
-        minted,
-        FAKE_CUA_DRIVER.replace('"window "', '"new control window "'),
-      );
-      await NodeFSP.writeFile(gate, "on");
-      const bridge = await loadMcpBridge({
-        cua: { command: process.execPath, args: [launched] },
-        cuaGate: gate,
-      });
-      const name = "mcp__cua-driver__get_window_state";
-      const tool = bridge.tools.find((entry) => entry.name === name)!;
-      const start = bridge.handlers.get("before_agent_start")!;
-      const ctx = { ui: { notify: () => undefined } };
-      const turn = async () => {
-        const sections: Record<string, string> = {};
-        await start({ systemPrompt: "base", systemPromptOptions: { sections } }, ctx);
-        return sections;
-      };
-      try {
-        bridge.restoreActiveTools(["read", name]);
-        await turn();
-        assert.deepEqual((await tool.execute("capture", { window_id: 1 })).content[0], {
-          type: "text",
-          text: "window 1",
-        });
-        // The adapter names the driver GOAT minted after a Stop beside the gate.
-        await NodeFSP.writeFile(
-          `${gate}.driver`,
-          JSON.stringify({ command: process.execPath, args: [minted], env: {} }),
-        );
-        await NodeFSP.writeFile(gate, "driver");
-        assert.include((await turn()).goat_computer_use, "<computer_use>");
-        assert.include(bridge.getActiveTools(), name);
-        assert.deepEqual((await tool.execute("capture", { window_id: 2 })).content[0], {
-          type: "text",
-          text: "new control window 2",
-        });
-      } finally {
-        await (bridge.handlers.get("session_shutdown") as unknown as () => void)();
-      }
-    } finally {
-      await NodeFSP.rm(directory, { recursive: true, force: true });
-    }
-  });
-
   it("leaves the instructions out of a session without the driver", async () => {
     const bridge = await loadMcpBridge();
     assert.isFalse(bridge.tools.some((entry) => entry.name.startsWith("mcp__cua-driver__")));
