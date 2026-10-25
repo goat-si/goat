@@ -4,9 +4,11 @@ import { RunId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import { MaxOpsBeforeYield } from "effect/Scheduler";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -121,4 +123,52 @@ it.effect(
       assert.notInclude(after, before[0]);
       yield* leases.stopAll;
     }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
+// A control's reuse takes well under this many fiber ops, so the sweep below covers every step.
+const YIELD_SWEEP = 160;
+
+it.effect(
+  "a Stop that lands at any scheduler yield during a control's reuse is never undone (#1653)",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const sql = yield* SqlClient.SqlClient;
+      const outcomes = new Set<string>();
+      for (let budget = 8; budget <= YIELD_SWEEP; budget++) {
+        const threadId = ThreadId.make(`thread-stop-during-reuse-${budget}`);
+        yield* sql`
+          INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+             created_at, updated_at, payload_json)
+          VALUES (${threadId}, 'project', 'thread', 'codex', 'full-access', 'default',
+            '2026-01-01', '2026-01-01', '{}')`;
+        const first = Option.getOrThrow(
+          yield* leases.everyAppControl(threadId, false, {
+            person: true,
+            runId: RunId.make(`run:${budget}:R`),
+          }),
+        );
+        // The reuse yields after `budget` ops, and the Stop forked behind it runs at that yield.
+        const reuse = yield* leases
+          .everyAppControl(threadId, false, {
+            person: true,
+            runId: RunId.make(`run:${budget}:Q`),
+          })
+          .pipe(Effect.provideService(MaxOpsBeforeYield, budget), Effect.forkChild);
+        const stop = yield* leases.stop(threadId).pipe(Effect.forkChild);
+        const reused = Option.getOrThrow(yield* Fiber.join(reuse));
+        assert.isTrue(yield* Fiber.join(stop));
+        const state = yield* leases.controlState(threadId, reused.controlId);
+        // Either the reuse finished first and the Stop ended it, or the Stop came first and the
+        // run got a new control. A reused control that is still live means the Stop was lost.
+        if (reused.controlId === first.controlId)
+          assert.deepEqual(state, { _tag: "ended", reason: "stopped" });
+        outcomes.add(reused.controlId === first.controlId ? "reused" : "new");
+      }
+      // The sweep reached both orders, so it crossed the whole reuse.
+      assert.deepEqual([...outcomes].sort(), ["new", "reused"]);
+      yield* leases.stopAll;
+    }).pipe(Effect.provide(layer)),
 );

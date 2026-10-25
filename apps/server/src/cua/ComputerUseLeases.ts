@@ -386,42 +386,39 @@ const make = Effect.gen(function* () {
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     // A driver started for this thread after all; the session list drops the blocked entry.
     if (blockedTurns.delete(threadId)) yield* changed;
-    const existing = controls.get(threadId);
-    if (
-      existing !== undefined &&
-      existing.ended === undefined &&
-      existing.handoffId === handoffId &&
-      existing.everyApp === everyApp &&
-      DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
-    ) {
-      const reused: ControlRecord = {
-        ...nextTurn(existing),
-        uses: existing.uses + 1,
-        ...(runId === undefined ? {} : { runId }),
-      };
-      // Proxies must hear of a grant this added or dropped (#1617, #1653), with no gap to interrupt.
-      yield* Effect.uninterruptible(
-        Effect.suspend(() => {
-          controls.set(threadId, reused);
-          return implyFocus(reused) || existing.idle === true ? changed : Effect.void;
-        }),
-      );
-      return reused as ComputerUseControl;
-    }
-    const next: ControlRecord = {
-      controlId: `control:${NodeCrypto.randomUUID()}`,
-      threadId,
-      expiresAt: Option.isSome(lease)
-        ? lease.value.expiresAt
-        : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
-      ...(handoffId === undefined ? {} : { handoffId }),
-      ...(everyApp === undefined ? {} : { everyApp }),
-      ...(runId === undefined ? {} : { runId }),
-      uses: 0,
-    };
-    // A new control publishes at once, in the same uninterruptible step as the state it changed.
-    yield* Effect.uninterruptible(
+    // Read, decision, state change and notice are one synchronous, uninterruptible step: a Stop
+    // cannot land between the read and the write, and an interrupt cannot skip the notice of a
+    // grant this added or dropped (#1617, #1653).
+    return yield* Effect.uninterruptible(
       Effect.suspend(() => {
+        const existing = controls.get(threadId);
+        if (
+          existing !== undefined &&
+          existing.ended === undefined &&
+          existing.handoffId === handoffId &&
+          existing.everyApp === everyApp &&
+          DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
+        ) {
+          const reused: ControlRecord = {
+            ...nextTurn(existing),
+            uses: existing.uses + 1,
+            ...(runId === undefined ? {} : { runId }),
+          };
+          controls.set(threadId, reused);
+          const notice = implyFocus(reused) || existing.idle === true ? changed : Effect.void;
+          return Effect.as(notice, reused as ComputerUseControl);
+        }
+        const next: ControlRecord = {
+          controlId: `control:${NodeCrypto.randomUUID()}`,
+          threadId,
+          expiresAt: Option.isSome(lease)
+            ? lease.value.expiresAt
+            : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
+          ...(handoffId === undefined ? {} : { handoffId }),
+          ...(everyApp === undefined ? {} : { everyApp }),
+          ...(runId === undefined ? {} : { runId }),
+          uses: 0,
+        };
         if (existing !== undefined) {
           reservations.forgetClosed(threadId, existing.controlId);
           foreground.revokeControl(threadId, existing.controlId);
@@ -434,10 +431,9 @@ const make = Effect.gen(function* () {
           everyApp === undefined ? handoffId : undefined,
         );
         implyFocus(next);
-        return changed;
+        return Effect.as(changed, next as ComputerUseControl);
       }),
     );
-    return next as ComputerUseControl;
   });
 
   const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
