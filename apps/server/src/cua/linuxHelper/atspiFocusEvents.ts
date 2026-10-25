@@ -233,13 +233,15 @@ export function readMessage(
     return typeof value === "string" ? value : undefined;
   };
   const replySerial = fields.get(5);
+  const iface = text(2);
+  const member = text(3);
   return {
     message: {
       type: data[1] ?? 0,
       serial: u32(8),
       ...(typeof replySerial === "number" ? { replySerial } : {}),
-      ...(text(2) === undefined ? {} : { iface: text(2) }),
-      ...(text(3) === undefined ? {} : { member: text(3) }),
+      ...(iface === undefined ? {} : { iface }),
+      ...(member === undefined ? {} : { member }),
       ...(typeof signature === "string" ? { signature } : {}),
       ...(firstString === undefined ? {} : { firstString }),
     },
