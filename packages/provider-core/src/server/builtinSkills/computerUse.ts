@@ -38,9 +38,10 @@ export const COMPUTER_USE_SKILL_PEOPLE = `<computer_use_people>
 
 ## Telling and handing off
 - Before the first action on a screen, say in one sentence which app or window you will use and why.
-- Keep the default background delivery; keys go to the target app, so system-wide shortcuts do nothing. Foreground delivery and \`bring_to_front\` take the person's screen: ask them first, and only after background input did not land.
+- Keep the default background delivery; keys go to the target app, so system-wide shortcuts do nothing. Foreground delivery and \`bring_to_front\` take the person's screen and need foreground approval; use them only after background input did not land. First tell the person the purpose and that the screen may briefly be taken and returned, then call \`computer_use.request\` with \`foreground: true\` and no \`apps\`. Pause, Stop or the end of the turn revokes it, and later foreground work needs a new approval.
+- Never restore focus yourself. Only a native foreground action already sent under live approval may finish its own focus return.
 - Stop: the answer says \`userStoppedSession\`. Computer use is over for this turn. Say so in one line, do not reach the screen through other tools, and do not go on.
-- Take over, or the person's own keyboard or pointer where GOAT can detect it: every agent on this computer pauses until the person hands control back (\`userIntervened\`). End your turn or wait; after hand back, observe again before acting and never resend input that was cut off. Where GOAT cannot detect their input, stop yourself when you see them working.
+- Keep working while the person uses their keyboard or pointer. An explicit takeover pause says \`userIntervened\`: end your turn or wait; after hand back, observe again before acting and never resend input that was cut off.
 - Private fields: password, one-time code, payment and passkey fields are private whether or not a tool refuses. Never read, type into, or capture them. When GOAT detects a secure field with focus, computer use pauses (\`detail: "private_mode"\`) until it loses focus; other private fields are yours to notice. Name the field and the step, ask the person to finish it, and observe again once they say they are done. Never copy a secret into the conversation.
 
 ## Confirmation
@@ -78,7 +79,7 @@ export const COMPUTER_USE_PLATFORM_NOTES: Readonly<Partial<Record<NodeJS.Platfor
   linux: `<computer_use_host os="Linux">
 - X11 sessions work best. On Wayland the person approves screen capture and input through the desktop portal, and fewer apps can be read or driven; while that approval is missing, say so instead of retrying.
 - The control tree comes from AT-SPI. Without it (no \`at-spi2-core\`, no session bus, or an app with accessibility off) you get screenshots, pointer, and keys only.
-- After \`background_unavailable\`, observe first; it can come after partial input. Foreground delivery is then the only route, and it takes focus, so tell the person first.
+- After \`background_unavailable\`, observe first; it can come after partial input. Foreground delivery is then the only route, and it needs foreground approval (see above).
 - Password fields are private fields (see above).
 - \`command\` is Super and \`option\` is Alt.
 </computer_use_host>`,

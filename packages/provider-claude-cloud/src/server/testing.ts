@@ -113,6 +113,14 @@ export const cloudToolResult = (id: string) =>
     remoteSourced: true,
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "…" }] },
   });
+/** The synthetic line Claude writes once its API retries are spent; nothing follows it. */
+export const cloudApiError = (text: string) =>
+  line({
+    type: "assistant",
+    remoteSourced: true,
+    isApiErrorMessage: true,
+    message: { role: "assistant", content: [{ type: "text", text }], stop_reason: null },
+  });
 const cloudAttachment = line({ type: "attachment", remoteSourced: true, attachment: {} });
 const stopHookSummary = line({ type: "system", subtype: "stop_hook_summary", remoteSourced: true });
 /** Wraps cloud lines in the teleport's own header and its local continuation, prompt and reply. */

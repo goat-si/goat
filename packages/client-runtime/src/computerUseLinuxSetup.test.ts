@@ -131,6 +131,26 @@ describe("linuxComputerUseSetup", () => {
     expect(JSON.stringify(steps)).not.toContain("can still read and use app controls");
   });
 
+  it("a helper that stopped answering is the only step, with its reason, not a broken session (#1514)", () => {
+    const reason =
+      "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
+    const setup = linuxComputerUseSetup(
+      {
+        ...READY,
+        grants: { accessibility: "unknown", screenCapture: "unknown" },
+        helper: "unauthenticated",
+        capture: "unavailable",
+        tree: "unavailable",
+        input: "unavailable",
+        reasons: [reason],
+      },
+      "lidge-ai",
+    );
+    expect(setup.ready).toBe(false);
+    expect(setup.steps.map((step) => step.id)).toEqual(["helper"]);
+    expect(setup.steps[0]?.detail).toBe(reason);
+    expect(setup.steps[0]?.guidance.map((line) => line.text).join(" ")).toContain("lidge-ai");
+  });
   it("with no window open yet, it asks for a window instead of turning AT-SPI on", () => {
     // AT-SPI is proven only by reading a window, so with none open the tree is unavailable
     // whether or not AT-SPI answers; capture reports the missing window.

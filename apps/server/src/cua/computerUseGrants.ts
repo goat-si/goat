@@ -1,34 +1,13 @@
 /**
- * What a computer use grant handoff admits: whether it is live, the apps a thread's grants admit
- * together, and where two admissions overlap. Pure helpers for ComputerUseLeases.ts.
+ * What a computer use grant handoff admits: the apps a thread's grants admit together,
+ * and where two admissions overlap. Pure helpers for ComputerUseLeases.ts.
  *
  * @module computerUseGrants
  */
-import { COMPUTER_USE_GRANT_HANDOFF_PATH, Handoff } from "@goat/contracts";
+import type { ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-
 import type { ComputerUseLease } from "./ComputerUseLeases.ts";
 import { approvedApps } from "./ComputerUseScope.ts";
-
-export const decodeHandoff = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.toCodecJson(Handoff)),
-);
-
-/** A completed grant before its expiry. A grant without an expiry is never live. */
-export const leaseOf = (handoff: Handoff, now: DateTime.Utc): Option.Option<ComputerUseLease> =>
-  handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-  handoff.state === "completed" &&
-  handoff.expiresAt !== null &&
-  DateTime.toEpochMillis(handoff.expiresAt) > DateTime.toEpochMillis(now)
-    ? Option.some({
-        threadId: handoff.requestedBy.threadId,
-        handoffId: handoff.handoffId,
-        expiresAt: handoff.expiresAt,
-        ...(handoff.apps === undefined ? {} : { apps: handoff.apps }),
-      })
-    : Option.none();
 
 /** The apps a thread's live grants admit together; absent when one of them admits every app. */
 export const appsOf = (
@@ -57,3 +36,25 @@ export const overlap = (
   const apps = held.filter((app) => names.has(app.toLowerCase()));
   return apps.length === 0 ? undefined : { apps };
 };
+
+/** A thread whose admission overlaps one asked for, by grant or by unattended full access. */
+export interface ComputerUseHolder {
+  readonly threadId: ThreadId;
+  readonly expiresAt: DateTime.Utc;
+  /** The holder's apps in the way, as its grant names them; absent when it holds the whole screen. */
+  readonly apps?: ReadonlyArray<string>;
+}
+
+const heldApps = (holder: ComputerUseHolder) =>
+  holder.apps === undefined ? "the whole screen" : holder.apps.join(", ");
+
+/** Who holds what an admission would overlap, and until when, as one sentence for an agent. */
+export const describeHolder = (holder: ComputerUseHolder) =>
+  `Thread ${holder.threadId} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt)}.`;
+
+/**
+ * The same sentence for a person on an approval card: the holder by its title, and the end as a
+ * UTC clock time like the request's own text, since the server does not know the reader's zone.
+ */
+export const describeHolderForPerson = (holder: ComputerUseHolder, title: string | undefined) =>
+  `${title === undefined ? "Another thread" : `The thread "${title}"`} holds ${heldApps(holder)} on this host until ${DateTime.formatIso(holder.expiresAt).slice(11, 16)} UTC.`;

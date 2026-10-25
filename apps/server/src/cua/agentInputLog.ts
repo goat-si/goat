@@ -93,7 +93,7 @@ const BOTH: ReadonlyArray<InputKind> = ["keyboard", "pointer"];
 const BEFORE_MS = 50;
 /**
  * Events the driver posted can surface this long after its answer: the window server delivers
- * them after the call returns, and the helper polls every 250 ms.
+ * them after the call returns, and the helper polls keys every 25 ms.
  */
 const AFTER_MS = 500;
 /**
@@ -103,9 +103,10 @@ const AFTER_MS = 500;
 export const KEEP_MS = 10_000;
 /**
  * An open call covers events for at most this long, and so does an unbroken run of calls of one
- * kind. Past it, a person's input of that kind pauses the agents even while calls keep coming: a
- * call that never answers, a lost end report, or back-to-back calls must not hide a person for
- * long. Agent input that really runs longer then pauses the agents, which errs toward the person.
+ * kind. Past it, a person's input of that kind is distinguished from a covered agent's input even
+ * while calls keep coming. Inputs older than the retained log are refused too, so an agent cannot
+ * masquerade as a person by sending an old click. Human input never pauses admitted work; these
+ * classifications remain useful for input arbitration and reports.
  */
 const OPEN_MS = 10_000;
 
@@ -133,6 +134,11 @@ function runsOf(spans: ReadonlyArray<Span>): Array<Array<Span>> {
   }
   return runs;
 }
+
+const boundsOf = (run: ReadonlyArray<Span>) => ({
+  from: Math.min(...run.map((span) => span.from)),
+  to: Math.max(...run.map((span) => span.to)),
+});
 
 /**
  * Keeps a run's history short: closed spans that end before every open span of their run cannot
@@ -215,6 +221,41 @@ export function makeAgentInputLog() {
         .filter((run) => now - Math.max(...run.map((span) => span.to)) < KEEP_MS)
         .flat();
   };
+  /** The log's covers and runs as they are now, and a test of one event against them. */
+  const judge = (live: (key: string) => boolean) => {
+    const covers = [
+      ...[...open]
+        .filter(([key]) => live(key))
+        .map(([, call]) => ({
+          kinds: call.kinds,
+          from: call.start - BEFORE_MS,
+          to: call.start + OPEN_MS,
+        })),
+      ...done
+        .filter((call) => call.expired === undefined || live(call.expired))
+        .map((call) => ({
+          kinds: call.kinds,
+          from: call.start - BEFORE_MS,
+          to: call.end + AFTER_MS,
+        })),
+    ];
+    const runs = {
+      keyboard: runsOf(spans.keyboard),
+      pointer: runsOf(spans.pointer),
+    };
+    const bounds = {
+      keyboard: runs.keyboard.map(boundsOf),
+      pointer: runs.pointer.map(boundsOf),
+    };
+    return (at: number, kind: InputKind | "unknown") => {
+      if (kind === "unknown") return false;
+      if (!covers.some((cover) => cover.kinds.includes(kind) && cover.from <= at && at <= cover.to))
+        return false;
+      const run = bounds[kind].find((entry) => entry.from <= at && at <= entry.to);
+      // No run on record for covered input: err toward the person.
+      return run !== undefined && at - run.from <= OPEN_MS;
+    };
+  };
   return {
     prune,
     /** Whether the log still holds every call that could cover an event at "at". */
@@ -250,32 +291,12 @@ export function makeAgentInputLog() {
       at: number,
       kind: InputKind | "unknown",
       live: (key: string) => boolean = () => true,
-    ) => {
-      if (kind === "unknown") return false;
-      const covered =
-        [...open].some(
-          ([key, call]) =>
-            live(key) &&
-            call.kinds.includes(kind) &&
-            at >= call.start - BEFORE_MS &&
-            at <= call.start + OPEN_MS,
-        ) ||
-        done.some(
-          (call) =>
-            (call.expired === undefined || live(call.expired)) &&
-            call.kinds.includes(kind) &&
-            at >= call.start - BEFORE_MS &&
-            at <= call.end + AFTER_MS,
-        );
-      if (!covered) return false;
-      const run = runsOf(spans[kind]).find(
-        (entry) =>
-          Math.min(...entry.map((span) => span.from)) <= at &&
-          at <= Math.max(...entry.map((span) => span.to)),
-      );
-      // No run on record for covered input: err toward the person.
-      return run !== undefined && at - Math.min(...run.map((span) => span.from)) <= OPEN_MS;
-    },
+    ) => judge(live)(at, kind),
+    /**
+     * isAgents for many events against the log as it is now: the covers and runs are worked out
+     * once, so a batch of thousands costs a pass over them per event, not a rebuild.
+     */
+    judge: (live: (key: string) => boolean = () => true) => judge(live),
     /** How many calls the log still holds, open or finished. */
     size: () => open.size + done.length,
   };

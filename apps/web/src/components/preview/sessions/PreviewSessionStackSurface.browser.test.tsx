@@ -7,6 +7,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { useState } from "react";
 
 import { act, render } from "../../../../test/render";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
 
 function setup(poppedOut = false) {
@@ -56,7 +57,11 @@ function setup(poppedOut = false) {
   };
 }
 
-function Stack(props: { readonly hidden?: boolean; readonly content?: boolean }) {
+function Stack(props: {
+  readonly hidden?: boolean;
+  readonly content?: boolean;
+  readonly tooltip?: boolean;
+}) {
   return (
     <PreviewSessionStackSurface
       hasContent={props.content ?? true}
@@ -68,6 +73,12 @@ function Stack(props: { readonly hidden?: boolean; readonly content?: boolean })
           <p>{live ? "Live thumbnails" : "Thumbnails paused"}</p>
           {toggle}
           {captureNotice}
+          {props.tooltip ? (
+            <Tooltip open>
+              <TooltipTrigger render={<span />}>Card name</TooltipTrigger>
+              <TooltipPopup>Card name tooltip</TooltipPopup>
+            </Tooltip>
+          ) : null}
         </section>
       )}
     </PreviewSessionStackSurface>
@@ -163,4 +174,19 @@ it("keeps web sessions docked when no Electron bridge exists", async () => {
   await using screen = await render(<Stack />);
   await expect.element(screen.getByText("Docked sessions")).toBeVisible();
   await expect.element(screen.getByRole("button", { name: "Pop out" })).not.toBeInTheDocument();
+});
+
+it("shows a floating card's tooltip in the floating window, not in GOAT's main window (#1534)", async () => {
+  using fixture = setup();
+  using _open = vi.spyOn(window, "open").mockReturnValue(fixture.child);
+  await using screen = await render(<Stack tooltip />);
+  await userEvent.click(screen.getByRole("button", { name: "Pop out" }));
+  await vi.waitFor(() =>
+    expect(fixture.child.document.body.textContent).toContain("Card name tooltip"),
+  );
+  expect(document.body.textContent).not.toContain("Card name tooltip");
+  // Docking returns the tooltip to the main window with the stack.
+  await userEvent.click(screen.getByRole("button", { name: "Dock", exact: true }));
+  await expect.element(screen.getByText("Card name tooltip")).toBeInTheDocument();
+  expect(fixture.child.document.body.textContent).not.toContain("Card name tooltip");
 });

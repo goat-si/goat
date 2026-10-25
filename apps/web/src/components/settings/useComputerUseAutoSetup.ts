@@ -123,12 +123,15 @@ function useEnableChoice(
 /**
  * Turning computer use on runs the whole setup in order: save the setting, read this Mac's
  * grants, wait in System Settings for any that are missing, then restart and verify the helper.
- * Only the Mac that runs the host can read and prove its grants; elsewhere saving is the setup.
+ * Only the Mac that runs the host can read its grants. The Windows desktop that runs the host
+ * has no grants to read but proves capture and the tree the same way (#1520); elsewhere saving
+ * is the setup.
  */
 export function useComputerUseAutoSetup({
   queueKey,
   enabled,
   localMac,
+  localCheck,
   hostRejects,
   actions,
 }: {
@@ -136,6 +139,8 @@ export function useComputerUseAutoSetup({
   readonly queueKey: string;
   readonly enabled: boolean;
   readonly localMac: boolean;
+  /** This desktop runs the host and can restart and verify its helper: macOS or Windows. */
+  readonly localCheck: boolean;
   /**
    * The host reports a failure or a blocked grant, helper or capture step. A failure carries no
    * generation that would prove it older than this session's check, so it ends that proof.
@@ -229,7 +234,8 @@ export function useComputerUseAutoSetup({
       return;
     }
     if (!localMac) {
-      setPhase({ step: "idle" });
+      if (localCheck) await verifyNow(id);
+      else setPhase({ step: "idle" });
       return;
     }
     setPhase({ step: "checking" });

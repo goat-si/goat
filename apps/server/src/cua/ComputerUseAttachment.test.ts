@@ -1,3 +1,4 @@
+import type { ComputerUseHolder } from "./computerUseGrants.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type CuaDriverMcpConfiguration,
@@ -39,7 +40,7 @@ const fakeLeases = (input: {
   readonly proxy?: typeof proxy | undefined;
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
   /** Another thread holding the screen for unattended work. */
-  readonly holder?: ComputerUseLeases.ComputerUseHolder;
+  readonly holder?: ComputerUseHolder;
   /** The screen was claimed between the holder check and the claim. */
   readonly claimLost?: boolean;
 }) => {
@@ -80,6 +81,9 @@ const fakeLeases = (input: {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    foregroundApprovalEpoch: Effect.die("unused"),
+    approveForeground: () => Effect.die("unused"),
+    foregroundAvailable: () => Effect.die("unused"),
     humanInput: () => Effect.die("unused"),
     agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
@@ -216,7 +220,9 @@ describe("computerUseAttachment", () => {
     ({ origin, unattendedWork }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
-        const leases = fakeLeases({});
+        const leases = fakeLeases({
+          detection: { humanInput: false, privateMode: true, frames: false },
+        });
         const attached = yield* decide(driver, {
           origin,
           runtimeMode: "full-access",
@@ -255,6 +261,25 @@ describe("computerUseAttachment", () => {
         assert.deepEqual(leases.everyApp, []);
         assert.deepEqual(leases.minted, [Option.none()]);
       }),
+  );
+
+  it.effect("requires private-field detection even for full-access unattended work", () =>
+    Effect.gen(function* () {
+      const driver = fakeDriver({ enabled: true, running: true });
+      const attached = yield* decide(driver, {
+        origin: unattended,
+        runtimeMode: "full-access",
+        leases: fakeLeases({
+          detection: { humanInput: false, privateMode: false, frames: false },
+        }).leases,
+      }).pipe(Effect.provide(allowFullAccess(true)));
+      assert.deepEqual(attached, {
+        _tag: "none",
+        reason: "detection-unsupported",
+        blockUserConfig: true,
+      });
+      assert.equal(driver.calls.acquire, 0);
+    }),
   );
 
   it.effect("refuses full access unattended work while another thread holds the screen", () =>
@@ -308,12 +333,12 @@ describe("computerUseAttachment", () => {
   );
 
   it.effect(
-    "refuses unattended work on a host that cannot detect a person's input or a secret field",
+    "refuses unattended work without private-field detection, regardless of human-input detection",
     () =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         for (const detection of [
-          { humanInput: false, privateMode: true, frames: false },
+          { humanInput: false, privateMode: false, frames: false },
           { humanInput: true, privateMode: false, frames: false },
         ])
           assert.deepEqual(

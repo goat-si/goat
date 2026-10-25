@@ -60,6 +60,13 @@ const threadTools = Object.values(agentSurfaceRegistry)
   .filter((entry) => entry.requires !== "client" && entry.resource !== "device")
   .map(listedToolName);
 
+const expectForegroundSchema = (inputSchema: unknown) => {
+  expect(inputSchema).toMatchObject({
+    required: ["purpose"],
+    properties: { foreground: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
+  });
+};
+
 /** The served tools a harness keeps, checked against the listing it was given. */
 const expectOffered = (
   offered: ReadonlyArray<ListedTool>,
@@ -77,6 +84,10 @@ const expectOffered = (
       ? CORE
       : threadTools.filter((name) => !removedByAdapter.includes(name)).toSorted(),
   );
+  if (listing === "full")
+    expectForegroundSchema(
+      offered.find((tool) => tool.name === "goat_computer_use_request")?.inputSchema,
+    );
 };
 
 const rpcResult = (text: string, id: number): unknown => {
@@ -291,6 +302,11 @@ describe("what each harness is offered from GOAT's /mcp", () => {
             .map((tool) => tool.name.slice("mcp__goat__".length))
             .toSorted();
         expect(names(), listing).toEqual(listing === "core" ? CORE : threadTools.toSorted());
+        if (listing === "full")
+          expectForegroundSchema(
+            bridge.tools.find((tool) => tool.name === "mcp__goat__goat_computer_use_request")
+              ?.parameters,
+          );
         // The marked tools are declared to the model; the rest wait for tool_search.
         expect(names("direct"), listing).toEqual(CORE);
       }),

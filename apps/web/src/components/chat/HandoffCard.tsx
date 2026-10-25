@@ -1,5 +1,6 @@
 import {
   codexRouteErrorMessage,
+  handoffExpiryLabel,
   handoffRespondErrorMessage,
 } from "@goat/client-runtime/state/provider-instance-display";
 import { computerUseGrantLabel } from "@goat/client-runtime/computerUseGrant";
@@ -239,16 +240,12 @@ function HandoffCardContent(props: HandoffCardProps) {
         <p className="text-sm text-muted-foreground">{handoff.reason}</p>
         {isSsh || isProvider ? (
           pending && handoff.expiresAt ? (
-            <p className="text-xs text-muted-foreground">
-              Expires {DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}
-            </p>
+            <p className="text-xs text-muted-foreground">{handoffExpiryLabel(handoff.expiresAt)}</p>
           ) : null
         ) : (
           <p className="text-xs text-muted-foreground">
             {handoff.kind.replaceAll("_", " ")} · {handoff.state}
-            {handoff.expiresAt && pending
-              ? ` · Expires ${DateTime.toDate(handoff.expiresAt).toLocaleTimeString()}`
-              : ""}
+            {handoff.expiresAt && pending ? ` · ${handoffExpiryLabel(handoff.expiresAt)}` : ""}
           </p>
         )}
       </div>
