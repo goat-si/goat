@@ -35,6 +35,27 @@ describe("testsForChanges", () => {
     ]);
   });
 
+  it("runs the whole ingest suite for its SQL, a deleted file and the shared allowlist", () => {
+    const ingestSuite = [
+      "infra/ingest/src/batch.test.ts",
+      "infra/ingest/src/store.test.ts",
+      "infra/ingest/src/worker.test.ts",
+    ];
+    for (const changed of [
+      ["infra/ingest/migrations/0001_batches.sql"],
+      ["infra/ingest/migrations/0002_removed.sql"],
+      ["packages/shared/src/analyticsAllowlist.ts"],
+    ]) {
+      const code = changed.filter((file) => file.endsWith(".ts"));
+      expect([...testsForChanges(root, code, changed)], changed[0]).toEqual(
+        expect.arrayContaining(ingestSuite),
+      );
+    }
+    expect([...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])]).toEqual(
+      [],
+    );
+  });
+
   it("fails instead of returning a partial selection when git cannot answer", () => {
     const outside = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "changed-tests-"));
     try {

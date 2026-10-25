@@ -12,6 +12,16 @@ const PROMPT_TEXT =
 const REPLAY_DIR = "apps/server/src/orchestration-v2/testkit";
 const REPLAY_SUITE = /Replay.*\.integration\.test\.ts$/;
 
+/**
+ * Changes that run the whole ingest Worker suite: its source, SQL migrations and Wrangler
+ * config, and the shared allowlist that decides what it stores. Most of these are not
+ * code, so no test sits beside them. goat-ci-scope.cjs uses the same pattern for its
+ * test-ingest task.
+ */
+export const INGEST_SUITE_TRIGGER =
+  /^(?:infra\/ingest\/|packages\/shared\/src\/analyticsAllowlist\.ts$)/;
+const INGEST_TESTS = "infra/ingest/src";
+
 /** A failed lookup would silently drop suites, so anything but a clean answer throws. */
 const git = (root: string, args: ReadonlyArray<string>) => {
   const result = NodeChildProcess.spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -68,9 +78,21 @@ function promptTextTests(root: string): ReadonlyArray<string> {
  *
  * Paths are git's repo-relative POSIX paths in and out on every platform, so Windows selects
  * the same suites as CI; NodePath.join would emit backslashes there.
+ *
+ * `changed` is every changed path, deleted and non-code ones included, for suites that
+ * own a whole directory (INGEST_SUITE_TRIGGER).
  */
-export function testsForChanges(root: string, code: ReadonlyArray<string>): ReadonlySet<string> {
+export function testsForChanges(
+  root: string,
+  code: ReadonlyArray<string>,
+  changed: ReadonlyArray<string> = code,
+): ReadonlySet<string> {
   const tests = new Set(code.filter((file) => TEST.test(file)));
+  if (changed.some((file) => INGEST_SUITE_TRIGGER.test(file))) {
+    for (const entry of NodeFS.readdirSync(NodePath.join(root, INGEST_TESTS))) {
+      if (TEST.test(entry)) tests.add(NodePath.posix.join(INGEST_TESTS, entry));
+    }
+  }
   for (const file of code) {
     const dir = NodePath.posix.dirname(file);
     const prefix = `${NodePath.posix.basename(file).replace(CODE, "")}.`;

@@ -1,0 +1,21 @@
+{
+  "name": "@goat/ingest",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "pnpm dlx wrangler@4.152.0 deploy",
+    "migrate": "pnpm dlx wrangler@4.152.0 d1 migrations apply goat-ingest --remote",
+    "test": "vp test run --config ../../vite.config.ts --dir .",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@goat/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260601.1",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
