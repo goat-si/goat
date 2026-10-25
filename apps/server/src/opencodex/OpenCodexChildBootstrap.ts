@@ -313,8 +313,9 @@ const make = Effect.gen(function* () {
     generation: number,
     grantId: string,
   ) {
-    const consent = yield* consents.check(alias);
+    // The settings read can wait on storage, so it goes first and session authority after it.
     if (!(yield* hubEnabled)) return { state: "withdrawn" } as const;
+    const consent = yield* consents.check(alias);
     // After every read that yields, with nothing in between that does: a Forget or a withdrawal
     // made during those reads ends this job's permission.
     const held = yield* consents.held(alias);
@@ -324,17 +325,28 @@ const make = Effect.gen(function* () {
       return { state: "withdrawn" } as const;
     return { state: "allowed", person: consent.person } as const;
   });
-  const sshGate = (alias: string, generation: number, grantId: string): Gate => ({
-    admission: sshAdmission(alias, generation, grantId),
-    join: (scope) =>
-      membership.joinWithConsent(
-        scope,
-        alias,
-        sshAdmission(alias, generation, grantId).pipe(
-          Effect.map((admission) => (admission.state === "allowed" ? admission.person : undefined)),
+  const sshGate = (alias: string, generation: number, grantId: string): Gate => {
+    // The read that finds a revoked grant drops it, so a later read only sees it gone; the job
+    // keeps the reason to show.
+    let revoked: Extract<Admission, { state: "revoked" }> | undefined;
+    const admission = sshAdmission(alias, generation, grantId).pipe(
+      Effect.map((read) => {
+        if (read.state === "revoked") revoked = read;
+        return read.state === "withdrawn" && revoked !== undefined ? revoked : read;
+      }),
+    );
+    return {
+      admission,
+      join: (scope) =>
+        membership.joinWithConsent(
+          scope,
+          alias,
+          admission.pipe(
+            Effect.map((read) => (read.state === "allowed" ? read.person : undefined)),
+          ),
         ),
-      ),
-  });
+    };
+  };
   const startSsh = Effect.fn("OpenCodexChildBootstrap.startSsh")(function* (
     alias: string,
     retry: boolean,

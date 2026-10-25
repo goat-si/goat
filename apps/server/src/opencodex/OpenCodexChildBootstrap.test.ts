@@ -73,6 +73,8 @@ interface Machine {
   expired: Set<string>;
   /** Runs inside the nth authority read, before it answers. */
   duringSessionRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
+  /** Runs inside the nth settings read, which can wait on storage, before it answers. */
+  duringSettingsRead: { readonly at: number; readonly run: Effect.Effect<void> } | undefined;
   /** Runs while OpenCodex is being prepared on the machine. */
   duringPrepare: Effect.Effect<void>;
 }
@@ -104,6 +106,7 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
   let ready: (alias: string) => Effect.Effect<void> = () => Effect.void;
   let sshEvent: SshAliasListener = () => Effect.void;
   let sessionReads = 0;
+  let settingsReads = 0;
   let removing: (alias: string) => Effect.Effect<void, CloudMachineError> = () => Effect.void;
   let invalidated: (
     alias: string,
@@ -214,14 +217,18 @@ const build = Effect.fn("OpenCodexChildBootstrapTest.build")(function* (
       ),
       Layer.provide(
         Layer.mock(Settings.ServerSettingsService)({
-          getSettings: Effect.sync(() => ({
-            ...DEFAULT_SERVER_SETTINGS,
-            hub: {
-              ...DEFAULT_SERVER_SETTINGS.hub,
-              enabled: machine.hub,
-              autoJoinCloudMachines: machine.autoJoin,
-            },
-          })),
+          getSettings: Effect.gen(function* () {
+            const hook = machine.duringSettingsRead;
+            if (hook !== undefined && ++settingsReads === hook.at) yield* hook.run;
+            return {
+              ...DEFAULT_SERVER_SETTINGS,
+              hub: {
+                ...DEFAULT_SERVER_SETTINGS.hub,
+                enabled: machine.hub,
+                autoJoinCloudMachines: machine.autoJoin,
+              },
+            };
+          }),
         }),
       ),
       Layer.provide(
@@ -270,6 +277,7 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
     sessions: new Map([["person", ["orchestration:operate", "settings:write"]]]),
     expired: new Set(),
     duringSessionRead: undefined,
+    duringSettingsRead: undefined,
     duringPrepare: Effect.void,
     ...overrides,
   };
@@ -733,5 +741,26 @@ it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
         });
         expect(home.calls).toEqual([]);
       }),
+  );
+
+  it.effect("a session that ends while the last settings read waits still stops the join", () =>
+    Effect.gen(function* () {
+      const endings: ReadonlyArray<(machine: Machine) => void> = [
+        (machine) => void machine.sessions.delete("person"),
+        (machine) => void machine.expired.add("person"),
+        (machine) => void machine.sessions.set("person", ["orchestration:operate"]),
+      ];
+      for (const end of endings) {
+        const home = yield* setup();
+        // Hub state is read before the setup, after preparing, and last by the join itself.
+        home.machine.duringSettingsRead = { at: 3, run: Effect.sync(() => end(home.machine)) };
+        yield* home.bootstrap.setSshOptIn("lidge-ts", true, PERSON);
+        expect(yield* home.bootstrap.ensure("lidge-ts")).toMatchObject({
+          state: "blocked",
+          reason: "consent_revoked",
+        });
+        expect(home.calls).toEqual(["prepare lidge-ts 2.91.0", "join lidge-ts as nobody"]);
+      }
+    }),
   );
 });
