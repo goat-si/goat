@@ -534,7 +534,10 @@ describe("redactCause", () => {
       const interrupted = Effect.fn("call with token=canary-interrupt-0123456789")(function* () {
         return yield* Effect.interrupt;
       });
-      for (const program of [dies(), interrupted()]) {
+      for (const [program, framed] of [
+        [dies(), true],
+        [interrupted(), false],
+      ] as const) {
         const exit = yield* Effect.exit(program);
         assert.isTrue(Exit.isFailure(exit));
         if (!Exit.isFailure(exit)) continue;
@@ -542,11 +545,40 @@ describe("redactCause", () => {
         expect(Cause.pretty(exit.cause)).toContain("canary");
         const redacted = redactCause(exit.cause);
         expect(Cause.pretty(redacted)).not.toContain("canary");
+        // The error was made inside Effect, so its stack runs through Effect's internal frames;
+        // the redacted span frame must still be printed after them.
+        if (framed) expect(Cause.pretty(redacted)).toContain("at call with token=***");
         const exported = Cause.prettyErrors(redacted, { includeCauseInStack: true });
         expect(exported.map((e) => e.stack).join("\n")).not.toContain("canary");
       }
     }),
   );
+
+  // redactCause keeps its first 16 reasons one by one, summarizes the rest, and reads the kinds of
+  // no more than 100,000.
+  it.each([16, 17, 100_000, 100_001])("a cause of %i interrupts stays interrupt-only", (count) => {
+    const interrupts = Array.from({ length: count }, (_, index) =>
+      Cause.makeInterruptReason(index),
+    );
+    expect(Cause.hasInterruptsOnly(redactCause(Cause.fromReasons(interrupts)))).toBe(true);
+  });
+
+  it.each([100_000, 100_001])("a cause of %i failures gains no defect", (count) => {
+    const failures = Array.from({ length: count }, () => Cause.makeFailReason("failed"));
+    const redacted = redactCause(Cause.fromReasons(failures));
+    expect([Cause.hasFails(redacted), Cause.hasDies(redacted)]).toEqual([true, false]);
+  });
+
+  it("keeps the kind of each omitted reason past the first 16", () => {
+    const interrupts = Array.from({ length: 16 }, (_, index) => Cause.makeInterruptReason(index));
+    const withFail = redactCause(
+      Cause.fromReasons([...interrupts, Cause.makeFailReason(`token=${"canary-omitted-fail"}`)]),
+    );
+    expect([Cause.hasFails(withFail), Cause.hasDies(withFail)]).toEqual([true, false]);
+    const withDie = redactCause(Cause.fromReasons([...interrupts, Cause.makeDieReason("boom")]));
+    expect([Cause.hasFails(withDie), Cause.hasDies(withDie)]).toEqual([false, true]);
+    expect(Cause.pretty(withFail)).not.toContain("canary-omitted-fail");
+  });
 });
 
 describe("redactedDefects", () => {
