@@ -577,10 +577,9 @@ describe("failed span exits", () => {
         expect(recordedCause).toContain("CanaryError: upstream rejected token=[MASKED]");
         expect(recordedCause).not.toContain(SPAN_CANARY);
 
+        const delegated = delegatedExit(delegates[0]);
         const [rendered, ...rest] = Cause.prettyErrors(
-          Exit.isFailure(delegatedExit(delegates[0]))
-            ? delegatedExit(delegates[0]).cause
-            : Cause.empty,
+          Exit.isFailure(delegated) ? delegated.cause : Cause.empty,
           { includeCauseInStack: true },
         );
         assert.equal(rest.length, 0);

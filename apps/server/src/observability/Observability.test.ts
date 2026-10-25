@@ -129,81 +129,82 @@ const recordedCause = (record: EffectTraceRecord) =>
   record.exit._tag === "Success" ? "" : record.exit.cause;
 
 describe("Observability.layer", () => {
-  for (const otlp of [false, true]) {
-    it.effect(
-      `redacts failed span causes in the trace file${otlp ? " and the OTLP export" : ""}, keeping their kind, name and stack shape`,
-      () =>
-        Effect.gen(function* () {
-          const { failure, defect, failExit, dieExit, traceText, record, bodies } =
-            yield* traceThroughServer(otlp ? "http://otlp.test/v1/traces" : undefined);
+  it.effect.each([
+    { otlp: false, exports: "the trace file" },
+    { otlp: true, exports: "the trace file and the OTLP export" },
+  ])(
+    "redacts failed span causes in $exports, keeping their kind, name and stack shape",
+    ({ otlp }) =>
+      Effect.gen(function* () {
+        const { failure, defect, failExit, dieExit, traceText, record, bodies } =
+          yield* traceThroughServer(otlp ? "http://otlp.test/v1/traces" : undefined);
 
-          // The application's own failures are untouched.
-          assert.strictEqual(Option.getOrUndefined(Exit.findErrorOption(failExit)), failure);
-          assert.include(failure.message, canaryJwt);
-          assert.isTrue(Exit.isFailure(dieExit));
-          if (Exit.isFailure(dieExit)) {
-            assert.strictEqual(Cause.squash(dieExit.cause), defect);
-          }
+        // The application's own failures are untouched.
+        assert.strictEqual(Option.getOrUndefined(Exit.findErrorOption(failExit)), failure);
+        assert.include(failure.message, canaryJwt);
+        assert.isTrue(Exit.isFailure(dieExit));
+        if (Exit.isFailure(dieExit)) {
+          assert.strictEqual(Cause.squash(dieExit.cause), defect);
+        }
 
-          for (const canary of [canaryJwt, canaryBearer]) {
-            expect(traceText).not.toContain(canary);
-            for (const body of bodies) expect(body).not.toContain(canary);
-          }
+        for (const canary of [canaryJwt, canaryBearer]) {
+          expect(traceText).not.toContain(canary);
+          for (const body of bodies) expect(body).not.toContain(canary);
+        }
 
-          const failed = record("observability-fail");
-          assert.equal(failed.exit._tag, "Failure");
-          expect(recordedCause(failed)).toContain("UpstreamError: upstream rejected ");
-          expect(recordedCause(failed)).toContain("at observability-fail");
-          const died = record("observability-die");
-          assert.equal(died.exit._tag, "Failure");
-          expect(recordedCause(died)).toContain("Error: worker crashed");
-          expect(recordedCause(died)).toContain("Authorization: ");
-          assert.equal(record("observability-interrupt").exit._tag, "Interrupted");
-          assert.deepStrictEqual(record("observability-success").exit, { _tag: "Success" });
+        const failed = record("observability-fail");
+        assert.equal(failed.exit._tag, "Failure");
+        expect(recordedCause(failed)).toContain("UpstreamError: upstream rejected ");
+        expect(recordedCause(failed)).toContain("at observability-fail");
+        const died = record("observability-die");
+        assert.equal(died.exit._tag, "Failure");
+        expect(recordedCause(died)).toContain("Error: worker crashed");
+        expect(recordedCause(died)).toContain("Authorization: ");
+        assert.equal(record("observability-interrupt").exit._tag, "Interrupted");
+        assert.deepStrictEqual(record("observability-success").exit, { _tag: "Success" });
 
-          if (!otlp) {
-            assert.deepStrictEqual(bodies, []);
-            return;
-          }
-          const spans = exportedSpans(bodies);
-          const span = (name: string) => {
-            const found = spans.find((entry) => entry.name === name);
-            assert.isDefined(found, `no exported span for ${name}`);
-            return found!;
+        if (!otlp) {
+          assert.deepStrictEqual(bodies, []);
+          return;
+        }
+        const spans = exportedSpans(bodies);
+        const span = (name: string) => {
+          const found = spans.find((entry) => entry.name === name);
+          assert.isDefined(found, `no exported span for ${name}`);
+          return found!;
+        };
+        const exception = (name: string) => {
+          const events = span(name).events.filter((event) => event.name === "exception");
+          assert.equal(events.length, 1);
+          const attributes = events[0]!.attributes;
+          return {
+            type: attribute(attributes, "exception.type")?.stringValue,
+            message: attribute(attributes, "exception.message")?.stringValue ?? "",
+            stack: attribute(attributes, "exception.stacktrace")?.stringValue ?? "",
           };
-          const exception = (name: string) => {
-            const events = span(name).events.filter((event) => event.name === "exception");
-            assert.equal(events.length, 1);
-            const attributes = events[0]!.attributes;
-            return {
-              type: attribute(attributes, "exception.type")?.stringValue,
-              message: attribute(attributes, "exception.message")?.stringValue ?? "",
-              stack: attribute(attributes, "exception.stacktrace")?.stringValue ?? "",
-            };
-          };
+        };
 
-          const failedExport = exception("observability-fail");
-          assert.equal(failedExport.type, "UpstreamError");
-          expect(failedExport.message).toMatch(/^upstream rejected /);
-          expect(failedExport.stack).toMatch(/^UpstreamError: upstream rejected /);
-          expect(failedExport.stack).toContain("\n    at ");
-          assert.equal(span("observability-fail").status.message, failedExport.message);
+        const failedExport = exception("observability-fail");
+        assert.equal(failedExport.type, "UpstreamError");
+        expect(failedExport.message).toMatch(/^upstream rejected /);
+        expect(failedExport.stack).toMatch(/^UpstreamError: upstream rejected /);
+        expect(failedExport.stack).toContain("\n    at ");
+        assert.equal(span("observability-fail").status.message, failedExport.message);
 
-          const diedExport = exception("observability-die");
-          assert.equal(diedExport.type, "Error");
-          assert.equal(diedExport.message, "worker crashed");
-          expect(diedExport.stack).toContain("Authorization: ");
+        const diedExport = exception("observability-die");
+        assert.equal(diedExport.type, "Error");
+        assert.equal(diedExport.message, "worker crashed");
+        expect(diedExport.stack).toContain("Authorization: ");
 
-          const interrupted = span("observability-interrupt");
-          assert.equal(interrupted.events.filter((event) => event.name === "exception").length, 0);
-          assert.equal(
-            attribute(interrupted.attributes, "effect.fiber.interrupted")?.boolValue,
-            true,
-          );
-          const succeeded = span("observability-success");
-          assert.equal(succeeded.events.filter((event) => event.name === "exception").length, 0);
-          assert.equal(succeeded.status.message, undefined);
-        }),
-    );
-  }
+        const interrupted = span("observability-interrupt");
+        assert.equal(interrupted.events.filter((event) => event.name === "exception").length, 0);
+        assert.equal(
+          attribute(interrupted.attributes, "effect.fiber.interrupted")?.boolValue,
+          true,
+        );
+        const succeeded = span("observability-success");
+        assert.equal(succeeded.events.filter((event) => event.name === "exception").length, 0);
+        assert.equal(succeeded.status.message, undefined);
+      }),
+  );
 });
