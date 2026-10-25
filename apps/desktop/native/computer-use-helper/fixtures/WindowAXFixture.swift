@@ -489,6 +489,26 @@ private func runObserverFixture(_ scenario: String) {
       f.executor.drain()
       check(gate == [false], "the same focused element that \(name) during the walk refuses: \(gate)")
     }
+    // An ancestor that loses its known role after the walk visited it fails the final recheck.
+    for role in ["AXUnknown", ""] {
+      let f = WatchFixture()
+      calculator(f.api)
+      let el = { (name: String) in WindowAXElement(name as NSString) }
+      f.api.roles["pane"] = "AXGroup"; f.api.subroles["pane"] = .absent; f.api.parents["pane"] = "window"
+      f.api.childrenMap["pane"] = .elements([el("calc-focus")])
+      f.api.parents["calc-focus"] = "pane"
+      // Listed after the keypad, so the walk visits the pane before the keypad's buttons.
+      f.api.childrenMap["window"] = .elements((["keypad", "display", "pane"] + (0..<6).map { "label-\($0)" }).map(el))
+      f.start()
+      check(f.events == ["ready"], "Calculator's focus under a known group starts: \(f.events)")
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "key-52:AXRole" { f.api.roles["pane"] = role }
+      }
+      var gate: [Bool] = []
+      f.watch.check { gate.append($0) }
+      f.executor.drain()
+      check(gate == [false], "an ancestor whose role became '\(role)' during the walk refuses: \(gate)")
+    }
     // A focus whose parent claims the window but which the window never lists cannot be judged.
     let hidden = WatchFixture()
     calculator(hidden.api)

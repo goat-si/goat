@@ -373,6 +373,8 @@ final class WindowAXWatch: SettleWatch {
       guard case .string(let role) = api.attribute(parent, "AXRole") else {
         return Self.privacy("focus_ancestor_unreadable")
       }
+      // Only the focused element itself may be unidentifiable; its ancestors must have known roles.
+      guard !role.isEmpty, role != "AXUnknown" else { return Self.privacy("focus_ancestor:AXUnknown") }
       switch api.attribute(parent, "AXSubrole") {
       case .string(let subrole):
         if role == "AXSecureTextField" || subrole == "AXSecureTextField" {
