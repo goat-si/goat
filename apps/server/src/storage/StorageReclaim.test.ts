@@ -409,6 +409,61 @@ describe("StorageReclaim", () => {
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
+  it.live("removes only the runtime folder a person chose, never past it", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim, outside } = yield* setup;
+      const versions = pinnedRuntimeVersionsDir(path, config.baseDir);
+      const install = (root: string, version: string, at: number) =>
+        Effect.gen(function* () {
+          const directory = path.join(root, version);
+          yield* fs.makeDirectory(path.join(directory, "notes"), { recursive: true });
+          const sentinel = path.join(directory, ".install-complete");
+          yield* fs.writeFileString(sentinel, version + "\n");
+          yield* fs.utimes(sentinel, at, at);
+        });
+      yield* install(versions, "0.0.1", 1);
+      yield* install(versions, "0.0.2", 2);
+      const runtime = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(
+            Effect.map((report) =>
+              report.items.find(
+                (item) => item.kind === "runtime_version" && item.path.endsWith("0.0.1"),
+              ),
+            ),
+          );
+      const clean = (item: StorageItem) =>
+        reclaim
+          .clean({ items: [{ id: item.id, token: item.token }], actor: "test" })
+          .pipe(Effect.map((result) => result.results[0]));
+
+      // An earlier removal's leftover, with someone's notes in it, is not part of the approval.
+      const offered = (yield* runtime())!;
+      expect(offered.state).toBe("removable");
+      const leftover = path.join(versions, ".pruned-0.0.1");
+      yield* fs.makeDirectory(leftover);
+      yield* fs.writeFileString(path.join(leftover, "kept.md"), "notes\n");
+      expect((yield* clean(offered))?.outcome).toBe("skipped");
+      expect(yield* fs.readFileString(path.join(leftover, "kept.md"))).toBe("notes\n");
+      expect(yield* runtime()).toMatchObject({ state: "needs_attention" });
+      yield* fs.remove(leftover, { recursive: true });
+
+      // The versions folder swapped for a link to runtimes outside the GOAT home.
+      const reviewed = (yield* runtime())!;
+      expect(reviewed.state).toBe("removable");
+      const elsewhere = path.join(outside, "versions");
+      yield* fs.rename(versions, elsewhere);
+      yield* fs.symlink(elsewhere, versions);
+      expect((yield* clean(reviewed))?.outcome).toBe("skipped");
+      expect(yield* fs.exists(path.join(elsewhere, "0.0.1", "notes"))).toBe(true);
+      expect(yield* runtime()).toMatchObject({
+        state: "needs_attention",
+        reason: "It is reached through a link inside the GOAT home",
+      });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
   it.live("keeps rotated logs while a thread works in the logs folder", () =>
     Effect.gen(function* () {
       const { fs, path, config, reclaim } = yield* setup;

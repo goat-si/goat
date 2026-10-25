@@ -439,7 +439,7 @@ const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(
 export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
   pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
 
-const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
+export const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
 /**
  * Another process may have just published a runtime it has not yet pointed anything at: an
  * update, a downgrade, or the install script between unpacking and linking. The install lock only
@@ -732,6 +732,8 @@ export const listPinnedRuntimes = Effect.fn("cloud.pinned_runtime.list")(functio
 /**
  * Removes one runtime a person chose, only if it is still unused under the install lock. Unlike
  * prunePinnedRuntimes it never touches other runtimes or an earlier prune's leftovers.
+ * Null when it was removed, otherwise why it stayed: in use, reached through a link below the
+ * GOAT home (which could lead outside it), or an earlier removal's leftover in the way.
  */
 export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_one")(
   function* (input: {
@@ -740,16 +742,49 @@ export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_
     readonly version: string;
   }) {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const renamed = yield* pinnedRuntimeInstallLock.withPermit(
       Effect.gen(function* () {
         const found = yield* findUnusedRuntimes({ ...input, references: [] });
-        if (!(found.unused ?? []).includes(input.version)) return null;
-        return yield* renameForRemoval(found.versionsDir, input.version);
+        if (!(found.unused ?? []).includes(input.version))
+          return { kept: "it is in use now" } as const;
+        const versionDir = path.join(found.versionsDir, input.version);
+        if (!(yield* reachedWithoutLinks(input.baseDir, versionDir)))
+          return { kept: "it is reached through a link inside the GOAT home" } as const;
+        const target = path.join(
+          found.versionsDir,
+          `${PINNED_RUNTIME_PRUNED_PREFIX}${input.version}`,
+        );
+        if (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true)))
+          return { kept: "an earlier removal left " + target + " in the way" } as const;
+        yield* fs.rename(versionDir, target);
+        return { target, kept: null } as const;
       }),
     );
-    if (renamed === null) return false;
-    yield* fs.remove(renamed, { recursive: true, force: true });
-    return true;
+    if (renamed.kept !== null) return renamed.kept;
+    yield* fs.remove(renamed.target, { recursive: true, force: true });
+    return null;
+  },
+);
+
+/**
+ * Whether a folder below the GOAT home resolves to that same place under the real home: no link
+ * between the home and the folder. Links above the home (macOS /var) do not matter.
+ */
+export const reachedWithoutLinks = Effect.fn("cloud.pinned_runtime.reached_without_links")(
+  function* (baseDir: string, folder: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const realHome = yield* fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => null));
+    const realFolder = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => null));
+    if (realHome === null || realFolder === null) return false;
+    const relative = path.relative(path.resolve(baseDir), path.resolve(folder));
+    return (
+      relative !== "" &&
+      !relative.startsWith("..") &&
+      !path.isAbsolute(relative) &&
+      realFolder === path.join(realHome, relative)
+    );
   },
 );
 

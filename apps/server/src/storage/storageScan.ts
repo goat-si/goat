@@ -12,7 +12,11 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { listPinnedRuntimes } from "../cloud/pinnedRuntime.ts";
+import {
+  listPinnedRuntimes,
+  PINNED_RUNTIME_PRUNED_PREFIX,
+  reachedWithoutLinks,
+} from "../cloud/pinnedRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -549,6 +553,14 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     .filter((runtime) => runtime.version !== packageJson.version)
     .toSorted((left, right) => right.completedAt - left.completedAt)[0];
   for (const runtime of runtimes.runtimes) {
+    // Removal renames the folder aside, so a leftover of an earlier removal or a link inside the
+    // home (which could lead outside it) keeps it from being offered.
+    const linked = !(yield* reachedWithoutLinks(config.baseDir, runtime.directory));
+    const blocked = yield* fs
+      .exists(
+        path.join(path.dirname(runtime.directory), PINNED_RUNTIME_PRUNED_PREFIX + runtime.version),
+      )
+      .pipe(Effect.orElseSucceed(() => true));
     const decision =
       runtime.version === packageJson.version
         ? state("protected", "The version this server runs")
@@ -558,8 +570,15 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
             ? state("needs_attention", "Whether it is in use could not be checked")
             : !runtime.unused
               ? state("protected", "The service, a running process or a launcher uses it")
-              : (usedBy(runtime.directory) ??
-                state("removable", "No service, process, launcher or thread uses it", true));
+              : linked
+                ? state("needs_attention", "It is reached through a link inside the GOAT home")
+                : blocked
+                  ? state(
+                      "needs_attention",
+                      "An earlier removal of this version left a folder behind; check it yourself",
+                    )
+                  : (usedBy(runtime.directory) ??
+                    state("removable", "No service, process, launcher or thread uses it", true));
     add(
       {
         kind: "runtime_version",

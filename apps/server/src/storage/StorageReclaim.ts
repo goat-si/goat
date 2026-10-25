@@ -471,12 +471,11 @@ const make = Effect.gen(function* () {
             if (reason !== null) return reason;
             const own = yield* ownReference(item.path);
             if (own !== null) return own;
-            const removed = yield* removeUnusedPinnedRuntime({
+            return yield* removeUnusedPinnedRuntime({
               baseDir: config.baseDir,
               keep: [packageJson.version],
               version: target.version,
             }).pipe(Effect.mapError((error) => new RemoveFailed({ message: error.message })));
-            return removed ? null : "it is in use now";
           }),
         );
       }
