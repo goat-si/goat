@@ -75,10 +75,12 @@ for the newest real goat-ci run of the same pull request on the same head and re
 was cancelled. Ignored runs take a concurrency group of their own per pull request, because a group
 holds one pending run and an ignored newcomer would cancel a real run waiting there. Skipped jobs
 keep their raw name expressions, so no skipped check carries a real name. A re-run keeps its run's
-original suite, so after re-running a run that such an edit or label followed, re-run that later run
-too; it republishes the new result. `goat-ci-result` is the one check to read: it fails when
-goat-scope or any selected task failed or was cancelled, and its notice says whether the run was
-quick and names the label and the command that start the full run.
+original suite, and a republished result is never refreshed: after re-running a real run that an
+edit or label followed, re-run that later run too. Until then a red re-run stays hidden behind a
+republished green, and a green one stays blocked behind a republished red (#1691). `goat-ci-result`
+is the one check to read: it fails when goat-scope or any selected task failed or was cancelled, and
+its notice says whether the run was quick and names the label and the command that start the full
+run.
 
 A manual run (`gh workflow run goat-ci.yml --ref <branch> [-f lane=<lane>]`) runs a lane: `all`
 (the default, everything), `server` (the full server suite), `memory-growth`, or `quick` (check and
