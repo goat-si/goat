@@ -44,11 +44,20 @@ describe("Cua Driver launch policy", () => {
       configuration.environment.filter((variable) => variable.name.toUpperCase() === name),
     ).toEqual([{ name, value: "1" }]);
     // npm SDK 0.37.0 rejects this name during withOptions, before launching a daemon.
-    expect(
-      cuaDriverHostOptions("/driver", "si.goat.dev", "/manifest").environment,
-    ).not.toContainEqual({
-      name,
-      value: "1",
-    });
+    for (const suppliedName of [name, name.toLowerCase()]) {
+      const { environment } = cuaDriverHostOptions("/driver", "si.goat.dev", "/manifest", [
+        { name: suppliedName, value: "0" },
+      ]);
+      expect(environment.some((variable) => variable.name.toUpperCase() === name)).toBe(false);
+      expect(
+        cuaDriverHostOptions(
+          "/driver",
+          "si.goat.dev",
+          "/manifest",
+          [],
+          [suppliedName],
+        ).environment.some((variable) => variable.name.toUpperCase() === name),
+      ).toBe(false);
+    }
   });
 });

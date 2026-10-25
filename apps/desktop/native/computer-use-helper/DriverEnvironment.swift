@@ -7,7 +7,7 @@ enum DriverEnvironment {
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "CUA_LOG",
   ]
   /// Driver tuning the host may set at launch. No tool argument can change these.
-  private static let hostSettableNames: Set<String> = [
+  static let hostSettableNames: Set<String> = [
     "CUA_DRIVER_WINDOW_CHANGE_TIMEOUT_MS", "CUA_DRIVER_WINDOW_CHANGE_POLL_MS",
     "CUA_DRIVER_KEY_GAP_MS", "CUA_LOG",
   ]

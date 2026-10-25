@@ -135,10 +135,8 @@ export function cuaDriverHostOptions(
       ...withheld
         .filter((name) => !supplied.has(name.toUpperCase()))
         .map((name) => ({ name, value: "" })),
-      ...CUA_DRIVER_PRIVACY_ENVIRONMENT.filter(
-        (variable) => variable.name !== "CUA_DRIVER_DISABLE_SCREENCAPTURE",
-      ).map((variable) => ({ ...variable })),
-    ],
+      ...CUA_DRIVER_PRIVACY_ENVIRONMENT.map((variable) => ({ ...variable })),
+    ].filter((variable) => variable.name.toUpperCase() !== "CUA_DRIVER_DISABLE_SCREENCAPTURE"),
     inheritStderr: true,
     noOverlay: false,
   };
