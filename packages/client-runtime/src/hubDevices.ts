@@ -54,6 +54,12 @@ export function presentChildSetup(
   };
 }
 
+/** The SSH host alias the switch writes to, and whether it is on. */
+export interface ChildOptIn {
+  readonly host: string;
+  readonly enabled: boolean;
+}
+
 export interface HubDeviceRow {
   readonly key: string;
   readonly label: string;
@@ -66,7 +72,7 @@ export interface HubDeviceRow {
    * Whether the hub joins this SSH host as its Child after each successful setup. Null when the
    * hub does not offer it for the host: a cloud machine, a host GOAT did not set up, or an older hub.
    */
-  readonly childOptIn: boolean | null;
+  readonly childOptIn: ChildOptIn | null;
 }
 
 function routeNames(node: HubNode): ReadonlyArray<string> {
@@ -142,7 +148,10 @@ export function hubDeviceList(input: {
   for (const entry of input.hosts) {
     if (entry.host === null) continue;
     const childSetup = presentChildSetup(entry.opencodexChild);
-    const childOptIn = entry.opencodexChildOptIn ?? null;
+    const childOptIn =
+      entry.opencodexChildOptIn === undefined
+        ? null
+        : { host: entry.host, enabled: entry.opencodexChildOptIn };
     if (childSetup === null && childOptIn === null) continue;
     const index = rowOf(entry.host);
     const row = rows[index];

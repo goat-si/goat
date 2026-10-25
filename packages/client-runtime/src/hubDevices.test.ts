@@ -184,8 +184,8 @@ describe("hubDeviceList", () => {
       ],
     });
     expect(rows.map((row) => [row.key, row.childOptIn])).toEqual([
-      ["node:n1", true],
-      ["setup:lidge-ts", false],
+      ["node:n1", { host: "macmini-ts", enabled: true }],
+      ["setup:lidge-ts", { host: "lidge-ts", enabled: false }],
     ]);
   });
 
@@ -207,7 +207,7 @@ describe("hubDeviceList", () => {
       ],
     });
     expect(rows[0]).toMatchObject({
-      childOptIn: false,
+      childOptIn: { host: "lidge-ts", enabled: false },
       childSetup: {
         label:
           "OpenCodex Child setup blocked: turned off because the session that allowed it lost access",
