@@ -44,9 +44,8 @@ import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
-
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
-import { driverExitReason } from "./ComputerUseDriverExit.ts";
+import { driverExitReason, markUnverified } from "./ComputerUseDriverOutcome.ts";
 import {
   approvedApps,
   learnApps,
@@ -280,6 +279,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             const request = outstanding.get(key);
             // A reply to a request the provider cancelled, or never made, is stale.
             if (request === undefined) return;
+            if (request.method === "tools/call") line = markUnverified(request.tool, line);
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
@@ -577,7 +577,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (active() && (yield* Clock.currentTimeMillis) < deadline) yield* start(token);
     }),
   }).pipe(
-    Effect.catchCause(() => end("helper_restarted")),
+    Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
 

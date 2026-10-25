@@ -535,6 +535,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
    * connection from this GOAT can work until GOAT or the helper is fixed; a restart does not help.
    */
   "helper_refused",
+  /** GOAT Computer Use could not start its service or driver (exit 64, 78 or 79). */
+  "helper_unsupported",
   /** The driver named a window that is not on the screen GOAT gave it (#1358). */
   "wrong_display",
   /** It would bring a window forward or move the pointer while another thread holds apps here. */
@@ -555,6 +557,7 @@ export const computerUseRefusalReason = (
       return "appNotAllowed";
     case "helper_restarted":
     case "helper_refused":
+    case "helper_unsupported":
       return "helperUnavailable";
     default:
       return "targetRefused";
