@@ -74,6 +74,8 @@ export const harness = Effect.fn(function* (
     readonly acceptHuman?: () => boolean;
     /** Holds every report of a person's input until it is done, as a slow server would. */
     readonly humanGate?: Deferred.Deferred<void>;
+    /** How long each report of a person's input takes, on the TestClock, as a slow server's. */
+    readonly reportDelay?: number;
     /** Holds every start report until it is done, as a slow server would. */
     readonly agentInputGate?: Deferred.Deferred<void>;
     /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
@@ -91,7 +93,7 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
-  const humanBatches: Array<number> = [];
+  const humanBatches: Array<{ readonly at: number; readonly sources: ReadonlyArray<string> }> = [];
   const taken = yield* Queue.unbounded<string>();
   const applied = yield* Queue.unbounded<string>();
   const agentCalls = yield* Queue.unbounded<string>();
@@ -133,7 +135,13 @@ export const harness = Effect.fn(function* (
           onHumanInput: (
             events: ReadonlyArray<{ source: ComputerUseHumanInputSource; at: number }>,
           ) =>
-            Effect.sync(() => void humanBatches.push(events.length)).pipe(
+            Clock.currentTimeMillis.pipe(
+              Effect.map(
+                (at) => void humanBatches.push({ at, sources: events.map((e) => e.source) }),
+              ),
+              Effect.andThen(
+                options.reportDelay === undefined ? Effect.void : Effect.sleep(options.reportDelay),
+              ),
               Effect.andThen(
                 Queue.offerAll(
                   people,

@@ -86,6 +86,19 @@ interface HelperInput {
 }
 
 /**
+ * Where the helper's input lines wait for forwardHelperInput. Lines are offered outside any
+ * fiber, a whole socket chunk at once (overlayChannel), so a bounded feed would drop all but the
+ * last few of a burst.
+ */
+export const makeHelperInputFeed = Effect.fn("agentInputReports.makeHelperInputFeed")(function* () {
+  const queue = yield* Queue.sliding<HelperInput>(16);
+  return {
+    offer: (input: HelperInput) => void Queue.offerUnsafe(queue, input),
+    events: Stream.fromQueue(queue),
+  };
+});
+
+/**
  * Sends a helper's keyboard and pointer events to the server until it takes one, and returns
  * then. Every event goes, even one this agent's own call could explain: only the server sees
  * every agent's calls, and with them when a run of cover is too long. Reports are slower than

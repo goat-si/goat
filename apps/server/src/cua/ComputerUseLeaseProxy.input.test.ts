@@ -2,7 +2,9 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
 
+import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy person and agent input", () => {
@@ -79,9 +81,57 @@ describe("ComputerUseLeaseProxy person and agent input", () => {
         const batches = yield* h.humanBatches;
         assert.isAtMost(batches.length, 3, String(batches));
         assert.equal(
-          batches.reduce((sum, size) => sum + size, 0),
+          batches.reduce((sum, batch) => sum + batch.sources.length, 0),
           42,
         );
+      }),
+  );
+
+  it.effect(
+    "the helper feed keeps every line one socket chunk hands over, a person's key included",
+    () =>
+      Effect.gen(function* () {
+        const feed = yield* makeHelperInputFeed();
+        // The overlay channel hands every line of a chunk over before anything else runs.
+        const lines = [
+          "pointer",
+          "keyboard",
+          ...Array.from({ length: 38 }, () => "pointer"),
+        ] as const;
+        for (const [index, source] of lines.entries()) feed.offer({ source, at: index });
+        const last = lines.length - 1;
+        const kept = yield* feed.events.pipe(
+          Stream.takeUntil((event) => event.at === last),
+          Stream.runCollect,
+        );
+        assert.deepEqual(
+          kept.map((event) => event.source),
+          [...lines],
+        );
+      }),
+  );
+
+  it.effect(
+    "under a sustained stream and a slow server, a person's key goes in the report after the one in flight",
+    () =>
+      Effect.gen(function* () {
+        // 1.9 s per report, just under the CLI's 2 s timeout, and moves at 250 a second.
+        const h = yield* harness({
+          humanInput: true,
+          acceptHuman: () => false,
+          reportDelay: 1_900,
+        });
+        yield* h.push(active());
+        for (let tick = 0; tick < 2_000; tick++) {
+          yield* TestClock.adjust(4);
+          yield* h.hid(tick === 1_250 ? "keyboard" : "pointer");
+        }
+        yield* TestClock.adjust(20_000);
+        const batches = yield* h.humanBatches;
+        const sent = batches.find((batch) => batch.sources.includes("keyboard"));
+        assert.isDefined(sent, "the key was never reported");
+        // The key happened at 5 s; the report out then ends by 6.9 s at the latest.
+        assert.isAtMost(sent?.at ?? Infinity, 5_000 + 1_900, String(sent?.at));
       }),
   );
 
