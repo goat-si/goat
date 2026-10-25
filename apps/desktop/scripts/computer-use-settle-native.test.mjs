@@ -75,6 +75,10 @@ describe.skipIf(platform !== "darwin")("injected production MCP window-settle se
     ],
     ["cancellation", "cancellation prevents later reads and drops already queued native results"],
     [
+      "session-bytes",
+      "recovery requires the byte-identical session, not a canonically equivalent one",
+    ],
+    [
       "busy",
       "refuses all tools during observer startup or sampling while servicing discovery and control",
     ],

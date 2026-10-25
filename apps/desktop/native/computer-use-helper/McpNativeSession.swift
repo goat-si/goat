@@ -216,7 +216,9 @@ final class McpNativeSession {
               var args = try? JSONSerialization.jsonObject(with: arguments) as? [String: Any],
               (args["pid"] as? NSNumber)?.int64Value == Int64(target.pid),
               (args["window_id"] as? NSNumber)?.uint64Value == UInt64(target.windowID),
-              (args["session"] as? String) == target.session, let params
+              // Swift String equality normalizes Unicode; the driver keys sessions by bytes.
+              (args["session"] as? String).map({ Data($0.utf8) }) == target.session.map({ Data($0.utf8) }),
+              let params
             else { return try refusal(id, code: "fresh_observation_required", message: "A cancelled or expired sample may have changed tokens. Read that exact PID/window and session fully before acting.") }
             args.removeValue(forKey: "since")
             args["include_accessibility_tree"] = true

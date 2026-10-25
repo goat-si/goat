@@ -129,8 +129,9 @@ private final class WatchFixture {
   var received = 0
   var ignored = 0
   var admitted = true
+  var duringPermitted: (() -> Void)?
   lazy var watch = WindowAXWatch(pid: 42, windowID: 7, api: api, executor: executor,
-    permitted: { [weak self] in self?.admitted == true })
+    permitted: { [weak self] in self?.duringPermitted?(); return self?.admitted == true })
   func start() {
     watch.start { [self] event in
       switch event {
@@ -184,7 +185,11 @@ private func runObserverFixture(_ scenario: String) {
     // The first blocking query of a callback must find the coordinator already fenced.
     var fencedAtFirstQuery: Bool?
     f.api.duringAttribute = { if fencedAtFirstQuery == nil { fencedAtFirstQuery = f.received == 1 } }
+    // Admission runs session code (a bundle lookup), during which a final reply can land.
+    var fencedAtAdmission: Bool?
+    f.duringPermitted = { if fencedAtAdmission == nil { fencedAtAdmission = f.received == 1 } }
     f.send(f.api.window)
+    check(fencedAtAdmission == true, "receipt reaches the coordinator before admission lookups")
     check(fencedAtFirstQuery == true, "receipt reaches the coordinator before attribution queries")
     check(f.events == ["ready", "changed"] && f.ignored == 0, "exact target change resolves the receipt")
     f.send(f.api.foreignChild)

@@ -177,8 +177,10 @@ final class WindowAXWatch: SettleWatch {
     return isAdmitted ? nil : "invalidated"
   }
 
-  private func deliver(_ event: SettleWatchEvent, terminal: Bool = false) {
-    if !terminal && !isAdmitted { return }
+  /// `admit: false` publishes without the external approval lookup, for receipt fences that
+  /// must land before any code that can let a final sample through.
+  private func deliver(_ event: SettleWatchEvent, terminal: Bool = false, admit: Bool = true) {
+    if !terminal && admit && !isAdmitted { return }
     lock.lock()
     guard active else { lock.unlock(); return }
     if terminal { active = false }
@@ -297,7 +299,8 @@ final class WindowAXWatch: SettleWatch {
   }
 
   private func receive(_ element: WindowAXElement, _ notification: String) {
-    guard isAdmitted, let target, let app else { return }
+    // Only local state before the receipt fence; approval is rechecked before any AX query.
+    guard isActive, let target, let app else { return }
     // Destruction invalidates the callback's element. Compare retained identity before any query.
     if notification == "AXUIElementDestroyed" {
       if element.same(target) { deliver(.destroyed, terminal: true) }
@@ -308,7 +311,8 @@ final class WindowAXWatch: SettleWatch {
     guard Self.required.contains(notification) else { return refuse("notification_unknown") }
     // Fence settlement before the blocking privacy and ancestry queries below; every
     // non-terminal path resolves this receipt as changed or ignored.
-    deliver(.received)
+    deliver(.received, admit: false)
+    guard isAdmitted else { return }
     guard privacyIsKnownSafe(app) else { if isActive { refuse("private_or_unknown_focus") }; return }
     var node = element
     var seen: [WindowAXElement] = []

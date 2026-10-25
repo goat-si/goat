@@ -390,6 +390,23 @@ private func cancellation() throws {
   try require(queued.driver.frames.count == actionIndex + 1, "Action resumes after full recovery")
 }
 
+private func sessionBytes() throws {
+  // Swift String equality treats these canonically equivalent sessions as one; the driver does not.
+  let h = Harness()
+  try h.call("wait", "wait_for_window_settle", ["pid": 41, "window_id": 73, "quiet_ms": 200,
+    "timeout_ms": 1000, "session": "caf\u{e9}"])
+  h.ready(); try h.reply(0, token: "baseline"); try h.clock.advance(200)
+  try h.cancel(); try h.expectCode("cancelled")
+  try h.reply(1, token: "late")
+  let denied = h.provider.frames.count
+  try h.call("other-session", "get_window_state", ["pid": 41, "window_id": 73, "session": "cafe\u{301}"])
+  try h.expectCode("fresh_observation_required", denied)
+  try h.call("action", "click"); try h.expectCode("fresh_observation_required", denied + 1)
+  let readIndex = h.driver.frames.count
+  try h.call("same-session", "get_window_state", ["pid": 41, "window_id": 73, "session": "caf\u{e9}"])
+  try require(h.driver.frames.count == readIndex + 1, "The byte-identical session recovers")
+}
+
 private func busy() throws {
   for ready in [false, true] {
     let h = Harness()
@@ -676,6 +693,7 @@ private struct McpNativeFixture {
       case "deadline-recovery": try recovery(cancel: false)
       case "cancel-recovery": try recovery(cancel: true)
       case "cancellation": try cancellation()
+      case "session-bytes": try sessionBytes()
       case "busy": try busy()
       case "observer-checks": try observerChecks()
       case "delayed-check": try delayedCheck()
