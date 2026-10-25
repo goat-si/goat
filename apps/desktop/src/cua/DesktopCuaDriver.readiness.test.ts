@@ -31,6 +31,8 @@ describe("DesktopCuaDriver readiness after a passing check", () => {
           assert.isTrue((yield* test.verify).verified);
           // The check started the helper, whose hello said it watches for a secure field (#1532).
           assert.equal(test.readiness.at(-1)?.signals.privateMode, "supported");
+          // This desktop answers app listing requests, so the server may ask it (#1567).
+          assert.isTrue(test.readiness.at(-1)?.appsListing);
         }),
       ),
   );

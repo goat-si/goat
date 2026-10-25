@@ -165,6 +165,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
         signals: helperSignals(helperCanWatch, helperReportsInput),
         frames: helperCanFrame,
+        // handleAppsRequest below answers app listing requests on every platform.
+        appsListing: true,
       } as const;
       const key = encodeJson(report);
       if (key === lastReadiness) return Effect.void;
