@@ -1,5 +1,7 @@
 # 000 — 기준선
 
+> T3 축의 기준선이다. Cua Driver 축은 [20_cua_baseline](./20_cua_baseline.md).
+
 > 갱신: 2026-10-24 (사이클 261024b 랜딩, PR #1118 → dev `eb2a07db0`. reviewed-through `2c592a108`)
 
 ## 현재 기준선
