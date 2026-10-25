@@ -116,6 +116,47 @@ it.effect(
     ),
 );
 
+it.effect("a person's Stop right after approving outlasts the waiting call's record of it", () =>
+  withWorld((world) =>
+    Effect.gen(function* () {
+      yield* startEpoch(world);
+      const now = yield* DateTime.now;
+      const summary = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH);
+      const waiting = yield* waitForComputerUse(
+        world,
+        summary.handoffId,
+        DateTime.add(now, { minutes: 1 }),
+      );
+      // Approved, then stopped, before the waiting call reads either answer.
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "completed" },
+        person,
+      );
+      yield* world.handoffs.respond(
+        { threadId, handoffId: summary.handoffId, action: "cancelled" },
+        person,
+      );
+      const gate = yield* Deferred.make<void>();
+      world.outage.storeGate = gate;
+      // A call interrupted while recording the answer gives that record back.
+      const stopping = yield* Effect.raceFirst(
+        Deferred.await(world.outage.stored),
+        Fiber.await(waiting),
+      ).pipe(
+        Effect.andThen(Fiber.interrupt(waiting)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(0);
+      world.outage.storeGate = undefined;
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(stopping);
+      yield* world.reactor.reconcile;
+      yield* world.reactor.reconcile;
+      expect(yield* wakes(world)).toHaveLength(0);
+    }),
+  ),
+);
+
 it.effect("a given-back answer whose wake is waiting to retry still wakes the thread once", () =>
   withWorld((world) =>
     Effect.gen(function* () {

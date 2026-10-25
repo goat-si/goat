@@ -24,6 +24,8 @@ import * as PubSub from "effect/PubSub";
 import type * as Semaphore from "effect/Semaphore";
 
 export const CONSUMED = { version: 1, kind: "computer_use_consumed" } as const;
+// A person's Stop after approving; it keeps the reactor quiet, so no call's record replaces it.
+const ENDED = "computer_use_ended";
 
 export interface ComputerUseAnswer {
   readonly handoff: Handoff;
@@ -42,15 +44,28 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
     readonly expire: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
     readonly cancelAsAgent: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
-    readonly consumed: (handoffId: string) => Effect.Effect<boolean, E>;
+    /** The kind of the request's private record, if it has one. */
+    readonly recordKind: (handoffId: string) => Effect.Effect<string | null | undefined, E>;
     readonly markConsumed: (handoffId: string) => Effect.Effect<void, E>;
-    readonly clearConsumed: (handoffId: string) => Effect.Effect<void, E>;
+    readonly removeRecord: (handoffId: string) => Effect.Effect<void, E>;
   }) {
     const answers = yield* PubSub.unbounded<string>();
     const owners = new Map<string, number>();
     // Answers a failed call recorded and gave back; their record no longer stops a wake.
     const givenBack = new Set<string>();
     const locked = deps.lock.withPermits(1);
+    const consumed = (id: string) =>
+      deps.recordKind(id).pipe(Effect.map((kind) => kind === CONSUMED.kind));
+    /** False when a person's Stop is already on record: that record stays. */
+    const markConsumed = Effect.fn("Handoffs.markComputerUseConsumed")(function* (id: string) {
+      if ((yield* deps.recordKind(id)) === ENDED) return false;
+      yield* deps.markConsumed(id);
+      return true;
+    });
+    /** Removes only this call's record; a Stop recorded since then stays. */
+    const clearConsumed = Effect.fn("Handoffs.clearComputerUseConsumed")(function* (id: string) {
+      if (yield* consumed(id)) yield* deps.removeRecord(id);
+    });
 
     /**
      * Waits until a person answers the request, it expires, or `until`. `settle` judges, under
@@ -78,8 +93,7 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
         release();
         const usable = yield* settle(handoff);
         if (usable && ownedWhilePending)
-          recorded = yield* deps.markConsumed(input.handoffId).pipe(
-            Effect.as(true),
+          recorded = yield* markConsumed(input.handoffId).pipe(
             logged("an answered computer use request was not recorded", input.handoffId),
             Effect.map((done) => done === true),
           );
@@ -134,7 +148,7 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
               release();
               if (!recorded || Exit.isSuccess(exit)) return;
               givenBack.add(input.handoffId);
-              yield* deps.clearConsumed(input.handoffId).pipe(
+              yield* clearConsumed(input.handoffId).pipe(
                 Effect.tap(() => Effect.sync(() => givenBack.delete(input.handoffId))),
                 logged("a computer use answer record could not be removed", input.handoffId),
               );
@@ -154,7 +168,7 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
           Effect.gen(function* () {
             if (owners.has(handoff.handoffId)) return;
             const returned =
-              !givenBack.has(handoff.handoffId) && (yield* deps.consumed(handoff.handoffId));
+              !givenBack.has(handoff.handoffId) && (yield* consumed(handoff.handoffId));
             if (returned) return;
             // Once sent, the wake's own message stops any further one.
             if (yield* dispatch) givenBack.delete(handoff.handoffId);

@@ -370,17 +370,12 @@ const make = Effect.gen(function* () {
     expire: (input) => transition(input, "expired", { type: "server" }),
     cancelAsAgent: (input) =>
       transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
-    consumed: (id) =>
-      loadPrivate(id).pipe(Effect.map((payload) => payload?.kind === CONSUMED.kind)),
-    markConsumed: (id) => savePrivate(id, CONSUMED, true),
-    clearConsumed: (id) =>
+    recordKind: (id) =>
       loadPrivate(id).pipe(
-        Effect.flatMap((payload) =>
-          payload?.kind === CONSUMED.kind
-            ? store.remove(storeName(id)).pipe(Effect.mapError(unavailable))
-            : Effect.void,
-        ),
+        Effect.map((payload) => (payload !== null && "kind" in payload ? payload.kind : null)),
       ),
+    markConsumed: (id) => savePrivate(id, CONSUMED, true),
+    removeRecord: (id) => store.remove(storeName(id)).pipe(Effect.mapError(unavailable)),
   });
   /**
    * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
