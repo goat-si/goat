@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
+import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -503,6 +504,28 @@ describe("request-time listing on standalone servers, review round 1 (#1574)", (
       });
       controller.abort();
       await expect(listing).rejects.toThrow(/cancel/i);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a signal shared by many finished listings keeps none of their abort handlers",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-signal-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const controller = new AbortController();
+      for (let run = 0; run < 3; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+            signal: controller.signal,
+          }),
+        ).rejects.toThrow();
+      expect(NodeEvents.getEventListeners(controller.signal, "abort")).toHaveLength(0);
     },
   );
 

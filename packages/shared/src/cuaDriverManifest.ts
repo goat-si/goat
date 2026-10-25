@@ -348,10 +348,13 @@ export function listCuaDriverApplications(input: {
     );
     let settled = false;
     let buffer = "";
+    const onAbort = () => finish(new Error("Cua Driver listing was cancelled."));
     const finish = (error: Error | undefined, apps?: ReadonlyArray<CuaDriverListedApp>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // A caller may reuse one signal for many listings; each listing removes its own handler.
+      input.signal?.removeEventListener("abort", onAbort);
       child.stdin.end();
       child.kill();
       if (error) reject(error);
@@ -367,10 +370,8 @@ export function listCuaDriverApplications(input: {
     // A driver that exits before reading leaves the pipe closed: that write fails here, not
     // as an uncaught error in the process that asked for the listing.
     child.stdin.on("error", (error) => finish(error));
-    if (input.signal?.aborted) finish(new Error("Cua Driver listing was cancelled."));
-    input.signal?.addEventListener("abort", () =>
-      finish(new Error("Cua Driver listing was cancelled.")),
-    );
+    if (input.signal?.aborted) onAbort();
+    else input.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("exit", (code) =>
       finish(new Error("Cua Driver exited while listing apps (" + code + ").")),
     );
