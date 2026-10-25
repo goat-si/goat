@@ -1,5 +1,15 @@
-import { describe, expect, it } from "@effect/vitest";
+import * as NodeSqlite from "node:sqlite";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, expect, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+
+import * as ProcessRunner from "../processRunner.ts";
+import * as LocalGoatServers from "./localGoatServers.ts";
 import { databasesByPid, looksLikeGoatServer } from "./localGoatServers.ts";
 
 describe("local GOAT server discovery", () => {
@@ -59,4 +69,55 @@ describe("local GOAT server discovery", () => {
       [303, ["/Users/me/.goat/userdata/statev2.sqlite"]],
     ]);
   });
+
+  it.live(
+    "respects the nightly desktop home's bindings while it exists, and skips it once gone",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.realPath(
+          yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-" }),
+        );
+        const nightlyHome = path.join(home, ".goat", "desktop-nightly");
+        const nightly = path.join(nightlyHome, "userdata", "statev2.sqlite");
+        yield* fs.makeDirectory(path.dirname(nightly), { recursive: true });
+        // The nightly copy's threads point at stable's worktrees by absolute path.
+        const stableWorktree = path.join(home, ".goat", "desktop", "worktrees", "goat", "feature");
+        const db = new NodeSqlite.DatabaseSync(nightly);
+        db.exec(
+          "CREATE TABLE orchestration_v2_projection_threads (thread_id TEXT, payload_json TEXT);" +
+            "CREATE TABLE projection_projects (workspace_root TEXT, deleted_at TEXT);",
+        );
+        db.prepare("INSERT INTO orchestration_v2_projection_threads VALUES (?, ?)").run(
+          "thread-nightly",
+          JSON.stringify({ worktreePath: stableWorktree }),
+        );
+        db.close();
+        const own = path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite");
+        const check = Effect.gen(function* () {
+          const servers = yield* LocalGoatServers.LocalGoatServers;
+          const found = yield* servers.otherServers(own);
+          expect(found.databases).toEqual([nightly]);
+          expect(found.worktreePaths).toEqual([stableWorktree]);
+
+          yield* fs.remove(nightlyHome, { recursive: true });
+          const gone = yield* servers.otherServers(own);
+          expect(gone.databases).toEqual([]);
+          expect(gone.worktreePaths).toEqual([]);
+          expect(gone.unverified.some((reason) => reason.includes("desktop-nightly"))).toBe(false);
+        });
+        yield* check.pipe(
+          Effect.provide(
+            LocalGoatServers.layer.pipe(
+              // This platform never lists processes, so only the known homes are read.
+              Layer.provide(Layer.mock(ProcessRunner.ProcessRunner)({})),
+            ),
+          ),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

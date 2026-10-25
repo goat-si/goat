@@ -123,6 +123,9 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
       env.GOAT_HOME,
       path.join(home, ".goat"),
       path.join(home, ".goat", "desktop"),
+      // Packaged nightly and preview builds keep their own home; their threads can still be bound
+      // to stable's worktrees.
+      path.join(home, ".goat", "desktop-nightly"),
       path.join(home, ".t3"),
     ]) {
       if (goatHome === undefined || goatHome.trim() === "") continue;
