@@ -20,6 +20,8 @@ export interface ComputerUseReadinessProps {
   readonly block?: CuaHostStatus["block"];
   /** Why the driver last failed to start on the host, when it did. */
   readonly failure?: CuaHostStatus["failure"];
+  /** What the host's screen allows now. */
+  readonly display?: CuaHostStatus["display"];
   /** The host's name, so the Linux guide says which machine to act on. */
   readonly machine?: string;
   readonly renderGrantAction?: (

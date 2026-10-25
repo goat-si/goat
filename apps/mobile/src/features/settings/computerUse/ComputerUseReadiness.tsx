@@ -135,6 +135,7 @@ export function ComputerUseHostReadiness({
         tools={query.data?.tools}
         signals={query.data?.signals}
         failure={query.data?.failure}
+        display={query.data?.display}
         details={advanced.expanded}
       />
       <ComputerUseAdvancedRow advanced={advanced} />

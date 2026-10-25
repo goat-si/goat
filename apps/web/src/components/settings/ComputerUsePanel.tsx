@@ -217,6 +217,7 @@ export function ComputerUsePanel({
     signals: status?.signals,
     block: status?.block,
     failure: status?.failure,
+    display: status?.display,
   };
   const line = statusLine({
     setup,

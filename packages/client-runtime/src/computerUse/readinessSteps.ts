@@ -184,6 +184,7 @@ export function computerUseReadinessSteps({
   machine,
   block,
   failure,
+  display,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
@@ -195,7 +196,10 @@ export function computerUseReadinessSteps({
   readonly block?: CuaAgentBlock | undefined;
   /** Why the driver last failed to start on the host, when it did. */
   readonly failure?: string | undefined;
+  /** What the host's screen allows now; an unusable one stops agents before any start fails. */
+  readonly display?: CuaHostStatus["display"] | undefined;
 }) {
+  const noScreen = display?.capability === "unavailable" ? display.reason : undefined;
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
   const unavailable = {
@@ -284,16 +288,21 @@ export function computerUseReadinessSteps({
             detail:
               "The driver is running. Whether agents can use computer use is not proven until the helper is confirmed.",
           } as const)
-        : tools === "unavailable" && failure === undefined
-          ? ({ state: "pending", detail: STARTS_WITH_NEXT_TURN } as const)
-          : tools === "unavailable"
-            ? ({ state: "blocked", detail: `${failure} ${toolsCopy.unavailable.detail}` } as const)
-            : tools
-              ? toolsCopy[tools]
-              : ({
-                  state: "unknown",
-                  detail: "The server has not reported whether agent tools are available yet.",
-                } as const);
+        : tools === "unavailable" && noScreen !== undefined
+          ? ({ state: "blocked", detail: noScreen } as const)
+          : tools === "unavailable" && failure === undefined
+            ? ({ state: "pending", detail: STARTS_WITH_NEXT_TURN } as const)
+            : tools === "unavailable"
+              ? ({
+                  state: "blocked",
+                  detail: `${failure} ${toolsCopy.unavailable.detail}`,
+                } as const)
+              : tools
+                ? toolsCopy[tools]
+                : ({
+                    state: "unknown",
+                    detail: "The server has not reported whether agent tools are available yet.",
+                  } as const);
   const steps: ReadinessStep[] = [
     {
       id: "grants",
@@ -383,6 +392,7 @@ export function computerUseReadinessSteps({
       computerUseReady(readiness) &&
       tools === "unavailable" &&
       failure === undefined &&
+      noScreen === undefined &&
       block === undefined,
     report,
     steps,
