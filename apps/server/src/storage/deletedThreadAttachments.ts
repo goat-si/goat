@@ -69,6 +69,8 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
     readonly attachmentsDir: string;
     readonly threads: ReadonlyArray<{ readonly id: string; readonly deleted: string | null }>;
     readonly now: number;
+    /** Look only at these files, as when cleanup checks its selection again. */
+    readonly only?: ReadonlySet<string>;
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -91,6 +93,7 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
       // A segment shared with a surviving thread (ids can truncate alike) is that thread's too.
       if (segment === null || live.has(segment) || !deleted.has(segment)) continue;
       const file = path.join(input.attachmentsDir, name);
+      if (input.only !== undefined && !input.only.has(file)) continue;
       const stat = yield* lstatOf(file);
       if (stat === null || !stat.isFile || stat.isLink) continue;
       if (input.now - stat.mtimeMs < ATTACHMENT_MIN_AGE_MS) {

@@ -36,6 +36,9 @@ export const lstatOf = (target: string) =>
 export const sameIdentity = (left: FileIdentity, right: FileIdentity) =>
   left.dev === right.dev && left.ino === right.ino;
 
+/** A .git entry in any spelling: case-insensitive volumes (macOS, Windows) let git find .GIT. */
+const isGitEntry = (name: string) => name.toLowerCase() === ".git";
+
 /** The most entries a folder may hold for the cleanup to vouch that nothing in it changed. */
 const CONTENT_STAMP_LIMIT = 300_000;
 
@@ -60,7 +63,7 @@ const walk = async (root: string, limit: number): Promise<ContentStamp | null> =
     for (const name of await NodeFSP.readdir(folder)) {
       entries += 1;
       if (entries > limit) return null;
-      if (name === ".git") holdsGit = true;
+      if (isGitEntry(name)) holdsGit = true;
       const child = NodePath.join(folder, name);
       const stat = await NodeFSP.lstat(child, { bigint: true });
       if (stat.ctimeNs > newestChangeNs) newestChangeNs = stat.ctimeNs;
@@ -100,7 +103,7 @@ const findGit = async (root: string, skipOwn: boolean): Promise<boolean | null> 
     for (const entry of await NodeFSP.readdir(folder, { withFileTypes: true })) {
       entries += 1;
       if (entries > GIT_SEARCH_LIMIT) return null;
-      if (entry.name === ".git") {
+      if (isGitEntry(entry.name)) {
         if (skipOwn && folder === root) continue;
         return true;
       }

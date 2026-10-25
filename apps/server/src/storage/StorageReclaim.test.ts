@@ -429,7 +429,8 @@ describe("StorageReclaim", () => {
       machine.facts = uses(true);
       const offered = find((yield* reclaim.usage({ rescan: true })).items, output)!;
       expect(offered.state).toBe("removable");
-      yield* fs.makeDirectory(path.join(output, "pkg", ".git"));
+      // Spelled as a case-insensitive volume lets git find it.
+      yield* fs.makeDirectory(path.join(output, "pkg", ".GIT"));
       const late = yield* reclaim.clean({
         items: [{ id: offered.id, token: offered.token }],
         actor: "test",
@@ -438,7 +439,7 @@ describe("StorageReclaim", () => {
         outcome: "skipped",
         reason: "It holds a git checkout, whose work its worktree's git cannot see",
       });
-      expect(yield* fs.exists(path.join(output, "pkg", ".git"))).toBe(true);
+      expect(yield* fs.exists(path.join(output, "pkg", ".GIT"))).toBe(true);
 
       // A linked worktree's .git file deep in a leftover folder.
       yield* fs.writeFileString(
@@ -508,7 +509,7 @@ describe("StorageReclaim", () => {
 
   it.live("removes files of deleted threads only while nothing surviving mentions them", () =>
     Effect.gen(function* () {
-      const { fs, path, config, reclaim } = yield* setup;
+      const { fs, path, config, leftover, reclaim } = yield* setup;
       const sql = yield* SqlClient.SqlClient;
       const thread = (id: string, deleted: boolean, payload: object = {}) =>
         sql`
@@ -590,6 +591,30 @@ describe("StorageReclaim", () => {
       expect(yield* fs.exists(gone.target)).toBe(true);
 
       yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'message-quote'`;
+
+      // Selected after a leftover folder: a message quotes the file while the folder goes.
+      const quote = sql`
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        VALUES ('message-late', 'thread-live', 'user', 0, '2026-01-04T00:00:00.000Z',
+          '2026-01-04T00:00:00.000Z', ${JSON.stringify({ attachments: [{ id: gone.id }] })})
+      `;
+      const selection = (yield* reclaim.usage({ rescan: true })).items
+        .filter((item) => item.kind === "attachments" || item.path === leftover)
+        .toSorted((left) => (left.kind === "orphan_folder" ? -1 : 1));
+      // The clean's scan lists processes once; the folder's final check lists them again.
+      machine.onProcessListing = { after: 1, run: quote };
+      const during = yield* reclaim.clean({
+        items: selection.map(({ id, token }) => ({ id, token })),
+        actor: "test",
+      });
+      expect(during.results.map((result) => [result.kind, result.outcome])).toEqual([
+        ["orphan_folder", "removed"],
+        ["attachments", "skipped"],
+      ]);
+      expect(yield* fs.exists(gone.target)).toBe(true);
+      yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'message-late'`;
+
       const again = (yield* reclaim.usage({ rescan: true })).items.find(
         (item) => item.kind === "attachments",
       )!;

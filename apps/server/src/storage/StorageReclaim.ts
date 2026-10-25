@@ -36,6 +36,7 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { buildOutputKeeps, maskedIndexEntry } from "./buildOutputs.ts";
+import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import { type FileIdentity, holdsGitCheckout, lstatOf, sameIdentity } from "./fileState.ts";
 import {
@@ -375,41 +376,69 @@ const make = Effect.gen(function* () {
         return removed ? null : "it is in use now";
       }
       case "files": {
-        // A group's log line names only its folder, so each file gets its own intent and outcome.
-        for (const file of target.files) {
-          const intent = yield* log({
-            event: "intent",
-            actor,
-            kind: item.kind,
-            path: file.path,
-          }).pipe(Effect.result);
-          if (intent._tag === "Failure")
-            return file.path + ": the cleanup log could not be written, so it was kept";
-          const done = yield* removeChecked(target.root, file.path, file.identity).pipe(
-            Effect.result,
-          );
-          yield* log({
-            event:
-              done._tag === "Failure" ? "failed" : done.success === null ? "removed" : "skipped",
-            actor,
-            kind: item.kind,
-            path: file.path,
-            ...(done._tag === "Failure"
-              ? { reason: done.failure.message }
-              : done.success === null
-                ? {}
-                : { reason: done.success }),
-          }).pipe(Effect.ignore);
-          if (done._tag === "Failure") return yield* done.failure;
-          if (done.success !== null && done.success !== "it is already gone")
-            return file.path + ": " + done.success;
-        }
-        return null;
+        if (item.kind !== "attachments") return yield* removeFiles(item, target, actor);
+        // A message can reference a file of a deleted thread at any moment. Holding the write
+        // lock while checking again and unlinking means such a message commits either before the
+        // check, which keeps the file, or after it is gone. Only the selected files' threads are
+        // read, so writes wait briefly.
+        return yield* sql.withTransaction(
+          Effect.gen(function* () {
+            const threads = yield* sql<{ readonly id: string; readonly deleted: string | null }>`
+              SELECT thread_id AS "id", deleted_at AS "deleted" FROM orchestration_v2_projection_threads
+            `;
+            const fresh = yield* deletedThreadAttachments({
+              attachmentsDir: target.root,
+              threads,
+              now: yield* Clock.currentTimeMillis,
+              only: new Set(target.files.map((file) => file.path)),
+            });
+            const still = new Set(
+              fresh.removable.map((file) => file.path + ":" + file.identity.ino),
+            );
+            if (target.files.some((file) => !still.has(file.path + ":" + file.identity.ino)))
+              return "a surviving thread or task mentions some of these files' threads now";
+            return yield* removeFiles(item, target, actor);
+          }),
+        );
       }
       case "none":
         return "it is shown for information only";
     }
   }, Effect.provideContext(context));
+
+  const removeFiles = Effect.fn("StorageReclaim.removeFiles")(function* (
+    item: StorageItem,
+    target: Extract<StorageTarget, { readonly kind: "files" }>,
+    actor: string,
+  ) {
+    // A group's log line names only its folder, so each file gets its own intent and outcome.
+    for (const file of target.files) {
+      const intent = yield* log({
+        event: "intent",
+        actor,
+        kind: item.kind,
+        path: file.path,
+      }).pipe(Effect.result);
+      if (intent._tag === "Failure")
+        return file.path + ": the cleanup log could not be written, so it was kept";
+      const done = yield* removeChecked(target.root, file.path, file.identity).pipe(Effect.result);
+      yield* log({
+        event: done._tag === "Failure" ? "failed" : done.success === null ? "removed" : "skipped",
+        actor,
+        kind: item.kind,
+        path: file.path,
+        ...(done._tag === "Failure"
+          ? { reason: done.failure.message }
+          : done.success === null
+            ? {}
+            : { reason: done.success }),
+      }).pipe(Effect.ignore);
+      if (done._tag === "Failure") return yield* done.failure;
+      if (done.success !== null && done.success !== "it is already gone")
+        return file.path + ": " + done.success;
+    }
+    return null;
+  });
 
   const clean: StorageReclaim["Service"]["clean"] = Effect.fn("StorageReclaim.clean")(
     function* (input) {
