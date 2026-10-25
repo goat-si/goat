@@ -728,4 +728,35 @@ describe("proxy releases (D17)", () => {
       assert.deepInclude(yield* h.nextReservation, { action: "release", completed: true });
     }),
   );
+  it.effect(
+    "a completed release the server never confirmed ends the proxy, so no later call runs unseen",
+    () =>
+      Effect.gen(function* () {
+        let tickets = 0;
+        const h = yield* harness({
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve"
+                ? { status: "admitted" as const, reservationId: `ticket:${tickets++}` }
+                : request.action === "release"
+                  ? // The release POST is lost; the CLI reports it as unauthorized.
+                    { status: "refused" as const, detail: "unauthorized" as const }
+                  : { status: "released" as const },
+            ),
+        });
+        yield* h.push(active());
+        yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "first" }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 1);
+        // The server never heard that the driver moved on, so nothing more may run unseen by it.
+        yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "second" }));
+        const first = yield* Effect.raceFirst(
+          h.nextToProvider.pipe(Effect.map((line) => ({ to: "provider", line }) as const)),
+          h.nextToDriver.pipe(Effect.map((line) => ({ to: "driver", line }) as const)),
+        );
+        assert.equal(first.to, "provider");
+        assert.isTrue(yield* h.isKilled);
+      }),
+  );
 });

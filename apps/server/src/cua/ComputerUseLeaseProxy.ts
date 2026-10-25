@@ -40,7 +40,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
-import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
+import { releaseProxyCall, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -244,19 +244,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  /** completed: the driver answered it, so its connection's earlier calls ended too (D17). */
+  // An answered call the server did not hear of ends the proxy (releaseProxyCall, D17).
   const release = (request: { reservationId?: string; connectionId?: string }, completed?: true) =>
-    request.reservationId === undefined || request.connectionId === undefined
-      ? Effect.void
-      : options
-          .reservation({
-            action: "release",
-            controlId: options.controlId,
-            connectionId: request.connectionId,
-            reservationId: request.reservationId,
-            ...(completed && { completed }),
-          })
-          .pipe(Effect.asVoid);
+    releaseProxyCall(options, request, completed).pipe(
+      Effect.flatMap((heard) => (heard ? Effect.void : Effect.forkIn(end("lost"), scope))),
+      Effect.asVoid,
+    );
 
   const readLines = (current: Running) =>
     current.driver.lines.pipe(
