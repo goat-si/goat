@@ -198,4 +198,14 @@ describe("computer use skill against what agents receive today", () => {
   it("names no driver tool GOAT withholds from agents", () => {
     expect(codeSpans.filter((span) => Object.hasOwn(CUA_DRIVER_EXCLUDED_TOOLS, span))).toEqual([]);
   });
+
+  it("teaches the foreground approval the proxy enforces, never a spoken ask or a self-restore", () => {
+    // The proxy refuses foreground input (foreground_not_approved) until a person approves
+    // computer_use.request with foreground:true and no apps; release never restores focus (#1480).
+    const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
+    expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
+    expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
+    expect(guidance).not.toContain("ask them first");
+    expect(guidance).toContain("Never restore focus yourself.");
+  });
 });

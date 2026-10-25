@@ -1,3 +1,4 @@
+import type { ComputerUseHolder } from "./computerUseGrants.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   type CuaDriverMcpConfiguration,
@@ -39,7 +40,7 @@ const fakeLeases = (input: {
   readonly proxy?: typeof proxy | undefined;
   readonly detection?: ComputerUseLeases.ComputerUseDetection;
   /** Another thread holding the screen for unattended work. */
-  readonly holder?: ComputerUseLeases.ComputerUseHolder;
+  readonly holder?: ComputerUseHolder;
   /** The screen was claimed between the holder check and the claim. */
   readonly claimLost?: boolean;
 }) => {
@@ -80,6 +81,9 @@ const fakeLeases = (input: {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    foregroundApprovalEpoch: Effect.die("unused"),
+    approveForeground: () => Effect.die("unused"),
+    foregroundAvailable: () => Effect.die("unused"),
     humanInput: () => Effect.die("unused"),
     agentInput: () => Effect.die("unused"),
     stopAll: Effect.die("unused"),
