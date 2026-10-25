@@ -14,6 +14,7 @@ import {
   type ComponentType,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -42,6 +43,7 @@ import { useEnvironmentScope } from "~/state/session";
 
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 type Chip = ReturnType<typeof previewSessionChip>;
 
@@ -191,10 +193,12 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   // A tap that reveals the controls must not also open the preview under them.
   const swallowClick = useRef(false);
   const shown = revealed;
+  const stackDocument = useContext(StackDocumentContext);
 
   useEffect(() => {
     if (!revealed) return;
-    const doc = card.current?.ownerDocument;
+    // The stack can move the card to the floating window's document while it stays mounted.
+    const doc = stackDocument ?? card.current?.ownerDocument;
     if (!doc) return;
     const hide = (event: PointerEvent) => {
       if (event.target instanceof Node && card.current?.contains(event.target)) return;
@@ -202,7 +206,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     };
     doc.addEventListener("pointerdown", hide);
     return () => doc.removeEventListener("pointerdown", hide);
-  }, [revealed]);
+  }, [revealed, stackDocument]);
 
   // Each request scrolls again, even to the card already focused.
   const focusRequest = props.focused ? props.focusRequest : 0;

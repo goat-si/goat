@@ -2,7 +2,7 @@ import {
   PREVIEW_SESSION_STACK_WINDOW_NAME,
   type DesktopPreviewSessionStackState,
 } from "@goat/contracts";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
@@ -33,6 +33,12 @@ const failure = (error: unknown) => {
     description: error instanceof Error ? error.message : String(error),
   });
 };
+
+/**
+ * The document the stack shows in now. Cards move between GOAT and the floating window without
+ * remounting, so listeners on "the card's document" follow this instead of reading it once.
+ */
+export const StackDocumentContext = createContext<Document | null>(null);
 
 function copyStyles(doc: Document) {
   doc.head.replaceChildren(
@@ -201,14 +207,16 @@ export function PreviewSessionStackSurface(props: {
     : null;
   if (!host) return stack;
   const portal = createPortal(
-    <div
-      ref={content}
-      className={floating ? "p-1" : "contents"}
-      onMouseMove={floating ? (event) => setInteractive(event.target) : undefined}
-      onMouseLeave={floating ? () => setInteractive(null) : undefined}
-    >
-      {stack}
-    </div>,
+    <StackDocumentContext.Provider value={target?.ownerDocument ?? document}>
+      <div
+        ref={content}
+        className={floating ? "p-1" : "contents"}
+        onMouseMove={floating ? (event) => setInteractive(event.target) : undefined}
+        onMouseLeave={floating ? () => setInteractive(null) : undefined}
+      >
+        {stack}
+      </div>
+    </StackDocumentContext.Provider>,
     host,
   );
   return (
