@@ -151,6 +151,25 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(harness.layer));
   });
 
+  // Pointing electron-updater at a feed constructs it, and an unpackaged Linux dev build's
+  // "0.0" version makes that throw at startup.
+  it.effect("sets the mock feed only when updates are enabled (#1545)", () =>
+    Effect.gen(function* () {
+      const feedsAfterConfigure = (env: Record<string, string>) => {
+        const harness = makeHarness({ env });
+        return Effect.scoped(
+          DesktopUpdates.DesktopUpdates.pipe(Effect.flatMap((updates) => updates.configure)),
+        ).pipe(Effect.provide(harness.layer), Effect.as(harness.feedUrls()));
+      };
+
+      const disabled = yield* feedsAfterConfigure({ GOAT_DISABLE_AUTO_UPDATE: "true" });
+      assert.deepEqual(disabled, []);
+
+      const enabled = yield* feedsAfterConfigure({});
+      assert.deepEqual(enabled, [{ provider: "generic", url: "http://localhost:4141" }]);
+    }),
+  );
+
   it.effect("checks for newer releases after an update has been downloaded", () => {
     const harness = makeHarness();
 
