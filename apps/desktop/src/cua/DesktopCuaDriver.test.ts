@@ -154,34 +154,41 @@ describe("DesktopCuaDriver", () => {
     }),
   );
 
-  it.effect("requires a development override and uses it to host without a bundled driver", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        vi.stubEnv("GOAT_CUA_DRIVER_PATH", " ");
-        const missing = yield* fixture({ isPackaged: false });
-        yield* missing.request("unconfigured");
-        assert.equal((yield* missing.next).status, "unavailable");
-        assert.isEmpty(missing.constructors);
+  it.effect.each(["linux", "darwin"] as const)(
+    "requires a %s development override to host without a bundled driver",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", " ");
+          const missing = yield* fixture({ platform, isPackaged: false });
+          yield* missing.request("unconfigured");
+          assert.equal((yield* missing.next).status, "unavailable");
+          assert.isEmpty(missing.constructors);
 
-        vi.stubEnv("GOAT_CUA_DRIVER_PATH", " /dev/cua-driver ");
-        const configured = yield* fixture({ isPackaged: false });
-        yield* configured.request("configured");
-        assert.equal((yield* configured.next).status, "ready");
-        assert.deepEqual(configured.constructors, [
-          {
-            path: "/dev/cua-driver",
-            bundleId: "codes.t3.host-test",
-            environment: privacyEnvironment,
-          },
-        ]);
-      }),
-    ),
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", " /dev/cua-driver ");
+          const configured = yield* fixture({ platform, isPackaged: false });
+          yield* configured.request("configured");
+          assert.equal((yield* configured.next).status, "ready");
+          assert.deepEqual(configured.constructors, [
+            {
+              path: "/dev/cua-driver",
+              bundleId: "codes.t3.host-test",
+              environment: privacyEnvironment,
+            },
+          ]);
+        }),
+      ),
   );
 
   it.effect("denies missing macOS permissions and restarts the host after permission changes", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin", denyPermissions: true });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({
+          platform: "darwin",
+          isPackaged: false,
+          denyPermissions: true,
+        });
         yield* test.request("denied");
         const denied = yield* test.next;
         assert.equal(denied.status, "unavailable");
@@ -199,7 +206,7 @@ describe("DesktopCuaDriver", () => {
         yield* test.restart;
         yield* test.request("granted");
         assert.equal((yield* test.next).status, "ready");
-        assert.equal(test.constructors[0]?.path, "/resources/cua-driver");
+        assert.equal(test.constructors[0]?.path, "/dev/cua-driver");
         yield* test.restart;
         assert.deepEqual(yield* test.next, {
           version: 1,
@@ -301,21 +308,22 @@ describe("DesktopCuaDriver verification", () => {
   it.effect("gives agents the general manifest and the grant check one that admits only GOAT", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin" });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "ready");
         assert.isTrue((yield* test.verify).verified);
         assert.deepEqual(test.launches, [
           {
             scope: "agents",
-            hostBundleIds: ["codes.t3.host-test"],
+            hostBundleIds: ["codes.t3.host-test", "com.github.Electron"],
             manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/agents.yaml",
             permissionMode: 0,
             approved: true,
           },
           {
             scope: "verify",
-            hostBundleIds: ["codes.t3.host-test"],
+            hostBundleIds: ["codes.t3.host-test", "com.github.Electron"],
             manifestPath: "/home/test/.goat/desktop/userdata/cua-driver/verify.yaml",
             permissionMode: 0,
             approved: true,
@@ -344,7 +352,8 @@ describe("DesktopCuaDriver verification", () => {
     Effect.gen(function* () {
       const test = yield* Effect.scoped(
         Effect.gen(function* () {
-          const test = yield* fixture({ platform: "darwin" });
+          vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+          const test = yield* fixture({ platform: "darwin", isPackaged: false });
           yield* test.request("agent");
           assert.equal((yield* test.next).status, "ready");
           assert.deepEqual(yield* test.verify, {
@@ -485,7 +494,8 @@ describe("DesktopCuaDriver verification", () => {
   it.effect.each(failures)("stops at $failedAt when $name", (failure) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin", ...failure.options });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false, ...failure.options });
         const result = yield* test.verify;
         const index = VERIFICATION_IDS.indexOf(failure.failedAt);
         assert.isFalse(result.verified);
@@ -504,7 +514,8 @@ describe("DesktopCuaDriver verification", () => {
   it.effect("an early failure leaves the agent's running driver alone", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const test = yield* fixture({ platform: "darwin" });
+        vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
+        const test = yield* fixture({ platform: "darwin", isPackaged: false });
         yield* test.request("agent");
         assert.equal((yield* test.next).status, "ready");
         // Grants revoked after the driver started: the check stops before its own restart.
@@ -567,12 +578,16 @@ describe("DesktopCuaDriver app listing for the agents' manifest", () => {
   );
 
   it.effect.each([
-    { name: "a build without the helper", platform: "darwin" as const, helper: undefined },
+    {
+      name: "a development build without the helper",
+      platform: "darwin" as const,
+      helper: undefined,
+    },
   ])("keeps listing by running the driver for $name", ({ platform, helper }) =>
     Effect.scoped(
       Effect.gen(function* () {
         vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
-        const test = yield* fixture({ platform, ...(helper ? { helper } : {}) });
+        const test = yield* fixture({ platform, isPackaged: false, ...(helper ? { helper } : {}) });
         yield* test.request("agent");
         yield* test.next;
         assert.deepEqual(

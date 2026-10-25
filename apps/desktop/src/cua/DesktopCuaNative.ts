@@ -24,8 +24,8 @@ import { makeMcpHelperHost } from "./McpHelperHost.ts";
 
 /**
  * Who runs the driver. "helper": GOAT Computer Use.app owns the TCC identity and spawns the
- * driver (D1). "embedded": the SDK spawns it from this Electron process, for builds that do not
- * ship the helper yet.
+ * driver (D1). "embedded": the SDK spawns it from this Electron process on Windows, Linux or
+ * unpackaged macOS development builds.
  */
 export type Engine =
   | { readonly kind: "helper"; readonly bundle: HelperBundle }
@@ -100,9 +100,9 @@ export interface DesktopCuaDriverDependencies {
     platform: NodeJS.Platform,
   ) => Promise<Grants>;
   /**
-   * The helper bundle this build ships. absent: the build has none, and GOAT itself runs the
-   * driver as releases did before the helper. unusable: it should be there and cannot be used,
-   * so computer use stays off rather than run under another principal. note: something to log.
+   * The helper bundle this build ships. absent: packaged macOS stays off; other builds may run
+   * the driver in-process. unusable: it should be there and cannot be used, so computer use stays
+   * off rather than run under another principal. note: something to log.
    */
   readonly helperBundlePath: typeof resolveHelperBundle;
   readonly helperHost: (

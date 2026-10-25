@@ -1,3 +1,9 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { createPackageWithOptions, extractFile, listPackage, statFile } from "@electron/asar";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { createBuildConfig } from "./build-desktop-artifact.ts";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
@@ -15,6 +21,78 @@ const signed = {
 };
 
 describe("desktop computer use payload", () => {
+  it.effect("mac omits the Cua SDK; Linux and Windows unpack natives and archive JavaScript", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cua-asar-" });
+      for (const [platform, nativePackage, library] of [
+        ["mac", "darwin-arm64", "libcua_driver_sdk.dylib"],
+        ["linux", "linux-x64-gnu", "libcua_driver_sdk.so"],
+        ["win", "win32-x64-msvc", "cua_driver_sdk.dll"],
+      ] as const) {
+        const sourceDir = path.join(root, platform);
+        const natives = [
+          `node_modules/@trycua/cua-driver-${nativePackage}/${library}`,
+          `node_modules/@trycua/cua-driver-${nativePackage}/cua_driver_node_runtime.node`,
+          `node_modules/@ubjs/node-${nativePackage}/uniffi-runtime-napi.${nativePackage}.node`,
+          ...(platform === "mac"
+            ? ["node_modules/@trycua/cua-driver-win32-x64-msvc/cua_driver_sdk.dll"]
+            : []),
+        ];
+        const javascript = [
+          "node_modules/@trycua/cua-driver/dist/embedded.js",
+          "node_modules/@ubjs/node/typescript/dist/resolve-lib.js",
+        ];
+        for (const file of [...natives, ...javascript]) {
+          yield* fs.makeDirectory(path.dirname(path.join(sourceDir, file)), { recursive: true });
+          yield* fs.writeFileString(path.join(sourceDir, file), file);
+        }
+        const config = yield* createBuildConfig(
+          platform,
+          "dir",
+          "1.2.3",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        const globs = config.asarUnpack as string[];
+        assert.isArray(globs, `${platform} needs explicit native unpack rules`);
+        const asarPath = path.join(root, `${platform}.asar`);
+        // electron-builder resolves file patterns from the app directory; anchor them the same way
+        // so the result does not depend on where the temporary fixture lives.
+        const ignore = (config.files as string[]).map(
+          (glob) => `${sourceDir.replaceAll("\\", "/")}/${glob.slice(1)}`,
+        );
+        yield* Effect.promise(() =>
+          createPackageWithOptions(sourceDir, asarPath, {
+            unpack: globs.length === 1 ? globs[0]! : `{${globs.join(",")}}`,
+            globOptions: { ignore },
+          }),
+        );
+        const excluded = (file: string) =>
+          platform === "mac" && file.includes("@trycua/cua-driver");
+        const packaged = listPackage(asarPath, { isPack: false }).map((file) =>
+          file.replaceAll("\\", "/"),
+        );
+        for (const file of [...natives, ...javascript].filter(excluded)) {
+          assert.notInclude(packaged, "/" + file);
+          assert.isFalse(yield* fs.exists(path.join(`${asarPath}.unpacked`, file)));
+        }
+        for (const file of natives.filter((file) => !excluded(file))) {
+          assert.equal(yield* fs.readFileString(path.join(`${asarPath}.unpacked`, file)), file);
+          assert.isTrue(statFile(asarPath, path.normalize(file)).unpacked);
+        }
+        for (const file of javascript.filter((file) => !excluded(file))) {
+          assert.equal(extractFile(asarPath, path.normalize(file)).toString(), file);
+          assert.isNotTrue(statFile(asarPath, path.normalize(file)).unpacked);
+          assert.isFalse(yield* fs.exists(path.join(`${asarPath}.unpacked`, file)));
+        }
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it("keeps the flag to unsigned mac builds; signed ones always carry the helper", () => {
     assert.isUndefined(computerUseHelperRefusal({ platform: "mac", signed: false }));
     assert.match(
