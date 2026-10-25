@@ -56,6 +56,7 @@ export async function readLinuxReadiness(
     tree: "unavailable",
     uinputWritable: await deps.uinputWritable(),
     captureRefused: undefined,
+    listingRefused: false,
   };
   const call = async (tool: string, args: Readonly<Record<string, unknown>>) => {
     const answer = await deps.call(tool, args, deadlineMs);
@@ -66,6 +67,10 @@ export async function readLinuxReadiness(
     const decoded = decodePermissions(permissions?.structured);
     if (decoded._tag === "Some") {
       facts.driver = decoded.value;
+      // Agents list windows through the driver's consent, which needs the screen layout; on a
+      // Wayland desktop the driver cannot read, readiness's own listing below still answers.
+      if (deps.session.displayServer === "wayland")
+        facts.listingRefused = (await call("get_screen_size", {})) === null;
       // A capture that may not be the window's own proves nothing, so it is not even taken.
       if (deps.capture.route === "refused") facts.captureRefused = deps.capture.reason;
       const list = await call("list_windows", {});

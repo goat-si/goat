@@ -51,7 +51,11 @@ describe("linuxComputerUseSetup", () => {
   });
 
   it("AT-SPI off is an action with the GNOME setting to turn on, shown and never run", () => {
-    const off = { ...READY, tree: "unavailable" } as const;
+    const off: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "unknown", screenCapture: "granted" },
+      tree: "unavailable",
+    };
     const step = linuxComputerUseSetup(off, "lidge-ai").steps.find(
       (entry) => entry.id === "accessibility",
     );
@@ -169,5 +173,21 @@ describe("linuxComputerUseSetup", () => {
     // A window that was read and still got no answer is AT-SPI being off.
     const silent = { ...noWindow, capture: "ready" } as const;
     expect(status(silent)).toMatchObject({ accessibility: "action" });
+  });
+
+  it("app controls the driver will not list on this Wayland desktop are unavailable, not an accessibility setting to change (#1610)", () => {
+    const refused: ComputerUseReadiness = {
+      ...READY,
+      grants: { accessibility: "granted", screenCapture: "unknown" },
+      capture: "unavailable",
+      tree: "unavailable",
+      input: "foregroundOnly",
+      platform: { linux: { displayServer: "wayland" } },
+    };
+    const setup = linuxComputerUseSetup(refused, "lidge-ai");
+    const step = setup.steps.find((entry) => entry.id === "accessibility");
+    expect(setup.ready).toBe(false);
+    expect(step).toMatchObject({ status: "unavailable", title: "App controls" });
+    expect(step?.guidance.some((entry) => entry.kind === "command")).toBe(false);
   });
 });

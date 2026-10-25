@@ -127,6 +127,17 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
         ),
       ],
     };
+  // AT-SPI answered, yet app controls are unavailable: the driver will not list windows for
+  // agents on this desktop (#1610). Turning accessibility on would change nothing.
+  if (readiness.grants.accessibility === "granted")
+    return {
+      id: "accessibility",
+      status: "unavailable",
+      title: "App controls",
+      detail:
+        "Cua Driver cannot read this Wayland desktop's screen layout, so agents cannot list or use windows here.",
+      guidance: [text("Use an X11 or XWayland session, or Hyprland.")],
+    };
   return {
     id: "accessibility",
     status: "action",

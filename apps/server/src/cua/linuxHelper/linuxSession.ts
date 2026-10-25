@@ -201,7 +201,16 @@ export interface ReadinessFacts {
   readonly uinputWritable: boolean;
   /** Why a window capture here would not be the window's own pixels (#1328). */
   readonly captureRefused: string | undefined;
+  /**
+   * Cua Driver could not read this Wayland desktop's screen layout. Its consent scopes listing
+   * windows to that layout, so it refuses to list them for agents (#1610), while readiness's
+   * own reads still answer.
+   */
+  readonly listingRefused: boolean;
 }
+
+const LISTING_REFUSED =
+  "Cua Driver cannot read this Wayland desktop's screen layout, so it does not list windows for agents here. Use an X11 or XWayland session, or Hyprland.";
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const { session } = facts;
@@ -223,8 +232,11 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     };
   const reasons: string[] = [];
   const wayland = session.displayServer === "wayland";
-  const tree = facts.driver.atspi ? facts.tree : "unavailable";
-  if (tree === "unavailable")
+  // AT-SPI itself, as readiness read it; the grant says only this.
+  const atspiTree = facts.driver.atspi ? facts.tree : "unavailable";
+  const tree = facts.listingRefused ? "unavailable" : atspiTree;
+  if (facts.listingRefused) reasons.push(LISTING_REFUSED);
+  else if (tree === "unavailable")
     reasons.push(
       facts.driver.atspi && facts.capture === "noWindow"
         ? "No window is open to read app controls from, so AT-SPI is not proven yet. Open any app window."
@@ -260,7 +272,7 @@ export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
     );
   return {
     grants: {
-      accessibility: tree === "unavailable" ? "unknown" : "granted",
+      accessibility: atspiTree === "unavailable" ? "unknown" : "granted",
       // No consent can make a cropped capture one window's own, so nothing is pending on it.
       screenCapture: !wayland
         ? "granted"
