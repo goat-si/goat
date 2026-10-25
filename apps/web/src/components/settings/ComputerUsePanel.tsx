@@ -263,7 +263,27 @@ export function ComputerUsePanel({
         </CollapsibleTrigger>
         <CollapsiblePanel>
           <div className="border-t border-border/50 pt-3 [&>*+*]:border-t [&>*+*]:border-border/50 [&>[data-slot=settings-row]]:rounded-none">
-            <ComputerUseReadiness {...readinessInput} />
+            <ComputerUseReadiness
+              {...readinessInput}
+              renderGrantAction={(grant) =>
+                // A switch macOS shows on but refuses is fixed in System Settings, on this Mac.
+                grant === "accessibility" &&
+                localMac &&
+                readinessInput.readiness?.blockers.includes("accessibilityStale")
+                  ? {
+                      action: (
+                        <Button
+                          size="compact"
+                          variant="outline"
+                          onClick={() => void bridge.openGuide("accessibility").catch(() => {})}
+                        >
+                          Open Accessibility settings
+                        </Button>
+                      ),
+                    }
+                  : { action: null }
+              }
+            />
             {localMac && setup.holder ? (
               <div className="space-y-2 px-4 py-3">
                 <CuaGrantTroubleshooting
@@ -320,7 +340,7 @@ function ComputerUseStatus({
         ) : null}
         {grant ? (
           <Button
-            size="xs"
+            size="compact"
             variant={setup.opened === grant ? "outline" : "default"}
             disabled={setup.opening}
             aria-label={`${setup.opened === grant ? "Open again" : "Open"}: ${cuaGrantTitle(grant)} in System Settings`}
@@ -331,7 +351,7 @@ function ComputerUseStatus({
         ) : null}
         {line?.retry ? (
           <Button
-            size="xs"
+            size="compact"
             variant="outline"
             disabled={!canConfigure}
             onClick={() => void setup.start()}
@@ -340,12 +360,12 @@ function ComputerUseStatus({
           </Button>
         ) : null}
         {line?.relaunch && setup.relaunch ? (
-          <Button size="xs" variant="outline" onClick={setup.relaunch}>
+          <Button size="compact" variant="outline" onClick={setup.relaunch}>
             Quit & reopen
           </Button>
         ) : null}
         {onDetails ? (
-          <Button size="xs" variant="link" onClick={onDetails}>
+          <Button size="compact" variant="link" onClick={onDetails}>
             Details
           </Button>
         ) : null}

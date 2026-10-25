@@ -105,6 +105,7 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
       noInteractiveDesktop: "Windows Session 0",
       otherUserAtConsole: "Another user",
       restartRequired: "Restart the helper or GOAT",
+      accessibilityStale: "switch GOAT Computer Use off and on again",
     } as const;
     expect(blocker?.id).toBe(id);
     expect(blocker?.remedy).toContain(remedies[id]);

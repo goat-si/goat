@@ -141,9 +141,18 @@ export const toReadiness = (
     ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
   ];
   const unproven = state.capture === "pending" && state.details.length === 0;
+  // A grant macOS reports on proves nothing by itself (AXIsProcessTrusted stays true for a switch
+  // macOS no longer honors, trycua/cua#3170); a tree read that fails under it is the tell.
+  const stale =
+    platform === "darwin" &&
+    state.confirmed &&
+    state.grants.accessibility === "granted" &&
+    state.capture !== "pending" &&
+    state.tree === "empty";
   const blockers = [
     ...new Set([
       ...state.blockers,
+      ...(stale ? (["accessibilityStale"] as const) : []),
       ...(state.desktop?.blocker === undefined ? [] : [state.desktop.blocker]),
     ]),
   ];
