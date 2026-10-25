@@ -18,30 +18,34 @@
 
 ## 0. 준비 (한 번)
 
-GOAT checkout 옆에 두 클론을 만든다. `/tmp`에 두지 않는다.
+GOAT checkout 옆에 두 클론을 만든다. `/tmp`에 두지 않는다. 아래 블록은 세 checkout을 절대 경로 변수로만 가리키므로 어느
+디렉터리에서 실행해도 같다. 새 셸에서는 이 변수 세 줄을 GOAT checkout 안에서 먼저 다시 실행한다.
 
 ```bash
-git clone https://github.com/goat-si/cua-driver.git ../cua-driver
+GOAT=$(git rev-parse --show-toplevel)      # GOAT checkout 안에서 실행
+FORK=$(cd "$GOAT/.." && pwd)/cua-driver
+CUA_UPSTREAM=$(cd "$GOAT/.." && pwd)/trycua-cua
+git clone https://github.com/goat-si/cua-driver.git "$FORK"
 # monorepo는 약 650 MB다. blob 없이 받아도 split은 tree만 읽으므로 된다.
-git clone --filter=blob:none --no-checkout --no-tags https://github.com/trycua/cua.git ../trycua-cua
+git clone --filter=blob:none --no-checkout --no-tags https://github.com/trycua/cua.git "$CUA_UPSTREAM"
 ```
 
 ## 1. 스캔
 
 ```bash
-devlog/_chase/scan.sh --cua   # GOAT pin 선언, upstream·포크 최신 태그, 20 레지스트리 검사
+"$GOAT/devlog/_chase/scan.sh" --cua   # GOAT pin 선언, upstream·포크 최신 태그, 20 레지스트리 검사
 VER=0.38.0                    # 대상 upstream 버전
-git -C ../trycua-cua fetch --no-tags origin main "refs/tags/cua-driver-rs-v$VER:refs/tags/cua-driver-rs-v$VER"
-UP=$(git -C ../trycua-cua rev-parse "cua-driver-rs-v$VER^{commit}")
+git -C "$CUA_UPSTREAM" fetch --no-tags origin main "refs/tags/cua-driver-rs-v$VER:refs/tags/cua-driver-rs-v$VER"
+UP=$(git -C "$CUA_UPSTREAM" rev-parse "cua-driver-rs-v$VER^{commit}")
 RT=<20_cua_baseline의 reviewed-through trycua 커밋>
-git -C ../trycua-cua log --oneline "$RT..$UP" -- libs/cua-driver
+git -C "$CUA_UPSTREAM" log --oneline "$RT..$UP" -- libs/cua-driver
 # split에 보이지 않는 파일: 루트 라이선스, vendor 원본, 빌드 workflow
-git -C ../trycua-cua diff --stat "$RT" "$UP" -- LICENSE.md LICENSING.md TRADEMARKS.md THIRD_PARTY_NOTICES.md \
+git -C "$CUA_UPSTREAM" diff --stat "$RT" "$UP" -- LICENSE.md LICENSING.md TRADEMARKS.md THIRD_PARTY_NOTICES.md \
   libs/cua/Cargo.toml libs/cua/crates/cua-telemetry libs/cua/crates/cua-teleport/src/ux/targets.json \
   libs/images/sandbox-images.json '.github/workflows/*cua-driver*' '.github/workflows/*rust*'
 # 보안·동작 검토의 출발점. 결과는 사람이 읽는다.
-git -C ../trycua-cua log -p "$RT..$UP" -- libs/cua-driver | rg -n 'Command::new|https?://|reqwest|ureq|unsafe |entitlement|kTCC'
-git -C ../trycua-cua diff "$RT" "$UP" -- libs/cua-driver/rust/Cargo.lock | rg '^\+name = '
+git -C "$CUA_UPSTREAM" log -p "$RT..$UP" -- libs/cua-driver | rg -n 'Command::new|https?://|reqwest|ureq|unsafe |entitlement|kTCC'
+git -C "$CUA_UPSTREAM" diff "$RT" "$UP" -- libs/cua-driver/rust/Cargo.lock | rg '^\+name = '
 ```
 
 출력 전문은 커밋하지 않고 사이클 카드에 요약한다.
@@ -61,20 +65,20 @@ git -C ../trycua-cua diff "$RT" "$UP" -- libs/cua-driver/rust/Cargo.lock | rg '^
 ## 3. split
 
 ```bash
-git -C ../cua-driver fetch origin
-OLD=$(git -C ../cua-driver rev-parse origin/upstream)
+git -C "$FORK" fetch origin
+OLD=$(git -C "$FORK" rev-parse origin/upstream)
 OLD_UP=$RT
 # 재현성: 이전 split을 다시 만들어 같은 SHA인지 본다. 다르면 git 버전이나 옵션이 바뀐 것이므로 멈추고 카드를 만든다.
-test "$(git -C ../trycua-cua subtree split -q --prefix=libs/cua-driver "$OLD_UP" 2>/dev/null)" = "$OLD"
-NEW=$(git -C ../trycua-cua subtree split -q --prefix=libs/cua-driver "$UP" 2>/dev/null)
-git -C ../trycua-cua merge-base --is-ancestor "$OLD" "$NEW"   # 실패하면 멈춘다
-git -C ../trycua-cua branch -f "split-$VER" "$NEW"
+test "$(git -C "$CUA_UPSTREAM" subtree split -q --prefix=libs/cua-driver "$OLD_UP" 2>/dev/null)" = "$OLD"
+NEW=$(git -C "$CUA_UPSTREAM" subtree split -q --prefix=libs/cua-driver "$UP" 2>/dev/null)
+git -C "$CUA_UPSTREAM" merge-base --is-ancestor "$OLD" "$NEW"   # 실패하면 멈춘다
+git -C "$CUA_UPSTREAM" branch -f "split-$VER" "$NEW"
 # git 2.45부터 upload-pack은 partial clone에서 빠진 blob을 가져오지 않는다. 이 한 번은 허용한다.
-GIT_NO_LAZY_FETCH=0 git -C ../cua-driver fetch ../trycua-cua "split-$VER"
-test "$(git -C ../cua-driver rev-parse FETCH_HEAD)" = "$NEW"
-git -C ../cua-driver push origin "$NEW:refs/heads/upstream"   # force 없이. 거부되면 멈춘다
-git -C ../cua-driver tag "upstream-v$VER" "$NEW"
-git -C ../cua-driver push origin "upstream-v$VER"
+GIT_NO_LAZY_FETCH=0 git -C "$FORK" fetch "$CUA_UPSTREAM" "split-$VER"
+test "$(git -C "$FORK" rev-parse FETCH_HEAD)" = "$NEW"
+git -C "$FORK" push origin "$NEW:refs/heads/upstream"   # force 없이. 거부되면 멈춘다
+git -C "$FORK" tag "upstream-v$VER" "$NEW"
+git -C "$FORK" push origin "upstream-v$VER"
 ```
 
 split 한 번은 약 1분 걸린다 (2026-10-25, 0.37.0에서 1180 경로 커밋). `2>/dev/null`은 진행 표시를 지운다.
@@ -82,7 +86,7 @@ split 한 번은 약 1분 걸린다 (2026-10-25, 0.37.0에서 1180 경로 커밋
 ## 4. 머지
 
 ```bash
-cd ../cua-driver
+cd "$FORK"
 git switch -c "chase/cua-$VER" origin/main
 git merge --no-ff "$NEW" -m "chase(cua): merge upstream cua-driver-rs v$VER (trycua/cua ${UP:0:10})"
 ```
@@ -96,9 +100,9 @@ git merge --no-ff "$NEW" -m "chase(cua): merge upstream cua-driver-rs v$VER (try
 ## 5. 라이선스와 고지
 
 ```bash
-cd ../cua-driver/rust
+cd "$FORK/rust"
 cargo deny check licenses advisories bans sources   # deny 설정은 #1589/#1590이 포크에 둔다. 그전에는 사이클을 릴리스까지 끌고 가지 않는다
-git -C .. diff "$OLD" "$NEW" -- rust/Cargo.lock | rg '^\+name = '   # 새 crate는 고지에 반영
+git -C "$FORK" diff "$OLD" "$NEW" -- rust/Cargo.lock | rg '^\+name = '   # 새 crate는 고지에 반영
 ```
 
 - 1번의 루트 `LICENSE.md`·`LICENSING.md`·`TRADEMARKS.md`·`THIRD_PARTY_NOTICES.md` 변경을 읽는다. `LICENSE.md`가 바뀌었으면 포크
@@ -137,7 +141,7 @@ done
 
 ## 8. GOAT pin 검증 (후보로)
 
-GOAT dev에서 브랜치를 만든다: `node scripts/worktree-add.ts ../goat-cua-pin-$VER -b chase/cua-pin-$VER origin/dev`.
+GOAT dev에서 브랜치를 만든다: `cd "$GOAT" && node scripts/worktree-add.ts "$GOAT/../goat-cua-pin-$VER" -b chase/cua-pin-$VER origin/dev`. 이 절의 나머지 명령과 9번의 GOAT 쪽 단계는 그 새 worktree(`cd "$GOAT/../goat-cua-pin-$VER"`)에서 실행한다.
 
 - 후보 바이트로 pin을 바꾼다: `cuaDriverRelease.ts`의 버전(`:3`), 아카이브 이름·바이트·SHA-256(`:11-37`), 필요하면
   `requiredFiles`(`:66-79`)와 텔레메트리 환경 변수(`:85-91`), SDK catalog(`pnpm-workspace.yaml:58`),
@@ -166,8 +170,8 @@ GOAT dev에서 브랜치를 만든다: `node scripts/worktree-add.ts ../goat-cua
 
 ```bash
 N=<이 upstream 버전의 다음 번호>
-git -C ../cua-driver tag "cua-driver-rs-v$VER-goat.$N" "$RELEASE_SHA"
-git -C ../cua-driver push origin "cua-driver-rs-v$VER-goat.$N"
+git -C "$FORK" tag "cua-driver-rs-v$VER-goat.$N" "$RELEASE_SHA"
+git -C "$FORK" push origin "cua-driver-rs-v$VER-goat.$N"
 ```
 
 - 릴리스는 7번 후보와 같은 바이트를 올린다. 올라간 자산의 크기와 SHA-256이 후보와 같은지 확인한다. 다시 빌드해 바이트가
