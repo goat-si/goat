@@ -64,6 +64,14 @@ export const VISIBLE_TEXT_RULES: readonly TextRule[] = [
     scope: (path) => path === "apps/server/src/cli/connect.ts",
   },
   {
+    // The docs index labels the two retitled Connect guides; the troubleshooting mirror keeps its title.
+    id: "visible-connect-docs-index",
+    category: "visible-copy",
+    find: /(?<=\[)T3 Connect(?=(?: setup)?\]\(\.\/(?:internals\/t3-connect|operations\/connect-setup)\.md\))/g,
+    replace: "GOAT Connect",
+    scope: (path) => path === "docs/README.md",
+  },
+  {
     // Settings describe the project file GOAT reads first; the t3.json reader and source label stay.
     id: "visible-project-file-copy",
     category: "visible-copy",

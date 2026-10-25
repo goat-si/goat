@@ -60,6 +60,37 @@ describe("GOAT Connect copy", () => {
     expect(apply(path, `${line} T3 Connect`)).not.toBe(`${line} T3 Connect`);
   });
 
+  it.each([
+    [
+      "docs/user/telemetry.md",
+      "T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
+      "GOAT also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.",
+    ],
+    [
+      "docs/operations/release.md",
+      "Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect enabled",
+      "Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect enabled",
+    ],
+  ])(
+    "holds the upstream service on upstream's wording of the line in %s",
+    (path, upstream, expected) => {
+      expect(apply(path, upstream)).toBe(expected);
+      expect(apply(path, expected)).toBe(expected);
+    },
+  );
+
+  it("relabels the retitled guides in the docs index and keeps the troubleshooting mirror", () => {
+    const path = "docs/README.md";
+    expect(apply(path, "- [T3 Connect](./internals/t3-connect.md)")).toBe(
+      "- [GOAT Connect](./internals/t3-connect.md)",
+    );
+    expect(apply(path, "- [T3 Connect setup](./operations/connect-setup.md)")).toBe(
+      "- [GOAT Connect setup](./operations/connect-setup.md)",
+    );
+    const mirror = "- [T3 Connect troubleshooting](./user/t3-connect-troubleshooting.md)";
+    expect(apply(path, mirror)).toBe(mirror);
+  });
+
   it("renames the line-wrapped phrases only in their files", () => {
     expect(
       apply("apps/web/src/components/clerk/T3ConnectUserProfilePage.tsx", "available through T3"),
