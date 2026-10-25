@@ -37,7 +37,7 @@ export const sameIdentity = (left: FileIdentity, right: FileIdentity) =>
   left.dev === right.dev && left.ino === right.ino;
 
 /** A .git entry in any spelling: case-insensitive volumes (macOS, Windows) let git find .GIT. */
-const isGitEntry = (name: string) => name.toLowerCase() === ".git";
+export const isGitEntry = (name: string) => name.toLowerCase() === ".git";
 
 /** The most entries a folder may hold for the cleanup to vouch that nothing in it changed. */
 const CONTENT_STAMP_LIMIT = 300_000;
@@ -132,11 +132,13 @@ export const holdsGitCheckout = Effect.fn("storage.holdsGitCheckout")(function* 
 /**
  * Whether file sits in a git checkout below root: a folder from the file's own up to root holds a
  * .git entry. Its contents are that checkout's work, whatever their names say. Null when a folder
- * cannot be read, which callers treat as yes.
+ * cannot be read, which callers treat as yes. skipRoot leaves out root's own .git, for a checkout
+ * looking for others between it and the file.
  */
 export const insideCheckout = Effect.fn("storage.insideCheckout")(function* (
   root: string,
   file: string,
+  options: { readonly skipRoot?: boolean } = {},
 ) {
   return yield* Effect.tryPromise(async () => {
     const top = NodePath.resolve(root);
@@ -145,8 +147,18 @@ export const insideCheckout = Effect.fn("storage.insideCheckout")(function* (
       ;
       folder = NodePath.dirname(folder)
     ) {
-      if ((await NodeFSP.readdir(folder)).some(isGitEntry)) return true;
+      const own = folder === top && options.skipRoot === true;
+      if (!own && (await NodeFSP.readdir(folder)).some(isGitEntry)) return true;
       if (folder === top || NodePath.dirname(folder) === folder) return false;
     }
   }).pipe(Effect.orElseSucceed(() => null));
+});
+
+/**
+ * Whether folder or any folder above it holds a .git entry, so its contents may be a repository's
+ * work. Null when a folder cannot be read, which callers treat as yes.
+ */
+export const withinCheckout = Effect.fn("storage.withinCheckout")(function* (folder: string) {
+  const resolved = NodePath.resolve(folder);
+  return yield* insideCheckout(NodePath.parse(resolved).root, NodePath.join(resolved, "-"));
 });

@@ -369,4 +369,66 @@ describe("StorageReclaim leaves GOAT's own data alone", () => {
       for (const file of [inCheckout, rotated]) expect(yield* fs.exists(file)).toBe(true);
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
+
+  it.live("keeps a build output that sits in a checkout nested in its worktree", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find } = yield* setup;
+      const { checkout, uses, git } = yield* buildOutputWorktree(worktrees);
+      yield* fs.writeFileString(path.join(checkout, ".gitignore"), "node_modules/\nvendor/\n");
+      machine.facts = uses(true);
+      const crate = (name: string) =>
+        Effect.gen(function* () {
+          const folder = path.join(checkout, "vendor", name);
+          yield* fs.makeDirectory(path.join(folder, "target"), { recursive: true });
+          yield* fs.writeFileString(path.join(folder, "Cargo.toml"), "[package]\n");
+          yield* fs.writeFileString(path.join(folder, "target", "work.rs"), "edited\n");
+          return folder;
+        });
+      // vendor/a is its own checkout already; vendor/b becomes one after review.
+      const a = yield* crate("a");
+      yield* git(["-C", a, "init", "-q"]);
+      const b = yield* crate("b");
+      const items = (yield* reclaim.usage({ rescan: true })).items;
+      expect(find(items, path.join(a, "target"))).toBeUndefined();
+      const offered = find(items, path.join(b, "target"))!;
+      expect(offered.state).toBe("removable");
+      yield* git(["-C", b, "init", "-q"]);
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      for (const folder of [a, b])
+        expect(yield* fs.readFileString(path.join(folder, "target", "work.rs"))).toBe("edited\n");
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("never takes a repository's folders for leftovers when worktrees live inside it", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, leftover, outside, reclaim, find } = yield* setup;
+      const offered = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
+      expect(offered.state).toBe("removable");
+      // A repository set as the worktrees folder: its old source folders are its work.
+      const repository = path.join(outside, "repository");
+      const source = path.join(repository, "packages", "app");
+      yield* fs.makeDirectory(path.join(repository, ".git"), { recursive: true });
+      yield* fs.makeDirectory(source, { recursive: true });
+      yield* fs.writeFileString(path.join(source, "work.ts"), "edited\n");
+      yield* backdate(repository);
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        worktreesDirectory: repository,
+      });
+      const items = (yield* reclaim.usage({ rescan: true })).items;
+      expect(items.filter((item) => item.path.startsWith(repository))).toEqual([]);
+      // The reviewed leftover's folder of checkouts turns out to be a checkout itself.
+      yield* fs.makeDirectory(path.join(worktrees, "goat", ".git"));
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.exists(leftover)).toBe(true);
+      expect(yield* fs.readFileString(path.join(source, "work.ts"))).toBe("edited\n");
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
 });

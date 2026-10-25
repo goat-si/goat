@@ -32,6 +32,7 @@ import {
   holdsGitCheckout,
   type Lstat,
   lstatOf,
+  withinCheckout,
 } from "./fileState.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import { measureFolder } from "./measureFolder.ts";
@@ -495,6 +496,8 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   if (facts._tag === "Success" && ownRows !== null) {
     const known = [...ownBound, ...registered];
     for (const managedRoot of managedRoots) {
+      // A worktrees folder set inside a repository: its folders are that repository's work.
+      if ((yield* withinCheckout(managedRoot)) !== false) continue;
       for (const first of yield* childDirectories(managedRoot)) {
         // <root>/<name> is a checkout itself, or a repository's folder of checkouts.
         if (known.some((value) => samePath(value, first.path, rules))) continue;

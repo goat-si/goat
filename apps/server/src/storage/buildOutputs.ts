@@ -3,13 +3,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-import { lstatOf } from "./fileState.ts";
+import { isGitEntry, lstatOf } from "./fileState.ts";
 
 /** How deep build outputs are looked for inside a worktree. */
 const BUILD_OUTPUT_DEPTH = 3;
 const SKIPPED_WHEN_SEARCHING = new Set([".git", "node_modules", "target", ".goat", ".t3"]);
 
-/** node_modules folders and Rust target/ folders next to a Cargo.toml, a few levels deep. */
+/**
+ * node_modules folders and Rust target/ folders next to a Cargo.toml, a few levels deep. A checkout
+ * nested in the worktree is left out: the worktree's git cannot see its work.
+ */
 export const findBuildOutputs = Effect.fn("storage.findBuildOutputs")(function* (worktree: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -22,6 +25,7 @@ export const findBuildOutputs = Effect.fn("storage.findBuildOutputs")(function* 
     const names = yield* fs
       .readDirectory(folder)
       .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    if (depth > 0 && names.some(isGitEntry)) continue;
     if (names.includes("node_modules")) outputs.push(path.join(folder, "node_modules"));
     if (names.includes("target") && names.includes("Cargo.toml"))
       outputs.push(path.join(folder, "target"));

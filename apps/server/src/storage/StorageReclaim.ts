@@ -48,6 +48,7 @@ import {
   insideCheckout,
   lstatOf,
   sameIdentity,
+  withinCheckout,
 } from "./fileState.ts";
 import {
   otherServerReason,
@@ -423,6 +424,12 @@ const make = Effect.gen(function* () {
               // A batch removes items one after another; this one may have changed meanwhile.
               const changed = yield* changedSinceReview(item.path, target.stamp);
               if (changed !== null) return changed;
+              // A folder of a repository is that repository's work, whatever GOAT folder holds it.
+              const around = yield* withinCheckout(path.dirname(item.path));
+              if (around !== false)
+                return around === null
+                  ? "the folders above it could not be checked for a git checkout"
+                  : "it sits in a git checkout, whose work it may be";
               return yield* removeChecked(target.root, item.path, target.identity);
             }),
           );
@@ -459,6 +466,11 @@ const make = Effect.gen(function* () {
                 return nested === null
                   ? "it could not be searched for git checkouts"
                   : "it holds a git checkout, whose work its worktree's git cannot see";
+              const between = yield* insideCheckout(worktree, item.path, { skipRoot: true });
+              if (between !== false)
+                return between === null
+                  ? "the folders above it could not be checked for a git checkout"
+                  : "it sits in a git checkout nested in its worktree, whose work its worktree's git cannot see";
               return yield* removeChecked(target.root, item.path, target.identity);
             }),
           ),
