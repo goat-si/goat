@@ -88,6 +88,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
@@ -1403,15 +1404,6 @@ const make = Effect.gen(function* () {
     });
   };
 
-  const withCaptureLock = <A>(tab: ServerTab, operation: () => Promise<A>): Promise<A> => {
-    const run = tab.captureLock.then(() => {
-      if (tab.closing) throw new Error("The preview tab closed.");
-      return operation();
-    });
-    tab.captureLock = run.then(constVoid, constVoid);
-    return run;
-  };
-
   const startRecording = (tab: ServerTab): Promise<Recording> => {
     const started = withCaptureLock(tab, async () => {
       if (tab.recording) return tab.recording;
@@ -1480,28 +1472,39 @@ const make = Effect.gen(function* () {
     return started;
   };
 
-  // Scaled captures repaint every screencast; pause them to avoid leaking that frame.
-  const withScreencastsPaused = <A>(tab: ServerTab, capture: () => Promise<A>): Promise<A> =>
-    withCaptureLock(tab, async () => {
-      tab.capturing += 1;
-      const recording = tab.recording;
-      try {
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.pause()),
-          recording?.session.send("Page.stopScreencast").catch(constVoid),
-        ]);
-        return await capture();
-      } finally {
-        tab.capturing -= 1;
+  // Scaled captures repaint every screencast; pause them to avoid leaking that frame. The
+  // deadline covers the pause, the capture and the resume, as the caller sees them.
+  const withScreencastsPaused = <A>(
+    tab: ServerTab,
+    capture: () => Promise<A>,
+    deadlineMs?: number,
+  ): Promise<A> =>
+    withCaptureLock(
+      tab,
+      async () => {
+        tab.capturing += 1;
+        const recording = tab.recording;
+        try {
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.pause()),
+            recording?.session.send("Page.stopScreencast").catch(constVoid),
+          ]);
+          return await capture();
+        } finally {
+          tab.capturing -= 1;
 
-        await Promise.all([
-          ...[...tab.viewers].map((viewer) => viewer.resume()),
-          recording && tab.recording === recording
-            ? recording.session.send("Page.startScreencast", RECORDING_SCREENCAST).catch(constVoid)
-            : undefined,
-        ]);
-      }
-    });
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.resume()),
+            recording && tab.recording === recording
+              ? recording.session
+                  .send("Page.startScreencast", RECORDING_SCREENCAST)
+                  .catch(constVoid)
+              : undefined,
+          ]);
+        }
+      },
+      deadlineMs,
+    );
 
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
@@ -1962,14 +1965,17 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(tab, () =>
-          ServerBrowserPage.snapshot({
-            ...tab,
-            renderScale: tab.desktop ? "display" : RENDER_SCALE,
-            fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
-            captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
-            timeoutMs: deadlineMs - performance.now(),
-          }),
+        return withScreencastsPaused(
+          tab,
+          () =>
+            ServerBrowserPage.snapshot({
+              ...tab,
+              renderScale: tab.desktop ? "display" : RENDER_SCALE,
+              fullPage: (input as PreviewAutomationSnapshotInput).fullPage,
+              captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
+              timeoutMs: deadlineMs - performance.now(),
+            }),
+          deadlineMs,
         );
       }
       case "logs":

@@ -440,6 +440,49 @@ it.live("a snapshot that cannot capture times out on the request's own deadline 
   ).pipe(Effect.provide(layer)),
 );
 
+it.live(
+  "a viewer still the page never draws leaves snapshots their own deadline and other calls running",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { browser, broker, tabId } = yield* ready;
+        const context = contexts[0]!;
+        const drawn = Promise.withResolvers<Record<string, unknown>>();
+        yield* Effect.addFinalizer(() => Effect.sync(() => drawn.resolve({ data: "" })));
+        // A desktop guest parked outside the window answers no screenshot, the opening still
+        // the viewer takes included.
+        const openSession = context.newCDPSession;
+        context.newCDPSession = async (target: unknown) => {
+          const session = await openSession(target);
+          const answer = session.send.getMockImplementation()!;
+          session.send.mockImplementation((method, input) =>
+            method === "Page.captureScreenshot" ? drawn.promise : answer(method, input),
+          );
+          return session;
+        };
+        yield* browser.attachViewer(viewerInput(tabId, false)).pipe(Effect.forkScoped);
+        const error = yield* broker
+          .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
+          .pipe(Effect.flip);
+        // The server browser answered on the request's deadline, before the broker gave up on
+        // it and cut off every agent's tabs.
+        expect(error).toMatchObject({
+          _tag: "PreviewAutomationTimeoutError",
+          timeoutMs: 200,
+          remoteTag: "PreviewAutomationTimeoutError",
+        });
+        const title = yield* broker.invoke({
+          scope,
+          tabId,
+          operation: "evaluate",
+          input: { expression: "document.title" },
+        });
+        expect(title).toBe("evaluated");
+        yield* broker.invoke<PreviewAutomationLogs>({ scope, tabId, operation: "logs", input: {} });
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
 it.live("logs read filtered diagnostics without page capture or invalidating snapshot refs", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -37,6 +37,7 @@ const control = {
   controlId: "control:1",
   threadId,
   expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+  acted: true,
 };
 const detected = { humanInput: true, privateMode: true, frames: true } as const;
 const active = {
@@ -143,6 +144,16 @@ describe("preview sessions", () => {
         detected,
       ),
     ).toBeDefined();
+  });
+
+  it("leaves out a turn's control until its agent asks to act, so a browser tab gets one card", () => {
+    const { acted: _acted, ...unused } = control;
+    // A person moving the mouse pauses every control, the unused one included.
+    for (const state of [active, { _tag: "paused", reason: "human_input" } as const])
+      expect(desktopSession(base, unused, state, detected)).toBeUndefined();
+    expect(
+      desktopSession(base, unused, { _tag: "ended", reason: "stopped_all" }, detected),
+    ).toBeUndefined();
   });
 
   it("keeps a stopped control's app label instead of calling it the whole screen", () => {

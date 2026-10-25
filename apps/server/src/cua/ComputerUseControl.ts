@@ -21,9 +21,27 @@ export interface ComputerUseControl {
    * the proxy, but no agent can act on it until then.
    */
   readonly idle?: boolean;
+  /** An agent's call asked to act through it this turn; until then no card shows it (#1360). */
+  readonly acted?: boolean;
   /** The window the agent's latest admitted call named, as its proxy reported it. */
   readonly target?: { readonly pid: number; readonly windowId: number };
 }
+
+/**
+ * The live control a call asked to act through, marked for this turn; undefined when it is not
+ * live or already marked. A turn reusing a control after an idle stretch starts unmarked, while
+ * a stopped one keeps its mark so its card stays.
+ */
+export const askedToAct = <C extends ComputerUseControl & { readonly ended?: unknown }>(
+  control: C | undefined,
+  call: { readonly controlId: string },
+): C | undefined =>
+  control?.controlId === call.controlId &&
+  control.ended === undefined &&
+  control.idle !== true &&
+  control.acted !== true
+    ? { ...control, acted: true }
+    : undefined;
 
 export type ComputerUseControlState =
   | {
