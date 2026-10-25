@@ -12,7 +12,7 @@ describe("webhookAddress", () => {
     expect(result.copyable).toBe(true);
     expect(result.note).toContain("Tailscale");
     expect(result.note).toContain("GOAT Connect (coming soon)");
-    expect(result.note).not.toContain("GOAT Connect");
+    expect(result.note).not.toContain("T3 Connect"); // goat-rename: legacy
   });
 
   it("falls back to the path when the address is unknown", () => {
