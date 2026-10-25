@@ -1,0 +1,33 @@
+---
+import Base from "../layouts/Base.astro";
+import { messages } from "../i18n";
+import { localePath } from "../lib/paths";
+
+// GitHub Pages serves this one file for every missing path, so it speaks both languages.
+const ko = messages("ko");
+---
+
+<Base
+  locale="en"
+  path="/"
+  title="Page not found | GOAT"
+  description="This page does not exist."
+  noindex
+>
+  <section class="page-head container not-found" aria-labelledby="not-found-title">
+    <h1 id="not-found-title">Page not found</h1>
+    <p class="lede">The link may be old, or the page moved when the site was rebuilt.</p>
+    <p class="inline-links">
+      <a class="button button-primary" href={localePath("en", "/")}>Go to the home page</a>
+      <a class="button button-quiet" href={localePath("en", "/download/")}>Download GOAT</a>
+    </p>
+    <div lang={ko.htmlLang} class="not-found-alt">
+      <h2>페이지를 찾을 수 없어요</h2>
+      <p>오래된 링크이거나 사이트를 새로 만들면서 페이지가 옮겨졌을 수 있어요.</p>
+      <p class="inline-links">
+        <a class="text-link" href={localePath("ko", "/")}>홈으로 가기</a>
+        <a class="text-link" href={localePath("ko", "/download/")}>GOAT 다운로드</a>
+      </p>
+    </div>
+  </section>
+</Base>

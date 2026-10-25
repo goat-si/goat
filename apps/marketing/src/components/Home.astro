@@ -1,0 +1,218 @@
+---
+import desktopEnDark from "../assets/captures/desktop-en-dark.webp";
+import desktopEnLight from "../assets/captures/desktop-en-light.webp";
+import desktopKoDark from "../assets/captures/desktop-ko-dark.webp";
+import desktopKoLight from "../assets/captures/desktop-ko-light.webp";
+import phoneEnDark from "../assets/captures/phone-en-dark.webp";
+import phoneEnLight from "../assets/captures/phone-en-light.webp";
+import phoneKoDark from "../assets/captures/phone-ko-dark.webp";
+import phoneKoLight from "../assets/captures/phone-ko-light.webp";
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { LINKS } from "../lib/links";
+import { absoluteUrl, localePath, withBase } from "../lib/paths";
+import Capture from "./Capture.astro";
+import EnvironmentDiagram from "./EnvironmentDiagram.astro";
+import InstallOptions from "./InstallOptions.astro";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = messages(locale);
+const h = t.home;
+const captures =
+  locale === "ko"
+    ? { desktop: [desktopKoLight, desktopKoDark], phone: [phoneKoLight, phoneKoDark] }
+    : { desktop: [desktopEnLight, desktopEnDark], phone: [phoneEnLight, phoneEnDark] };
+const [desktopLight, desktopDark] = captures.desktop;
+const [phoneLight, phoneDark] = captures.phone;
+const homeUrl = absoluteUrl(localePath(locale, "/"), Astro.site);
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      name: "GOAT",
+      url: homeUrl,
+      inLanguage: t.htmlLang,
+    },
+    {
+      "@type": "SoftwareApplication",
+      name: "GOAT",
+      url: homeUrl,
+      description: t.meta.homeDescription,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "macOS, Windows, Linux",
+      downloadUrl: LINKS.releases,
+      license: "https://opensource.org/license/mit",
+      isAccessibleForFree: true,
+      image: absoluteUrl(withBase(`og/${locale}.png`), Astro.site),
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      name: "GOAT",
+      codeRepository: LINKS.repository,
+      license: "https://opensource.org/license/mit",
+      programmingLanguage: "TypeScript",
+    },
+  ],
+};
+---
+
+<Base
+  locale={locale}
+  path="/"
+  title={t.meta.homeTitle}
+  description={t.meta.homeDescription}
+  jsonLd={jsonLd}
+>
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="container hero-copy">
+      <h1 id="hero-title">{h.title}</h1>
+      <p class="lede">{h.lede}</p>
+      <div class="actions">
+        <a class="button button-primary" href={localePath(locale, "/download/")}>{h.primary}</a>
+        <a class="button button-quiet" href={LINKS.guides}>{h.secondary}</a>
+      </div>
+      <p class="fine-print">{h.note}</p>
+    </div>
+    <figure class="hero-capture">
+      <Capture
+        class="capture-frame"
+        light={desktopLight}
+        dark={desktopDark}
+        alt={h.captureAlt}
+        widths={[720, 1080, 1440, 2160, 2880]}
+        sizes="(min-width: 1360px) 1180px, (min-width: 1024px) 88vw, 180vw"
+        priority
+      />
+      <figcaption class="container">{h.captureCaption}</figcaption>
+    </figure>
+  </section>
+
+  <section class="section" id="machines" aria-labelledby="machines-title">
+    <div class="container split">
+      <div class="split-lead">
+        <h2 id="machines-title">{h.machines.title}</h2>
+        <p>{h.machines.body}</p>
+        <a class="text-link" href={h.machines.guideHref}>{h.machines.guide}</a>
+      </div>
+      <dl class="point-list">
+        {
+          h.machines.points.map((point) => (
+            <div class="point">
+              <dt>{point.title}</dt>
+              <dd>{point.body}</dd>
+            </div>
+          ))
+        }
+      </dl>
+    </div>
+    <div class="container">
+      <EnvironmentDiagram locale={locale} />
+    </div>
+  </section>
+
+  <section class="section section-tinted" id="across" aria-labelledby="across-title">
+    <div class="container flow">
+      <div class="flow-copy">
+        <h2 id="across-title">{h.flow.title}</h2>
+        <p class="lede">{h.flow.lede}</p>
+        <ol class="steps">
+          {
+            h.flow.steps.map((step) => (
+              <li>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+              </li>
+            ))
+          }
+        </ol>
+      </div>
+      <figure class="phone">
+        <Capture
+          class="phone-frame"
+          light={phoneLight}
+          dark={phoneDark}
+          alt={h.flow.phoneAlt}
+          widths={[300, 390, 600, 780]}
+          sizes="(min-width: 1024px) 320px, 70vw"
+        />
+      </figure>
+    </div>
+  </section>
+
+  <section class="section" id="agents" aria-labelledby="agents-title">
+    <div class="container split">
+      <div class="split-lead">
+        <h2 id="agents-title">{h.agents.title}</h2>
+        <p>{h.agents.lede}</p>
+        <a class="text-link" href={h.agents.guideHref}>{h.agents.guide}</a>
+      </div>
+      <div class="agent-groups">
+        <div>
+          <h3 class="label">{h.agents.localLabel}</h3>
+          <ul class="agent-list">{h.agents.local.map((name) => <li>{name}</li>)}</ul>
+        </div>
+        <div>
+          <h3 class="label">{h.agents.cloudLabel}</h3>
+          <ul class="agent-list">{h.agents.cloud.map((name) => <li>{name}</li>)}</ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="features" aria-labelledby="features-title">
+    <div class="container">
+      <h2 id="features-title">{h.features.title}</h2>
+      <ul class="feature-list">
+        {
+          h.features.items.map((item) => (
+            <li class="feature">
+              <h3>{item.title}</h3>
+              <p>{item.body}</p>
+              <a class="text-link" href={item.href}>
+                {h.features.readGuide}
+                <span class="visually-hidden">: {item.title}</span>
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+
+  <section class="section section-tinted" id="open-source" aria-labelledby="open-source-title">
+    <div class="container split">
+      <div class="split-lead">
+        <h2 id="open-source-title">{h.openSource.title}</h2>
+      </div>
+      <div>
+        <p class="lede">{h.openSource.body}</p>
+        <ul class="inline-links">
+          {
+            h.openSource.links.map((link) => (
+              <li>
+                <a class="text-link" href={link.href}>
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="install" aria-labelledby="install-title">
+    <div class="container">
+      <h2 id="install-title">{t.install.title}</h2>
+      <p class="lede">{t.install.lede}</p>
+      <InstallOptions locale={locale} />
+    </div>
+  </section>
+</Base>

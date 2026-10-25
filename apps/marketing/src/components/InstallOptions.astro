@@ -1,0 +1,41 @@
+---
+import { messages, type Locale } from "../i18n";
+import { INSTALL_COMMANDS } from "../lib/links";
+import { localePath } from "../lib/paths";
+
+interface Props {
+  locale: Locale;
+  /** The download page already lists every desktop build, so it hides that column. */
+  showDesktop?: boolean;
+  headingLevel?: 2 | 3;
+}
+
+const { locale, showDesktop = true, headingLevel = 3 } = Astro.props;
+const t = messages(locale).install;
+const Heading = headingLevel === 2 ? "h2" : "h3";
+---
+
+<div class:list={["install-grid", { "install-grid-two": !showDesktop }]}>
+  {
+    showDesktop && (
+      <div class="install-option">
+        <Heading>{t.desktopTitle}</Heading>
+        <p>{t.desktopBody}</p>
+        <a class="button button-primary" href={localePath(locale, "/download/")}>
+          {t.desktopCta}
+        </a>
+      </div>
+    )
+  }
+  <div class="install-option">
+    <Heading>{t.cliTitle}</Heading>
+    <p>{t.cliBody}</p>
+    <pre class="command"><code>{INSTALL_COMMANDS.unix}</code></pre>
+    <pre class="command"><code>{INSTALL_COMMANDS.windows}</code></pre>
+  </div>
+  <div class="install-option">
+    <Heading>{t.serverTitle}</Heading>
+    <p>{t.serverBody}</p>
+    <pre class="command"><code>{INSTALL_COMMANDS.server}</code></pre>
+  </div>
+</div>

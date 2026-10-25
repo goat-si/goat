@@ -1,0 +1,85 @@
+---
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { LINKS } from "../lib/links";
+import InstallOptions from "./InstallOptions.astro";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = messages(locale);
+const d = t.download;
+---
+
+<Base
+  locale={locale}
+  path="/download/"
+  title={t.meta.downloadTitle}
+  description={t.meta.downloadDescription}
+>
+  <section
+    class="page-head container"
+    aria-labelledby="download-title"
+    data-releases
+    data-locale={t.htmlLang}
+    data-stable={d.stable}
+    data-nightly={d.nightly}
+    data-failed={d.failed}
+  >
+    <h1 id="download-title">{d.title}</h1>
+    <p class="lede">{d.lede}</p>
+    <p class="release-status" data-release-status role="status">{d.checking}</p>
+
+    <div class="platforms">
+      {
+        d.platforms.map((platform) => (
+          <section class="platform" aria-labelledby={`platform-${platform.name}`}>
+            <h2 id={`platform-${platform.name}`}>{platform.name}</h2>
+            <div class="platform-builds">
+              <ul class="build-list">
+                {platform.builds.map((build) => (
+                  <li>
+                    <a class="build" href={LINKS.releases} data-asset={build.pattern}>
+                      <span class="build-label">{build.label}</span>
+                      <span class="build-file">{build.file}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+              {platform.note && <p class="fine-print">{platform.note}</p>}
+            </div>
+          </section>
+        ))
+      }
+    </div>
+    <p class="inline-links">
+      <a class="text-link" href={LINKS.releases}>{d.allBuilds}</a>
+      <a class="text-link" href={d.installGuideHref}>{d.installGuide}</a>
+    </p>
+  </section>
+
+  <section class="section container" aria-labelledby="install-title">
+    <h2 id="install-title" class="visually-hidden">{t.install.title}</h2>
+    <InstallOptions locale={locale} showDesktop={false} />
+  </section>
+
+  <section class="section container split" aria-labelledby="mobile-title">
+    <div class="split-lead">
+      <h2 id="mobile-title">{d.mobileTitle}</h2>
+    </div>
+    <div>
+      <p>{d.mobileBody}</p>
+      <p class="callout">{d.mobileWarning}</p>
+      <a class="text-link" href={d.mobileGuideHref}>{d.mobileGuide}</a>
+    </div>
+  </section>
+</Base>
+
+<script>
+  import { fillReleaseLinks } from "../scripts/releases";
+
+  const root = document.querySelector<HTMLElement>("[data-releases]");
+  if (root) void fillReleaseLinks(root);
+</script>
