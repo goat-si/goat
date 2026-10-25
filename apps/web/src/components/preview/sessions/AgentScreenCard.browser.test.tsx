@@ -579,14 +579,26 @@ it("keeps a stopped desktop session's last frame on a card mounted anew, as when
         "data:image/jpeg;base64,CCCC",
       ),
     );
+    // Stopped while docked, then popped out: the docked card goes away showing the frame.
+    state.frame = null;
+    await docked.rerender(cardView({ ...desk, status: "stopped" }).element);
+    await vi.waitFor(() => expect(docked.container.querySelector("img")).not.toBeNull());
   }
-  state.frame = null;
-  await using popped = await render(cardView({ ...desk, status: "stopped" }).element);
-  const picture = () => popped.container.querySelector("img");
+  {
+    await using popped = await render(cardView({ ...desk, status: "stopped" }).element);
+    const picture = () => popped.container.querySelector("img");
+    await vi.waitFor(() =>
+      expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,CCCC"),
+    );
+    expect(picture()?.className).toContain("opacity-50");
+  }
+  // And docked again.
+  await using redocked = await render(cardView({ ...desk, status: "stopped" }).element);
   await vi.waitFor(() =>
-    expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,CCCC"),
+    expect(redocked.container.querySelector("img")?.getAttribute("src")).toBe(
+      "data:image/jpeg;base64,CCCC",
+    ),
   );
-  expect(picture()?.className).toContain("opacity-50");
 });
 
 it("forgets a desktop session's last frame once it turns private, even on a card mounted anew", async () => {
@@ -606,6 +618,45 @@ it("forgets a desktop session's last frame once it turns private, even on a card
   await using popped = await render(cardView({ ...desk, status: "stopped" }).element);
   await vi.waitFor(() => expect(state.frameRequests.at(-1)).toBeNull());
   expect(popped.container.querySelector("img")).toBeNull();
+});
+
+it("shows no earlier frame once a person held the session, even after it stops", async () => {
+  setup([]);
+  const desk = desktopApp({
+    id: "desktop-taken-over",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  state.frame = { type: "frame", seq: 1, width: 4, height: 4, mime: "image/jpeg", data: "EEEE" };
+  await using screen = await render(cardView(desk).element);
+  await vi.waitFor(() => expect(screen.container.querySelector("img")).not.toBeNull());
+  // The list marks it private: the card unmounts its picture without hearing a private frame.
+  await screen.rerender(cardView({ ...desk, owner: "private" }).element);
+  await expect.element(screen.getByText("Private")).toBeVisible();
+  state.frame = null;
+  await screen.rerender(cardView({ ...desk, status: "stopped" }).element);
+  await vi.waitFor(() => expect(state.frameRequests.at(-1)).toBeNull());
+  expect(screen.container.querySelector("img")).toBeNull();
+});
+
+it("does not give a stopped session's frame to another thread's session with the same id", async () => {
+  setup([]);
+  const desk = desktopApp({
+    id: "desktop-reused",
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  state.frame = { type: "frame", seq: 1, width: 4, height: 4, mime: "image/jpeg", data: "FFFF" };
+  {
+    await using first = await render(cardView(desk).element);
+    await vi.waitFor(() => expect(first.container.querySelector("img")).not.toBeNull());
+    state.frame = null;
+    await first.rerender(cardView({ ...desk, status: "stopped" }).element);
+    await vi.waitFor(() => expect(first.container.querySelector("img")).not.toBeNull());
+  }
+  await using other = await render(
+    cardView({ ...desk, threadId: ThreadId.make("thread-other"), status: "stopped" }).element,
+  );
+  await vi.waitFor(() => expect(state.frameRequests.at(-1)).toBeNull());
+  expect(other.container.querySelector("img")).toBeNull();
 });
 
 it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
