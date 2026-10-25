@@ -27,6 +27,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
+import * as AutomationHold from "../automationHold.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
@@ -60,6 +61,7 @@ export class ChannelRuntime extends Context.Service<
 >()("goat/channels/ChannelRuntime") {}
 
 const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const ledger = yield* ChannelLedger.ChannelLedger;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
@@ -108,6 +110,7 @@ const make = Effect.gen(function* () {
     });
 
   const runPass = Effect.gen(function* () {
+    if ((yield* hold.current) !== null) return 0;
     // A Messages read failure must not stall other channels, but a lost owner or cursor fence
     // means this process no longer owns the workers, so it stops the pass like any other write.
     let started = yield* imessage.pollDue(owner).pipe(
@@ -215,6 +218,7 @@ export const layerBackground = Layer.effectDiscard(
     const wake = yield* ChannelWake.ChannelWake;
     const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
     const eventSink = yield* EventSink.EventSinkV2;
+    const hold = yield* AutomationHold.AutomationHold;
     const owning = yield* Ref.make(false);
 
     const heartbeat = Effect.gen(function* () {
@@ -262,6 +266,10 @@ export const layerBackground = Layer.effectDiscard(
       ),
     );
 
+    if ((yield* hold.current) !== null) {
+      // Release must process copied backlog without waiting for another writer or scan.
+      yield* hold.awaitRelease.pipe(Effect.andThen(wake.wake), Effect.forkScoped);
+    }
     yield* heartbeat.pipe(
       Effect.repeat(Schedule.spaced(Duration.millis(HEARTBEAT_MS))),
       Effect.forkScoped,

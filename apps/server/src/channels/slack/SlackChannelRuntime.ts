@@ -30,6 +30,7 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+import * as AutomationHold from "../../automationHold.ts";
 import * as ChannelGateway from "../ChannelGateway.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as ChannelTransport from "../ChannelTransport.ts";
@@ -142,6 +143,7 @@ const backoffSeconds = (failures: number) =>
   Math.min(MAX_BACKOFF_SECONDS, 2 ** Math.max(0, failures - 1));
 
 const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const sdk = yield* SlackSdk.SlackSdk;
   const registry = yield* ChannelTransport.ChannelTransportRegistry;
   const gatewayContext = yield* Effect.context<ChannelGateway.ChannelGateway>();
@@ -431,6 +433,7 @@ const make = Effect.gen(function* () {
           : undefined,
       );
       while (true) {
+        yield* hold.awaitRelease;
         const exit = yield* Effect.exit(
           attempt(connection, owner, generation, blocked, savedIdentity),
         );
