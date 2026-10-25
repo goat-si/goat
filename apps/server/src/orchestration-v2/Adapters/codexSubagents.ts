@@ -75,9 +75,20 @@ export const stoppedLineage = (
   });
 
 /**
+ * Whether this turn runs under the given subagent: a child's own descendant messaging it. Moving
+ * the child under that turn would make its parent chain a cycle, which every walk up would
+ * follow forever.
+ */
+const descendsFrom = (turn: TurnLike, subagent: object) => {
+  for (let at: TurnLike | undefined = turn; at; at = at.subagent?.parentContext)
+    if (at.subagent === subagent) return true;
+  return false;
+};
+
+/**
  * A parent turn that sends a child new work (send_input, resume_agent) takes it over: the child's
  * next turn belongs to that turn, not to the one it was spawned under, which Stop may have ended
- * (#1643). Waiting on a child gives it no work.
+ * (#1643). Waiting on a child gives it no work, and a child's own descendant never takes it over.
  */
 export const assign = <T extends TurnLike>(
   subagents: ReadonlyMap<string, { parentContext: T; workLineage: ReadonlyArray<string> }>,
@@ -87,7 +98,7 @@ export const assign = <T extends TurnLike>(
   if (item.tool !== "sendInput" && item.tool !== "resumeAgent") return;
   for (const childThreadId of item.receiverThreadIds) {
     const subagent = subagents.get(childThreadId);
-    if (subagent === undefined) continue;
+    if (subagent === undefined || descendsFrom(turn, subagent)) continue;
     subagent.parentContext = turn;
     subagent.workLineage = lineage(turn);
   }

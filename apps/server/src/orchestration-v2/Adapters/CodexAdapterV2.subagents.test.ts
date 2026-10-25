@@ -507,4 +507,68 @@ describe("Codex native subagents as their thread's background work", () => {
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
+
+  it.effect("a grandchild sending input to its own parent child takes nothing over (#1643)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "grandchild-messages-parent";
+        const child = root + "-child";
+        const grandchild = root + "-grandchild";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, child);
+        f.entries.push(childTurn(child, "child-turn", "inProgress"), {
+          type: "emit_inbound",
+          frame: {
+            method: "item/completed",
+            params: {
+              item: {
+                type: "subAgentActivity",
+                id: "spawn-" + grandchild,
+                kind: "started",
+                agentThreadId: grandchild,
+                agentPath: "/root/child/grandchild",
+              },
+              threadId: child,
+              turnId: "child-turn",
+              completedAtMs: 1782622441500,
+            },
+          },
+        });
+        // The grandchild messages its parent: that must not make the child its own descendant.
+        f.entries.push(childTurn(grandchild, "grandchild-turn", "inProgress"), {
+          type: "emit_inbound",
+          frame: {
+            method: "item/started",
+            params: {
+              threadId: grandchild,
+              turnId: "grandchild-turn",
+              item: {
+                type: "collabAgentToolCall",
+                id: "reply-to-parent",
+                tool: "sendInput",
+                status: "inProgress",
+                senderThreadId: grandchild,
+                receiverThreadIds: [child],
+                agentsStates: {},
+              },
+              startedAtMs: 1782622442000,
+            },
+          },
+        });
+        f.entries.push(childTurn(grandchild, "grandchild-turn", "completed"));
+        f.entries.push(childTurn(child, "child-turn", "completed"));
+        f.turnCompleted(1);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        assert.isFalse(
+          yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });
