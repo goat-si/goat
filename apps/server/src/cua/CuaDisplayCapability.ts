@@ -526,14 +526,15 @@ const probeLinux = Effect.fnUntraced(function* () {
   const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
 
   const preferred = localDisplayNumber(environment.DISPLAY);
+  // The Wayland session this server belongs to, named or the one its session type implies. It
+  // is settled before any X socket is tried: a server in a Wayland session never looks for X.
+  const waylandName =
+    environment.WAYLAND_DISPLAY?.trim() ||
+    (environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ? "wayland-0" : "");
   const sockets = x11SocketDisplays(
     yield* fs.readDirectory("/tmp/.X11-unix").pipe(Effect.orElseSucceed(() => [])),
   );
-  const candidates = linuxDisplayCandidates(
-    environment.DISPLAY,
-    sockets,
-    environment.WAYLAND_DISPLAY,
-  );
+  const candidates = linuxDisplayCandidates(environment.DISPLAY, sockets, waylandName);
 
   // Xvfb and display managers keep the cookie in a file named only on their command line.
   const serverAuth = new Map<number, string>();
@@ -595,9 +596,6 @@ const probeLinux = Effect.fnUntraced(function* () {
   );
 
   // A variable left from a session that ended names a socket nobody listens on.
-  const waylandName =
-    environment.WAYLAND_DISPLAY?.trim() ||
-    (environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ? "wayland-0" : "");
   const waylandSocket = waylandName.startsWith("/")
     ? waylandName
     : runtimeDir && waylandName
