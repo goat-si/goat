@@ -8,12 +8,14 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
@@ -173,6 +175,52 @@ const setup = Effect.fn("OpenCodexChildBootstrapTest.setup")(function* (
 });
 
 it.layer(NodeServices.layer)("OpenCodex Child bootstrap", (it) => {
+  it.effect("held: dispatches no child setup; release: the queued machine joins", () =>
+    Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* setup().pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          makeDirectory: () => Effect.void,
+          writeFileString: () => Effect.void,
+          rename: () => Effect.void,
+        }),
+        Effect.provideService(AutomationHold.AutomationHold, hold),
+      );
+      yield* home.ready("boat-builder");
+      const ensured = yield* Effect.forkChild(home.bootstrap.ensure("boat-builder"));
+      yield* TestClock.adjust("0 millis");
+      expect(home.calls).toEqual([]);
+      yield* hold.release;
+      expect((yield* Fiber.join(ensured))?.state).toBe("child");
+      expect(home.calls).toEqual(["prepare boat-builder 2.91.0", "join boat-builder"]);
+    }),
+  );
+
+  it.effect("held: sends no pending link release; release: revokes the removed machine", () =>
+    Effect.gen(function* () {
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      const home = yield* setup({
+        pending: new Set(["boat-builder"]),
+        removed: new Set(["boat-builder"]),
+      }).pipe(Effect.provideService(AutomationHold.AutomationHold, hold));
+      yield* TestClock.adjust("0 millis");
+      expect(yield* Queue.size(home.machine.hubEvents)).toBe(0);
+      expect(home.machine.pending).toEqual(new Set(["boat-builder"]));
+      yield* hold.release;
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("removed? boat-builder");
+      expect(yield* Queue.take(home.machine.hubEvents)).toBe("release boat-builder");
+      expect(home.machine.pending).toEqual(new Set());
+    }),
+  );
+
   it.effect("a readied cloud machine gets this Home's OpenCodex and joins as its Child, once", () =>
     Effect.gen(function* () {
       const home = yield* setup();

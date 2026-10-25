@@ -12,6 +12,7 @@ import * as CloudLink from "./CloudLink.ts";
 import * as CloudManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import * as CloudCliState from "./CliState.ts";
 import * as ServerActivation from "../serverActivation.ts";
+import * as AutomationHold from "../automationHold.ts";
 import { pendingServiceUpdateExists } from "./updateHandoff.ts";
 import { hasCloudPublicConfig } from "./publicConfig.ts";
 import {
@@ -26,6 +27,8 @@ const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const cloudLink = yield* CloudLink.CloudLink;
+      const hold = yield* AutomationHold.AutomationHold;
+      const activation = yield* ServerActivation.ServerActivation;
       const releaseManagedTunnel = cloudLink.releaseManagedTunnelOnShutdown().pipe(
         Effect.timeout("10 seconds"),
         Effect.tap((released) =>
@@ -39,17 +42,19 @@ const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
         ),
         Effect.asVoid,
       );
-      // The previous server is already gone, so the trial owns cleanup
-      // immediately; the pending-state check keeps the tunnel for normal
+      // After the hold releases, the trial owns cleanup before activation because the
+      // previous server is already gone. The pending-state check keeps the tunnel for normal
       // commit or rollback, while the launcher's explicit-stop marker allows
       // it to be released. Other runtimes wait for activation so a failed
       // standby cannot tear down the active runtime's tunnel.
       const cleanupBeforeActivation = yield* pendingServiceUpdateExists;
-      if (cleanupBeforeActivation) {
-        yield* Effect.addFinalizer(() => releaseManagedTunnel);
-      }
       yield* ServerActivation.forkParked(
         Effect.gen(function* () {
+          yield* hold.awaitRelease;
+          if (cleanupBeforeActivation) {
+            yield* Effect.addFinalizer(() => releaseManagedTunnel);
+          }
+          if (activation !== undefined) yield* activation;
           if (!cleanupBeforeActivation) {
             yield* Effect.addFinalizer(() => releaseManagedTunnel);
           }
@@ -205,6 +210,9 @@ const layerDesiredLinkReconcile = (cloudLinkParked: Deferred.Deferred<void>) =>
             }
           }
         }),
+      ).pipe(
+        // Cleanup ownership must wait for the hold, but pending-update cleanup precedes activation.
+        Effect.provideService(ServerActivation.ServerActivation, Effect.void),
       );
       yield* Deferred.succeed(cloudLinkParked, undefined).pipe(Effect.orDie);
     }),

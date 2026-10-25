@@ -39,6 +39,7 @@ import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as AutomationHold from "../automationHold.ts";
 import {
   isAgentActivityPublishingEnabledValue,
   PUBLISH_AGENT_ACTIVITY_SECRET,
@@ -371,6 +372,7 @@ export const make = Effect.gen(function* () {
     });
   }
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const hold = yield* AutomationHold.AutomationHold;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
@@ -444,6 +446,7 @@ export const make = Effect.gen(function* () {
   });
 
   const publishThreadUnsafe = Effect.fn("publishThreadUnsafe")(function* (threadId: ThreadId) {
+    if ((yield* hold.current) !== null) return;
     const publishAgentActivity = yield* readPublishAgentActivityEnabled;
     if (!publishAgentActivity) {
       yield* cancelPublishRetries;
@@ -806,21 +809,26 @@ export const make = Effect.gen(function* () {
           break;
       }
       yield* forkParked(
-        Effect.sleep("1 second").pipe(
+        hold.awaitRelease.pipe(
+          Effect.andThen(Effect.sleep("1 second")),
           Effect.andThen(publishActiveThreadsOnceWhenConfigured(startupState !== "enabled")),
         ),
       );
       yield* forkParked(
-        Stream.runForEach(threads.streamDomainEvents, (event) => {
-          const threadId = eventThreadId(event);
-          if (!shouldPublishAgentAwarenessEvent(event)) {
-            return Effect.void;
-          }
-          return Effect.logDebug("agent activity publishing queued thread publish", {
-            eventType: event.type,
-            threadId,
-          }).pipe(Effect.andThen(enqueueThreadPublish(threadId)));
-        }),
+        hold.awaitRelease.pipe(
+          Effect.andThen(
+            Stream.runForEach(threads.streamDomainEvents, (event) => {
+              const threadId = eventThreadId(event);
+              if (!shouldPublishAgentAwarenessEvent(event)) {
+                return Effect.void;
+              }
+              return Effect.logDebug("agent activity publishing queued thread publish", {
+                eventType: event.type,
+                threadId,
+              }).pipe(Effect.andThen(enqueueThreadPublish(threadId)));
+            }),
+          ),
+        ),
       );
     },
   );

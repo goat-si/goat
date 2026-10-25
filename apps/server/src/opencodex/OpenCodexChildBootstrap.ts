@@ -18,6 +18,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as CloudMachines from "../cloudMachines/CloudMachineService.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HubMembership from "../hub/HubMembership.ts";
@@ -72,6 +73,7 @@ export class OpenCodexChildBootstrap extends Context.Service<
 
 const make = Effect.gen(function* () {
   const cloud = yield* CloudMachines.CloudMachineService;
+  const hold = yield* AutomationHold.AutomationHold;
   const ocx = yield* HubOcx;
   const membership = yield* HubMembership.HubMembership;
   const inventory = yield* Inventory.OpenCodexInventory;
@@ -192,7 +194,8 @@ const make = Effect.gen(function* () {
   const start = Effect.fn("OpenCodexChildBootstrap.start")(function* (alias: string) {
     const existing = jobs.get(alias);
     if (existing !== undefined) return existing;
-    const fiber = yield* run(alias).pipe(
+    const fiber = yield* hold.awaitRelease.pipe(
+      Effect.andThen(run(alias)),
       Effect.catchCause(() =>
         record(alias, { state: "blocked", reason: "link_failed", message: "Setup stopped." }),
       ),
@@ -237,7 +240,8 @@ const make = Effect.gen(function* () {
   });
   const startRelease = Effect.fn("OpenCodexChildBootstrap.startRelease")(function* (alias: string) {
     if (releases.has(alias)) return;
-    const fiber = yield* release(alias).pipe(
+    const fiber = yield* hold.awaitRelease.pipe(
+      Effect.andThen(release(alias)),
       Effect.ignore({ log: true }),
       Effect.ensuring(Effect.sync(() => releases.delete(alias))),
       Effect.forkIn(serviceScope, { startImmediately: false }),
