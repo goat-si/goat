@@ -26,11 +26,17 @@ export const makeStoppedCards = () => {
   >();
   const released = new Set<string>();
   return {
-    /** Keeps a control a newer one replaces, when a person stopped it. */
+    /**
+     * Keeps a control a newer one replaces, when a person stopped it and its card was shown: its
+     * agent acted (#1555). One never shown leaves the card kept before it in place.
+     */
     replaced: (
       control: ComputerUseControl & { readonly ended?: ComputerUseControlEnd | undefined },
     ) => {
-      if (control.ended === "stopped" || control.ended === "stopped_all")
+      if (
+        (control.ended === "stopped" || control.ended === "stopped_all") &&
+        control.acted === true
+      )
         byThread.set(control.threadId, { control, reason: control.ended });
     },
     release: (handoffIds: Iterable<string>) => {
