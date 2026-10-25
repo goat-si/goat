@@ -2421,6 +2421,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
         /** Turns Stop ended; failed turns are not among them, their children keep working. */
         const stoppedNativeTurns = new Set<string>();
+        // Turns a Stop ended itself; they count as running until Codex reports them ended (#1654).
+        const forcedNativeTurns = new Set<string>();
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -6957,6 +6959,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
+            forcedNativeTurns.delete(payload.turn.id);
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) {
               return;
@@ -7998,8 +8001,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               const trackedInterruptNativeTurnIds = new Set(
                 interruptTargets.map((target) => target.context.nativeTurnId),
               );
-              // Turns this Stop ended itself; a failed Stop does not count them as stopped (#1654).
-              const forcedNativeTurnIds = new Set<string>();
               const finalizeRemainingInterruptLineage = Effect.gen(function* () {
                 while (true) {
                   const newlyDiscovered: Array<ActiveCodexTurnContext> = [];
@@ -8068,13 +8069,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   }
                   const completedAt = yield* DateTime.now;
                   for (const context of activeLineage) {
-                    forcedNativeTurnIds.add(context.nativeTurnId);
-                    yield* finalizeCodexTurn({
+                    forcedNativeTurns.add(context.nativeTurnId);
+                    const forced = yield* finalizeCodexTurn({
                       context,
                       nativeTurnId: context.nativeTurnId,
                       status: "interrupted",
                       completedAt,
                     });
+                    if (!forced) forcedNativeTurns.delete(context.nativeTurnId);
                   }
                 }
               });
@@ -8269,7 +8271,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }).pipe(
                 Effect.onError(() => finalizeRemainingInterruptLineage),
                 Effect.onError(() =>
-                  CodexSubagents.failedStop(interruptTargets, forcedNativeTurnIds).pipe(
+                  CodexSubagents.failedStop(interruptTargets, forcedNativeTurns).pipe(
                     Effect.flatMap((failed) =>
                       CodexSubagents.endStopped(
                         subagentThreads,

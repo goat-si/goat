@@ -146,7 +146,8 @@ export interface FailedStop {
 
 /**
  * Sorts a failed Stop's turns. A waiter that finished means Codex reported the turn ended, unless
- * GOAT finalized that turn itself (forced), which proves nothing about its work.
+ * GOAT finalized that turn itself (forced), which proves nothing about its work. A turn forced by
+ * any Stop stays unconfirmed until Codex reports it ended.
  */
 export const failedStop = Effect.fn("CodexAdapterV2.failedStop")(function* (
   targets: ReadonlyArray<{
@@ -162,6 +163,7 @@ export const failedStop = Effect.fn("CodexAdapterV2.failedStop")(function* (
       ? confirmed
       : unconfirmed
     ).add(context.nativeTurnId);
+  for (const turnId of forced) unconfirmed.add(turnId);
   return { confirmed, unconfirmed } satisfies FailedStop;
 });
 
