@@ -74,7 +74,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   readonly bound: (threadId: ThreadId, controlId: string, id: TurnItemId) => boolean;
 }) => {
   const { admission, controls, reservations, changed, controlState } = deps;
-  // A pause is host-wide and lifts for every holder at once, so it keeps the holder's apps.
+  // A pause is host-wide and lifts for every holder at once, so it keeps the holder's apps. A
+  // lease whose call carried no app id (an older proxy) holds its process while the control does.
   const appLeases = makeAppLeases({
     holds: (threadId, controlId, app) =>
       controlState(threadId, controlId).pipe(
@@ -84,7 +85,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
             (state._tag === "active" &&
               state.idle !== true &&
               (state.apps === undefined ||
-                state.apps.some((name) => name.toLowerCase() === app?.toLowerCase()))),
+                app === undefined ||
+                state.apps.some((name) => name.toLowerCase() === app.toLowerCase()))),
         ),
       ),
   });
@@ -108,10 +110,16 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         if (call === undefined) return { status: "refused", detail: "replaced" } as const;
         if (request.action === "reserve" && markActed(controls, threadId, call)) yield* changed;
         const before = controls.get(threadId);
+        const need = appNeed(call);
+        // Checking another holder's lease reads its control and yields, so the caller's own
+        // authority is read after it: the admission below judges what holds now (#1679 r1).
+        const appBusy = yield* appLeases.busy(
+          threadId,
+          need,
+          DateTime.toEpochMillis(yield* DateTime.now),
+        );
         const state = yield* controlState(threadId, call.controlId);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const need = appNeed(call);
-        const appBusy = yield* appLeases.busy(threadId, need, now);
         // Release and close do not wait on admission: neither can resurrect a yielding validation.
         if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
           return { status: "refused", detail: "replaced" } as const;
@@ -124,7 +132,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           interruptions: deps.interruptions(),
           now,
           bound: (id) => deps.bound(threadId, call.controlId, id),
-          appBusy,
+          // Another control's window ticket refuses below as target_busy, the narrower answer.
+          appBusy: reservations.targetBusy(threadId, call) ? undefined : appBusy,
         });
         if (detail === "app_busy" && appBusy !== undefined)
           return { status: "refused", detail, ...appBusy } as const;

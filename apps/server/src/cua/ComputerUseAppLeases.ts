@@ -48,7 +48,8 @@ export interface AppBusy {
 }
 
 interface Lease {
-  readonly pid: number;
+  /** Every process the app was used in under this lease. */
+  readonly pids: ReadonlyArray<number>;
   readonly app: string | undefined;
   readonly threadId: ThreadId;
   readonly controlId: string;
@@ -59,7 +60,7 @@ interface Lease {
 const sameApp = (a: string | undefined, b: string | undefined) =>
   a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
 const meets = (lease: Lease, need: Extract<AppNeed, { _tag: "app" }>) =>
-  lease.pid === need.pid || sameApp(lease.app, need.app);
+  lease.pids.includes(need.pid) || sameApp(lease.app, need.app);
 
 /** Owned by the lease service; every operation runs inside its admission permit. */
 export const makeAppLeases = <E>(options: {
@@ -92,7 +93,7 @@ export const makeAppLeases = <E>(options: {
           app:
             lease.app ??
             (need._tag === "app" ? need.app : undefined) ??
-            `the app with pid ${lease.pid}`,
+            `the app with pid ${lease.pids.join(", ")}`,
         } satisfies AppBusy;
       drop(lease);
     }
@@ -103,9 +104,10 @@ export const makeAppLeases = <E>(options: {
     if (need._tag !== "app") return;
     const own = leases.filter((lease) => lease.threadId === threadId && meets(lease, need));
     const app = need.app ?? own.find((lease) => lease.app !== undefined)?.app;
+    const pids = [...new Set([...own.flatMap((lease) => lease.pids), need.pid])];
     leases = [
       ...leases.filter((lease) => !own.includes(lease)),
-      { pid: need.pid, app, threadId, controlId, usedAt: now },
+      { pids, app, threadId, controlId, usedAt: now },
     ];
   };
   /** The control's proxy closed its driver (it exited, crashed or lost its connection). */

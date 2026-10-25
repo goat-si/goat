@@ -168,19 +168,11 @@ describe("foreground through real computer-use attachment", () => {
         assert.equal((yield* h.nextReservation).action, "reserve");
         assert.equal(yield* h.agentCall, "start 2");
         assert.equal(yield* h.driverQueued, 0);
-        // A foreground call holds the desktop's ticket. A background one also leases its app
-        // (D17), and that lease answers before the window's ticket.
-        assert.deepEqual(
-          yield* leases.callReservation(competitor, competingCall),
-          delivery === "foreground"
-            ? { status: "refused", detail: "target_busy", holderThreadId: threadId }
-            : {
-                status: "refused",
-                detail: "app_busy",
-                holderThreadId: threadId,
-                app: "com.example.AppB",
-              },
-        );
+        assert.deepEqual(yield* leases.callReservation(competitor, competingCall), {
+          status: "refused",
+          detail: "target_busy",
+          holderThreadId: threadId,
+        });
         yield* revokeForegroundGrant(grant.handoffId);
         yield* Deferred.succeed(gate, undefined);
         const observed = yield* Effect.raceFirst(

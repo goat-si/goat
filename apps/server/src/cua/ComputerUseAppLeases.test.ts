@@ -8,11 +8,15 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { APP_LEASE_IDLE_MS, makeAppLeases } from "./ComputerUseAppLeases.ts";
+import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import type { ComputerUseControlState } from "./ComputerUseControl.ts";
+import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
@@ -321,6 +325,31 @@ describe("app leases between threads (D17)", () => {
       assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
   );
+  it.effect("a granted thread whose proxy sent no app id still holds the app's process", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const a = yield* granted("no-app-a", [TEXTEDIT]);
+      const b = yield* fullAccess("no-app-b");
+      // An older proxy reserves without the app; its call is still running (ticket held).
+      const held = yield* leases.callReservation(a.threadId, {
+        action: "reserve",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+        callId: "held",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7, x: 1, y: 1 },
+      });
+      assert.equal(held.status, "admitted");
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), {
+        status: "refused",
+        detail: "app_busy",
+        holderThreadId: a.threadId,
+      } as const);
+    }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("app lease records (D17)", () => {
@@ -354,6 +383,101 @@ describe("app lease records (D17)", () => {
       leases.hold(holder, "control:4", textEdit, 20);
       assert.isUndefined(yield* leases.busy(other, textEdit, 20 + APP_LEASE_IDLE_MS));
       assert.equal(leases.held(), 0);
+    }),
+  );
+  it.effect("a lease keeps every process its app was used in, so neither stops meeting it", () =>
+    Effect.gen(function* () {
+      const leases = makeAppLeases({ holds: () => Effect.succeed(true) });
+      leases.hold(holder, "control:1", textEdit, 0);
+      leases.hold(holder, "control:1", { _tag: "app", pid: 77, app: TEXTEDIT }, 1);
+      assert.equal(leases.held(), 1);
+      for (const pid of [42, 77])
+        assert.deepInclude(yield* leases.busy(other, { _tag: "app", pid, app: undefined }, 2), {
+          holderThreadId: holder,
+        });
+    }),
+  );
+});
+
+describe("call admission after an app lease check (D17)", () => {
+  const first = ThreadId.make("thread-first");
+  const second = ThreadId.make("thread-second");
+  const expiresAt = DateTime.makeUnsafe(3_600_000);
+  const control = (threadId: ThreadId, controlId: string) => ({
+    controlId,
+    threadId,
+    expiresAt,
+    uses: 0,
+  });
+  const active = (apps?: ReadonlyArray<string>, idle?: true) =>
+    ({
+      _tag: "active",
+      expiresAt,
+      interruptions: { count: 0, last: "human_input" },
+      apps,
+      wakeAt: DateTime.toEpochMillis(expiresAt),
+      ...(idle === undefined ? {} : { idle }),
+    }) satisfies ComputerUseControlState;
+
+  it.effect("judges the caller's authority as it is after another holder's lease was checked", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const gate = yield* Deferred.make<void>();
+      let firstState: ComputerUseControlState = active();
+      let secondState: ComputerUseControlState = active([TEXTEDIT, CALCULATOR]);
+      let gated = false;
+      const controls = new Map([
+        [first, control(first, "control:first")],
+        [second, control(second, "control:second")],
+      ]);
+      const reserve = makeCallReservation({
+        admission: yield* Semaphore.make(1),
+        controls,
+        reservations: makeCallReservations(),
+        changed: Effect.void,
+        controlState: (threadId) =>
+          threadId === first
+            ? gated
+              ? Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.as(firstState),
+                )
+              : Effect.succeed(firstState)
+            : Effect.sync(() => secondState),
+        blocked: () => false,
+        interruptions: () => 0,
+        bound: () => false,
+      }).reserve;
+      const call = (
+        threadId: ThreadId,
+        controlId: string,
+        callId: string,
+        pid: number,
+        app: string,
+      ) =>
+        reserve(threadId, {
+          action: "reserve",
+          controlId,
+          connectionId: `proxy:${threadId}`,
+          callId,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "invoke_menu",
+          args: { pid, window_id: Number(callId) },
+          app,
+        });
+      assert.equal((yield* call(first, "control:first", "1", 42, TEXTEDIT)).status, "admitted");
+      // The first thread's turn went idle, so its lease no longer holds once checked.
+      firstState = active(undefined, true);
+      gated = true;
+      const pending = yield* call(second, "control:second", "2", 42, TEXTEDIT).pipe(
+        Effect.forkChild,
+      );
+      yield* Deferred.await(entered);
+      // While that check waits, a person ends the second thread's computer use.
+      secondState = { _tag: "ended", reason: "revoked" };
+      yield* Deferred.succeed(gate, undefined);
+      assert.deepEqual(yield* Fiber.join(pending), { status: "refused", detail: "revoked" });
     }),
   );
 });

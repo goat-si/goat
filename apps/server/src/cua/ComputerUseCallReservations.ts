@@ -110,6 +110,21 @@ export const makeCallReservations = () => {
   // A delayed POST must never reopen a driver generation already cut off by its proxy.
   const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
   return {
+    /**
+     * Whether another control's ticket holds what this call would reserve. It takes nothing; a
+     * window ticket answers before the app lease around it (D17), as the narrower refusal.
+     */
+    targetBusy(threadId: ThreadId, call: Call): boolean {
+      const resource = callResource(call);
+      if (resource === "invalid" || resource === "read") return false;
+      for (const ticket of tickets.values())
+        if (
+          (ticket.threadId !== threadId || ticket.call.controlId !== call.controlId) &&
+          overlaps(resource, ticket.resource)
+        )
+          return true;
+      return false;
+    },
     reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))
         return { status: "refused", detail: "replaced" };
