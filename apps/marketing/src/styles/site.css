@@ -29,7 +29,7 @@
     --muted: #a1a1a1;
     --hairline: #2e2e2e;
     --accent: #346bf1;
-    --accent-hover: #4a7bf3;
+    --accent-hover: #2a5ee6;
     --accent-text: #8eb0ff;
   }
 }
@@ -820,10 +820,6 @@ main:focus {
 
 .prose p {
   color: var(--muted);
-}
-
-.prose .text-link {
-  min-height: 32px;
 }
 
 .not-found {

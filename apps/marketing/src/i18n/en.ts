@@ -81,7 +81,7 @@ export const en = {
       steps: [
         {
           title: "Start a thread on your laptop",
-          body: "Pick a project and a provider. Every turn ends with a checkpoint, so you can review exactly what it changed and restore it.",
+          body: "Pick a project and a provider. When the agent works in a local Git checkout, each turn saves a checkpoint, so you can review exactly what it changed and restore it.",
         },
         {
           title: "Move it to a bigger machine",
