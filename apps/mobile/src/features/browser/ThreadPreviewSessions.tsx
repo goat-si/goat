@@ -9,16 +9,29 @@ import {
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
+  type PreviewSessionNoPicture,
 } from "@goat/contracts";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
-import { AppState, FlatList, Keyboard, Pressable, View, type ListViewToken } from "react-native";
+import {
+  AppState,
+  FlatList,
+  Image,
+  Keyboard,
+  Pressable,
+  View,
+  type ListViewToken,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { Sheet } from "../../components/ui/Sheet";
-import { previewSessionsEnvironment, usePreviewSessions } from "../../state/previewSessions";
+import {
+  previewSessionsEnvironment,
+  useDesktopSessionFrame,
+  usePreviewSessions,
+} from "../../state/previewSessions";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useThreadShell } from "../../state/entities";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -261,6 +274,17 @@ function SessionThumbnail({
   if (session.owner === "private") return <Placeholder text="Private (paused)" />;
   // A person who took over works in their own view; other viewers' cards do not watch them.
   if (session.owner === "human") return <Placeholder text="A person is in control" />;
+  // A turn the desktop gave no driver: say what a person must do, as web does (#1399, #1516).
+  if (session.status === "permission-needed")
+    return (
+      <Placeholder
+        text={`No computer use yet. ${session.target.kind === "desktop" ? session.target.title : "Allow it"}${session.reason === "permissionsNotGranted" || session.reason === undefined ? " (System Settings > Privacy & Security)" : ""}.`}
+      />
+    );
+  if (session.target.kind === "desktop")
+    return (
+      <DesktopThumbnail session={session} live={live} stopped={session.status === "stopped"} />
+    );
   if (
     session.target.kind === "browser" &&
     session.capabilities.frames &&
@@ -281,16 +305,53 @@ function SessionThumbnail({
     );
   }
   return (
-    <Placeholder
-      text={
-        session.status === "stopped"
-          ? "Stopped"
-          : session.kind === "desktop"
-            ? "No live picture: this computer's helper does not send window frames yet"
-            : "No live picture available"
-      }
-    />
+    <Placeholder text={session.status === "stopped" ? "Stopped" : "No live picture available"} />
   );
+}
+
+/** Why a desktop window shows no picture, said only when a person can do something about it. */
+const NO_PICTURE: Partial<Record<PreviewSessionNoPicture, string>> = {
+  screenRecordingNotGranted: "Allow Screen Recording for GOAT Computer Use",
+  appNotApproved: "This app is not approved for the agent",
+  windowGone: "The window is closed",
+};
+
+/**
+ * The agent's window through the shared frames subscription web uses (#1576). Frames stream only
+ * while the card shows; a stopped session keeps its last frame, dimmed, and a private one keeps
+ * nothing.
+ */
+function DesktopThumbnail(props: {
+  readonly session: PreviewSession;
+  readonly live: boolean;
+  readonly stopped: boolean;
+}) {
+  const { session } = props;
+  const watching = props.live && !props.stopped && session.capabilities.frames;
+  const { event } = useDesktopSessionFrame(session.environmentId, watching ? session.id : null);
+  const [last, setLast] = useState<string | null>(null);
+  const frame = event?.type === "frame" ? `data:${event.mime};base64,${event.data}` : null;
+  const reason = event?.type === "unavailable" ? event.reason : undefined;
+  // Kept for a stopped session; adjusted while rendering, as the last event decides it.
+  const kept = frame ?? (reason === "private" ? null : last);
+  if (kept !== last) setLast(kept);
+  const shown = frame ?? (props.stopped ? last : null);
+  if (shown !== null)
+    return (
+      <Image
+        source={{ uri: shown }}
+        resizeMode="contain"
+        style={[{ flex: 1 }, props.stopped && { opacity: 0.5 }]}
+      />
+    );
+  if (reason === "private") return <Placeholder text="Private" />;
+  if (props.stopped) return <Placeholder text="Stopped" />;
+  if (!session.capabilities.frames)
+    return (
+      <Placeholder text="No live picture: this computer's helper does not send window frames yet" />
+    );
+  if (!props.live) return <Placeholder text="Preview paused" />;
+  return <Placeholder text={(reason && NO_PICTURE[reason]) ?? "No preview"} />;
 }
 
 function Placeholder({ text }: { readonly text: string }) {
