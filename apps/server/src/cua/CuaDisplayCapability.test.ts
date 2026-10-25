@@ -1,4 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodePath from "@effect/platform-node/NodePath";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/process";
 
 import {
   classifyDarwin,
@@ -7,6 +14,7 @@ import {
   MAC_GRANTS_REASON,
   MAC_STANDALONE_REASON,
   parseMacGrants,
+  probeDisplay,
   withMacGrants,
   ldconfigLibraries,
   localDisplayNumber,
@@ -96,6 +104,87 @@ describe("Linux display parsing", () => {
       "unix:path=/run/user/1000/bus",
     ]);
   });
+
+  it("a server given a Wayland session and no DISPLAY never takes another session's X display (#1581)", () => {
+    // A headless GNOME session of its own, while a person is signed in on Xorg :1.
+    expect(linuxDisplayCandidates(undefined, [1], "gcu-wl-0")).toEqual([]);
+    expect(linuxDisplayCandidates(undefined, [1], "/run/gcu/wayland-0")).toEqual([]);
+    // Its session bus is the one in its own runtime directory, not the seat's.
+    expect(linuxBusCandidates(undefined, "/tmp/gcu-gnome/run")).toEqual([
+      "unix:path=/tmp/gcu-gnome/run/bus",
+    ]);
+    // With no X display found, the driver gets that Wayland session and no X display.
+    const result = classifyLinux(facts({ displays: [], wayland: liveWayland }));
+    expect(result.environment.map((variable) => variable.name)).not.toContain("DISPLAY");
+    expect(result.environment).toContainEqual({ name: "WAYLAND_DISPLAY", value: "wayland-0" });
+  });
+
+  // Runs the whole Linux probe with another session's X socket listed. A display number nothing
+  // listens on keeps the old behavior harmless: it would only read the X credentials and fail.
+  const probeWith = (environment: NodeJS.ProcessEnv) => {
+    const read: Array<string> = [];
+    return probeDisplay("standalone").pipe(
+      Effect.map((result) => ({ result, read })),
+      Effect.provideService(HostProcess.Platform, "linux"),
+      Effect.provideService(HostProcess.Environment, environment),
+      Effect.provideService(HostProcess.HomeDirectory, "/home/person"),
+      Effect.provideService(HostProcess.UserId, 1000),
+      Effect.provideService(
+        FileSystem.FileSystem,
+        FileSystem.makeNoop({
+          readDirectory: (directory) => {
+            read.push(directory);
+            return Effect.succeed(directory === "/tmp/.X11-unix" ? ["X9998"] : []);
+          },
+          readFile: (file) => {
+            read.push(file);
+            return Effect.succeed(new Uint8Array());
+          },
+          exists: () => Effect.succeed(false),
+        }),
+      ),
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+              isRunning: Effect.succeed(false),
+              kill: () => Effect.void,
+              stdin: Sink.drain,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+              unref: Effect.succeed(Effect.void),
+            }),
+          ),
+        ),
+      ),
+      Effect.provide(NodePath.layerPosix),
+    );
+  };
+
+  it.effect(
+    "a server in a Wayland session never reads another session's X credentials (#1581)",
+    () =>
+      Effect.gen(function* () {
+        const runtime = { XDG_RUNTIME_DIR: "/nonexistent/gcu-1581/run" };
+        const named = yield* probeWith({ ...runtime, WAYLAND_DISPLAY: "gcu-wl-0" });
+        const implied = yield* probeWith({ ...runtime, XDG_SESSION_TYPE: "wayland" });
+        for (const { result, read } of [named, implied]) {
+          expect(read.filter((file) => file.includes("Xauthority") || file === "/proc")).toEqual(
+            [],
+          );
+          expect(result.environment.map((variable) => variable.name)).not.toContain("DISPLAY");
+        }
+        // A server given neither, as over SSH, still looks for the local desktop.
+        const neither = yield* probeWith(runtime);
+        expect(neither.read).toContain("/home/person/.Xauthority");
+      }),
+  );
 
   it("a named DISPLAY that does not answer is unavailable, even with a Wayland session beside it (#1358)", () => {
     // Started for its own Xvfb on :96 from a terminal inside a Wayland desktop.
