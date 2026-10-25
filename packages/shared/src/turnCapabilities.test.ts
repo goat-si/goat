@@ -2,10 +2,15 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { projectComposerContextForProvider } from "./composerContextReferences.ts";
 import {
+  appCapabilityContextRecord,
+  appIdForContextId,
   capabilityContextRecordsInText,
   requestedTurnCapabilities,
+  turnCapabilityContextRecord,
+  turnCapabilityForContextId,
   withTurnCapabilities,
 } from "./turnCapabilities.ts";
+import { formatComposerContextReference } from "./composerContextReferences.ts";
 
 describe("turn capabilities", () => {
   it("counts only the chips still in the text", () => {
@@ -45,5 +50,50 @@ describe("turn capabilities", () => {
     expect(projected).toContain("[Capability: Computer; ref=capability_computer-use]");
     expect(projected).toContain("capability: computer-use");
     expect(projected).toContain("If those tools are not in your tool list");
+  });
+});
+
+describe("app chips", () => {
+  const finder = appCapabilityContextRecord({ id: "com.apple.finder", name: "Finder" });
+
+  it("ask for computer use aimed at one app, carried in the chip's id", () => {
+    expect(finder).toMatchObject({
+      kind: "capability",
+      capability: "computer-use",
+      label: "Finder",
+      app: { id: "com.apple.finder", name: "Finder" },
+    });
+    expect(appIdForContextId(finder.contextId)).toBe("com.apple.finder");
+    expect(turnCapabilityForContextId(finder.contextId)).toBe("computer-use");
+    expect(
+      appIdForContextId(turnCapabilityContextRecord("computer-use").contextId),
+    ).toBeUndefined();
+    expect(appIdForContextId("app_zz")).toBeUndefined();
+  });
+
+  it("round-trip through the text: a sent message keeps the app and asks for computer use", () => {
+    const text = `${formatComposerContextReference(finder)} open Downloads`;
+    const records = capabilityContextRecordsInText(text);
+    expect(records).toEqual([finder]);
+    expect(requestedTurnCapabilities({ text, records })).toEqual(["computer-use"]);
+  });
+
+  it("keep an executable path id that fits the context id", () => {
+    const record = appCapabilityContextRecord({ id: "C:\\Apps\\Editor.exe", name: "Editor" });
+    expect(appIdForContextId(record.contextId)).toBe("C:\\Apps\\Editor.exe");
+    expect(record.contextId.length).toBeLessThanOrEqual(128);
+  });
+});
+
+describe("app chip provider note", () => {
+  it("names the app and its id for the agent", () => {
+    const record = appCapabilityContextRecord({ id: "com.kakao.KakaoTalkMac", name: "KakaoTalk" });
+    const projected = projectComposerContextForProvider({
+      text: `${formatComposerContextReference(record)} 메시지 확인해줘`,
+      records: [record],
+    });
+    expect(projected).toContain("capability: computer-use");
+    expect(projected).toContain("app: KakaoTalk");
+    expect(projected).toContain("appId: com.kakao.KakaoTalkMac");
   });
 });
