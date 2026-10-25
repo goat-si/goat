@@ -70,6 +70,12 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly manifestStamp?: () => string | undefined;
   /** Runs once a lease update has been applied, under the lifecycle lock; for tests. */
   readonly onLeaseUpdateApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
+  /** Installs the same synchronous receipt hook used by the lease stream reader. */
+  readonly onLeaseUpdateReceiver?: (
+    receive: (update: ComputerUseLeaseUpdate | undefined) => void,
+  ) => void;
+  /** A cancelled request settled without an output line; its id can be reused now. */
+  readonly onCancelledRequestSettled?: (key: string) => void;
   /** Deny-only revocation of the driver sessions this connection named. */
   readonly revokeSessions: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
   /**
