@@ -14,6 +14,16 @@ export function diskPressureNotice(
   return { notify: RANK[level] > RANK[announced ?? "ok"], announce: level };
 }
 
+/**
+ * The level to store once a reading was handled, or null to keep the stored one. A rise counts as
+ * announced only after the person was actually shown it, so a warning that found no visible page
+ * and no desktop notification stays pending until the page is seen again.
+ */
+export const announcedAfter = (
+  notice: { readonly notify: boolean; readonly announce: HostPressureLevel },
+  delivered: boolean,
+): HostPressureLevel | null => (notice.notify && !delivered ? null : notice.announce);
+
 export const diskPressureStorageKey = (environmentId: string) =>
   "goat:disk-pressure-announced:" + environmentId;
 

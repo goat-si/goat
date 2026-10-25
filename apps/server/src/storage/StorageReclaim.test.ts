@@ -1,11 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import type { HostCapacitySnapshot, StorageItem } from "@goat/contracts";
+import { ThreadId, type HostCapacitySnapshot, type StorageItem } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
@@ -30,6 +31,7 @@ const machine = {
     unverified: [],
   } as OtherServerBindings,
   cwds: [] as ReadonlyArray<string> | null,
+  facts: [] as ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts>,
 };
 
 const layer = (tempRoot: string) =>
@@ -40,7 +42,9 @@ const layer = (tempRoot: string) =>
           otherServers: () => Effect.sync(() => machine.others),
           workingDirectories: Effect.sync(() => machine.cwds),
         }),
-        Layer.mock(WorktreeInventory.WorktreeInventoryService)({ facts: Effect.succeed([]) }),
+        Layer.mock(WorktreeInventory.WorktreeInventoryService)({
+          facts: Effect.sync(() => machine.facts),
+        }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           isLive: () => Effect.succeed(false),
         }),
@@ -49,9 +53,9 @@ const layer = (tempRoot: string) =>
         }),
         ProcessRunner.layer,
         GitVcsDriver.layer,
-        SqlitePersistence.layerMemory,
       ),
     ),
+    Layer.provideMerge(SqlitePersistence.layerMemory),
     Layer.provideMerge(ServerSettings.layerTest({})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "storage-reclaim-" })),
     Layer.provideMerge(
@@ -67,6 +71,7 @@ const setup = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   machine.others = { databases: [], worktreePaths: [], projectRoots: [], unverified: [] };
   machine.cwds = [];
+  machine.facts = [];
   const worktrees = yield* fs
     .realPath(config.worktreesDir)
     .pipe(
@@ -82,7 +87,7 @@ const setup = Effect.gen(function* () {
     path.join(leftover, "node_modules", "pkg", "index.js"),
     "x".repeat(4096),
   );
-  yield* fs.utimes(leftover, LONG_AGO, LONG_AGO);
+  yield* backdate(leftover);
   const outside = yield* fs.realPath(
     yield* fs.makeTempDirectoryScoped({ prefix: "storage-outside-" }),
   );
@@ -91,6 +96,15 @@ const setup = Effect.gen(function* () {
   const find = (items: ReadonlyArray<StorageItem>, target: string) =>
     items.find((item) => item.path === target);
   return { fs, path, config, worktrees, leftover, outside, reclaim, find };
+});
+
+/** Sets every write time in a folder to long ago; change times stay as they are. */
+const backdate = Effect.fn("StorageReclaim.test.backdate")(function* (folder: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  for (const name of yield* fs.readDirectory(folder, { recursive: true }))
+    yield* fs.utimes(path.join(folder, name), LONG_AGO, LONG_AGO);
+  yield* fs.utimes(folder, LONG_AGO, LONG_AGO);
 });
 
 describe("StorageReclaim", () => {
@@ -231,5 +245,163 @@ describe("StorageReclaim", () => {
       });
       yield* run.pipe(Effect.provide(layer(tempRoot)));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("skips a reviewed leftover folder once anything inside it changed", () =>
+    Effect.gen(function* () {
+      const { fs, path, leftover, reclaim, find } = yield* setup;
+      const item = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
+      expect(item.state).toBe("removable");
+      const file = path.join(leftover, "node_modules", "pkg", "index.js");
+      yield* fs.writeFileString(file, "work written after review\n");
+      // Setting the write time back hides nothing: the change time moved and cannot be set back.
+      yield* fs.utimes(file, LONG_AGO, LONG_AGO);
+
+      const result = yield* reclaim.clean({
+        items: [{ id: item.id, token: item.token }],
+        actor: "test",
+      });
+      expect(result.results).toMatchObject([
+        { outcome: "skipped", reason: "It changed since it was reviewed" },
+      ]);
+      expect(yield* fs.readFileString(file)).toBe("work written after review\n");
+
+      // Fresh writes inside an old folder mean someone uses it: not offered at all.
+      yield* fs.writeFileString(path.join(leftover, "node_modules", "pkg", "notes.txt"), "today\n");
+      expect(find((yield* reclaim.usage({ rescan: true })).items, leftover)).toMatchObject({
+        state: "needs_attention",
+        reason: "Something inside it changed recently",
+      });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps the build outputs of a worktree any unarchived thread uses, idle or not", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find } = yield* setup;
+      const checkout = path.join(worktrees, "goat", "idle-branch");
+      const output = path.join(checkout, "node_modules");
+      yield* fs.makeDirectory(path.join(output, "pkg"), { recursive: true });
+      const uses = (archived: boolean): ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts> => [
+        {
+          entry: {
+            path: checkout,
+            repository: path.join(worktrees, "repo"),
+            branch: "idle-branch",
+            main: false,
+            missing: false,
+            managed: true,
+            threads: [
+              {
+                threadId: ThreadId.make("thread-idle"),
+                title: "Idle",
+                status: "idle",
+                archived,
+                busy: false,
+              },
+            ],
+            dirtyCount: 3,
+            aheadCount: 0,
+          },
+          head: "abc",
+          holdsProject: false,
+        },
+      ];
+      machine.facts = uses(false);
+      expect(find((yield* reclaim.usage({ rescan: true })).items, output)).toMatchObject({
+        kind: "build_output",
+        state: "protected",
+        reason: "A thread still uses this worktree; archive it first",
+      });
+
+      // Offered while only an archived thread used it; unarchived before deletion, it stays.
+      machine.facts = uses(true);
+      const offered = find((yield* reclaim.usage({ rescan: true })).items, output)!;
+      expect(offered.state).toBe("removable");
+      machine.facts = uses(false);
+      const late = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(late.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.exists(output)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("removes files of deleted threads only while nothing surviving mentions them", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      const thread = (id: string, deleted: boolean, payload: object = {}) =>
+        sql`
+          INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+             created_at, updated_at, deleted_at, payload_json)
+          VALUES (${id}, 'project', ${id}, 'codex', 'full-access', 'default',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+            ${deleted ? "2026-01-02T00:00:00.000Z" : null}, ${JSON.stringify(payload)})
+        `;
+      yield* thread("thread-gone", true);
+      yield* thread("thread-forked", true);
+      yield* thread("thread-recent", true);
+      yield* thread("thread-live", false, { lineage: { parentThreadId: "thread-forked" } });
+      yield* fs.makeDirectory(config.attachmentsDir, { recursive: true });
+      const file = (segment: string, digit: string, old: boolean) =>
+        Effect.gen(function* () {
+          const id =
+            segment +
+            "-" +
+            digit.repeat(8) +
+            "-" +
+            digit.repeat(4) +
+            "-4" +
+            digit.repeat(3) +
+            "-8" +
+            digit.repeat(3) +
+            "-" +
+            digit.repeat(12);
+          const target = path.join(config.attachmentsDir, id + ".png");
+          yield* fs.writeFileString(target, "image\n");
+          if (old) yield* fs.utimes(target, LONG_AGO, LONG_AGO);
+          return { id, target };
+        });
+      const gone = yield* file("thread-gone", "1", true);
+      const forked = yield* file("thread-forked", "2", true);
+      const recent = yield* file("thread-recent", "3", false);
+      const live = yield* file("thread-live", "4", true);
+
+      const offered = (yield* reclaim.usage({ rescan: true })).items.filter(
+        (item) => item.kind === "attachments",
+      );
+      expect(offered).toMatchObject([
+        { state: "removable", selected: false, label: "1 files of deleted threads" },
+      ]);
+      expect(offered[0]?.reason).toContain("2 more stay");
+
+      // A surviving thread quotes the file after review: the cleanup keeps it.
+      yield* sql`
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        VALUES ('message-quote', 'thread-live', 'user', 0, '2026-01-03T00:00:00.000Z',
+          '2026-01-03T00:00:00.000Z', ${JSON.stringify({ attachments: [{ id: gone.id }] })})
+      `;
+      const quoted = yield* reclaim.clean({
+        items: [{ id: offered[0]!.id, token: offered[0]!.token }],
+        actor: "test",
+      });
+      expect(quoted.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.exists(gone.target)).toBe(true);
+
+      yield* sql`DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'message-quote'`;
+      const again = (yield* reclaim.usage({ rescan: true })).items.find(
+        (item) => item.kind === "attachments",
+      )!;
+      const done = yield* reclaim.clean({
+        items: [{ id: again.id, token: again.token }],
+        actor: "test",
+      });
+      expect(done.results[0]?.outcome).toBe("removed");
+      expect(yield* fs.exists(gone.target)).toBe(false);
+      for (const kept of [forked, recent, live]) expect(yield* fs.exists(kept.target)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 });

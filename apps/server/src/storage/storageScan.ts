@@ -1,5 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off -- lstat with bigint dev/ino identifies what a person reviewed.
-import * as NodeFSP from "node:fs/promises";
+// @effect-diagnostics nodeBuiltinImport:off -- os.tmpdir names the temp folder GOAT's one-shot work uses.
 import * as NodeOS from "node:os";
 
 import type { HostDiskUsage, StorageItem, StorageItemState } from "@goat/contracts";
@@ -13,16 +12,14 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import packageJson from "../../package.json" with { type: "json" };
-import {
-  parseThreadSegmentFromAttachmentId,
-  toSafeThreadAttachmentSegment,
-} from "../attachmentStore.ts";
 import { listPinnedRuntimes } from "../cloud/pinnedRuntime.ts";
 import * as ServerConfig from "../config.ts";
 import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
+import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
+import { contentStamp, type FileIdentity, type Lstat, lstatOf } from "./fileState.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
 import { measureFolder } from "./measureFolder.ts";
 import {
@@ -45,11 +42,6 @@ import {
  *
  * @module storageScan
  */
-
-export interface FileIdentity {
-  readonly dev: bigint;
-  readonly ino: bigint;
-}
 
 /** What a cleanup acts on for one item, kept on the server beside the item it offered. */
 export type StorageTarget =
@@ -77,33 +69,6 @@ export interface StorageScan {
   readonly targets: ReadonlyMap<string, StorageTarget>;
   readonly notes: ReadonlyArray<string>;
 }
-
-interface Lstat {
-  readonly identity: FileIdentity;
-  readonly isDirectory: boolean;
-  readonly isFile: boolean;
-  readonly isLink: boolean;
-  readonly mtimeMs: number;
-  readonly size: number;
-  readonly uid: number;
-}
-
-export const lstatOf = (target: string) =>
-  Effect.tryPromise(() => NodeFSP.lstat(target, { bigint: true })).pipe(
-    Effect.map((stat): Lstat => ({
-      identity: { dev: stat.dev, ino: stat.ino },
-      isDirectory: stat.isDirectory(),
-      isFile: stat.isFile(),
-      isLink: stat.isSymbolicLink(),
-      mtimeMs: Number(stat.mtimeMs),
-      size: Number(stat.size),
-      uid: Number(stat.uid),
-    })),
-    Effect.orElseSucceed(() => null),
-  );
-
-export const sameIdentity = (left: FileIdentity, right: FileIdentity) =>
-  left.dev === right.dev && left.ino === right.ino;
 
 /** Leftover folders younger than this may be a checkout GOAT is still creating. */
 const ORPHAN_MIN_AGE_MS = 60 * 60_000;
@@ -184,6 +149,8 @@ export const processInside = (
 export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   readonly measure: boolean;
   readonly sizes: Map<string, { readonly bytes: number; readonly at: number }>;
+  /** Item ids whose folder contents are read for their token; all of them when absent. */
+  readonly stampOnly?: ReadonlySet<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -221,6 +188,34 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     state: value,
     reason,
     selected,
+  });
+  /**
+   * Binds an offered leftover folder to its contents: the decision it keeps, plus what its token
+   * carries, so editing anything inside after review makes the cleanup skip it.
+   */
+  const stamped = Effect.fn("storageScan.stamped")(function* (
+    id: string,
+    folder: string,
+    minAgeMs: number,
+    decision: ReturnType<typeof state>,
+  ) {
+    if (decision.state !== "removable" || (options.stampOnly && !options.stampOnly.has(id)))
+      return { decision, token: [] as ReadonlyArray<string | number | bigint> };
+    const stamp = yield* contentStamp(folder);
+    if (stamp === null)
+      return {
+        decision: state(
+          "needs_attention",
+          "It holds too many files, or files GOAT cannot read, to confirm nothing in it changed",
+        ),
+        token: [],
+      };
+    if (now - stamp.newestModifiedMs < minAgeMs)
+      return {
+        decision: state("needs_attention", "Something inside it changed recently"),
+        token: [],
+      };
+    return { decision, token: [stamp.entries, stamp.newestChangeNs] };
   });
 
   const other = yield* resolveOtherServerPaths(config.dbPath);
@@ -328,12 +323,17 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
       [fact.head, entry.branch],
     );
     measureLater("worktree:" + entry.path, entry.path, decision.state === "removable" ? 0 : 2);
-    const busy = entry.threads.some((thread) => thread.busy);
     for (const output of yield* findBuildOutputs(entry.path)) {
       const stat = yield* lstatOf(output);
       if (stat === null || !stat.isDirectory || stat.isLink) continue;
-      const outputDecision = busy
-        ? state("protected", "A thread is running in this worktree")
+      // Build outputs regrow, so their token is the folder alone; liveness is what guards them.
+      const outputDecision = live
+        ? state(
+            "protected",
+            entry.threads.some((thread) => thread.busy)
+              ? "A thread is running in this worktree"
+              : "A thread still uses this worktree; archive it first",
+          )
         : otherReason !== null
           ? state(
               other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
@@ -408,7 +408,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
           const otherReason = otherServerReason(other, candidate.path, rules);
           const working = processInside(cwds, [candidate.path], rules);
           const git = yield* hasGitEntry(candidate.path);
-          const decision = git
+          const offered = git
             ? state(
                 "needs_attention",
                 "A git checkout no repository lists any more; check it for work before deleting it yourself",
@@ -429,6 +429,12 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                     "removable",
                     "Not a git checkout, and no thread on this machine references it; check it holds nothing you need",
                   );
+          const { decision, token } = yield* stamped(
+            "orphan_folder:" + candidate.path,
+            candidate.path,
+            ORPHAN_MIN_AGE_MS,
+            offered,
+          );
           add(
             {
               kind: "orphan_folder",
@@ -437,7 +443,7 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
               ...decision,
             },
             { kind: "path", root: managedRoot, identity: candidate.stat.identity, worktree: null },
-            [candidate.stat.identity.dev, candidate.stat.identity.ino],
+            [candidate.stat.identity.dev, candidate.stat.identity.ino, ...token],
           );
           measureLater(
             "orphan_folder:" + candidate.path,
@@ -541,49 +547,65 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
+    const { decision, token } = yield* stamped(
+      "temp:" + target,
+      target,
+      TEMP_MIN_AGE_MS,
+      state("removable", "A temporary folder GOAT left more than a day ago"),
+    );
     add(
       {
         kind: "temp",
         path: target,
         label: name,
-        ...state("removable", "A temporary folder GOAT left more than a day ago"),
+        ...decision,
       },
       { kind: "path", root: tempRoot, identity: stat.identity, worktree: null },
-      [stat.identity.dev, stat.identity.ino],
+      [stat.identity.dev, stat.identity.ino, ...token],
     );
     measureLater("temp:" + target, target, 2);
   }
 
-  // Attachments of deleted threads: report only, since deleting a thread already removes them.
+  // Files deleted threads left behind. Nothing surviving may still point at them.
   if (ownRows !== null) {
-    const live = new Set<string>();
-    const deleted = new Set<string>();
-    for (const row of ownRows) {
-      const segment = toSafeThreadAttachmentSegment(row.id);
-      if (segment !== null) (row.deleted === null ? live : deleted).add(segment);
-    }
-    let bytes = 0;
-    let count = 0;
-    for (const name of yield* fs
-      .readDirectory(config.attachmentsDir)
-      .pipe(Effect.orElseSucceed(() => []))) {
-      const segment = parseThreadSegmentFromAttachmentId(
-        name.slice(0, name.length - path.extname(name).length),
-      );
-      if (segment === null || live.has(segment) || !deleted.has(segment)) continue;
-      const stat = yield* lstatOf(path.join(config.attachmentsDir, name));
-      if (stat === null || !stat.isFile) continue;
-      bytes += stat.size;
-      count += 1;
-    }
-    if (count > 0)
+    const leftovers = yield* deletedThreadAttachments({
+      attachmentsDir: config.attachmentsDir,
+      threads: ownRows,
+      now,
+    });
+    const kept =
+      leftovers.kept.count === 0
+        ? ""
+        : "; " +
+          leftovers.kept.count +
+          " more stay because a surviving thread or task mentions their thread, or they are under a day old";
+    if (leftovers.removable.length > 0)
       add(
         {
           kind: "attachments",
           path: config.attachmentsDir,
-          label: count + " files of deleted threads",
-          ...state("report_only", "Deleting a thread removes its files; these stayed behind"),
-          bytes,
+          label: leftovers.removable.length + " files of deleted threads",
+          ...state("removable", "No surviving thread or task mentions their threads" + kept),
+          bytes: leftovers.removable.reduce((sum, file) => sum + file.size, 0),
+        },
+        {
+          kind: "files",
+          root: config.attachmentsDir,
+          files: leftovers.removable.map(({ path: file, identity }) => ({ path: file, identity })),
+        },
+        leftovers.removable.map((file) => file.path + ":" + file.identity.ino).toSorted(),
+      );
+    else if (leftovers.kept.count > 0)
+      add(
+        {
+          kind: "attachments",
+          path: config.attachmentsDir,
+          label: leftovers.kept.count + " files of deleted threads",
+          ...state(
+            "report_only",
+            "A surviving thread or task mentions their threads, or they are under a day old",
+          ),
+          bytes: leftovers.kept.bytes,
         },
         { kind: "none" },
         [],

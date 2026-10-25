@@ -280,15 +280,18 @@ working. Current logs, message attachments, and browser profiles are kept.
 **Settings → Storage → Disk usage** shows each machine's free space and what GOAT's own folders
 hold there: worktrees and their `node_modules` and Rust `target/` folders, leftover folders of
 removed worktrees, worktrees Git still lists after their folder was deleted, older GOAT runtimes,
-rotated logs past retention, temporary folders, and the kache build cache. **Scan again** measures
-now; a scan can take a minute on machines with many worktrees.
+rotated logs past retention, temporary folders, files deleted threads left behind, and the kache
+build cache. **Scan again** measures now; a scan can take a minute on machines with many worktrees.
 
 **Clean up…** lists every path it would delete with its size. Nothing is deleted until you choose
 **Delete**. It starts with the categories that are safe to clear; tick build outputs, leftover
-folders and temporary folders yourself after checking them. A worktree qualifies only when it has
-no uncommitted changes, every commit is on a remote, and no thread on any GOAT server on that
-machine uses it. Anything that holds work shows as **Needs attention** and is never deleted. Each
-deletion is written to `storage-cleanup.ndjson` in that machine's logs folder.
+folders, temporary folders and deleted threads' files yourself after checking them. A worktree
+qualifies only when it has no uncommitted changes, every commit is on a remote, and no thread on
+any GOAT server on that machine uses it; its build outputs stay until every thread using it is
+archived. A deleted thread's files stay while a surviving thread, task or scheduled prompt still
+mentions that thread. Anything that changed after you reviewed it is skipped. Anything that holds
+work shows as **Needs attention** and is never deleted. Each deletion is written to
+`storage-cleanup.ndjson` in that machine's logs folder.
 
 From a terminal, `goat storage --dry-run` lists the default selection and `goat storage --clean`
 asks you to approve exactly that list in the GOAT app; run it again with `--approval <id>` once

@@ -35,13 +35,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
+import { type FileIdentity, lstatOf, sameIdentity } from "./fileState.ts";
 import {
-  type FileIdentity,
-  lstatOf,
   otherServerReason,
   processInside,
   resolveOtherServerPaths,
-  sameIdentity,
   scanStorage,
   type StorageScan,
   type StorageTarget,
@@ -109,9 +107,13 @@ const make = Effect.gen(function* () {
   const sizes = new Map<string, { readonly bytes: number; readonly at: number }>();
   const lock = yield* Semaphore.make(1);
 
-  const scanNow = Effect.fn("StorageReclaim.scan")(function* (measure: boolean) {
+  /** stampOnly: the items being cleaned, the only folders whose contents need re-reading. */
+  const scanNow = Effect.fn("StorageReclaim.scan")(function* (
+    measure: boolean,
+    stampOnly?: ReadonlySet<string>,
+  ) {
     const startedAt = yield* Clock.currentTimeMillis;
-    const scan = yield* scanStorage({ measure, sizes });
+    const scan = yield* scanStorage({ measure, sizes, ...(stampOnly ? { stampOnly } : {}) });
     const durationMs = (yield* Clock.currentTimeMillis) - startedAt;
     if (measure) yield* Ref.set(latest, { scan, durationMs });
     return { scan, durationMs };
@@ -246,8 +248,8 @@ const make = Effect.gen(function* () {
             const facts = yield* worktrees.facts.pipe(Effect.orElseSucceed(() => null));
             const entry = facts?.find((fact) => samePath(fact.entry.path, worktree, rules))?.entry;
             if (entry === undefined) return "its worktree is no longer listed";
-            if (entry.threads.some((thread) => thread.busy))
-              return "a thread is running in its worktree";
+            if (entry.threads.some((thread) => thread.busy || !thread.archived))
+              return "a thread still uses its worktree";
             const reason = yield* inUse(worktree);
             if (reason !== null) return reason;
             return yield* removeChecked(target.root, item.path, target.identity);
@@ -310,7 +312,10 @@ const make = Effect.gen(function* () {
     function* (input) {
       return yield* lock.withPermit(
         Effect.gen(function* () {
-          const { scan } = yield* scanNow(false);
+          const { scan } = yield* scanNow(
+            false,
+            new Set(input.items.map((requested) => requested.id)),
+          );
           const previous = yield* Ref.get(latest);
           const results: Array<StorageCleanOutcome> = [];
           let freedBytes = 0;

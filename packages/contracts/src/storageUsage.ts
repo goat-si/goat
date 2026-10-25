@@ -22,7 +22,7 @@ export const StorageItemKind = Schema.Literals([
   "runtime_version",
   "rotated_logs",
   "temp",
-  /** Files of deleted threads. Report only: deleting a thread already removes them. */
+  /** Files deleted threads left behind; offered only while nothing surviving mentions their thread. */
   "attachments",
   /** The kache build cache. Report only: kache keeps it under its own size limit. */
   "kache",
