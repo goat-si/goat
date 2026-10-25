@@ -187,6 +187,13 @@ const printedBy = <E>(program: Effect.Effect<unknown, E>) =>
   });
 
 // Synthetic canaries; none of them is a real credential.
+// Provider prefixes are joined at runtime so push protection does not take these synthetic
+// canaries for real credentials.
+const xox = "xox";
+const sk = "sk";
+const aiza = "AIza";
+const pemBegin = "-----BEGIN";
+
 const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktand0In0.Y2FuYXJ5LWp3dC1zaWduYXR1cmU";
 // A valid JWT whose header has spaces, so it does not start with "eyJ".
 const spacedJwt =
@@ -208,6 +215,12 @@ const canaries = [
   "canary-key-token",
   "canary-annotation-cookie",
   "canary-span-token",
+  "canary-custom-scheme",
+  "canary-cookie-assignment",
+  "canarySlackToken",
+  "canaryStripeKey",
+  "canaryGoogleKey",
+  "canary-pem-body",
 ];
 
 /** An error whose message, own field and nested cause each carry a credential. */
@@ -236,6 +249,17 @@ const leakyLog = Effect.logError(
       "Set-Cookie: sid=canary-set-cookie; Path=/ GOAT_MCP_BEARER_TOKEN=canaryGoatEnvToken0123456789",
     error: leakyError("field"),
     "Bearer canary-key-token-0123456789": "keyed",
+    // Credentials of the shapes #1487 added, each on its own line of one field.
+    pasted: [
+      "authorization=Custom+Scheme realm canary-custom-scheme",
+      "cookie=sid=1; theme=canary-cookie-assignment",
+      `slack ${xox}b-0123456789-canarySlackToken`,
+      `stripe ${sk}_live_canaryStripeKey0123456789 and pk_live_readablePublishable0123`,
+      `google ${aiza}canaryGoogleKey0123456789abcdefghij`,
+      `${pemBegin} EC PRIVATE KEY-----`,
+      "canary-pem-body",
+      "-----END EC PRIVATE KEY-----",
+    ].join("\n"),
   },
   Cause.fromReasons([
     Cause.makeFailReason(leakyError("failure")),
@@ -289,6 +313,7 @@ describe("ServerLoggerLive", () => {
         assert.include(output, "detail");
         assert.include(output, "defect failed with");
         assert.include(output, "upstream echoed");
+        assert.include(output, "pk_live_readablePublishable0123");
         assertRedacted(output);
       }),
     );
@@ -355,6 +380,7 @@ describe("ServerLoggerLive", () => {
         );
         assert.include(events, "tool handler died");
         assert.include(events, "defect failed with");
+        assert.include(events, "pk_live_readablePublishable0123");
         assertRedacted(events);
       }).pipe(Effect.provide(TestConsole.layer)),
     );
@@ -369,6 +395,7 @@ describe("ServerLoggerLive", () => {
         const body = requests.map((request) => request.body).join("\n");
         assert.include(body, "tool handler died");
         assert.include(body, "failure failed with");
+        assert.include(body, "pk_live_readablePublishable0123");
         assertRedacted(body);
       }).pipe(Effect.provide(TestConsole.layer)),
     );

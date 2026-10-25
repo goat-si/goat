@@ -3,9 +3,9 @@ import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 /**
  * Credentials in log text, recognized by their shape and masked whole: GOAT MCP credentials,
  * bare JWT and JWE tokens, Authorization header values, Cookie and Set-Cookie headers, URL
- * userinfo, provider token shapes, and the values of fields and assignments named in
- * CREDENTIAL_KEY. Every pattern runs in time linear in the text; see LogRedaction.ts for the
- * guarantee this serves.
+ * userinfo, provider token shapes, PEM private-key blocks, and the values of fields and
+ * assignments named in CREDENTIAL_KEY. Every pattern runs in time linear in the text; see
+ * LogRedaction.ts for the guarantee this serves.
  */
 
 export const MASK = "***";
@@ -266,14 +266,16 @@ function maskJoseToken(run: string): string {
 
 // key=value or key: value for every credential name a field is masked by.
 const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi");
-// "authorization=Bearer abc": a scheme word and the credential after it are one value.
-// Sticky, so it is tried once at the value's start, however long the scheme word or its spacing.
-const SCHEME_WORD = /[A-Za-z][\w-]*\s+(?=\S)/y;
+// A scheme word alone on its line, "authorization=Bearer" then a line break, still leads the
+// credential on the next line. Sticky, so it is tried once at the value's start.
+const LONE_SCHEME_WORD = /[A-Za-z][\w+.~-]*[ \t]*(?:\r\n?|\n)[ \t]*(?=[^\s])/y;
+const LINE_BREAK = /[\r\n]/g;
 
 /**
  * Every assignment to a credential name with its whole value masked: a JSON value up to its
- * closing bracket ({@link valueEnd}), otherwise a shell word, quoted segments and all, as in
- * password='first'second. The key and its = or : stay.
+ * closing bracket ({@link valueEnd}), an authorization or cookie value up to the end of its line,
+ * otherwise a shell word, quoted segments and all, as in password='first'second. The key and its
+ * = or : stay.
  */
 function maskAssignments(text: string): string {
   let out = "";
@@ -283,11 +285,17 @@ function maskAssignments(text: string): string {
     const start = match.index + match[0].length;
     if (match.index < shown || start >= text.length) continue;
     const lead = text.charAt(start);
-    const scheme = /^authorization$/i.test(match[1] ?? "") ? schemeLength(text, start) : 0;
+    const key = match[1] ?? "";
+    // An authorization or cookie value is a list of words, "Custom+Scheme realm=x, credential" or
+    // "a=1; sid=2", so it runs to the end of its line.
     const end =
       lead === "{" || lead === "["
         ? valueEnd(text, start, false)
-        : shellWordEnd(text, start + scheme);
+        : /^authorization$/i.test(key)
+          ? lineEnd(text, start + loneSchemeLength(text, start))
+          : /^cookie$/i.test(key)
+            ? lineEnd(text, start)
+            : shellWordEnd(text, start);
     if (end === start) continue;
     out += text.slice(shown, start) + MASK;
     shown = end;
@@ -296,9 +304,14 @@ function maskAssignments(text: string): string {
   return out + text.slice(shown);
 }
 
-function schemeLength(text: string, start: number): number {
-  SCHEME_WORD.lastIndex = start;
-  return SCHEME_WORD.exec(text)?.[0].length ?? 0;
+function loneSchemeLength(text: string, start: number): number {
+  LONE_SCHEME_WORD.lastIndex = start;
+  return LONE_SCHEME_WORD.exec(text)?.[0].length ?? 0;
+}
+
+function lineEnd(text: string, start: number): number {
+  LINE_BREAK.lastIndex = start;
+  return LINE_BREAK.exec(text)?.index ?? text.length;
 }
 
 /** The end of a shell word: up to unquoted whitespace, with quoted segments and escapes inside. */
@@ -321,6 +334,49 @@ function shellWordEnd(text: string, start: number): number {
   return Math.min(index, text.length);
 }
 
+const PRIVATE_KEY_LABEL = String.raw`(?:[A-Z0-9]{1,16} ){0,3}PRIVATE KEY(?: BLOCK)?-----`;
+const PRIVATE_KEY_BEGIN = new RegExp(`-----BEGIN ${PRIVATE_KEY_LABEL}`, "g");
+const PRIVATE_KEY_END = new RegExp(`-----END ${PRIVATE_KEY_LABEL}`, "g");
+
+/**
+ * Every PEM private-key block with its body masked and its markers kept. A block whose END marker
+ * never comes, cut or malformed, is masked to the end of the text. Each search starts past the
+ * previous block, so scanning stays linear.
+ */
+function maskPrivateKeys(text: string): string {
+  let out = "";
+  let shown = 0;
+  PRIVATE_KEY_BEGIN.lastIndex = 0;
+  for (
+    let begin = PRIVATE_KEY_BEGIN.exec(text);
+    begin !== null;
+    begin = PRIVATE_KEY_BEGIN.exec(text)
+  ) {
+    const body = begin.index + begin[0].length;
+    PRIVATE_KEY_END.lastIndex = body;
+    const end = PRIVATE_KEY_END.exec(text);
+    out += text.slice(shown, body) + MASK;
+    if (end === null) return out;
+    shown = end.index;
+    PRIVATE_KEY_BEGIN.lastIndex = end.index + end[0].length;
+  }
+  return out + text.slice(shown);
+}
+
+// The start of every provider token REDACTIONS recognizes by its prefix.
+const TOKEN_PREFIX = /gh[pousr]_|github_pat_|[sr]k-|[sr]k_(?:live|test)_|AKIA|AIza|xox[a-z]-|xapp-/;
+
+/**
+ * A cut text can end inside a provider token, leaving it shorter than its pattern needs. A last
+ * word holding the start of one, "id-xoxb-12" as much as "xoxb-12", is masked from that start.
+ */
+function maskUnfinishedToken(text: string): string {
+  let start = text.length;
+  while (start > 0 && /[A-Za-z0-9_-]/.test(text.charAt(start - 1))) start -= 1;
+  const prefix = text.slice(start).search(TOKEN_PREFIX);
+  return prefix === -1 ? text : text.slice(0, start + prefix) + MASK;
+}
+
 const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => string)]> = [
   // Cookie and Set-Cookie headers hold every cookie up to the end of the header, including
   // folded continuation lines (a line break followed by a space or tab).
@@ -337,6 +393,11 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   [/([a-z][a-z0-9+.-]{0,31}:\/\/)[^/\r\n?#]*@/gi, `$1${MASK}@`],
   [/\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})/g, MASK],
   [/\b(?:sk|rk)-[A-Za-z0-9_-]{16,}/g, MASK],
+  // Stripe secret and restricted keys; publishable pk_ keys are meant to be public.
+  [/\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}/g, MASK],
+  // Slack bot, user, app, refresh and legacy tokens, and Google API keys.
+  [/\b(?:xoxe\.)?(?:xox[a-z]|xapp)-[A-Za-z0-9-]{10,}/g, MASK],
+  [/\bAIza[0-9A-Za-z_-]{35,}/g, MASK],
   [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, `$1 ${MASK}`],
   // An Authorization header holds its scheme and every parameter up to the end of the header,
@@ -353,13 +414,13 @@ export function redactLogText(text: string): string {
   const scanned =
     text.length <= MAX_SCANNED
       ? text
-      : maskUnfinishedUrl(maskUnfinishedJose(text.slice(0, MAX_SCANNED)));
+      : maskUnfinishedToken(maskUnfinishedUrl(maskUnfinishedJose(text.slice(0, MAX_SCANNED))));
   const redacted = REDACTIONS.reduce(
     (current, [pattern, replacement]) =>
       typeof replacement === "string"
         ? current.replace(pattern, replacement)
         : current.replace(pattern, replacement),
-    maskCredentialFields(redactGoatCredentials(scanned)),
+    maskCredentialFields(redactGoatCredentials(maskPrivateKeys(scanned))),
   );
   const assigned = maskAssignments(redacted);
   return assigned.length <= MAX_STRING && scanned === text
