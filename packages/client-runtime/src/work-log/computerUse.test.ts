@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   computerUseDisplayInput,
   computerUseItemResult,
+  computerUseNeedsResultDetail,
   computerUseObservedTarget,
   computerUseResult,
   computerUseRun,
@@ -191,6 +192,17 @@ describe("computerUseResult", () => {
     // Without a wire outcome, as from an older server, the fetched detail still counts.
     const full = "Notification settle: unsupported (observer_unavailable).";
     expect(computerUseItemResult(settle, "succeeded", undefined, full).status).toBe("unsettled");
+  });
+
+  it("an expanded card still fetches a settle result the wire carried no outcome for", () => {
+    // Wire output from a server that predates compact settle outcomes.
+    expect(computerUseNeedsResultDetail(settle, { isError: true })).toBe(true);
+    expect(computerUseNeedsResultDetail(settle, undefined)).toBe(true);
+    expect(
+      computerUseNeedsResultDetail(settle, { settle: { outcome: "pending", reason: "deadline" } }),
+    ).toBe(false);
+    const click = computerUseRun(call("cua-driver.click", { pid: 1, x: 1, y: 1 }));
+    expect(computerUseNeedsResultDetail(click, undefined)).toBe(false);
   });
 
   it("a settled wait, other tools and other lifecycles keep their status", () => {

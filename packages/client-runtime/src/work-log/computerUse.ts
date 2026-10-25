@@ -259,3 +259,14 @@ export function computerUseItemResult(
     ? fromWire
     : computerUseResult(run, status, fetchedOutput);
 }
+
+/**
+ * Whether a card must fetch detail for its status even with screenshots hidden: a settle row whose
+ * wire output carries no outcome, as from a server before compact settle outcomes.
+ */
+export function computerUseNeedsResultDetail(
+  run: ComputerUseRun | undefined,
+  wireOutput: unknown,
+): boolean {
+  return run?.tool === "wait_for_window_settle" && toolOutputSettle(wireOutput) === undefined;
+}

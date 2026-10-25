@@ -3,6 +3,7 @@ import {
   COMPUTER_USE_RUN_STATUS_LABELS,
   computerUseObservedTarget,
   computerUseItemResult,
+  computerUseNeedsResultDetail,
   type ComputerUseRun,
   type ComputerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
@@ -39,8 +40,10 @@ export function ThreadComputerUseCard(props: {
   readonly showScreenshots: boolean;
   readonly onPressPreview: (source: FilePreviewSource) => void;
 }) {
+  const wireOutput = props.row.item.type === "dynamic_tool" ? props.row.item.output : undefined;
   const detail = useTurnItemDetail(
-    props.showScreenshots && turnItemNeedsDetailFetch(props.row.item)
+    (props.showScreenshots || computerUseNeedsResultDetail(props.run, wireOutput)) &&
+      turnItemNeedsDetailFetch(props.row.item)
       ? { environmentId: props.environmentId, row: props.row }
       : null,
   );
@@ -53,7 +56,7 @@ export function ThreadComputerUseCard(props: {
   const { status, note } = computerUseItemResult(
     props.run,
     props.status,
-    props.row.item.type === "dynamic_tool" ? props.row.item.output : undefined,
+    wireOutput,
     fetched?.type === "dynamic_tool" ? fetched.output : undefined,
   );
   if (status === null && target === null && images.length === 0) return null;
