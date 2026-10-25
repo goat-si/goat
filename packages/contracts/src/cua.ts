@@ -35,6 +35,30 @@ export const DesktopCuaDriverRequest = Schema.Struct({
 });
 export type DesktopCuaDriverRequest = typeof DesktopCuaDriverRequest.Type;
 
+export const DesktopCuaAppsRequest = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaAppsRequest"),
+  requestId: TrimmedNonEmptyString,
+});
+export type DesktopCuaAppsRequest = typeof DesktopCuaAppsRequest.Type;
+
+export const DesktopCuaAppsReport = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaApps"),
+    requestId: TrimmedNonEmptyString,
+    status: Schema.Literal("listed"),
+    apps: Schema.Array(TrimmedNonEmptyString).check(Schema.isMaxLength(1000)),
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaApps"),
+    requestId: TrimmedNonEmptyString,
+    status: Schema.Literal("unavailable"),
+  }),
+]);
+export type DesktopCuaAppsReport = typeof DesktopCuaAppsReport.Type;
+
 /**
  * Whether any agent controls this host right now; the desktop's helper watches for secret
  * fields and a person's input only while it does (D7, #1235). seq grows with every change the
@@ -642,7 +666,7 @@ export const ComputerUseRequestInput = Schema.Struct({
   apps: Schema.optional(
     ComputerUseApps.annotate({
       description:
-        "The apps you will control, by the bundle_id list_apps reports (its name where there is none). The person approves exactly these. Omit only when the work needs the whole screen.",
+        "The apps you will control, by the ids list_apps reports: bundle_id, or its listed name (the executable name on Windows) where there is none, never a window title. If the app is not open, open it first. The person approves exactly these. Omit only when the work needs the whole screen.",
     }),
   ),
   minutes: Schema.optional(
@@ -676,8 +700,10 @@ export const ComputerUseRequestResult = Schema.Union([
        * needs, or the Windows helper cannot use the desktop (block says which).
        */
       "not_granted",
+      "unknown_app",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
+    unknownApps: Schema.optionalKey(Schema.Array(Schema.String)),
     block: Schema.optionalKey(CuaAgentBlock),
     message: Schema.String,
   }),

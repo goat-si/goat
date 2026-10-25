@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostPowerSnapshot } from "./background.ts";
 import {
+  DesktopCuaAppsReport,
+  DesktopCuaAppsRequest,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
   DesktopCuaFrame,
@@ -310,6 +312,7 @@ export const DesktopHostTelemetryMessage = Schema.Union([
   DesktopHostTelemetrySnapshot,
   DesktopUpdateStatusReport,
   DesktopCuaDriverReport,
+  DesktopCuaAppsReport,
   DesktopCuaHumanInputReport,
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
@@ -366,6 +369,7 @@ export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetryCommitDesktopUpdate,
   DesktopTelemetryCancelDesktopUpdate,
   DesktopCuaDriverRequest,
+  DesktopCuaAppsRequest,
   DesktopCuaWatch,
   DesktopCuaFrames,
 ]);

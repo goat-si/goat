@@ -12,6 +12,7 @@ import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
+  cuaRequestableApps,
   cuaDriverCapabilityManifest,
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
@@ -45,6 +46,31 @@ describe("cuaDriverManifest", () => {
       "get_desktop_state",
     ])
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
+  });
+
+  it("offers only list_apps identities outside the manifest's protected apps", () => {
+    expect(
+      cuaRequestableApps(
+        [
+          { bundle_id: " com.apple.TextEdit ", name: "Editor window" },
+          { bundle_id: "com.apple.TextEdit", name: "Duplicate" },
+          { bundle_id: " ", name: " fixture.exe ", executable: "C:\\Apps\\fixture.exe" },
+          { name: "Linux Editor", executable: "/usr/bin/editor" },
+          { name: "Name only" },
+          { bundle_id: "SI.GOAT.DESKTOP", name: "GOAT" },
+          { name: "GOAT.exe", executable: "c:/Program Files/GOAT/GOAT.exe" },
+          { bundle_id: "com.trycua.driver", name: "Driver" },
+          { bundle_id: "com.apple.Passwords", name: "Vault" },
+          { bundle_id: "org.example.vault", name: "Bitwarden" },
+          { name: "1Password.exe" },
+          { name: "Driver", executable: "C:\\Tools\\cua-driver.exe" },
+          { bundle_id: "com.example.Passwords", name: "Vault" },
+          { name: " ", executable: "/usr/bin/anonymous" },
+          {},
+        ],
+        ["si.goat.desktop", "\\\\?\\C:\\Program Files\\GOAT\\GOAT.exe"],
+      ),
+    ).toEqual(["Linux Editor", "Name only", "com.apple.TextEdit", "fixture.exe"]);
   });
 
   it("admits every listed app except GOAT, the driver and credential stores", () => {
