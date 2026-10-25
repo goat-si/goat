@@ -61,6 +61,10 @@ its own** (a Scheduler source, a timer, a recovery pass at startup, an inbound h
 **must check the hold** or wait for its release; Scheduler sources skip while held unless registered
 with `whileAutomationHeld: "run"`. Work a person starts on the copy is not automation and runs.
 
+Both databases point at the same worktree folders, and the workspace lease is in-process only. Storage
+cleanup therefore ignores worktree roots inside another local GOAT home and keeps any worktree another
+home's database binds (`apps/server/src/otherGoatHomes.ts`); a cross-process lease is tracked in #1681.
+
 ## Version rule
 
 Every build carries exactly one version, and the desktop bundle, the server inside it, and the SSH runtime archive all report it. SSH remotes download the runtime archive named after the server's version, so a server that reports a version nobody published (#339) breaks every remote. The source manifests always hold the plain base `X.Y.Z`; a build stamps its full version into all four with `node scripts/update-release-package-versions.ts <version>` before anything is built.
