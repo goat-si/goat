@@ -287,7 +287,11 @@ const fixture = (scenario: string) => {
       });
     });
   // Codex reports a thread's status as it changes: active for a turn, idle once it ends.
-  const status = (threadId: string, type: "active" | "idle", flags: ReadonlyArray<string> = []) =>
+  const status = (
+    threadId: string,
+    type: "active" | "idle" | "systemError",
+    flags: ReadonlyArray<string> = [],
+  ) =>
     entries.push({
       type: "emit_inbound",
       frame: {
@@ -821,6 +825,42 @@ describe("Codex computer use attachment", () => {
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("reloads once a failed subagent is left in systemError (#1564)", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "cua-child-failed";
+        const child = root + "-agent";
+        const f = fixture(root);
+        const withCua = (control: string) => ({
+          ...f.config,
+          cuaDriver: f.driver(control),
+          cuaDriverOverridesUserConfig: true,
+        });
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(withCua("control:a"));
+        f.start(f.managed("control:a"));
+        yield* f.turnStart(3, 1, true);
+        spawnChild(f, root, child);
+        f.status(child, "active");
+        // Codex keeps a loaded child whose turn failed in systemError until it runs again.
+        f.status(child, "systemError");
+        f.turnCompleted(1);
+        yield* f.turnStart(f.reload(4, f.managed("control:b"), [root, child]), 2, true);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* sessions.set(withCua("control:b"));
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        assert.deepEqual(
+          replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+          [f.managed("control:a"), f.managed("control:b")],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("reloads when Codex has goals turned off, instead of deferring forever (#1564)", () =>

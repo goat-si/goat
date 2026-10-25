@@ -8,10 +8,14 @@ export const CUA_DEFERRED_NOTE =
 
 /**
  * What Codex last reported for each native thread, from thread/status/changed and thread/start.
- * Only a thread reported idle or notLoaded is quiet; an unreported one is not. Codex answers
+ * Only a thread reported idle, notLoaded or systemError is quiet; an unreported one is not. Codex answers
  * turn/start before the new turn's own notifications, and a finished turn's notifications can
  * arrive after that answer, so a start stays pending until turn/started names its turn.
  */
+// Codex reports a loaded thread whose last turn failed as systemError until its next turn: like
+// idle, nothing runs or waits there.
+const QUIET = new Set(["idle", "notLoaded", "systemError"]);
+
 export function makeCodexThreadStatuses() {
   const statuses = new Map<string, string>();
   const lastStarted = new Map<string, string>();
@@ -19,7 +23,7 @@ export function makeCodexThreadStatuses() {
   const pending = new Map<string, string | null>();
   const quiet = (threadId: string) => {
     const status = statuses.get(threadId);
-    return !pending.has(threadId) && (status === "idle" || status === "notLoaded");
+    return !pending.has(threadId) && status !== undefined && QUIET.has(status);
   };
   return {
     /**
