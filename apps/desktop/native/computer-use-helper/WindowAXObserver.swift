@@ -35,6 +35,7 @@ enum WindowAXAttribute {
   case elements([WindowAXElement])
   case string(String)
   case absent
+  case unsupported
   case failure
 }
 
@@ -277,7 +278,8 @@ final class WindowAXWatch: SettleWatch {
     let focused: WindowAXElement
     switch api.attribute(app, "AXFocusedUIElement") {
     case .element(let element): focused = element
-    // No focused element (Calculator): nothing receives typing, so the window itself decides (#1585).
+    // Only noValue says there is no focused element (Calculator); unsupported leaves the app's
+    // focus unknown, so it still refuses (#1585).
     case .absent: return windowHasNoSecureField()
     default: return false
     }
@@ -294,7 +296,7 @@ final class WindowAXWatch: SettleWatch {
       guard isAdmitted else { return false }
       switch api.attribute(node, "AXSubrole") {
       case .string(let subrole): if subrole == "AXSecureTextField" { return false }
-      case .absent: if role == "AXTextField" { return false }
+      case .absent, .unsupported: if role == "AXTextField" { return false }
       default: return false
       }
       guard isAdmitted else { return false }
@@ -306,10 +308,15 @@ final class WindowAXWatch: SettleWatch {
 
   private static let treeNodeLimit = 512
   private static let treeDepthLimit = 32
+  /// Roles that never contain other elements, so an unsupported AXChildren still proves the
+  /// subtree. Any other node must list its children, or be empty, for the walk to know its contents.
+  private static let leafRoles: Set<String> = ["AXButton", "AXStaticText", "AXImage", "AXCheckBox",
+    "AXRadioButton", "AXMenuButton", "AXPopUpButton", "AXSlider", "AXValueIndicator", "AXIncrementor",
+    "AXProgressIndicator", "AXBusyIndicator", "AXLevelIndicator", "AXDisclosureTriangle",
+    "AXColorWell", "AXSplitter", "AXHandle", "AXRelevanceIndicator"]
 
-  /// Reads the whole target window, within bounds, and fails closed on anything it cannot read,
-  /// a secure field, or a tree past its bounds. An AXUnknown node is allowed here, unlike on the
-  /// focus chain: it receives no typing, and a secure field still names itself by role or subrole.
+  /// Reads the whole target window, within bounds, and fails closed on anything it cannot read or
+  /// identify (AXUnknown, a container hiding its children), a secure field, or a tree past its bounds.
   private func windowHasNoSecureField() -> Bool {
     guard let target else { return false }
     var pending: [(WindowAXElement, Int)] = [(target, 0)]
@@ -318,11 +325,11 @@ final class WindowAXWatch: SettleWatch {
       visited += 1
       guard visited <= Self.treeNodeLimit, depth <= Self.treeDepthLimit, isAdmitted else { return false }
       guard case .string(let role) = api.attribute(node, "AXRole"), !role.isEmpty,
-        role != "AXSecureTextField" else { return false }
+        role != "AXSecureTextField", role != "AXUnknown" else { return false }
       guard isAdmitted else { return false }
       switch api.attribute(node, "AXSubrole") {
       case .string(let subrole): if subrole == "AXSecureTextField" { return false }
-      case .absent: if role == "AXTextField" { return false }
+      case .absent, .unsupported: if role == "AXTextField" { return false }
       default: return false
       }
       guard isAdmitted else { return false }
@@ -331,6 +338,7 @@ final class WindowAXWatch: SettleWatch {
         guard visited + pending.count + children.count <= Self.treeNodeLimit else { return false }
         pending.append(contentsOf: children.map { ($0, depth + 1) })
       case .absent: break
+      case .unsupported: if !Self.leafRoles.contains(role) { return false }
       default: return false
       }
     }
@@ -483,7 +491,8 @@ private final class SystemWindowAX: WindowAXFunctions {
     guard let element = ax(element) else { return .failure }
     var value: CFTypeRef?
     let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-    if error == .noValue || error == .attributeUnsupported { return .absent }
+    if error == .noValue { return .absent }
+    if error == .attributeUnsupported { return .unsupported }
     guard error == .success, let value else { return .failure }
     if CFGetTypeID(value) == AXUIElementGetTypeID() { return .element(WindowAXElement(value)) }
     if let string = value as? String { return .string(string) }

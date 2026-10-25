@@ -66,6 +66,8 @@ private final class FakeAX: WindowAXFunctions {
   let group = WindowAXElement("group" as NSString)
   let button = WindowAXElement("button" as NSString)
   let field = WindowAXElement("field" as NSString)
+  let mystery = WindowAXElement("mystery" as NSString)
+  let web = WindowAXElement("web" as NSString)
   let subscription = FakeAXSubscription()
   var receive: ((WindowAXElement, String) -> Void)?
   var queries: [String] = []
@@ -78,6 +80,10 @@ private final class FakeAX: WindowAXFunctions {
   var secureInTree = false
   var unreadableTree = false
   var hugeTree = false
+  // attributeUnsupported for focus: the app's focus is unknown, unlike noValue.
+  var unsupportedFocus = false
+  var unknownInTree = false
+  var opaqueWebInTree = false
   var missingSubrole = false
   var duplicateTarget = false
   var unknownMapping = false
@@ -110,14 +116,19 @@ private final class FakeAX: WindowAXFunctions {
     if cannotComplete { return .failure }
     switch name {
     case "AXWindows": return .elements(duplicateTarget ? [window, window] : [window, other])
-    case "AXFocusedUIElement": return missingFocus ? .failure : noFocus ? .absent : .element(focus)
+    case "AXFocusedUIElement":
+      if unsupportedFocus { return .unsupported }
+      return missingFocus ? .failure : noFocus ? .absent : .element(focus)
     case "AXRole":
       if element.same(group) { return .string("AXGroup") }
+      if element.same(mystery) { return .string("AXUnknown") }
+      if element.same(web) { return .string("AXWebArea") }
       if element.same(button) || key(element).hasPrefix("leaf-") { return .string("AXButton") }
       if element.same(field) { return .string("AXTextField") }
       return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
     case "AXSubrole":
-      if element.same(button) || element.same(group) || key(element).hasPrefix("leaf-") { return .absent }
+      if element.same(button) || element.same(group) || element.same(mystery) || element.same(web)
+        || key(element).hasPrefix("leaf-") { return .absent }
       if element.same(field) { return .string(secureInTree ? "AXSecureTextField" : "AXSearchField") }
       return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
     case "AXChildren":
@@ -125,8 +136,10 @@ private final class FakeAX: WindowAXFunctions {
       if element.same(group) {
         if unreadableTree { return .failure }
         if hugeTree { return .elements((0..<2000).map { WindowAXElement("leaf-\($0)" as NSString) }) }
-        return .elements([button, field])
+        return .elements([button, field] + (unknownInTree ? [mystery] : []) + (opaqueWebInTree ? [web] : []))
       }
+      // Real controls often do not support AXChildren at all; a button is still a known leaf.
+      if element.same(button) || element.same(mystery) || element.same(web) { return .unsupported }
       return .absent
     case "AXParent":
       if element.same(focus) { return .element(window) }
@@ -299,12 +312,15 @@ private func runObserverFixture(_ scenario: String) {
     check(calm.api.queries.contains("field:AXSubrole"), "the walk reads every node's subrole")
     calm.send(calm.api.window)
     check(calm.events == ["ready", "changed"], "changes are delivered while focus stays absent")
-    for defect in ["secure", "unreadable", "huge"] {
+    for defect in ["secure", "unreadable", "huge", "unsupported-focus", "unknown", "opaque-web"] {
       let f = WatchFixture()
       f.api.noFocus = true
       if defect == "secure" { f.api.secureInTree = true }
       if defect == "unreadable" { f.api.unreadableTree = true }
       if defect == "huge" { f.api.hugeTree = true }
+      if defect == "unsupported-focus" { f.api.unsupportedFocus = true }
+      if defect == "unknown" { f.api.unknownInTree = true }
+      if defect == "opaque-web" { f.api.opaqueWebInTree = true }
       f.start()
       f.unsupported("no focus with a \(defect) window tree fails closed")
       check(f.api.observerCount == 0, "the tree check precedes observation (\(defect))")
