@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ComputerUsePauseReason,
   type ComputerUseCallReservation,
@@ -6,11 +7,14 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import * as Queue from "effect/Queue";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpRouter } from "effect/http";
+import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
+import * as NetAddress from "effect/net/NetAddress";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -23,6 +27,7 @@ import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
@@ -44,6 +49,7 @@ const fixture = Effect.fnUntraced(function* () {
     attached: () => Effect.succeedNone,
     everyAppControl: () => Effect.die("unused"),
     serializeAdmission: (effect) => effect,
+    currentControl: () => Effect.die("unused"),
     controlState: () =>
       Effect.gen(function* () {
         if (yield* Ref.get(revoked)) return { _tag: "ended", reason: "revoked" } as const;
@@ -118,7 +124,307 @@ const active = {
   apps: ["com.apple.calculator"],
 } as const;
 
+const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
+  options: { readonly livenessWindowMs?: number } = {},
+) {
+  const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
+    Effect.provideService(HttpServer.HttpServer, {
+      address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
+      serve: () => Effect.void,
+    }),
+    Effect.provideService(ServerEnvironment.ServerEnvironment, {
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
+      getDescriptor: Effect.die("unused"),
+    }),
+    Effect.provide(NodeServices.layer),
+  );
+  const credential = yield* registry.issue({
+    threadId,
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  });
+  const signals = yield* PubSub.unbounded<void>();
+  const subscribed = yield* Deferred.make<void>();
+  const heldRead = yield* Ref.make<
+    { reading: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
+  >(undefined);
+  const current = yield* Ref.make<
+    | {
+        controlId: string;
+        state: "active" | "paused" | "idle" | "stopped";
+      }
+    | undefined
+  >(undefined);
+  const context = yield* Layer.build(
+    Layer.mergeAll(
+      ServerSettings.layerTest({ enableCua: true }),
+      Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
+      Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+        proxy: undefined,
+        currentControl: () =>
+          Ref.get(current).pipe(
+            Effect.map((value) =>
+              value === undefined
+                ? Option.none()
+                : Option.some({
+                    threadId,
+                    controlId: value.controlId,
+                    expiresAt,
+                    ...(value.state === "stopped" ? { ended: "stopped" as const } : {}),
+                  }),
+            ),
+          ),
+        controlState: (_owner, id) =>
+          Effect.gen(function* () {
+            const value = yield* Ref.get(current);
+            const held = yield* Ref.getAndSet(heldRead, undefined);
+            if (held !== undefined) {
+              yield* Deferred.succeed(held.reading, undefined);
+              yield* Deferred.await(held.release);
+            }
+            if (value === undefined) return { _tag: "ended", reason: "revoked" } as const;
+            if (value.controlId !== id) return { _tag: "ended", reason: "replaced" } as const;
+            if (value.state === "stopped") return { _tag: "ended", reason: "stopped" } as const;
+            if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(expiresAt))
+              return { _tag: "ended", reason: "expired" } as const;
+            if (value.state === "paused") return { _tag: "paused", reason: "takeover" } as const;
+            return {
+              _tag: "active",
+              expiresAt,
+              apps: ["com.apple.calculator"],
+              interruptions: { count: 0, last: "human_input" },
+              wakeAt: DateTime.toEpochMillis(expiresAt),
+              ...(value.state === "idle" ? ({ idle: true } as const) : {}),
+            } as const;
+          }),
+        subscribe: PubSub.subscribe(signals).pipe(
+          Effect.tap(() => Deferred.succeed(subscribed, undefined)),
+        ),
+      }),
+    ),
+  );
+  const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.layer);
+  const request = (
+    query: string,
+    authorization: string | undefined = credential.config.authorizationHeader,
+  ) =>
+    handler.pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request(`http://goat.test/api/computer-use/lease?${query}`, {
+            headers: authorization === undefined ? {} : { authorization },
+          }),
+        ),
+      ),
+      Effect.provideContext(context),
+    );
+  const open = Effect.fn("LeaseRouteTest.open")(function* (query = `thread=${threadId}`) {
+    const response = yield* request(query);
+    assert.equal(response.status, 200);
+    if (response.body._tag !== "Stream") return yield* Effect.die("expected lease stream");
+    const updates = yield* response.body.stream.pipe(
+      Stream.orDie,
+      Stream.decodeText,
+      Stream.splitLines,
+      Stream.map((line): unknown => JSON.parse(line)),
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+    yield* Deferred.await(subscribed);
+    return Queue.take(updates).pipe(Effect.catchTags({ Done: () => Effect.undefined }));
+  });
+  return {
+    registry,
+    credential,
+    request,
+    open,
+    holdNextRead: Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Ref.set(heldRead, { reading, release });
+      return { reading: Deferred.await(reading), release: Deferred.succeed(release, undefined) };
+    }),
+    set: (controlId: string, state: "active" | "paused" | "idle" | "stopped" = "active") =>
+      Ref.set(current, { controlId, state }).pipe(
+        Effect.andThen(PubSub.publish(signals, undefined)),
+      ),
+  };
+});
+
 describe("computer use lease route", () => {
+  it.effect.each(["stopped", "replaced", "revoked"] as const)(
+    "%s during a suspended control read discards the older snapshot",
+    (transition) =>
+      Effect.gen(function* () {
+        const f = yield* threadFixture();
+        yield* f.set(controlId);
+        const next = yield* f.open();
+        assert.deepEqual(yield* next, active);
+        const held = yield* f.holdNextRead;
+        yield* f.set(controlId);
+        yield* held.reading;
+        if (transition === "revoked") yield* f.registry.revokeThread(threadId);
+        else
+          yield* f.set(
+            transition === "replaced" ? "control:two" : controlId,
+            transition === "stopped" ? "stopped" : "active",
+          );
+        yield* held.release;
+        if (transition === "revoked") {
+          assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+          yield* f.set("control:two");
+          assert.isUndefined(yield* next);
+        } else {
+          assert.deepEqual(yield* next, { state: "control-ended", controlId, reason: transition });
+          assert.deepEqual(
+            yield* next,
+            transition === "stopped"
+              ? { state: "waiting" }
+              : { ...active, controlId: "control:two" },
+          );
+        }
+      }).pipe(Effect.scoped),
+  );
+  it.effect("one thread subscription waits, sees A stop, and follows B with its expiry", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* f.set(controlId);
+      assert.deepEqual(yield* next, active);
+      yield* f.set(controlId, "stopped");
+      assert.deepEqual(yield* next, { state: "control-ended", controlId, reason: "stopped" });
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* f.set("control:two");
+      assert.deepEqual(yield* next, { ...active, controlId: "control:two" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a new current id replaces A even without observing its end", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, active);
+      yield* f.set("control:two");
+      assert.deepEqual(yield* next, { state: "control-ended", controlId, reason: "replaced" });
+      assert.deepEqual(yield* next, { ...active, controlId: "control:two" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "thread snapshots include expiry while paused and idle, and paused controls expire",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* threadFixture();
+        yield* f.set(controlId, "idle");
+        const next = yield* f.open();
+        assert.deepEqual(yield* next, { state: "idle", controlId, expiresAt: active.expiresAt });
+        yield* f.set(controlId, "paused");
+        assert.deepEqual(yield* next, {
+          state: "paused",
+          controlId,
+          expiresAt: active.expiresAt,
+          reason: "takeover",
+        });
+        yield* TestClock.adjust("10 minutes");
+        assert.deepEqual(yield* next, { state: "control-ended", controlId, reason: "expired" });
+        assert.deepEqual(yield* next, { state: "waiting" });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses wrong-thread, missing and revoked bearers and ambiguous thread options", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      assert.equal((yield* f.request("thread=thread:other")).status, 401);
+      assert.equal((yield* f.request(`thread=${threadId}`, "")).status, 401);
+      for (const query of [
+        `thread=${threadId}&control=${controlId}`,
+        `thread=${threadId}&mode=unknown`,
+        `thread=${threadId}&thread=thread:other`,
+      ])
+        assert.equal((yield* f.request(query)).status, 400);
+      yield* f.registry.revokeThread(threadId);
+      assert.equal((yield* f.request(`thread=${threadId}`)).status, 401);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["thread", "provider", "all"] as const)(
+    "credential revocation by %s ends a waiting stream before B",
+    (revoke) =>
+      Effect.gen(function* () {
+        const f = yield* threadFixture();
+        const next = yield* f.open();
+        assert.deepEqual(yield* next, { state: "waiting" });
+        yield* revoke === "thread"
+          ? f.registry.revokeThread(threadId)
+          : revoke === "provider"
+            ? f.registry.revokeProviderSession(f.credential.config.providerSessionId)
+            : f.registry.revokeAll;
+        assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+        yield* f.set("control:two");
+        assert.isUndefined(yield* next);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("watching a credential never keeps it alive past its liveness window", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture({ livenessWindowMs: 100 });
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* TestClock.adjust("90 millis");
+      yield* f.set(controlId);
+      assert.deepEqual(yield* next, active);
+      // Nothing used the credential since it was issued; the stream's own checks are not use.
+      yield* TestClock.adjust("60 millis");
+      yield* f.set(controlId, "paused");
+      assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+      assert.isUndefined(
+        yield* f.registry.resolve(f.credential.config.authorizationHeader.slice(7)),
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a quiet waiting stream ends when its credential expires", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture({ livenessWindowMs: 100 });
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      yield* TestClock.adjust("101 millis");
+      assert.deepEqual(yield* next, { state: "ended", reason: "unauthorized" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("same-token renewal keeps the stream following controls", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      const next = yield* f.open();
+      assert.deepEqual(yield* next, { state: "waiting" });
+      const renewed = yield* f.registry.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        renew: {
+          authorizationHeader: f.credential.config.authorizationHeader,
+          providerSessionId: f.credential.config.providerSessionId,
+        },
+      });
+      assert.equal(renewed.config.authorizationHeader, f.credential.config.authorizationHeader);
+      yield* f.set("control:two");
+      assert.deepEqual(yield* next, { ...active, controlId: "control:two" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("the legacy GET stream still ends with its original control", () =>
+    Effect.gen(function* () {
+      const f = yield* threadFixture();
+      yield* f.set(controlId);
+      const next = yield* f.open(`control=${controlId}`);
+      assert.deepEqual(yield* next, active);
+      yield* f.set(controlId, "stopped");
+      assert.deepEqual(yield* next, { state: "ended", reason: "stopped" });
+      yield* f.set("control:two");
+      assert.isUndefined(yield* next);
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "authenticates call reservations, rejects malformed requests and binds the credential's thread",
     () =>
