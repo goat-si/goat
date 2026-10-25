@@ -568,3 +568,27 @@ it.effect("a confirmed API error does not bypass the login check for the next me
     }),
   ),
 );
+
+it.effect(
+  "a confirmed API error does not survive a follow-up whose admission was not acknowledged",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const failed = confirmedFailure(h);
+        // The first commit saves the submission; the second, its admission receipt, is lost.
+        h.failCommit(2);
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: failed } });
+        yield* h.runtime.startTurn(followUpTurn(h, 2, "try again", failed));
+        yield* Deferred.await(h.terminal);
+        expect(h.counts().sends).toBe(1);
+        const saved = h.ledger.at(-1)!;
+        expect(saved.status).toBe("unknown");
+        expect(saved).not.toHaveProperty("confirmedTerminalError");
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: saved } });
+        yield* h.runtime.startTurn(followUpTurn(h, 3, "and again", saved));
+        yield* Deferred.await(h.secondTerminal);
+        expect(h.counts().sends).toBe(1);
+      }),
+    ),
+);

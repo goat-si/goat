@@ -1077,6 +1077,12 @@ export const OrchestrationV2CloudTask = Schema.Struct({
   localChangesExcluded: Schema.Boolean,
   localChangesIncluded: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
+  /**
+   * The provider read the run's own prompt ending in a terminal API error, so the prompt reached
+   * the vendor and its turn is over. Counts only with status "failed"; providers drop it from every
+   * later write of the task, so it never outlives the next submission.
+   */
+  confirmedTerminalError: Schema.optional(Schema.Literal(true)),
   updatedAt: IsoDateTime,
   /**
    * The vendor run that stopped on an unexpected error and that GOAT retried once on its own.
