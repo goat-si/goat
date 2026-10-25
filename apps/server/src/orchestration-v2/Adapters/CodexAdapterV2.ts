@@ -1289,8 +1289,6 @@ interface CodexSubagentThreadContext {
   task: OrchestrationV2Subagent;
   /** Stop ended it before its first turn started; that turn, when it comes, reopens it. */
   endedByStop?: boolean;
-  /** The parent turn that last gave it work; its next turn belongs to that turn (#1643). */
-  assignedTurn?: string;
 }
 
 const approvalOwnerCodexTurn = (
@@ -2389,6 +2387,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         const interruptingNativeTurns = yield* Ref.make(new Set<string>());
         const terminalizedNonCompletedNativeTurns = yield* Ref.make(new Set<string>());
+        /** Turns Stop ended; failed turns are not among them, their children keep working. */
+        const stoppedNativeTurns = new Set<string>();
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -3101,20 +3101,20 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (subagent.nativeTurnIds.has(turn.nativeTurnId)) return;
             subagent.nativeTurnIds.add(turn.nativeTurnId);
             // The turn the child was spawned or last given work under. A child whose first turn
-            // starts late, after the parent thread moved on to a new turn, still belongs to it
-            // unless that new turn gave it the work (#1643).
+            // starts late, after Stop ended that turn and the parent thread moved on, is still
+            // stopped (#1643).
             const spawnedUnder = subagent.parentContext;
             const parentNativeThreadId = yield* getNativeThreadId(
               subagent.parentContext.providerThread,
             );
             const currentParent = yield* findActiveTurnByNativeThreadId(parentNativeThreadId);
             if (currentParent !== undefined) subagent.parentContext = currentParent;
-            const assigned = subagent.assignedTurn === subagent.parentContext.nativeTurnId;
             if (
               CodexSubagents.stoppedLineage(
-                assigned ? [subagent.parentContext] : [subagent.parentContext, spawnedUnder],
+                [subagent.parentContext],
                 yield* Ref.get(terminalizedNonCompletedNativeTurns),
-              )
+              ) ||
+              CodexSubagents.stoppedLineage([spawnedUnder], stoppedNativeTurns)
             )
               // Forked: notifications are handled on the input reader, which must stay free to
               // read the interrupt's answer.
@@ -5313,11 +5313,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
             if (payload.item.type === "collabAgentToolCall")
-              CodexSubagents.assign(
-                yield* Ref.get(subagentThreads),
-                payload.item.receiverThreadIds,
-                payload.turnId,
-              );
+              CodexSubagents.assign(yield* Ref.get(subagentThreads), payload.item, context);
 
             yield* completeProviderRetry(context, yield* DateTime.now);
             if (payload.item.type !== "reasoning") {
@@ -6649,13 +6645,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   new Set(current).add(input.nativeTurnId),
                 );
               // Only Stop: Codex also reports a turn replaced by compaction as interrupted.
-              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId))
+              if ((yield* Ref.get(interruptingNativeTurns)).has(input.nativeTurnId)) {
+                stoppedNativeTurns.add(input.nativeTurnId);
                 for (const subagent of CodexSubagents.stopped(
                   yield* Ref.get(subagentThreads),
                   input.context,
                   yield* Ref.get(activeTurns),
                 ))
                   yield* emitSubagentTaskUpdate({ subagent, status: "interrupted" });
+              }
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);

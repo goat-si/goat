@@ -67,18 +67,19 @@ export const stoppedLineage = (
   });
 
 /**
- * Records which parent turn gave these children work (send_input and the like), so a child's
- * next turn is known to be new work of that turn rather than the late start of stopped work
- * (#1643).
+ * A parent turn that sends a child new work (send_input, resume_agent) takes it over: the child's
+ * next turn belongs to that turn, not to the one it was spawned under, which Stop may have ended
+ * (#1643). Waiting on a child gives it no work.
  */
-export const assign = (
-  subagents: ReadonlyMap<string, { assignedTurn?: string }>,
-  childThreadIds: ReadonlyArray<string>,
-  turnId: string,
+export const assign = <T>(
+  subagents: ReadonlyMap<string, { parentContext: T }>,
+  item: { readonly tool: string; readonly receiverThreadIds: ReadonlyArray<string> },
+  turn: T,
 ) => {
-  for (const childThreadId of childThreadIds) {
+  if (item.tool !== "sendInput" && item.tool !== "resumeAgent") return;
+  for (const childThreadId of item.receiverThreadIds) {
     const subagent = subagents.get(childThreadId);
-    if (subagent !== undefined) subagent.assignedTurn = turnId;
+    if (subagent !== undefined) subagent.parentContext = turn;
   }
 };
 
