@@ -563,7 +563,8 @@ const make = Effect.gen(function* () {
   const readinessReport = Effect.gen(function* () {
     const reported = Option.isSome(desktop) ? yield* desktop.value.cuaReadiness : Option.none();
     if (Option.isSome(reported) || Option.isNone(linuxHelper)) return reported;
-    return yield* linuxHelper.value.readiness;
+    // Only the helper that runs with the driver watches; a setup check never counts (#1542).
+    return yield* linuxHelper.value.liveReadiness;
   });
   const fromDesktop: Effect.Effect<ComputerUseDetection> = readinessReport.pipe(
     Effect.map(

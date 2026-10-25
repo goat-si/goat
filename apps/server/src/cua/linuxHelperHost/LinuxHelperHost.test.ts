@@ -638,6 +638,8 @@ describe("LinuxHelperHost before the first turn (#1542)", () => {
           readiness: READY,
           signals: CAPABILITIES.signals,
         });
+        // No helper watches until a driver starts one, so nothing vouches for detection yet.
+        assert.deepEqual(yield* t.host.liveReadiness, Option.none());
         // The same session is not checked again right away.
         yield* TestClock.adjust(TICK_MS * 3);
         assert.lengthOf(t.spawned, 1);
@@ -664,5 +666,55 @@ describe("LinuxHelperHost before the first turn (#1542)", () => {
         yield* TestClock.adjust(TICK_MS);
         assert.deepEqual(yield* t.host.readiness, Option.none());
       }).pipe(Effect.scoped),
+  );
+});
+
+describe("LinuxHelperHost before the first turn, round 1 (#1546)", () => {
+  it.effect("a session that cannot be resolved is not probed again every tick", () =>
+    Effect.gen(function* () {
+      let probes = 0;
+      const report = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+      yield* makeLinuxHelperHost({
+        session: Effect.succeed(Option.none()),
+        check: {
+          wanted: Effect.succeed(true),
+          session: Effect.sync(() => {
+            probes++;
+            return Option.none<DriverSession>();
+          }),
+        },
+        spawn: () => fakeHelper().process,
+        environment: {},
+        report,
+        newId: () => "id",
+        after: () => () => undefined,
+      });
+      yield* TestClock.adjust(TICK_MS * 4);
+      assert.strictEqual(probes, 1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a check whose answer comes after computer use was turned off reports nothing", () =>
+    Effect.gen(function* () {
+      let wanted = true;
+      const report = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+      yield* makeLinuxHelperHost({
+        session: Effect.succeed(Option.none()),
+        check: { wanted: Effect.sync(() => wanted), session: Effect.succeed(Option.some(SESSION)) },
+        spawn: () =>
+          fakeHelper({
+            onRequest: (request) => {
+              if (request.method === "permissions") wanted = false;
+            },
+          }).process,
+        environment: {},
+        report,
+        newId: () => "id",
+        after: () => () => undefined,
+      });
+      // Read right after the first check, before a later tick could clear it.
+      yield* TestClock.adjust(1);
+      assert.deepEqual(yield* Ref.get(report), Option.none());
+    }).pipe(Effect.scoped),
   );
 });

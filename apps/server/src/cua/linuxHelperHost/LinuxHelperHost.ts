@@ -49,8 +49,17 @@ import { LinuxHelperReport } from "./LinuxHelperReport.ts";
 export class LinuxHelperHost extends Context.Service<
   LinuxHelperHost,
   {
-    /** The running helper's readiness and signals; none while no helper runs. */
+    /**
+     * Readiness for setup: the running helper's, or before the first turn the last check's
+     * (#1542). None while neither has reported.
+     */
     readonly readiness: Effect.Effect<Option.Option<DesktopCuaReadinessReport>>;
+    /**
+     * Only a report from the helper that runs with the driver, which is the one that watches for
+     * the safety signals. A check before the first turn proves setup but watches nothing, so it
+     * never counts as detection for unattended use.
+     */
+    readonly liveReadiness: Effect.Effect<Option.Option<DesktopCuaReadinessReport>>;
     /** Its safety reports, shaped as the desktop host's helper sends them. */
     readonly safety: Stream.Stream<DesktopCuaSafetyReport>;
     /** Whether agents control this host, so the helper watches only then (D7). */
@@ -304,6 +313,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
         new Promise<undefined>((resolve) => deps.after(HELLO_MS, () => resolve(undefined))),
       ]);
       if (hello === undefined) return undefined;
+      // A driver started while this helper said hello has its own helper; stop here.
+      if (current !== undefined) return undefined;
       const readiness = decodeReadiness(await client.request("permissions", {}, REQUEST_MS));
       return Option.isSome(readiness)
         ? { readiness: readiness.value, signals: hello.capabilities.signals }
@@ -317,8 +328,10 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       ),
     );
     checked = { next: now + (answered ? CHECK_EVERY_MS : CHECK_RETRY_MS) };
-    // A driver that started meanwhile has its own helper, whose report counts instead.
+    // A driver that started meanwhile has its own helper, whose report counts instead, and an
+    // answer that came after computer use was turned off reports nothing.
     if (current !== undefined || Option.isSome(yield* deps.session)) return;
+    if (deps.check === undefined || !(yield* deps.check.wanted)) return yield* dropCheck();
     if (answered === undefined) {
       yield* Effect.logWarning("The Linux computer use readiness check got no answer", {
         launch,
@@ -350,7 +363,12 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (deps.check === undefined || !(yield* deps.check.wanted)) return yield* dropCheck();
     if (checked !== undefined && now < checked.next) return;
     const session = yield* deps.check.session;
-    if (Option.isNone(session)) return yield* dropCheck();
+    if (Option.isNone(session)) {
+      // An unusable display or a missing binary is probed again only after the retry interval.
+      yield* dropCheck();
+      checked = { next: now + CHECK_RETRY_MS };
+      return;
+    }
     yield* check(session.value, now);
   });
   const start = Effect.fnUntraced(function* (session: DriverSession) {
@@ -554,6 +572,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
 
   return LinuxHelperHost.of({
     readiness: Ref.get(deps.report),
+    liveReadiness: Effect.map(Ref.get(deps.report), (report) =>
+      reportFromCheck ? Option.none() : report,
+    ),
     safety: Stream.fromPubSub(hub),
     setWatch: (active) =>
       Effect.sync(() => {
@@ -622,6 +643,7 @@ const spawnHelper =
 const inert = (report: Ref.Ref<Option.Option<DesktopCuaReadinessReport>>) =>
   LinuxHelperHost.of({
     readiness: Ref.get(report),
+    liveReadiness: Ref.get(report),
     safety: Stream.empty,
     setWatch: () => Effect.void,
   });
