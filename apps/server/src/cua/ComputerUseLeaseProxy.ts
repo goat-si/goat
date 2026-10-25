@@ -24,7 +24,7 @@
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
-  ComputerUseLeaseUpdate,
+  type ComputerUseLeaseUpdate,
   type ComputerUsePauseReason,
   type ComputerUseForegroundGrant,
 } from "@goat/contracts";
@@ -35,7 +35,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -43,6 +42,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
+import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 
 import { makeLeaseFences } from "./leaseUpdateFences.ts";
@@ -98,8 +98,6 @@ import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 const WRONG_DISPLAY =
   "That window is not on the screen GOAT gave computer use, so the call did not run. Use a window from list_windows.";
 
-const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
-
 /** Ids of the proxy's own requests to the driver; their answers never reach the provider. */
 const OWN_ID = "goat-proxy:";
 
@@ -131,6 +129,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
   const handshake: Array<string> = [];
+  const handshakeAnswers = makeLeaseProxyHandshake({
+    startDriver: options.startDriver,
+    handshake,
+    ownId: (kind) => OWN_ID + kind + ":" + ownRequests++,
+    output: options.output,
+  });
   const outstanding = new Map<
     string,
     {
@@ -210,12 +214,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const latest = outstanding.get(key);
       if (latest?.connectionId !== request.connectionId) continue;
       outstanding.delete(key);
-      if (!latest.cancelled)
-        yield* options.output(
-          request.method === "tools/call"
-            ? cutOff(request.id, request.tool, cause)
-            : refusal(request.id, request.method, interruptionDetail(cause), message),
-        );
+      if (latest.cancelled) continue;
+      const refuse = options.output(
+        request.method === "tools/call"
+          ? cutOff(request.id, request.tool, cause)
+          : refusal(request.id, request.method, interruptionDetail(cause), message),
+      );
+      // A handshake the pause cut off is still answered (#1604); only an end refuses it.
+      if (cause._tag !== "end" && handshakeAnswers.covers(request.method))
+        yield* handshakeAnswers
+          .answer(request.id, request.method, undefined, refuse)
+          .pipe(Effect.forkIn(scope));
+      else yield* refuse;
     }
     return token;
   });
@@ -336,7 +346,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                   offScreenAnswer(request.id, request.method, request.tool, "unknown"),
                 );
               if (verdict === "proof") proven = current;
-            } else outstanding.delete(key);
+            } else {
+              handshakeAnswers.remember(request.method, message);
+              outstanding.delete(key);
+            }
           }
           yield* options.output(admitDriverReplyScreenshots(line));
         }),
@@ -781,18 +794,16 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const session = message.params?.arguments?.session;
       if (typeof session === "string" && session.length > 0) sessions.add(session);
     }
-    // Paused: there is no driver until the server hands control back.
+    // Paused: there is no driver until the server hands control back. The handshake is still
+    // answered, so the agent keeps its tools and hears the pause when it calls one (#1604).
     if (lifecycle.current === undefined) {
-      if (isRequest)
-        yield* options.output(
-          refusal(
-            id,
-            message?.method,
-            "waiting_for_human",
-            PAUSE_MESSAGES[paused ?? "human_input"],
-          ),
-        );
-      return;
+      if (!isRequest) return;
+      const refuse = options.output(
+        refusal(id, message.method, "waiting_for_human", PAUSE_MESSAGES[paused ?? "human_input"]),
+      );
+      return yield* handshakeAnswers.covers(message.method)
+        ? handshakeAnswers.answer(id, message.method, line, refuse)
+        : refuse;
     }
     // The child this line goes to. A pause, end or replacement before the send below means the
     // call never reached a driver, so it is refused; once sent, an interruption answers it as
@@ -978,15 +989,3 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   if (finished === undefined) yield* end("lost");
   return finished;
 });
-
-/** Parses one NDJSON chunk stream from the lease route into updates, dropping unknown lines. */
-export const leaseUpdateLines = <E>(lines: Stream.Stream<string, E>) =>
-  lines.pipe(
-    Stream.filter((line) => line.trim().length > 0),
-    Stream.map((line) => {
-      const parsed = parse(line);
-      return parsed === undefined ? Option.none() : decodeUpdate(parsed);
-    }),
-    Stream.filter(Option.isSome),
-    Stream.map((update) => update.value),
-  );

@@ -27,7 +27,8 @@ import * as Stream from "effect/Stream";
 
 import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
-import { leaseUpdateLines, runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { leaseUpdateLines } from "./ComputerUseLeaseProtocol.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
