@@ -6,7 +6,12 @@ import * as Effect from "effect/Effect";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
-import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
+import {
+  childNodes,
+  fixture,
+  layerAdapterTest,
+  spawnChild,
+} from "./CodexAdapterV2.attachment.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
 // A parent turn giving a child work starts a send_input call naming it.
@@ -129,6 +134,11 @@ describe("Codex native subagents as their thread's background work", () => {
             yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
           );
           assert.isFalse(yield* replay.runtime.hasPendingBackgroundWork!);
+          // Its nodes end with its task, so neither the parent nor its own thread shows it running.
+          assert.deepStrictEqual(
+            childNodes(allocator, root + "-agent").map((id) => replay.nodeStatuses.get(id)?.at(-1)),
+            ["interrupted", "interrupted"],
+          );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -228,6 +238,14 @@ describe("Codex native subagents as their thread's background work", () => {
           yield* replay.terminal;
           assert.equal(replay.subagentStatuses.at(-1), "completed");
           assert.include(replay.subagentStatuses, "interrupted");
+          // Both of its nodes run again for the new work, then end with it (#1654).
+          assert.deepStrictEqual(
+            childNodes(allocator, child).map((id) => replay.nodeStatuses.get(id)),
+            [
+              ["running", "interrupted", "running", "completed"],
+              ["running", "interrupted", "running", "completed"],
+            ],
+          );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
