@@ -371,6 +371,38 @@ it.effect(
             `message:handoff-wake:${pending.handoffId}:cancelled`,
           ].sort(),
         );
+        // The approval's wake waited behind the thread's running turn; ending the grant withdrew
+        // it, so it never starts a turn that takes the screen again.
+        const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs;
+        const approvalWake = runs.find(
+          (run) => run.userMessageId === `message:handoff-wake:${approved.handoffId}:completed`,
+        );
+        expect(approvalWake?.status).toBe("cancelled");
+      }),
+    ),
+);
+
+it.effect(
+  "stays quiet when a person ends an approved computer use grant whose approval wake failed",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        world.outage.failing = 1;
+        yield* world.reactor.reconcile;
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* TestClock.adjust("20 minutes");
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
       }),
     ),
 );
