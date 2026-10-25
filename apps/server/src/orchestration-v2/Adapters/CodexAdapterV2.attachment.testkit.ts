@@ -198,17 +198,17 @@ export const fixture = (scenario: string) => {
     browserToolsAvailable: false,
     grantedScopes: [],
   };
-  // GOAT's lease proxy names its control in its arguments; Stop mints a new one (#1564).
-  const driver = (control: string): M.CuaDriverMcpConfiguration => ({
+  // Synthetic native driver generations exercise reloads; Stop keeps the real proxy's identity.
+  const driver = (generation: string): M.CuaDriverMcpConfiguration => ({
     command: "/resources/cua-driver",
-    args: ["mcp", "--socket", "/tmp/cua.sock", "--control", control],
+    args: ["mcp", "--socket", "/tmp/cua.sock", "--generation", generation],
     environment: [{ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }],
     socketPath: "/tmp/cua.sock",
   });
   // The wire shape Codex receives: each server under its own dotted path.
-  const managed = (control: string) => ({
+  const managed = (generation: string) => ({
     command: "/resources/cua-driver",
-    args: ["mcp", "--socket", "/tmp/cua.sock", "--control", control],
+    args: ["mcp", "--socket", "/tmp/cua.sock", "--generation", generation],
     env: { CUA_DRIVER_RS_TELEMETRY_ENABLED: "false" },
   });
   // The thread params Codex receives: which credential and memory tools GOAT's server carries,

@@ -726,7 +726,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       const gate = await readCuaGate();
       let open = gate !== "off";
       if (gate === "driver") {
-        // The same driver tools under the control GOAT minted since launch: swap the connection.
+        // A different driver fingerprint requires a fresh connection.
         const next = await readCuaDriver();
         if (next === undefined) open = false;
         else if (JSON.stringify(next) !== cuaDriverKey) {

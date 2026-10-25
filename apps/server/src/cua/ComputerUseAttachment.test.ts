@@ -626,10 +626,10 @@ describe("computerUseAttachment", () => {
       args: [
         "/goat/bin.mjs",
         "cua-lease-proxy",
-        "--control",
-        "control:unattended",
-        "--expires",
-        "2026-10-21T13:00:00.000Z",
+        "--thread",
+        "thread-cua",
+        "--driver-fingerprint",
+        "c92dbd15a4346d598492ae617191d83ff9a12ebe91406e454fa3e7009b8401d7",
       ],
       environment: [
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },
