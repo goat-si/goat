@@ -88,6 +88,14 @@ export class ThreadHistoryArchive extends Context.Service<
     /** Copies an archived thread's turn items back. True when something was restored. */
     readonly restore: (threadId: string) => Effect.Effect<boolean, ThreadHistoryArchiveError>;
     readonly stats: Effect.Effect<ThreadHistoryArchiveStats, ThreadHistoryArchiveError>;
+    /**
+     * Which needles appear in the archived history of threads that are not deleted. Null when an
+     * archive cannot be read or they hold more than maxRawBytes, so callers keep what they guard.
+     */
+    readonly mentions: (
+      needles: ReadonlyArray<string>,
+      maxRawBytes: number,
+    ) => Effect.Effect<ReadonlySet<string> | null>;
     /** Every archive, restore and hard delete, as it commits. */
     readonly changes: Stream.Stream<ThreadHistoryArchiveChange>;
   }
@@ -622,10 +630,35 @@ const make = Effect.gen(function* () {
     Effect.mapError(fail("stats")),
   );
 
+  const mentions = Effect.fn("ThreadHistoryArchive.mentions")(
+    function* (needles: ReadonlyArray<string>, maxRawBytes: number) {
+      const rows = yield* sql<ArchiveRow & { readonly raw_bytes: number }>`
+        SELECT archive.thread_id, archive.state, archive.archived_at, archive.file_name,
+          archive.sha256, archive.frames_json, archive.item_count, archive.event_count,
+          archive.rows_deleted, archive.raw_bytes
+        FROM orchestration_v2_thread_history_archives AS archive
+        JOIN orchestration_v2_projection_threads AS thread ON thread.thread_id = archive.thread_id
+        WHERE archive.state != 'deleted' AND thread.deleted_at IS NULL
+      `;
+      if (rows.reduce((sum, row) => sum + row.raw_bytes, 0) > maxRawBytes) return null;
+      const found = new Set<string>();
+      for (const row of rows)
+        yield* readArchive(row, (lines) =>
+          Effect.sync(() => {
+            for (const line of lines)
+              for (const needle of needles) if (line.includes(needle)) found.add(needle);
+          }),
+        );
+      return found;
+    },
+    (effect) => effect.pipe(Effect.orElseSucceed(() => null)),
+  );
+
   return ThreadHistoryArchive.of({
     runPass,
     restore,
     stats,
+    mentions,
     changes: Stream.fromPubSub(changes),
   });
 });

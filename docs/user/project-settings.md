@@ -287,8 +287,9 @@ build cache. **Scan again** measures now; a scan can take a minute on machines w
 **Delete**. It starts with the categories that are safe to clear; tick build outputs, leftover
 folders, temporary folders and deleted threads' files yourself after checking them. A worktree
 qualifies only when it has no uncommitted changes, every commit is on a remote, and no thread on
-any GOAT server on that machine uses it; its build outputs stay until every thread using it is
-archived. A deleted thread's files stay while a surviving thread, task or scheduled prompt still
+any GOAT server on that machine uses it. Build outputs qualify once every thread using their
+worktree is archived, and only when Git ignores them and tracks nothing in them. A deleted thread's
+files stay while a surviving thread, its archived history, a task or a scheduled prompt still
 mentions that thread. Anything that changed after you reviewed it is skipped. Anything that holds
 work shows as **Needs attention** and is never deleted. Each deletion is written to
 `storage-cleanup.ndjson` in that machine's logs folder.

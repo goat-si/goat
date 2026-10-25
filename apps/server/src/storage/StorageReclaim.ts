@@ -33,7 +33,9 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { withWorkspaceLease } from "../workspace/workspaceLease.ts";
+import { buildOutputKeeps } from "./buildOutputs.ts";
 import { LocalGoatServers } from "./localGoatServers.ts";
 import { type FileIdentity, lstatOf, sameIdentity } from "./fileState.ts";
 import {
@@ -45,7 +47,7 @@ import {
   type StorageTarget,
   toReport,
 } from "./storageScan.ts";
-import { isStrictlyInside, pathRules, samePath } from "./storagePaths.ts";
+import { isStrictlyInside, overlaps, pathRules, samePath } from "./storagePaths.ts";
 
 /**
  * GOAT's own disk usage on this machine and the cleanup a person confirms (docs/user, Storage).
@@ -91,6 +93,7 @@ const make = Effect.gen(function* () {
     | ProviderSessionManager.ProviderSessionManagerV2
     | GitVcsDriver.GitVcsDriver
     | LocalGoatServers
+    | ThreadHistoryArchive.ThreadHistoryArchive
   >();
   const config = yield* ServerConfig.ServerConfig;
   const worktrees = yield* WorktreeInventory.WorktreeInventoryService;
@@ -220,7 +223,51 @@ const make = Effect.gen(function* () {
     return null;
   }, Effect.provideContext(context));
 
-  const act = Effect.fn("StorageReclaim.act")(function* (item: StorageItem, target: StorageTarget) {
+  /**
+   * Why this server now uses a leftover folder: a thread bound to it or inside it since the scan,
+   * deleted and archived ones included, or a project folder overlapping it. Null when none does.
+   */
+  const ownReference = Effect.fn("StorageReclaim.ownReference")(function* (folder: string) {
+    const threads = yield* sql<{ readonly path: string | null }>`
+      SELECT json_extract(payload_json, '$.worktreePath') AS "path"
+      FROM orchestration_v2_projection_threads
+    `.pipe(
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    const projects = yield* sql<{ readonly root: string }>`
+      SELECT workspace_root AS "root" FROM projection_projects WHERE deleted_at IS NULL
+    `.pipe(
+      NodeSqliteClient.readOnly,
+      Effect.orElseSucceed(() => null),
+    );
+    if (threads === null || projects === null) return "this server's threads could not be read";
+    const targets = [path.resolve(folder), (yield* real(folder)) ?? path.resolve(folder)];
+    for (const row of threads) {
+      if (row.path === null) continue;
+      const bound = [path.resolve(row.path), (yield* real(row.path)) ?? path.resolve(row.path)];
+      if (
+        targets.some((target) =>
+          bound.some(
+            (value) => samePath(value, target, rules) || isStrictlyInside(target, value, rules),
+          ),
+        )
+      )
+        return "a thread on this server uses it now";
+    }
+    for (const row of projects) {
+      const root = (yield* real(row.root)) ?? path.resolve(row.root);
+      if (targets.some((target) => overlaps(root, target, rules)))
+        return "it overlaps a project folder on this server";
+    }
+    return null;
+  });
+
+  const act = Effect.fn("StorageReclaim.act")(function* (
+    item: StorageItem,
+    target: StorageTarget,
+    actor: string,
+  ) {
     switch (target.kind) {
       case "worktree": {
         const result = yield* worktrees
@@ -235,11 +282,19 @@ const make = Effect.gen(function* () {
       }
       case "path": {
         if (target.worktree === null) {
-          if (item.kind === "orphan_folder") {
-            const reason = yield* inUse(item.path);
-            if (reason !== null) return reason;
-          }
-          return yield* removeChecked(target.root, item.path, target.identity);
+          if (item.kind !== "orphan_folder")
+            return yield* removeChecked(target.root, item.path, target.identity);
+          // Binding a thread here takes the same lease, so it cannot slip in after these checks.
+          return yield* withWorkspaceLease(
+            path.resolve(item.path),
+            Effect.gen(function* () {
+              const reason = yield* inUse(item.path);
+              if (reason !== null) return reason;
+              const own = yield* ownReference(item.path);
+              if (own !== null) return own;
+              return yield* removeChecked(target.root, item.path, target.identity);
+            }),
+          );
         }
         const worktree = target.worktree;
         return yield* withWorkspaceLease(
@@ -252,6 +307,8 @@ const make = Effect.gen(function* () {
               return "a thread still uses its worktree";
             const reason = yield* inUse(worktree);
             if (reason !== null) return reason;
+            const keeps = yield* buildOutputKeeps(worktree, item.path);
+            if (keeps !== null) return keeps;
             return yield* removeChecked(target.root, item.path, target.identity);
           }),
         );
@@ -297,9 +354,34 @@ const make = Effect.gen(function* () {
         return removed ? null : "it is in use now";
       }
       case "files": {
+        // A group's log line names only its folder, so each file gets its own intent and outcome.
         for (const file of target.files) {
-          const reason = yield* removeChecked(target.root, file.path, file.identity);
-          if (reason !== null && reason !== "it is already gone") return file.path + ": " + reason;
+          const intent = yield* log({
+            event: "intent",
+            actor,
+            kind: item.kind,
+            path: file.path,
+          }).pipe(Effect.result);
+          if (intent._tag === "Failure")
+            return file.path + ": the cleanup log could not be written, so it was kept";
+          const done = yield* removeChecked(target.root, file.path, file.identity).pipe(
+            Effect.result,
+          );
+          yield* log({
+            event:
+              done._tag === "Failure" ? "failed" : done.success === null ? "removed" : "skipped",
+            actor,
+            kind: item.kind,
+            path: file.path,
+            ...(done._tag === "Failure"
+              ? { reason: done.failure.message }
+              : done.success === null
+                ? {}
+                : { reason: done.success }),
+          }).pipe(Effect.ignore);
+          if (done._tag === "Failure") return yield* done.failure;
+          if (done.success !== null && done.success !== "it is already gone")
+            return file.path + ": " + done.success;
         }
         return null;
       }
@@ -363,7 +445,7 @@ const make = Effect.gen(function* () {
               );
               continue;
             }
-            const done = yield* act(item, target).pipe(Effect.result);
+            const done = yield* act(item, target, input.actor).pipe(Effect.result);
             const result =
               done._tag === "Failure"
                 ? outcome("failed", failureMessage(done.failure), bytes)

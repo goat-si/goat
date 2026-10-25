@@ -758,6 +758,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
         LocalGoatServers.layer.pipe(Layer.provide(ProcessRunner.layer)),
         ProcessRunner.layer,
         HostResources.layer,
+        ThreadHistoryArchive.layer,
       ),
     ),
   ),

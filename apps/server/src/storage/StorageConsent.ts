@@ -30,7 +30,6 @@ import { identityToken } from "./storagePaths.ts";
 /** A person often answers after the asking turn ends; an hour keeps what they saw current. */
 const HANDOFF_TTL_MINUTES = 60;
 const DECISION_TTL_HOURS = 24;
-const LISTED_ITEMS = 20;
 
 const invalid = (message: string) =>
   new OrchestratorMcpFailure({ code: "invalid_request", message });
@@ -71,6 +70,25 @@ export class StorageConsent extends Context.Service<
   }
 >()("goat/storage/StorageConsent") {}
 
+/** What the person is shown: every path and size the approval covers. */
+export const storageApprovalText = (items: ReadonlyArray<StorageItem>) => {
+  const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
+  const lines = items.map(
+    (item) =>
+      "- " + item.kind.replaceAll("_", " ") + ": " + item.path + " (" + formatGiB(item.bytes) + ")",
+  );
+  return {
+    title:
+      "Delete " + items.length + (items.length === 1 ? " item" : " items") + " of GOAT storage",
+    reason: "An agent asks to free " + formatGiB(total) + " on this machine.",
+    location: [
+      "Deleting cannot be undone. Worktrees are checked again for changes and use right before they go.",
+      "",
+      ...lines,
+    ].join("\n"),
+  };
+};
+
 export const makeStorageConsent = Effect.gen(function* () {
   const approvals = yield* ApprovalHandoffs.ApprovalHandoffs;
   const inbox = yield* DecisionInbox.DecisionInbox;
@@ -79,34 +97,6 @@ export const makeStorageConsent = Effect.gen(function* () {
 
   const bindingOf = (items: ReadonlyArray<StorageCleanItem>) =>
     environment.getEnvironmentId.pipe(Effect.map((id) => storageCleanBinding(id, items)));
-
-  /** What the person is shown: every path and size, up to a limit. */
-  const describe = (items: ReadonlyArray<StorageItem>) => {
-    const total = items.reduce((sum, item) => sum + (item.bytes ?? 0), 0);
-    const lines = items
-      .slice(0, LISTED_ITEMS)
-      .map(
-        (item) =>
-          "- " +
-          item.kind.replaceAll("_", " ") +
-          ": " +
-          item.path +
-          " (" +
-          formatGiB(item.bytes) +
-          ")",
-      );
-    if (items.length > LISTED_ITEMS) lines.push("- and " + (items.length - LISTED_ITEMS) + " more");
-    return {
-      title:
-        "Delete " + items.length + (items.length === 1 ? " item" : " items") + " of GOAT storage",
-      reason: "An agent asks to free " + formatGiB(total) + " on this machine.",
-      location: [
-        "Deleting cannot be undone. Worktrees are checked again for changes and use right before they go.",
-        "",
-        ...lines,
-      ].join("\n"),
-    };
-  };
 
   /** Asks a person: a handoff for a thread, otherwise a decision bound to these items. */
   const ask = Effect.fn("StorageConsent.ask")(function* (
@@ -119,7 +109,7 @@ export const makeStorageConsent = Effect.gen(function* () {
     OrchestratorMcpFailure
   > {
     const binding = yield* bindingOf(requested);
-    const text = describe(items);
+    const text = storageApprovalText(items);
     const now = yield* DateTime.now;
     if (scope.thread !== undefined)
       return {

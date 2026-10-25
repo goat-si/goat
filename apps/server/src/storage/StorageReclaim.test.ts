@@ -7,10 +7,12 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
+import type { SqlError } from "effect/sql/SqlError";
 
 import * as ServerConfig from "../config.ts";
 import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as ThreadHistoryArchive from "../orchestration-v2/ThreadHistoryArchive.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
@@ -32,6 +34,10 @@ const machine = {
   } as OtherServerBindings,
   cwds: [] as ReadonlyArray<string> | null,
   facts: [] as ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts>,
+  /** What archived history of surviving threads mentions; null when it cannot be read. */
+  archived: new Set<string>() as ReadonlySet<string> | null,
+  /** Runs on the listing of running processes after this many listings, once. */
+  onProcessListing: null as { after: number; run: Effect.Effect<unknown, SqlError> } | null,
 };
 
 const layer = (tempRoot: string) =>
@@ -40,10 +46,27 @@ const layer = (tempRoot: string) =>
       Layer.mergeAll(
         Layer.succeed(LocalGoatServers, {
           otherServers: () => Effect.sync(() => machine.others),
-          workingDirectories: Effect.sync(() => machine.cwds),
+          workingDirectories: Effect.suspend(() => {
+            const hook = machine.onProcessListing;
+            if (hook === null) return Effect.succeed(machine.cwds);
+            if (hook.after > 0) {
+              hook.after -= 1;
+              return Effect.succeed(machine.cwds);
+            }
+            machine.onProcessListing = null;
+            return hook.run.pipe(Effect.orDie, Effect.as(machine.cwds));
+          }),
         }),
         Layer.mock(WorktreeInventory.WorktreeInventoryService)({
           facts: Effect.sync(() => machine.facts),
+        }),
+        Layer.mock(ThreadHistoryArchive.ThreadHistoryArchive)({
+          mentions: (needles) =>
+            Effect.sync(() =>
+              machine.archived === null
+                ? null
+                : new Set(needles.filter((needle) => machine.archived?.has(needle))),
+            ),
         }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
           isLive: () => Effect.succeed(false),
@@ -52,9 +75,9 @@ const layer = (tempRoot: string) =>
           read: Effect.succeed({ disk: null } as unknown as HostCapacitySnapshot),
         }),
         ProcessRunner.layer,
-        GitVcsDriver.layer,
       ),
     ),
+    Layer.provideMerge(GitVcsDriver.layer),
     Layer.provideMerge(SqlitePersistence.layerMemory),
     Layer.provideMerge(ServerSettings.layerTest({})),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "storage-reclaim-" })),
@@ -72,6 +95,8 @@ const setup = Effect.gen(function* () {
   machine.others = { databases: [], worktreePaths: [], projectRoots: [], unverified: [] };
   machine.cwds = [];
   machine.facts = [];
+  machine.archived = new Set();
+  machine.onProcessListing = null;
   const worktrees = yield* fs
     .realPath(config.worktreesDir)
     .pipe(
@@ -105,6 +130,49 @@ const backdate = Effect.fn("StorageReclaim.test.backdate")(function* (folder: st
   for (const name of yield* fs.readDirectory(folder, { recursive: true }))
     yield* fs.utimes(path.join(folder, name), LONG_AGO, LONG_AGO);
   yield* fs.utimes(folder, LONG_AGO, LONG_AGO);
+});
+
+/** A worktree whose git ignores node_modules/, holding one, and its facts for an idle thread. */
+const buildOutputWorktree = Effect.fn("StorageReclaim.test.buildOutputWorktree")(function* (
+  worktrees: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const driver = yield* GitVcsDriver.GitVcsDriver;
+  const checkout = path.join(worktrees, "goat", "idle-branch");
+  const output = path.join(checkout, "node_modules");
+  yield* fs.makeDirectory(path.join(output, "pkg"), { recursive: true });
+  yield* fs.writeFileString(path.join(output, "pkg", "index.js"), "installed\n");
+  const git = (args: ReadonlyArray<string>) =>
+    driver.execute({ operation: "StorageReclaim.test", cwd: checkout, args });
+  yield* git(["init", "-q"]);
+  yield* fs.writeFileString(path.join(checkout, ".gitignore"), "node_modules/\n");
+  const uses = (archived: boolean): ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts> => [
+    {
+      entry: {
+        path: checkout,
+        repository: path.join(worktrees, "repo"),
+        branch: "idle-branch",
+        main: false,
+        missing: false,
+        managed: true,
+        threads: [
+          {
+            threadId: ThreadId.make("thread-idle"),
+            title: "Idle",
+            status: "idle",
+            archived,
+            busy: false,
+          },
+        ],
+        dirtyCount: 3,
+        aheadCount: 0,
+      },
+      head: "abc",
+      holdsProject: false,
+    },
+  ];
+  return { checkout, output, uses, git };
 });
 
 describe("StorageReclaim", () => {
@@ -278,34 +346,7 @@ describe("StorageReclaim", () => {
   it.live("keeps the build outputs of a worktree any unarchived thread uses, idle or not", () =>
     Effect.gen(function* () {
       const { fs, path, worktrees, reclaim, find } = yield* setup;
-      const checkout = path.join(worktrees, "goat", "idle-branch");
-      const output = path.join(checkout, "node_modules");
-      yield* fs.makeDirectory(path.join(output, "pkg"), { recursive: true });
-      const uses = (archived: boolean): ReadonlyArray<WorktreeInventory.AbandonedWorktreeFacts> => [
-        {
-          entry: {
-            path: checkout,
-            repository: path.join(worktrees, "repo"),
-            branch: "idle-branch",
-            main: false,
-            missing: false,
-            managed: true,
-            threads: [
-              {
-                threadId: ThreadId.make("thread-idle"),
-                title: "Idle",
-                status: "idle",
-                archived,
-                busy: false,
-              },
-            ],
-            dirtyCount: 3,
-            aheadCount: 0,
-          },
-          head: "abc",
-          holdsProject: false,
-        },
-      ];
+      const { output, uses } = yield* buildOutputWorktree(worktrees);
       machine.facts = uses(false);
       expect(find((yield* reclaim.usage({ rescan: true })).items, output)).toMatchObject({
         kind: "build_output",
@@ -324,6 +365,42 @@ describe("StorageReclaim", () => {
       });
       expect(late.results[0]?.outcome).toBe("skipped");
       expect(yield* fs.exists(output)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps a build output git tracks files in or does not ignore, whatever its name", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find } = yield* setup;
+      const { checkout, output, uses, git } = yield* buildOutputWorktree(worktrees);
+      machine.facts = uses(true);
+      const offered = find((yield* reclaim.usage({ rescan: true })).items, output)!;
+      expect(offered.state).toBe("removable");
+
+      // Committed work under node_modules/ after review: the check right before deletion keeps it.
+      yield* fs.writeFileString(path.join(output, "pkg", "patched.js"), "local fix\n");
+      yield* git(["add", "-f", "node_modules/pkg/patched.js"]);
+      const late = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      // Git stops reporting a folder with tracked files as ignored; either answer keeps it.
+      expect(late.results[0]).toMatchObject({
+        outcome: "skipped",
+        reason: expect.stringMatching(/^Git (tracks files in it|does not ignore it)/),
+      });
+      expect(yield* fs.readFileString(path.join(output, "pkg", "patched.js"))).toBe("local fix\n");
+      expect(find((yield* reclaim.usage({ rescan: true })).items, output)).toMatchObject({
+        state: "needs_attention",
+        reason: expect.stringMatching(/^Git (tracks files in it|does not ignore it); check it/),
+      });
+
+      yield* git(["rm", "-q", "--cached", "node_modules/pkg/patched.js"]);
+      // A negation outranks any global excludes the machine running the test has.
+      yield* fs.writeFileString(path.join(checkout, ".gitignore"), "!node_modules/\n");
+      expect(find((yield* reclaim.usage({ rescan: true })).items, output)).toMatchObject({
+        state: "needs_attention",
+        reason: "Git does not ignore it; check it before deleting it yourself",
+      });
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 
@@ -369,6 +446,17 @@ describe("StorageReclaim", () => {
       const recent = yield* file("thread-recent", "3", false);
       const live = yield* file("thread-live", "4", true);
 
+      // Only a surviving thread's archived history names the thread, or that history is unreadable.
+      for (const archived of [new Set(["thread-gone"]), null]) {
+        machine.archived = archived;
+        expect(
+          (yield* reclaim.usage({ rescan: true })).items.filter(
+            (item) => item.kind === "attachments",
+          ),
+        ).toMatchObject([{ state: "report_only" }]);
+      }
+      machine.archived = new Set();
+
       const offered = (yield* reclaim.usage({ rescan: true })).items.filter(
         (item) => item.kind === "attachments",
       );
@@ -402,6 +490,46 @@ describe("StorageReclaim", () => {
       expect(done.results[0]?.outcome).toBe("removed");
       expect(yield* fs.exists(gone.target)).toBe(false);
       for (const kept of [forked, recent, live]) expect(yield* fs.exists(kept.target)).toBe(true);
+      // The group's line names the folder; each file has its own intent and outcome.
+      const lines = (yield* fs.readFileString(done.logPath))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(lines.filter((line) => line.path === gone.target).map((line) => line.event)).toEqual([
+        "intent",
+        "removed",
+      ]);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps a leftover folder a thread here binds after the clean's own scan", () =>
+    Effect.gen(function* () {
+      const { fs, leftover, reclaim, find } = yield* setup;
+      const sql = yield* SqlClient.SqlClient;
+      const item = find((yield* reclaim.usage({ rescan: true })).items, leftover)!;
+      expect(item.state).toBe("removable");
+      // The clean's scan lists processes once; the binding lands after it, before deletion.
+      machine.onProcessListing = {
+        after: 1,
+        run: sql`
+          INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+             created_at, updated_at, payload_json)
+          VALUES ('thread-new', 'project', 'New', 'codex', 'full-access', 'default',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+            ${JSON.stringify({ worktreePath: leftover })})
+        `,
+      };
+      const result = yield* reclaim.clean({
+        items: [{ id: item.id, token: item.token }],
+        actor: "test",
+      });
+      expect(machine.onProcessListing).toBeNull();
+      expect(result.results[0]).toMatchObject({
+        outcome: "skipped",
+        reason: "A thread on this server uses it now",
+      });
+      expect(yield* fs.exists(leftover)).toBe(true);
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
 });

@@ -17,7 +17,7 @@ import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as PendingQuestions from "../mcp/PendingQuestionsMcpService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
-import { makeStorageConsent } from "./StorageConsent.ts";
+import { makeStorageConsent, storageApprovalText } from "./StorageConsent.ts";
 
 const fromThread: McpInvocationScope = {
   environmentId: EnvironmentId.make("origin"),
@@ -115,3 +115,9 @@ it.effect("a declined approval deletes nothing", () =>
     }),
   ),
 );
+
+it("the person is shown every path an approval covers, however many", () => {
+  const many = Array.from({ length: 200 }, (_, index) => item("/w/many-" + index, "t" + index));
+  const shown = storageApprovalText(many).location;
+  for (const listedItem of many) expect(shown).toContain(listedItem.path + " (");
+});

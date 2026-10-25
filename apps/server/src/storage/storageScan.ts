@@ -18,6 +18,7 @@ import * as WorktreeInventory from "../mcp/WorktreeInventoryService.ts";
 import * as HostResources from "../resourceTelemetry/HostResources.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { isFilesystemRoot, managedWorktreesDirectories } from "../worktreesDirectory.ts";
+import { buildOutputKeeps, findBuildOutputs } from "./buildOutputs.ts";
 import { deletedThreadAttachments } from "./deletedThreadAttachments.ts";
 import { contentStamp, type FileIdentity, type Lstat, lstatOf } from "./fileState.ts";
 import { LocalGoatServers, type OtherServerBindings } from "./localGoatServers.ts";
@@ -75,9 +76,6 @@ const ORPHAN_MIN_AGE_MS = 60 * 60_000;
 /** Total time the scan spends measuring folders; later scans measure what this one could not. */
 const MEASURE_BUDGET = Duration.seconds(120);
 const MEASURE_CONCURRENCY = 6;
-/** How deep build outputs are looked for inside a worktree. */
-const BUILD_OUTPUT_DEPTH = 3;
-const SKIPPED_WHEN_SEARCHING = new Set([".git", "node_modules", "target", ".goat", ".t3"]);
 
 /** Paths the other GOAT servers on this machine use, compared resolved and real. */
 export interface OtherServerPaths {
@@ -326,7 +324,11 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     for (const output of yield* findBuildOutputs(entry.path)) {
       const stat = yield* lstatOf(output);
       if (stat === null || !stat.isDirectory || stat.isLink) continue;
-      // Build outputs regrow, so their token is the folder alone; liveness is what guards them.
+      // Build outputs regrow, so their token is the folder alone; liveness and git guard them.
+      const keeps =
+        live || otherReason !== null || working !== false
+          ? null
+          : yield* buildOutputKeeps(entry.path, output);
       const outputDecision = live
         ? state(
             "protected",
@@ -343,12 +345,17 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
             ? state("needs_attention", "Running processes could not be listed")
             : working
               ? state("protected", "A process is running in this worktree")
-              : state(
-                  "removable",
-                  path.basename(output) === "target"
-                    ? "Rust build output; cargo rebuilds it"
-                    : "Installed packages; an install brings them back",
-                );
+              : keeps !== null
+                ? state(
+                    "needs_attention",
+                    sentenceCase(keeps) + "; check it before deleting it yourself",
+                  )
+                : state(
+                    "removable",
+                    path.basename(output) === "target"
+                      ? "Rust build output; cargo rebuilds it"
+                      : "Installed packages; an install brings them back",
+                  );
       add(
         {
           kind: "build_output",
@@ -705,34 +712,6 @@ const childDirectories = Effect.fn("storageScan.childDirectories")(function* (pa
 const hasGitEntry = Effect.fn("storageScan.hasGitEntry")(function* (folder: string) {
   const path = yield* Path.Path;
   return (yield* lstatOf(path.join(folder, ".git"))) !== null;
-});
-
-/** node_modules folders and Rust target/ folders next to a Cargo.toml, a few levels deep. */
-const findBuildOutputs = Effect.fn("storageScan.findBuildOutputs")(function* (worktree: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const outputs: Array<string> = [];
-  const pending: Array<{ readonly folder: string; readonly depth: number }> = [
-    { folder: worktree, depth: 0 },
-  ];
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const { folder, depth } = next;
-    const names = yield* fs
-      .readDirectory(folder)
-      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-    if (names.includes("node_modules")) outputs.push(path.join(folder, "node_modules"));
-    if (names.includes("target") && names.includes("Cargo.toml"))
-      outputs.push(path.join(folder, "target"));
-    if (depth >= BUILD_OUTPUT_DEPTH) continue;
-    for (const name of names) {
-      if (SKIPPED_WHEN_SEARCHING.has(name) || name.startsWith(".")) continue;
-      const child = path.join(folder, name);
-      const stat = yield* lstatOf(child);
-      if (stat !== null && stat.isDirectory && !stat.isLink)
-        pending.push({ folder: child, depth: depth + 1 });
-    }
-  }
-  return outputs;
 });
 
 const rotatedLogFiles = Effect.fn("storageScan.rotatedLogFiles")(function* (logsDir: string) {

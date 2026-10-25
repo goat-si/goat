@@ -265,3 +265,19 @@ it.effect("the hard-delete policy removes old archives only when it is set", () 
     assert.isFalse(yield* archive.restore("old"));
   }).pipe(Effect.provide(layer())),
 );
+
+it.effect("finds text only archived history holds, for threads that are not deleted", () =>
+  Effect.gen(function* () {
+    const archive = yield* ThreadHistoryArchive.ThreadHistoryArchive;
+    const sql = yield* SqlClient.SqlClient;
+    yield* seed;
+    yield* archive.runPass(policy);
+    assert.deepEqual(yield* rows("old").pipe(Effect.map((old) => old.items.length)), 0);
+    const needles = ["old:item-7", "nowhere-at-all"];
+    assert.deepEqual([...((yield* archive.mentions(needles, 1024 ** 3)) ?? [])], ["old:item-7"]);
+    // More archived history than the caller may read: it learns nothing rather than "no".
+    assert.isNull(yield* archive.mentions(needles, 1));
+    yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at = '2026-10-21T00:00:00.000Z' WHERE thread_id = 'old'`;
+    assert.deepEqual([...((yield* archive.mentions(needles, 1024 ** 3)) ?? ["unread"])], []);
+  }).pipe(Effect.provide(layer())),
+);

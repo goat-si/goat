@@ -8,12 +8,15 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../attachmentStore.ts";
+import { ThreadHistoryArchive } from "../orchestration-v2/ThreadHistoryArchive.ts";
 import { lstatOf, type FileIdentity } from "./fileState.ts";
 
 /** Files younger than this may belong to a deletion GOAT is still finishing. */
 const ATTACHMENT_MIN_AGE_MS = 24 * 60 * 60_000;
 /** Deleted threads checked per scan; each check reads the thread tables once. */
 const THREADS_CHECKED_PER_SCAN = 40;
+/** Archived history read per scan; beyond it no deleted thread's files are offered. */
+const ARCHIVE_BYTES_READ_PER_SCAN = 512 * 1024 * 1024;
 
 export interface AttachmentFile {
   readonly path: string;
@@ -26,7 +29,8 @@ export interface AttachmentFile {
  * handed its context, a message or tool result quoting one of its files, unfinished work or a
  * scheduled prompt. A thread's attachment ids start with its id, so any copy of one of its files'
  * ids mentions it too. Archived threads whose history moved out of the database still name their
- * source in their own record. Null when the tables cannot be read.
+ * source in their own record; their archived tool history is read separately. Null when the
+ * tables cannot be read.
  */
 const mentionedBySurvivors = Effect.fn("storage.mentionedBySurvivors")(function* (needle: string) {
   const sql = yield* SqlClient.SqlClient;
@@ -105,9 +109,23 @@ export const deletedThreadAttachments = Effect.fn("storage.deletedThreadAttachme
         right.reduce((sum, file) => sum + file.size, 0) -
         left.reduce((sum, file) => sum + file.size, 0),
     );
+    const needlesOf = (segment: string) => new Set([segment, ...(deleted.get(segment) ?? [])]);
+    // Archived history of surviving threads, read once for every thread checked this scan.
+    const archived =
+      largestFirst.length === 0
+        ? new Set<string>()
+        : yield* (yield* ThreadHistoryArchive).mentions(
+            largestFirst
+              .slice(0, THREADS_CHECKED_PER_SCAN)
+              .flatMap(([segment]) => [...needlesOf(segment)]),
+            ARCHIVE_BYTES_READ_PER_SCAN,
+          );
     for (const [index, [segment, files]] of largestFirst.entries()) {
-      let mentioned: boolean | null = index >= THREADS_CHECKED_PER_SCAN ? null : false;
-      for (const needle of new Set([segment, ...(deleted.get(segment) ?? [])])) {
+      let mentioned: boolean | null =
+        index >= THREADS_CHECKED_PER_SCAN || archived === null
+          ? null
+          : [...needlesOf(segment)].some((needle) => archived.has(needle));
+      for (const needle of needlesOf(segment)) {
         if (mentioned !== false) break;
         mentioned = yield* mentionedBySurvivors(needle);
       }
