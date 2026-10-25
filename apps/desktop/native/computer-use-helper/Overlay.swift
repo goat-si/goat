@@ -46,7 +46,11 @@ final class AgentOverlayView: NSView {
 func overlayWindowFrame(_ windowId: CGWindowID) -> NSRect? {
   guard
     let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowId) as? [[String: Any]],
-    let bounds = list.first?[kCGWindowBounds as String] as? NSDictionary,
+    let info = list.first,
+    // A minimized window or one on another Space: nothing of it shows here, so neither does
+    // the border (the panel joins every Space).
+    HelperSafety.isOnScreen(info),
+    let bounds = info[kCGWindowBounds as String] as? NSDictionary,
     let rect = CGRect(dictionaryRepresentation: bounds)
   else { return nil }
   // The window server's origin is the primary display's top left; Cocoa's is its bottom left.

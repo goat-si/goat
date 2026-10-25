@@ -348,6 +348,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "Frames.swift"),
       // GOAT's own windows, which the live picture never shows (#1321).
       path.join(sourceDir, "HostIdentity.swift"),
+      // Fail-closed private mode, capture refusals and off-screen targets (pure decisions).
+      path.join(sourceDir, "HelperSafety.swift"),
       // Opens the window server connection captures need before AppKit would.
       path.join(sourceDir, "WindowServer.swift"),
       // Grants read again for a moment before they count as missing (#1597).

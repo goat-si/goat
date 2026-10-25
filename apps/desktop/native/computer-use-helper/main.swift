@@ -517,8 +517,18 @@ final class PrivateModeWatch {
   let queue = DispatchQueue(label: "si.goat.computer-use.private-mode")
   var watchId: String?
   var timer: DispatchSourceTimer?
-  /// The secure field's window last reported active under watchId.
+  /// The secure field's window last reported active under watchId. An unreadable focus is
+  /// reported active with no window (pid 0), so the host pauses until focus reads clean.
   var active: (pid: Int, windowId: Int)?
+
+  /// The window a focus answer holds private, or nil when nothing does.
+  private func privateTarget(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
+    switch focus {
+    case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
+    case .unknown: return (pid: 0, windowId: 0)
+    case .none: return nil
+    }
+  }
 
   func watch(_ params: [String: Any]) throws -> [String: Any] {
     guard let watchId = params["watchId"] as? String, !watchId.isEmpty else {
@@ -555,7 +565,7 @@ final class PrivateModeWatch {
   func announce() {
     queue.async { [weak self] in
       guard let self, self.watchId != nil else { return }
-      let now = focusedSecureField()
+      let now = self.privateTarget(focusedSecureField())
       self.active = now
       self.send(active: now != nil, target: now ?? (pid: 0, windowId: 0))
     }
@@ -575,7 +585,7 @@ final class PrivateModeWatch {
 
   private func tick() {
     guard watchId != nil else { return }
-    let now = focusedSecureField()
+    let now = privateTarget(focusedSecureField())
     if now?.pid == active?.pid && now?.windowId == active?.windowId { return }
     clear()
     if let now {
@@ -596,23 +606,26 @@ final class PrivateModeWatch {
   }
 }
 
-/// The window of the focused secure text field, or nil when none has focus.
-func focusedSecureField() -> (pid: Int, windowId: Int)? {
+/// Whether a secure text field has focus, and in which window. A focus that cannot be read
+/// (a missing or stale Accessibility grant, an app that does not answer) is `.unknown`, which
+/// private mode treats as private (HelperSafety.isPrivate).
+func focusedSecureField() -> FocusedSecureField {
   let system = AXUIElementCreateSystemWide()
   var focused: CFTypeRef?
-  guard
-    AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
-      == .success,
-    let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
-  else { return nil }
+  let read = AXUIElementCopyAttributeValue(
+    system, kAXFocusedUIElementAttribute as CFString, &focused)
+  if HelperSafety.focusReadIsUnknown(read) { return .unknown }
+  guard read == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+    return .none
+  }
   let element = focused as! AXUIElement
   var subrole: CFTypeRef?
   guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole) == .success,
     (subrole as? String) == (kAXSecureTextFieldSubrole as String)
-  else { return nil }
+  else { return .none }
   var pid: pid_t = 0
-  guard AXUIElementGetPid(element, &pid) == .success else { return nil }
-  return (pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)
+  guard AXUIElementGetPid(element, &pid) == .success else { return .unknown }
+  return .secure(pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)
 }
 
 /// The app's frontmost ordinary window: the one its focused field almost always sits in.

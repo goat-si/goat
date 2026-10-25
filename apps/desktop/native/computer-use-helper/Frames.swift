@@ -131,11 +131,17 @@ final class FrameCapture {
     if isPrivate(target) { return unavailable(target, "private", framesId: framesId) }
     busy.insert(target.key)
     SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) {
-      [weak self] content, _ in
+      [weak self] content, error in
       guard let self else { return }
       self.queue.async {
         // A replaced request's lookup touches nothing: busy belongs to the request in force.
         guard self.framesId == framesId else { return }
+        if let refusal = HelperSafety.shareableContentRefusal(
+          contentPresent: content != nil, errorCode: (error as NSError?)?.code)
+        {
+          self.busy.remove(target.key)
+          return self.unavailable(target, refusal, framesId: framesId)
+        }
         guard let window = content?.windows.first(where: { Int($0.windowID) == target.windowId }),
           let owner = window.owningApplication, Int(owner.processID) == target.pid
         else {
@@ -160,8 +166,7 @@ final class FrameCapture {
 
   /// A secure text field has focus in the window's app; its windows are not pictured at all.
   private func isPrivate(_ target: FrameTarget) -> Bool {
-    guard let secure = focusedSecureField() else { return false }
-    return secure.pid == target.pid
+    HelperSafety.isPrivate(focusedSecureField(), targetPid: target.pid)
   }
 
   @available(macOS 14.0, *)
