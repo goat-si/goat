@@ -1,3 +1,4 @@
+import { describeHolderForPerson } from "../cua/computerUseGrants.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import {
   EnvironmentAuthorizationError,
@@ -144,6 +145,7 @@ export class Handoffs extends Context.Service<
       readonly sshProgress?: SshProgressBinding;
       /** A computer use grant's apps, recorded on the handoff itself. */
       readonly apps?: ReadonlyArray<string>;
+      readonly computerUseForeground?: Handoff["computerUseForeground"];
     }) => Effect.Effect<HandoffSummary, HandoffError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** Client-only; caller supplies an authenticated, server-resolved label. */
@@ -387,8 +389,12 @@ const make = Effect.gen(function* () {
     }
     return session!.client.label ?? "GOAT client";
   });
-  const respond = Effect.fn("Handoffs.respond")(
-    function* (input: HandoffRespondInput, sessionId: AuthSessionId) {
+  const respondLocked = Effect.fn("Handoffs.respondLocked")(
+    function* (
+      input: HandoffRespondInput,
+      sessionId: AuthSessionId,
+      foregroundEpoch: number | undefined,
+    ) {
       const label = yield* clientLabel(input, sessionId);
       const record = yield* read(input);
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
@@ -407,7 +413,7 @@ const make = Effect.gen(function* () {
           const title = rows[0]?.title?.trim();
           return yield* new HandoffError({
             reason: "conflict",
-            detail: `${ComputerUseLeases.describeHolderForPerson(held.value, title || undefined)} End that admission first, or deny this one.`,
+            detail: `${describeHolderForPerson(held.value, title || undefined)} End that admission first, or deny this one.`,
           });
         }
       }
@@ -430,6 +436,15 @@ const make = Effect.gen(function* () {
         );
       }
       const result = yield* transition(input, input.action, { type: "client", label });
+      if (
+        foregroundEpoch !== undefined &&
+        isComputerUseGrant &&
+        isHandoffPending(record.state) &&
+        record.computerUseForeground !== undefined &&
+        result.state === "completed" &&
+        Option.isSome(computerUseLeases)
+      )
+        yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
       if (isComputerUseGrant && Option.isSome(computerUseLeases))
         yield* computerUseLeases.value.changed;
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
@@ -443,6 +458,17 @@ const make = Effect.gen(function* () {
         ? computerUseLeases.value.serializeAdmission(effect)
         : effect,
   );
+  const respond = Effect.fn("Handoffs.respond")(function* (
+    input: HandoffRespondInput,
+    sessionId: AuthSessionId,
+  ) {
+    // Authorization, holder reads and lock acquisition can all overlap a person's Stop.
+    const foregroundEpoch =
+      input.action === "completed" && Option.isSome(computerUseLeases)
+        ? yield* computerUseLeases.value.foregroundApprovalEpoch
+        : undefined;
+    return yield* respondLocked(input, sessionId, foregroundEpoch);
+  });
   const open = Effect.fn("Handoffs.open")(function* (
     input: HandoffReadInput,
     sessionId: AuthSessionId,
@@ -515,6 +541,9 @@ const make = Effect.gen(function* () {
         createdAt: now,
         actor: { type: "agent", threadId: input.requestedBy.threadId },
         ...(input.apps === undefined ? {} : { apps: input.apps }),
+        ...(input.computerUseForeground === undefined
+          ? {}
+          : { computerUseForeground: input.computerUseForeground }),
       };
       yield* savePrivate(handoff.handoffId, {
         version: 1,

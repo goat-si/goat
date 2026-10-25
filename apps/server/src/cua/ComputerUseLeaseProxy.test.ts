@@ -12,9 +12,10 @@ import {
   active,
   call,
   CONTROL,
-  cutOffCall,
+  foregroundActive,
   harness,
   refusedCall,
+  cutOffCall,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
@@ -223,7 +224,7 @@ describe("ComputerUseLeaseProxy", () => {
     () =>
       Effect.gen(function* () {
         const h = yield* harness();
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
         assert.equal((yield* h.nextToDriver).id, 7);
         // The person ends it while run_script is still running and the provider stays up.
@@ -249,7 +250,7 @@ describe("ComputerUseLeaseProxy", () => {
   it.effect("expires on its own clock with a long call outstanding and no new call", () =>
     Effect.gen(function* () {
       const h = yield* harness({ expiresAt: "1970-01-01T00:10:00.000Z" });
-      yield* h.push(active("1970-01-01T00:10:00.000Z"));
+      yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
       yield* h.send(call(3, "run_steps", { steps: [] }));
       assert.equal((yield* h.nextToDriver).id, 3);
       yield* TestClock.adjust("9 minutes");
@@ -272,7 +273,7 @@ describe("ComputerUseLeaseProxy", () => {
           expiresAt: "1970-01-01T00:10:00.000Z",
           revoke: () => Deferred.await(stuck),
         });
-        yield* h.push(active("1970-01-01T00:10:00.000Z"));
+        yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
         yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
         assert.equal((yield* h.nextToDriver).id, 7);
         if (reason === "revoked") yield* h.push({ state: "ended", reason: "revoked" });
@@ -350,7 +351,7 @@ describe("ComputerUseLeaseProxy", () => {
   it.effect("on Stop kills the driver mid-call and tells the agent not to go on", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       yield* h.send(call(1, "run_script", { script: "/* long */" }));
       assert.equal((yield* h.nextToDriver).id, 1);
       yield* h.push({ state: "ended", reason: "stopped" });

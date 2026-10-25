@@ -383,6 +383,47 @@ it.effect("does not clear uncertainty on an otherwise unsupported follow-up", ()
     }),
   ),
 );
+it.effect.each(["cancelled", "unknown", "submitting"] as const)(
+  "a confirmed API error marker on a %s task never authorizes a follow-up",
+  (status) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const task = { ...h.saved.cloudTask, status, confirmedTerminalError: true as const };
+        yield* h.runtime.resumeThread({ providerThread: { ...h.saved, cloudTask: task } });
+        yield* h.runtime.startTurn({
+          ...h.input,
+          providerThread: { ...h.saved, cloudTask: { ...task, status: "submitting" } },
+        });
+        yield* Deferred.await(h.terminal);
+        expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+        expect(h.controlCommands).toEqual([]);
+        expect(h.ledger.at(-1)?.status).toBe("unknown");
+      }),
+    ),
+);
+it.effect("a restart keeps a marked failure blocked when its saved identity is inconsistent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const task = {
+        ...h.saved.cloudTask,
+        status: "failed" as const,
+        error: "API Error: 529 Overloaded",
+        confirmedTerminalError: true as const,
+        url: "https://claude.ai/code/session_OTHER1",
+      };
+      yield* h.runtime.resumeTurn!({
+        ...h.attach,
+        providerThread: { ...h.saved, cloudTask: task },
+        cloudTask: task,
+      });
+      yield* Deferred.await(h.terminal);
+      expect(h.ledger.at(-1)?.status).toBe("unknown");
+      expect(h.counts()).toEqual({ starts: 0, sends: 0, reads: 0 });
+    }),
+  ),
+);
 it.effect.each([
   { modelSelection: { ...selection, model: "local-model" } },
   { modelSelection: { ...selection, options: [{ id: "effort", value: "high" }] } },

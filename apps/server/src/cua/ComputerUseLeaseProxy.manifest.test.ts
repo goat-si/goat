@@ -1,11 +1,108 @@
+import { TurnItemId } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  active,
+  foregroundActive,
+  call,
+  CONTROL,
+  harness,
+} from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
+  it.effect.each(["removed", "replaced", "shortened"] as const)(
+    "fences a selected foreground grant %s at receipt behind the lifecycle lock",
+    (change) =>
+      Effect.gen(function* () {
+        const report = yield* Deferred.make<void>();
+        const held = yield* Deferred.make<void>();
+        const olderApplied = yield* Deferred.make<void>();
+        let hold = false;
+        let heldUpdates = 0;
+        const h = yield* harness({
+          humanInput: true,
+          agentInputGate: report,
+          reservation: (request) =>
+            Effect.succeed(
+              request.action === "reserve" || request.action === "validate"
+                ? {
+                    status: "admitted" as const,
+                    reservationId:
+                      request.action === "validate"
+                        ? request.reservationId
+                        : "authoritative-ticket",
+                    permissions: { validUntilMillis: 1_800_000 },
+                  }
+                : { status: "released" as const },
+            ),
+          afterApplied: () =>
+            hold ? Deferred.await(heldUpdates++ === 0 ? held : olderApplied) : Effect.void,
+        });
+        const initial = foregroundActive();
+        yield* h.push(initial);
+        yield* h.applied;
+        yield* h.taken;
+        yield* h.send(
+          call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1, dispatch: "foreground" }),
+        );
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal(yield* h.agentCall, "start 1");
+        hold = true;
+        yield* h.push(initial);
+        yield* h.applied;
+        yield* h.taken;
+        // An older broader update remains queued too; applying it cannot revive this call.
+        yield* h.push(initial);
+        yield* h.taken;
+        yield* h.push({
+          ...active(),
+          foreground:
+            change === "removed"
+              ? []
+              : initial.foreground.map((grant) => ({
+                  ...grant,
+                  ...(change === "replaced"
+                    ? { handoffId: TurnItemId.make("handoff:unrelated") }
+                    : { expiresAtMillis: 60_000 }),
+                })),
+        });
+        yield* h.taken;
+        yield* Deferred.succeed(held, undefined);
+        // Apply the older broad state after receiving the revocation, before dispatch resumes.
+        yield* h.applied;
+        yield* Deferred.succeed(report, undefined);
+        const observed = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "dispatched", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(
+          observed.kind,
+          "answer",
+          "Received foreground revocation must fence the waiting call",
+        );
+        assert.deepInclude(
+          (observed.message.result as { structuredContent: object }).structuredContent,
+          { detail: "foreground_not_approved" },
+        );
+        assert.equal(yield* h.agentCall, "end 1");
+        assert.equal((yield* h.nextReservation).action, "release");
+        hold = false;
+        yield* Deferred.succeed(olderApplied, undefined);
+        yield* h.applied;
+        yield* h.send(
+          call(2, "type_text", {
+            pid: 4,
+            window_id: 9,
+            text: "background desktop remains approved",
+          }),
+        );
+        assert.equal((yield* h.nextToDriver).id, 2);
+      }),
+  );
+
   it.effect(
     "a lease update that fails to apply ends the control instead of leaving it running",
     () =>
@@ -162,7 +259,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         let manifest = "v1";
         const gate = yield* Deferred.make<void>();
         const h = yield* harness({ manifestStamp: () => manifest, firstKillGate: gate });
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         manifest = "v2";
         const forwarded = yield* h
           .send(call(1, "move_cursor", { scope: "desktop", x: 1, y: 1 }))
@@ -172,9 +269,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         // The refresh is stopping the old child when another thread's grant arrives.
         yield* h.killed;
         yield* h.push({
-          state: "active",
-          controlId: CONTROL,
-          expiresAt: "1970-01-01T00:30:00.000Z",
+          ...foregroundActive(),
           shared: true,
         });
         assert.equal(yield* h.taken, "active");
@@ -206,7 +301,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
           agentInputGate: started,
           afterApplied: () => (hold ? Deferred.await(held) : Effect.void),
         });
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         assert.equal(yield* h.applied, "active");
         // A foreground click waits for its input report while two updates arrive: an older one
         // without the grant, then the one with it. The older one applies and the queue holds.
@@ -215,11 +310,9 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         );
         assert.equal(yield* h.agentCall, "start 1");
         hold = true;
-        yield* h.push(active());
+        yield* h.push(foregroundActive());
         yield* h.push({
-          state: "active",
-          controlId: CONTROL,
-          expiresAt: "1970-01-01T00:30:00.000Z",
+          ...foregroundActive(),
           shared: true,
         });
         assert.equal(yield* h.applied, "active");

@@ -6,6 +6,8 @@ import {
 } from "@goat/contracts";
 import {
   type Interruption,
+  type LeaseEnd,
+  FOREGROUND_NOT_APPROVED,
   LEASE_END_MESSAGES,
   PAUSE_STATE,
   PAUSE_NEXT,
@@ -14,6 +16,8 @@ import {
   MAY_HAVE_ACTED,
   READ_CUT_OFF,
 } from "./ComputerUseLeaseMessages.ts";
+
+import type { Stopping } from "./leaseUpdateFences.ts";
 
 export type JsonRpcId = string | number;
 
@@ -144,3 +148,48 @@ export const offScreenAnswer = (
           isError: true,
         },
       });
+
+/** Receipt-time restrictions outrank the last applied state when a call has not run. */
+export const unsentCallRefusal = (
+  id: JsonRpcId,
+  method: string | undefined,
+  state: {
+    readonly pending: Stopping | undefined;
+    readonly finished: LeaseEnd | undefined;
+    readonly paused: ComputerUsePauseReason | undefined;
+    readonly idle: boolean;
+    readonly foregroundRevoked: boolean;
+    readonly lastInterruption: Interruption;
+  },
+) => {
+  const { pending, lastInterruption } = state;
+  const ending =
+    state.finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
+  const pausing =
+    state.paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
+  if (ending !== undefined) return refusal(id, method, ending, LEASE_END_MESSAGES[ending]);
+  if (pausing !== undefined)
+    return refusal(id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
+  if (state.idle || (pending !== undefined && "idle" in pending))
+    return refusal(
+      id,
+      method,
+      "control_idle",
+      "This thread's turn has ended. Computer use is idle until its next turn.",
+    );
+  if (pending !== undefined && "narrowed" in pending)
+    return refusal(
+      id,
+      method,
+      "app_not_approved",
+      "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
+    );
+  if (state.foregroundRevoked)
+    return refusal(id, method, "foreground_not_approved", FOREGROUND_NOT_APPROVED);
+  return refusal(
+    id,
+    method,
+    interruptionDetail(lastInterruption),
+    interruptionRefusal(lastInterruption),
+  );
+};
