@@ -494,6 +494,95 @@ describe("Rescheduler", () => {
     }),
   );
 
+  testScoped(
+    "regression #1451: a held move whose answer was lost stays unconfirmed until findMove sees its thread",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        const held = request({
+          holdUnconfirmed: true,
+          callerRuntimeMode: "full-access",
+          runtimeMode: "auto",
+        });
+        yield* loseA(world);
+        // Nothing was claimed yet, so nothing can have launched.
+        expect(
+          yield* rescheduler.findMove({ clientRequestId: held.clientRequestId, owner: held.owner }),
+        ).toEqual({ _tag: "NotLaunched" });
+        world.loseNextLaunchResponse = true;
+        expect(yield* rescheduler.reschedule(held)).toMatchObject({
+          _tag: "Unconfirmed",
+          host: "B",
+        });
+        expect(world.launches[0]).toMatchObject({
+          runtimeMode: "auto",
+          callerRuntimeMode: "full-access",
+        });
+        // B cannot be listed: unknown, and a retry launches nothing anywhere.
+        world.failing.add("B/goat_thread_list");
+        expect(
+          yield* rescheduler.findMove({ clientRequestId: held.clientRequestId, owner: held.owner }),
+        ).toMatchObject({ _tag: "Unknown", host: "B" });
+        expect(yield* rescheduler.reschedule(held)).toMatchObject({
+          _tag: "Unconfirmed",
+          host: "B",
+        });
+        // Another owner's lookup never adopts it.
+        expect(
+          yield* rescheduler.findMove({
+            clientRequestId: held.clientRequestId,
+            owner: FleetOwnerKey.make("goal:other"),
+          }),
+        ).toMatchObject({ _tag: "Unknown" });
+        world.failing.delete("B/goat_thread_list");
+        expect(
+          yield* rescheduler.findMove({ clientRequestId: held.clientRequestId, owner: held.owner }),
+        ).toEqual({ _tag: "Launched", host: "B", threadId: "thread:B1", branch: "goal-g1-s0-a2" });
+        expect(yield* rescheduler.reschedule(held)).toMatchObject({
+          _tag: "Rescheduled",
+          host: "B",
+        });
+        expect(world.launches).toHaveLength(1);
+      }),
+  );
+
+  testScoped(
+    "regression #1451: a held move never relaunches when its earlier launch is not listed",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        const held = request({ holdUnconfirmed: true });
+        yield* loseA(world);
+        world.loseNextLaunchResponse = true;
+        expect(yield* rescheduler.reschedule(held)).toMatchObject({ _tag: "Unconfirmed" });
+        // The launch has not appeared there (yet): a person's retry would relaunch on B; a held one waits.
+        world.threads.splice(
+          world.threads.findIndex((thread) => thread.host === "B"),
+          1,
+        );
+        expect(yield* rescheduler.reschedule(held)).toMatchObject({
+          _tag: "Unconfirmed",
+          host: "B",
+        });
+        expect(
+          yield* rescheduler.findMove({ clientRequestId: held.clientRequestId, owner: held.owner }),
+        ).toMatchObject({ _tag: "Unknown" });
+        expect(world.launches).toHaveLength(1);
+      }),
+  );
+
+  testScoped("regression #1451: a move never lands on a host the goal excludes", (world) =>
+    Effect.gen(function* () {
+      const rescheduler = yield* Rescheduler.Rescheduler;
+      world.reachable.C = true;
+      yield* loseA(world);
+      expect(yield* rescheduler.reschedule(request({ excludeHosts: ["B"] }))).toMatchObject({
+        _tag: "Rescheduled",
+        host: "C",
+      });
+    }),
+  );
+
   testScoped("never adopts another owner's thread on the same branch name", (world) =>
     Effect.gen(function* () {
       const rescheduler = yield* Rescheduler.Rescheduler;
@@ -590,6 +679,37 @@ describe("Rescheduler", () => {
       expect(world.launches).toHaveLength(0);
       expect(world.calls.filter((call) => call.tool === "goat_thread_interrupt")).toHaveLength(0);
     }),
+  );
+
+  testScoped(
+    "regression #1451: the attempt cap follows the goal's maxAttemptsPerWorker; manual moves keep 3",
+    (world) =>
+      Effect.gen(function* () {
+        const rescheduler = yield* Rescheduler.Rescheduler;
+        yield* loseA(world);
+        const at = (attempt: number, maxAttempts?: number) =>
+          rescheduler.reschedule(
+            request({
+              attempt,
+              ...(maxAttempts === undefined ? {} : { maxAttempts }),
+              clientRequestId: "goal:g1:s0:a" + (attempt + 1) + ":launch:" + maxAttempts,
+              workspace: {
+                baseRef: "dev",
+                branch: "goal-g1-s0-a" + (attempt + 1) + "-" + maxAttempts,
+                startFromOrigin: true,
+              },
+            }),
+          );
+        const outcomes = [
+          yield* at(1, 1),
+          yield* at(2),
+          yield* at(3),
+          yield* at(9, 10),
+          yield* at(10, 10),
+        ].map((result) => (result._tag === "Refused" ? result.reason : result._tag));
+        // The last legal successor moves; the one after it is refused.
+        expect(outcomes).toEqual(["budget", "Rescheduled", "budget", "Rescheduled", "budget"]);
+      }),
   );
 
   testScoped("regression #969: binds the caller's goatclaw ceiling on the destination", (world) =>

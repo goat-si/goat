@@ -72,6 +72,17 @@ export interface RescheduleRequest {
   readonly permissionProfileCeiling?: PermissionProfile;
   /** Brings the destination's goatclaw policy up to date before the ceiling is forwarded to it. */
   readonly prepareCeiling?: (host: string) => Effect.Effect<void>;
+  /** The attempt cap; MAX_ATTEMPTS_PER_WORKER when absent. A goal passes its maxAttemptsPerWorker. */
+  readonly maxAttempts?: number;
+  /** The destination session's ceiling, when it is higher than the moved thread's runtimeMode. */
+  readonly callerRuntimeMode?: RuntimeMode;
+  /** Hosts placement must not choose, besides this machine and the old host. */
+  readonly excludeHosts?: ReadonlyArray<string>;
+  /**
+   * A launch that may have started is never retried: it stays Unconfirmed until findMove finds its
+   * thread. Goals set this; a person's goat_thread_reschedule retries on the same host instead.
+   */
+  readonly holdUnconfirmed?: boolean;
 }
 
 export type RescheduleRefusal =
@@ -90,10 +101,28 @@ export type RescheduleResult =
       readonly branch: string;
       readonly resumedFrom: "branch" | "replica" | "base";
     }
-  | { readonly _tag: "Refused"; readonly reason: RescheduleRefusal; readonly message: string };
+  | { readonly _tag: "Refused"; readonly reason: RescheduleRefusal; readonly message: string }
+  /** A launch on host may have started; only finding its thread settles it (holdUnconfirmed). */
+  | { readonly _tag: "Unconfirmed"; readonly host: string; readonly message: string };
+
+/** What became of an earlier move under one clientRequestId. */
+export type MoveLookup =
+  | {
+      readonly _tag: "Launched";
+      readonly host: string;
+      readonly threadId: ThreadId;
+      readonly branch: string;
+    }
+  /** No claim was ever written, so no launch was sent: every move claims before it launches. */
+  | { readonly _tag: "NotLaunched" }
+  | { readonly _tag: "Unknown"; readonly host: string; readonly message: string };
 
 export interface ReschedulerShape {
   readonly reschedule: (request: RescheduleRequest) => Effect.Effect<RescheduleResult>;
+  readonly findMove: (input: {
+    readonly clientRequestId: string;
+    readonly owner: FleetOwnerKey;
+  }) => Effect.Effect<MoveLookup>;
 }
 
 /** Moves one attempt to another host (agentic-k8s.md "Resume from the branch or a replica"). */
@@ -149,6 +178,12 @@ const shortHash = (text: string) => {
 export const attemptTitle = (owner: string, clientRequestId: string, branch: string) =>
   "Resume " + branch + " · " + shortHash(owner + "\n" + clientRequestId);
 
+const unconfirmed = (host: string, message: string): RescheduleResult => ({
+  _tag: "Unconfirmed",
+  host,
+  message,
+});
+
 const refused = (reason: RescheduleRefusal, message: string): RescheduleResult => ({
   _tag: "Refused",
   reason,
@@ -196,21 +231,27 @@ const make = Effect.gen(function* () {
       writes ? recheck(request) : Effect.succeed<RuntimeMode>("approval-required"),
     );
 
-  /** Null: the list could not be read, so whether the launch happened is unknown. */
-  const findOnHost = (request: RescheduleRequest, host: string, title: string) =>
-    call(
-      request,
-      host,
-      "goat_thread_list",
-      { allProjects: true, titleContains: title, limit: 20 },
-      false,
-    ).pipe(
-      Effect.flatMap(decodeThreadList),
-      Effect.map((listed) => ({
-        threadId: listed.threads.find((entry) => entry.title === title)?.threadId ?? null,
-      })),
-      Effect.orElseSucceed(() => null),
-    );
+  /** Null: the list could not be read or names several, so whether the launch happened is unknown. */
+  const findOnHost = (host: string, title: string) =>
+    dispatch
+      .callHostTool(
+        {
+          host,
+          tool: "goat_thread_list",
+          arguments: { allProjects: true, titleContains: title, limit: 20 },
+          writes: false,
+          timeoutMs: REMOTE_TIMEOUT_MS,
+        },
+        Effect.succeed<RuntimeMode>("approval-required"),
+      )
+      .pipe(
+        Effect.flatMap(decodeThreadList),
+        Effect.map((listed) => listed.threads.filter((entry) => entry.title === title)),
+        Effect.map((matches) =>
+          matches.length > 1 ? null : { threadId: matches[0]?.threadId ?? null },
+        ),
+        Effect.orElseSucceed(() => null),
+      );
 
   const targetCwd = (request: RescheduleRequest, host: string) => {
     const project = request.project;
@@ -355,7 +396,7 @@ const make = Effect.gen(function* () {
             ].join("\n"),
             modelSelection,
             runtimeMode: request.runtimeMode,
-            callerRuntimeMode: request.runtimeMode,
+            callerRuntimeMode: request.callerRuntimeMode ?? request.runtimeMode,
             ...(ceiling === undefined ? {} : { permissionProfileCeiling: ceiling }),
           },
           recheck(request).pipe(Effect.asVoid),
@@ -394,8 +435,26 @@ const make = Effect.gen(function* () {
             clip(error.message),
         );
       }
-      // Only a launch that provably never started frees the request to place again.
-      if (error.launchMayHaveStarted === false) yield* claims.release(request.clientRequestId);
+      // Only a launch that provably never started frees the request to place again. A held request
+      // counts every launch failure the destination did not flag as having started.
+      const notStarted = request.holdUnconfirmed
+        ? error.launchMayHaveStarted !== true
+        : error.launchMayHaveStarted === false;
+      if (notStarted) yield* claims.release(request.clientRequestId);
+      if (request.holdUnconfirmed && !notStarted) {
+        yield* Effect.logWarning("fleet.reschedule.launch_unconfirmed", {
+          owner: request.owner,
+          target,
+        });
+        return unconfirmed(
+          target,
+          "Launch on " +
+            target +
+            " may have started (" +
+            clip(error.message) +
+            "); nothing else is launched until it is found.",
+        );
+      }
       yield* Effect.logWarning("fleet.reschedule.launch_failed", {
         owner: request.owner,
         target,
@@ -445,7 +504,13 @@ const make = Effect.gen(function* () {
           }
           let pinned: string | null = null;
           if (claim !== null) {
-            const found = yield* findOnHost(request, claim.targetHost, title);
+            const found = yield* findOnHost(claim.targetHost, claim.title);
+            if (found === null && request.holdUnconfirmed)
+              return unconfirmed(
+                claim.targetHost,
+                claim.targetHost +
+                  " cannot be checked for the earlier launch now; nothing else is launched until it can.",
+              );
             if (found === null) {
               return refused(
                 "no_capacity",
@@ -466,7 +531,15 @@ const make = Effect.gen(function* () {
                 resumedFrom: resumedFrom === "replica" ? "base" : resumedFrom,
               } satisfies RescheduleResult;
             }
-            // Confirmed absent: retry on the same host, where the branch name also guards a repeat.
+            // Not listed: a held request waits for the thread to appear, since the launch may still
+            // land; a person's request retries on the same host, where the branch name guards a repeat.
+            if (request.holdUnconfirmed)
+              return unconfirmed(
+                claim.targetHost,
+                "An earlier launch on " +
+                  claim.targetHost +
+                  " is not listed there; nothing else is launched for it.",
+              );
             pinned = claim.targetHost;
             // The pin outranks placement, so it must also pass the caller's allowlist.
             if (request.allowedHosts !== undefined && !request.allowedHosts.includes(pinned))
@@ -478,12 +551,20 @@ const make = Effect.gen(function* () {
               );
           }
 
-          if (request.attempt >= MAX_ATTEMPTS_PER_WORKER) {
+          const cap = request.maxAttempts ?? MAX_ATTEMPTS_PER_WORKER;
+          if (request.attempt >= cap) {
             return refused(
               "budget",
-              "Attempt " + request.attempt + " was the last of " + MAX_ATTEMPTS_PER_WORKER + ".",
+              "Attempt " + request.attempt + " was the last of " + cap + ".",
             );
           }
+          if (pinned !== null && request.excludeHosts?.includes(pinned) === true)
+            return refused(
+              "not_allowed",
+              "An earlier attempt of this move was placed on " +
+                pinned +
+                ", which the goal now excludes.",
+            );
           const blocked = yield* gate(request);
           if (blocked !== null) return blocked;
           if (resumedFrom === "replica") {
@@ -504,10 +585,10 @@ const make = Effect.gen(function* () {
             // Moved work runs on another machine over SSH, never here or back on the old host.
             hostSelector:
               requested !== null
-                ? { hosts: [requested] }
+                ? { hosts: [requested], exclude: [...(request.excludeHosts ?? [])] }
                 : allowed === undefined
-                  ? { exclude: [null] }
-                  : { hosts: allowed, exclude: [null] },
+                  ? { exclude: [null, ...(request.excludeHosts ?? [])] }
+                  : { hosts: allowed, exclude: [null, ...(request.excludeHosts ?? [])] },
             project: { host: null, projectId: null, cwd: request.project?.cwd ?? null },
             avoidHosts: [request.ref.host],
           });
@@ -541,7 +622,42 @@ const make = Effect.gen(function* () {
       )
       .pipe(Effect.provideContext(context));
 
-  return Rescheduler.of({ reschedule });
+  const findMove: ReschedulerShape["findMove"] = ({ clientRequestId, owner }) =>
+    lock
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const claim = yield* claims.get(clientRequestId);
+          if (claim === null) return { _tag: "NotLaunched" } as const;
+          if (claim.ownerKey !== owner)
+            return {
+              _tag: "Unknown",
+              host: claim.targetHost,
+              message: "The move's claim belongs to another owner.",
+            } as const;
+          const settled =
+            claim.threadId === null ? null : { threadId: ThreadId.make(claim.threadId) };
+          const found = settled ?? (yield* findOnHost(claim.targetHost, claim.title));
+          if (found === null || found.threadId === null)
+            return {
+              _tag: "Unknown",
+              host: claim.targetHost,
+              message:
+                found === null
+                  ? claim.targetHost + " cannot be checked for the move's launch now."
+                  : "The move's launch on " + claim.targetHost + " is not listed there yet.",
+            } as const;
+          if (settled === null) yield* claims.settle(clientRequestId, found.threadId);
+          return {
+            _tag: "Launched",
+            host: claim.targetHost,
+            threadId: found.threadId,
+            branch: claim.branch,
+          } as const;
+        }),
+      )
+      .pipe(Effect.provideContext(context));
+
+  return Rescheduler.of({ reschedule, findMove });
 });
 
 export const layer = Layer.effect(Rescheduler, make);
