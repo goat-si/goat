@@ -31,6 +31,25 @@ const ROLE_PASSWORD_TEXT = 40;
 // More windows than this and the scan would be slow enough to stall observation; focus is then
 // reported unknown, which the helper treats as private.
 const MAX_WINDOWS = 64;
+// AtspiStateType bits in the first state word: FOCUSED 12, SHOWING 25.
+const STATE_FOCUSED = 1 << 12;
+const STATE_SHOWING = 1 << 25;
+// GTK4 has no Collection interface, so focus is found by walking (#1607). Each node costs a
+// gdbus call or two; past this many in one probe, focus is reported unknown, which is private.
+const MAX_WALK_NODES = 256;
+
+/** The first state word of a `GetState` reply, `([uint32 N, M],)`; null for any other reply. */
+function parseStates(output: string): number | null {
+  const match = /^\(\[uint32 (\d+), (?:uint32 )?\d+\],\)$/u.exec(output.trim());
+  return match ? Number(match[1]) : null;
+}
+
+/** A gdbus failure because the object has no Collection interface, as GTK4 objects do not. */
+function lacksCollection(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  // The command line in the message names the method too; only the reply's error counts.
+  return /UnknownMethod: No such interface .org\.a11y\.atspi\.Collection./u.test(text);
+}
 
 /** `('unix:path=...',)` from org.a11y.Bus.GetAddress. */
 function parseAddress(output: string): string | null {
@@ -134,19 +153,46 @@ export function makeSecureFocusProbe(run: GdbusRunner) {
       );
       if (windows.length > MAX_WINDOWS)
         return { known: false, secure: false, windows: windows.length };
+      let walkBudget = MAX_WALK_NODES;
+      // Breadth-first through showing objects, for a toolkit without Collection: the focused
+      // object, or none. Any unreadable state or an exhausted budget throws, so focus is unknown.
+      const walkFocused = async (window: { readonly bus: string; readonly path: string }) => {
+        const queue = [window];
+        for (let node = queue.shift(); node !== undefined; node = queue.shift()) {
+          if (--walkBudget < 0) throw new Error("Too many accessible objects to find focus.");
+          const states = parseStates(
+            await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetState"),
+          );
+          if (states === null) throw new Error("AT-SPI gave no state set.");
+          if ((states & STATE_FOCUSED) !== 0) return [node];
+          if (node === window || (states & STATE_SHOWING) !== 0)
+            queue.push(
+              ...parseReferences(
+                await call(node.bus, node.path, "org.a11y.atspi.Accessible.GetChildren"),
+              ),
+            );
+        }
+        return [];
+      };
       for (const window of windows) {
-        const matches = parseReferences(
-          await call(
-            bus,
-            window.path,
-            "org.a11y.atspi.Collection.GetMatches",
-            // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
-            "(" + FOCUSED_STATES + ", 1, @a{ss} {}, 1, @ai [], 1, @as [], 1, false)",
-            "1",
-            "4",
-            "true",
-          ),
-        );
+        let matches: ReadonlyArray<{ readonly bus: string; readonly path: string }>;
+        try {
+          matches = parseReferences(
+            await call(
+              bus,
+              window.path,
+              "org.a11y.atspi.Collection.GetMatches",
+              // states ALL, attributes/roles/interfaces ALL of none, no inversion; canonical order.
+              "(" + FOCUSED_STATES + ", 1, @a{ss} {}, 1, @ai [], 1, @as [], 1, false)",
+              "1",
+              "4",
+              "true",
+            ),
+          );
+        } catch (error) {
+          if (!lacksCollection(error)) throw error;
+          matches = await walkFocused(window);
+        }
         for (const match of matches) {
           const role = parseUint32(
             await call(match.bus, match.path, "org.a11y.atspi.Accessible.GetRole"),

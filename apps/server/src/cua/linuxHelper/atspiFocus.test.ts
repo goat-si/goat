@@ -127,4 +127,69 @@ describe("makeSecureFocusProbe", () => {
       windows: 0,
     });
   });
+
+  it("finds a focused password field in a toolkit without Collection, such as GTK4 (#1607)", async () => {
+    // GTK4: window → box → (label, password entry with focus); a hidden page is never entered.
+    const states: Record<string, string> = {
+      "/w": "([uint32 1124073472, 0],)\n",
+      "/box": "([uint32 1124073472, 0],)\n",
+      "/label": "([uint32 1124073472, 0],)\n",
+      "/entry": "([uint32 1124077568, 0],)\n",
+      "/hidden": "([uint32 0, 0],)\n",
+    };
+    const children: Record<string, string> = {
+      "/w": "([(':1.9', objectpath '/box'), (':1.9', '/hidden')],)\n",
+      "/box": "([(':1.9', objectpath '/label'), (':1.9', '/entry')],)\n",
+    };
+    const gtk4 =
+      (focusedRole: number, extraChildren = 0): GdbusRunner =>
+      async (args) => {
+        const method = args[args.indexOf("--method") + 1];
+        const path = args[args.indexOf("--object-path") + 1] ?? "";
+        if (method === "org.a11y.Bus.GetAddress")
+          return "('unix:path=/run/user/1000/at-spi/bus',)\n";
+        if (method === "org.freedesktop.DBus.GetConnectionUnixProcessID") return "(uint32 10,)\n";
+        if (method === "org.a11y.atspi.Accessible.GetChildren") {
+          if (path === "/org/a11y/atspi/accessible/root")
+            return args.includes("org.a11y.atspi.Registry")
+              ? "([(':1.9', objectpath '/org/a11y/atspi/accessible/root')],)\n"
+              : "([(':1.9', objectpath '/w')],)\n";
+          if (path === "/w" && extraChildren > 0)
+            return (
+              "([" +
+              Array.from({ length: extraChildren }, (_, i) =>
+                i === 0 ? "(':1.9', objectpath '/n0')" : "(':1.9', '/n" + i + "')",
+              ).join(", ") +
+              "],)\n"
+            );
+          return children[path] ?? "(@a(so) [],)\n";
+        }
+        if (method === "org.a11y.atspi.Collection.GetMatches")
+          throw new Error(
+            "Command failed: gdbus call ... --method org.a11y.atspi.Collection.GetMatches\nError: GDBus.Error:org.freedesktop.DBus.Error.UnknownMethod: No such interface “org.a11y.atspi.Collection” on object at path " +
+              path,
+          );
+        if (method === "org.a11y.atspi.Accessible.GetState")
+          return states[path] ?? "([uint32 1124073472, 0],)\n";
+        if (method === "org.a11y.atspi.Accessible.GetRole")
+          return "(uint32 " + (path === "/entry" ? focusedRole : 29) + ",)\n";
+        throw new Error("unexpected " + method);
+      };
+    expect(await makeSecureFocusProbe(gtk4(40))(10)).toEqual({
+      known: true,
+      secure: true,
+      windows: 1,
+    });
+    expect(await makeSecureFocusProbe(gtk4(61))(10)).toEqual({
+      known: true,
+      secure: false,
+      windows: 1,
+    });
+    // A tree too large to walk in time stays unknown, which is private.
+    expect(await makeSecureFocusProbe(gtk4(40, 300))(10)).toEqual({
+      known: false,
+      secure: false,
+      windows: 0,
+    });
+  });
 });
