@@ -271,7 +271,22 @@ jobs:
           # The executable bundles the server again, so it needs the same stamp
           # as release.yml's JS bundle.
           GOAT_TELEMETRY_CHANNEL: ${{ github.repository == 'pingdotgg/t3code' && inputs.release_channel || 'dev' }}
-        run: node apps/server/scripts/cli.ts build-exe --verbose ${{ inputs.platform == 'win' && format('--target win-{0}', inputs.arch) || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Commits before the Node 26 pin declare a Node 24 range, which cannot run
+          # --build-sea. Stable promotion rebuilds such commits, so they take the exact
+          # pin from this workflow's revision instead.
+          pin="$(node -p 'require("./package.json").engines.node')"
+          if [[ ! "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            pinned="$RUNNER_TEMP/workflow-package.json"
+            curl -fsSL --retry 3 -o "$pinned" \
+              -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/contents/package.json?ref=$GITHUB_WORKFLOW_SHA"
+            VP_NODE_VERSION="$(node -p 'require(process.argv[1]).engines.node' "$pinned")"
+            export VP_NODE_VERSION
+          fi
+          node apps/server/scripts/cli.ts build-exe --verbose ${{ inputs.platform == 'win' && format('--target win-{0}', inputs.arch) || '' }}
 
       - name: Import macOS signing certificate for the CLI archive
         if: inputs.cli_archive && inputs.platform == 'mac'
