@@ -186,7 +186,6 @@ const printedBy = <E>(program: Effect.Effect<unknown, E>) =>
     return printed.join("\n");
   });
 
-// Synthetic canaries; none of them is a real credential.
 // Provider prefixes are joined at runtime so push protection does not take these synthetic
 // canaries for real credentials.
 const xox = "xox";
@@ -194,6 +193,7 @@ const sk = "sk";
 const aiza = "AIza";
 const pemBegin = "-----BEGIN";
 
+// Synthetic canaries; none of them is a real credential.
 const canaryJwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJjYW5hcnktand0In0.Y2FuYXJ5LWp3dC1zaWduYXR1cmU";
 // A valid JWT whose header has spaces, so it does not start with "eyJ".
 const spacedJwt =
