@@ -33,7 +33,7 @@ git clone --filter=blob:none --no-checkout --no-tags https://github.com/trycua/c
 ## 1. 스캔
 
 ```bash
-"$GOAT/devlog/_chase/scan.sh" --cua   # GOAT pin 선언, upstream·포크 최신 태그, 20 레지스트리 검사
+(cd "$GOAT" && devlog/_chase/scan.sh --cua)   # GOAT pin 선언, upstream·포크 최신 태그, 20 레지스트리 검사
 VER=0.38.0                    # 대상 upstream 버전
 git -C "$CUA_UPSTREAM" fetch --no-tags origin main "refs/tags/cua-driver-rs-v$VER:refs/tags/cua-driver-rs-v$VER"
 UP=$(git -C "$CUA_UPSTREAM" rev-parse "cua-driver-rs-v$VER^{commit}")
