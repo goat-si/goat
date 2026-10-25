@@ -101,6 +101,20 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       block,
       message: cuaAgentBlockMessage(block),
     } satisfies ComputerUseRequestResult;
+  if (wanted !== undefined) {
+    const listed = yield* cua.value.listedApps;
+    if (Option.isSome(listed)) {
+      const known = new Set(listed.value.map((app) => app.toLowerCase()));
+      const unknownApps = wanted.filter((app) => !known.has(app.toLowerCase()));
+      if (unknownApps.length > 0)
+        return {
+          kind: "refused",
+          reason: "unknown_app",
+          unknownApps,
+          message: `This host does not list these app ids: ${unknownApps.join(", ")}. Apps must be named by the id list_apps reports: the bundle id on macOS, or the listed name (the executable name on Windows) elsewhere. A window title is not an app id. Call list_apps and ask again with its ids; if the app is not open, open it first.`,
+        } satisfies ComputerUseRequestResult;
+    }
+  }
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   // Admissions to different apps hold at once; an app, or the whole screen, is one thread's.
   const held = yield* leases.holder(input.threadId, input.request.apps);

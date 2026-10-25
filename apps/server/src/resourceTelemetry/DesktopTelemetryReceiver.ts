@@ -6,6 +6,7 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
   DesktopHostTelemetryMessage,
   type DesktopCuaWatch,
+  type DesktopCuaAppsReport,
   type DesktopCuaDriverReport,
   type DesktopCuaFrame,
   type DesktopCuaFrames,
@@ -196,6 +197,10 @@ export class DesktopTelemetryReceiver extends Context.Service<
       never,
       Scope.Scope
     >;
+    readonly cuaApps: Stream.Stream<DesktopCuaAppsReport>;
+    readonly requestCuaApps: (
+      requestId: string,
+    ) => Effect.Effect<void, DesktopTelemetryControlError | DesktopTelemetryDescriptorUnavailable>;
     readonly cuaReports: Stream.Stream<DesktopCuaDriverReport>;
     /**
      * The helper's safety reports: a person's input, a secret field, and its readiness with what
@@ -407,6 +412,7 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   const healthChanges = yield* PubSub.sliding<DesktopTelemetryReceiverHealth>(4);
   const latestUpdateReport = yield* Ref.make(Option.none<DesktopUpdateStatusReport>());
   const updateReportChanges = yield* PubSub.sliding<DesktopUpdateStatusReport>(16);
+  const cuaApps = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const cuaReports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
   // Every report counts: a dropped private-mode change would leave agents watching a secret.
   const cuaSafety = yield* PubSub.unbounded<DesktopCuaSafetyReport>();
@@ -629,6 +635,13 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
           );
         }
 
+        if (message.type === "cuaApps") {
+          return recordContact.pipe(
+            Effect.andThen(PubSub.publish(cuaApps, message)),
+            Effect.asVoid,
+          );
+        }
+
         if (message.type === "cuaDriverReport") {
           return recordContact.pipe(
             Effect.andThen(PubSub.publish(cuaReports, message)),
@@ -759,6 +772,11 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
   }
 
   return DesktopTelemetryReceiver.of({
+    cuaApps: Stream.fromPubSub(cuaApps),
+    requestCuaApps: (requestId) =>
+      config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
+        ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
+        : sendControlMessage({ version: 1, type: "cuaAppsRequest", requestId }),
     cuaReports: Stream.fromPubSub(cuaReports),
     cuaSafety: Stream.fromPubSub(cuaSafety),
     cuaReadiness: Ref.get(cuaReadiness),
@@ -852,6 +870,9 @@ export const layerTest = (
       requestDesktopUpdate: () => Effect.void,
       commitDesktopUpdate: () => Effect.void,
       cancelDesktopUpdate: () => Effect.void,
+      cuaApps: Stream.empty,
+      requestCuaApps: () =>
+        Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: "test" })),
       cuaReports: Stream.empty,
       cuaSafety: overrides.cuaSafety ?? Stream.empty,
       cuaReadiness: Effect.succeedNone,

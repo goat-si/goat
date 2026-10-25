@@ -128,6 +128,7 @@ const fakeDriver = (input: {
       calls.acquire++;
       return input.running ? Option.some(mcp) : Option.none();
     }),
+    listedApps: Effect.succeedNone,
     lastFailure: Effect.succeed(Option.fromUndefinedOr(input.failure)),
     block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: input.running }),
