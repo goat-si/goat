@@ -7191,16 +7191,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // Codex ignores resume overrides on a thread a client still holds, so a changed computer
             // use driver (a new control after Stop, #1564) needs a cold reload. A thread with a turn
             // or background work still running keeps its subscription; the next idle turn reloads.
-            // A subagent turn counts through its root, which may already have completed.
+            // A subagent turn counts through its root, which may already have completed. A stale
+            // record keeps the reload deferred: reloading could cut off work that is still live.
             const ownedHere = (context: ActiveCodexTurnContext) =>
               approvalOwnerCodexTurn(context).owner.providerThread.id ===
               turnInput.providerThread.id;
+            const retainedWorkHere = Effect.gen(function* () {
+              const contexts = [
+                ...(yield* Ref.get(activeTurns)).values(),
+                ...(yield* Ref.get(settledTurns)).values(),
+              ];
+              for (const context of contexts) {
+                if (!ownedHere(context)) continue;
+                if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
+              }
+              return false;
+            });
             const busy =
               Array.from((yield* Ref.get(activeTurns)).values()).some(ownedHere) ||
               Array.from((yield* Ref.get(subagentThreads)).values()).some(
                 (subagent) =>
-                  subagent.task.status === "running" && ownedHere(subagent.parentContext),
+                  (subagent.task.status === "running" || subagent.task.status === "pending") &&
+                  ownedHere(subagent.parentContext),
               ) ||
+              (yield* retainedWorkHere) ||
               (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(

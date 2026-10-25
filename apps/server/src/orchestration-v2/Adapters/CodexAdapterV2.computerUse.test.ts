@@ -490,4 +490,116 @@ describe("Codex computer use attachment", () => {
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
+  it.effect.each(["initializing", "background-command"] as const)(
+    "keeps the reload deferred for a completed turn's %s subagent (#1564)",
+    (mode) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = `cua-child-${mode}`;
+          const child = `${root}-agent`;
+          const f = fixture(root);
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          yield* f.turnStart(3, 1, true);
+          const childTurn = (status: "inProgress" | "completed") => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method: status === "inProgress" ? "turn/started" : "turn/completed",
+              params: { threadId: child, turn: makeCodexReplayTurn({ id: "child-turn", status }) },
+            },
+          });
+          if (mode === "initializing") {
+            // Codex reports the spawned child as still initializing, before its first turn.
+            f.entries.push({
+              type: "emit_inbound",
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: root,
+                  turnId: "turn-1",
+                  item: {
+                    type: "collabAgentToolCall",
+                    id: "spawn-initializing-child",
+                    tool: "spawnAgent",
+                    status: "completed",
+                    senderThreadId: root,
+                    receiverThreadIds: [child],
+                    agentsStates: { [child]: { status: "pendingInit", message: null } },
+                  },
+                },
+              },
+            });
+          } else {
+            // The child's turn completes but leaves a background command running.
+            f.entries.push(
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "item/completed",
+                  params: {
+                    item: {
+                      type: "subAgentActivity",
+                      id: "spawn-background-child",
+                      kind: "started",
+                      agentThreadId: child,
+                      agentPath: "/root/child",
+                    },
+                    threadId: root,
+                    turnId: "turn-1",
+                    completedAtMs: 1782622441000,
+                  },
+                },
+              },
+              childTurn("inProgress"),
+              {
+                type: "emit_inbound",
+                frame: {
+                  method: "item/started",
+                  params: {
+                    threadId: child,
+                    turnId: "child-turn",
+                    startedAtMs: 1782622440500,
+                    item: {
+                      type: "commandExecution",
+                      id: "child-background-command",
+                      command: "sleep 20",
+                      cwd: "/workspace",
+                      processId: "4242",
+                      source: "unifiedExecStartup",
+                      status: "inProgress",
+                      commandActions: [{ type: "unknown", command: "sleep 20" }],
+                      aggregatedOutput: null,
+                      exitCode: null,
+                      durationMs: null,
+                    },
+                  },
+                },
+              },
+              childTurn("completed"),
+            );
+          }
+          f.turnCompleted(1);
+          // Turn 2 under a new control: the child's work may still be live, so nothing reloads.
+          yield* f.turnStart(4, 2, true);
+          f.turnCompleted(2);
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          if (mode === "background-command") yield* replay.childDone;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(2);
+          yield* replay.terminal;
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });
