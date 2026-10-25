@@ -471,13 +471,15 @@ jobs:
         if: env.REAL_RUN != 'true'
         uses: actions/checkout@v6
         with:
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            /package.json
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
         if: env.REAL_RUN != 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
-          # Cone-mode sparse checkout keeps the root files, package.json among them.
           node-version-file: package.json
           cache: false
           run-install: false
