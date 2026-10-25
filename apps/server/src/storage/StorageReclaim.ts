@@ -282,7 +282,7 @@ const make = Effect.gen(function* () {
             : nested === null
               ? "it could not be searched for git checkouts inside it"
               : "it holds another git checkout, whose work its own git status cannot see";
-        });
+        }).pipe(Effect.provideContext(context));
         const result = yield* worktrees
           .removeAbandoned({
             path: item.path,

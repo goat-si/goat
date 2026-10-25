@@ -64,6 +64,7 @@ const fromClient: McpInvocationScope = {
 const withConsent = <A, E>(
   body: (input: {
     readonly consent: Effect.Success<typeof makeStorageConsent>;
+    readonly inbox: DecisionInbox.DecisionInbox["Service"];
     readonly respond: (
       handoffId: HandoffSummary["handoffId"],
       action: "completed" | "declined",
@@ -75,6 +76,7 @@ const withConsent = <A, E>(
       const consent = yield* makeStorageConsent;
       return yield* body({
         consent,
+        inbox: yield* DecisionInbox.DecisionInbox,
         respond: (handoffId, action) => handoffs.respond({ threadId, handoffId, action }, person),
       });
     }).pipe(
@@ -166,9 +168,8 @@ it("the person is shown every path an approval covers, however many", () => {
 });
 
 it.effect("a decision approves a deletion only for a person who may delete GOAT storage", () =>
-  withConsent(({ consent }) =>
+  withConsent(({ consent, inbox }) =>
     Effect.gen(function* () {
-      const inbox = yield* DecisionInbox.DecisionInbox;
       const request = yield* consent.ask(fromClient, asked, listed);
       if (request.kind !== "decision") return expect.unreachable("a client is asked by a decision");
       // An owner who may operate and change settings, but not maintain this machine.
