@@ -17,6 +17,7 @@ import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
 import * as Client from "./MemoryHubClient.ts";
@@ -27,6 +28,7 @@ import * as Hold from "./MemoryGenerationHold.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import { memoryOperationDigest } from "./MemoryDecider.ts";
 import { redacted, scanMemoryValue } from "./MemorySecretScanner.ts";
+import { failureCode, holdClass, transient } from "./MemorySyncErrors.ts";
 import * as OwnerSource from "./MemoryOwnerSourceReader.ts";
 
 type Error = Hub.MemoryHubServiceError;
@@ -151,35 +153,7 @@ const decodeResolveInput = Schema.decodeUnknownEffect(M.ResolveMemoryConflictInp
 const decodeLineagePayload = Schema.decodeUnknownEffect(M.MemoryPayload);
 const decodeSubmission = Schema.decodeUnknownEffect(M.MemoryHubApplyResolutionInput);
 const encodePush = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubPushInput));
-const failureCode = (e: Error): M.MemoryFailureCode =>
-  e._tag === "MemoryHubUnauthorizedError" || e._tag === "MemoryHubForbiddenError"
-    ? "route_unavailable"
-    : e._tag === "MemoryStorageError"
-      ? "storage_failed"
-      : e._tag === "MemoryCapacityError"
-        ? "capacity_exceeded"
-        : e.code;
-const holdClass = (e: Error): Store.MemoryHoldClass =>
-  e._tag === "MemoryHubUnauthorizedError" ||
-  e._tag === "MemoryHubForbiddenError" ||
-  failureCode(e) === "route_unavailable"
-    ? "authorization"
-    : ["identity_mismatch", "space_mismatch"].includes(failureCode(e))
-      ? "identity"
-      : [
-            "unsupported_protocol",
-            "unsupported_operation",
-            "invalid_output",
-            "invalid_cursor",
-          ].includes(failureCode(e))
-        ? "protocol"
-        : "availability";
 const HELD_CLAIM_DEFER_MS = 60_000;
-const transient = (e: Error) =>
-  e._tag === "MemoryStorageError" ||
-  (e._tag === "MemoryHubError" &&
-    ["unavailable", "storage_failed", "cursor_expired"].includes(e.code));
-
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const store = yield* Store.MemoryStore;
@@ -189,6 +163,7 @@ const make = Effect.gen(function* () {
   const settings = yield* Settings.ServerSettingsService;
   const committedSettings = yield* Settings.MemoryHubCommittedSettings;
   const runtime = yield* MemorySyncRuntime;
+  const automationHold = yield* AutomationHold.AutomationHold;
   const quota = yield* Quota.MemoryQuotaService;
   const generation = yield* Generation.TextGeneration;
   const hold = yield* Hold.shared;
@@ -300,6 +275,7 @@ const make = Effect.gen(function* () {
     (effect) => Effect.ignore(effect),
   );
   const route = Effect.fnUntraced(function* () {
+    if ((yield* automationHold.current) !== null) return null;
     const s = yield* readSettings;
     if (s.memoryHub.mode === "disabled") return null;
     const principal =
@@ -2142,6 +2118,10 @@ const make = Effect.gen(function* () {
         }
       }).pipe(Effect.forkIn(scope)),
     );
+    if ((yield* automationHold.current) !== null)
+      background.push(
+        yield* automationHold.awaitRelease.pipe(Effect.andThen(guardedSync), Effect.forkIn(scope)),
+      );
     yield* guardedSync;
   });
   const readLocalReadiness = Effect.fnUntraced(function* () {

@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 import {
   CommandId,
   MessageId,
@@ -33,6 +34,7 @@ export const make = Effect.gen(function* () {
     function* (threadId: ThreadId, runId: RunId) {
       // Loops once after the wait: the thread may have moved on.
       while (true) {
+        if (yield* AutomationHold.isHeld) return;
         const current = yield* settings.getSettings;
         const records = yield* projections.getThreadRecords(
           threadId,

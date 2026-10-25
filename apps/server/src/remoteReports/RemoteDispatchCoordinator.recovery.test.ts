@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 import { assert, it } from "@effect/vitest";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -83,6 +84,27 @@ const test = <E>(
       }).pipe(Effect.provide(f.layer));
     }).pipe(Effect.provide(database)),
   );
+
+it.effect("held: no lost launch resolution sends; release: the timer fences it", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    yield* f.seedLost(LONG_AGO);
+    f.answer(Effect.succeed({ _tag: "fenced" }));
+    yield* Effect.gen(function* () {
+      const coordinator = yield* Coordinator.RemoteDispatchCoordinator;
+      yield* TestClock.adjust("1 minute");
+      assert.lengthOf(f.asked, 0);
+      yield* hold.release;
+      yield* TestClock.adjust("1 minute");
+      assert.lengthOf(f.asked, 1);
+      assert.strictEqual((yield* coordinator.get(id))?.state, "cancelled");
+    }).pipe(Effect.provide(f.layer), Effect.provideService(AutomationHold.AutomationHold, hold));
+  }).pipe(Effect.provide(database)),
+);
 
 test("a lost launch the destination bound and started is rebound with its run, never relaunched", (f, coordinator) =>
   Effect.gen(function* () {

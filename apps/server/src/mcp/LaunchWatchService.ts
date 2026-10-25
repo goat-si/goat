@@ -1,3 +1,5 @@
+import { describe, lastText } from "./launchWatchText.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
 import { admitLaunch } from "./pressureAdmission.ts";
 import {
@@ -276,15 +278,9 @@ const decodeRequestIds = Schema.decodeUnknownEffect(
 );
 const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 
-const describe = (error: unknown) =>
-  error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
-
-const lastText = (texts: ReadonlyArray<string | null | undefined>) =>
-  texts.findLast((text): text is string => typeof text === "string" && text.trim().length > 0) ??
-  null;
-
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const config = yield* ServerConfig.ServerConfig;
@@ -848,7 +844,10 @@ export const make = Effect.gen(function* () {
         fiber: undefined,
       };
       followers.set(watch.id, slot);
-      slot.fiber = yield* follow(watch.id, watch.incarnation).pipe(Effect.forkIn(layerScope));
+      slot.fiber = yield* hold.awaitRelease.pipe(
+        Effect.andThen(follow(watch.id, watch.incarnation)),
+        Effect.forkIn(layerScope),
+      );
     });
 
   type Plan =
@@ -1601,6 +1600,7 @@ export const make = Effect.gen(function* () {
 
   const interruptRetired = Effect.fn("LaunchWatchService.interruptRetired")(
     function* () {
+      yield* hold.awaitRelease;
       for (const snapshot of watches.values()) {
         const retired = snapshot.recovery;
         if (

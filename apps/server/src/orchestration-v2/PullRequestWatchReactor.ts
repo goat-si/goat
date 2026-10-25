@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 import {
   CommandId,
   type OrchestrationV2Notification,
@@ -200,6 +201,7 @@ export class PullRequestWatchReactor extends Context.Service<
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const pullRequests = yield* PullRequestService.PullRequestService;
@@ -681,7 +683,11 @@ export const make = Effect.gen(function* () {
 
   const start: PullRequestWatchReactor["Service"]["start"] = () =>
     forkParked(
-      sweep.pipe(Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)), Effect.asVoid),
+      hold.awaitRelease.pipe(
+        Effect.andThen(
+          sweep.pipe(Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)), Effect.asVoid),
+        ),
+      ),
     );
 
   return { start, sweep } satisfies PullRequestWatchReactor["Service"];

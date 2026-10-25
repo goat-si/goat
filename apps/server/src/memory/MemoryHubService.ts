@@ -12,6 +12,7 @@ import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Environment from "../environment/ServerEnvironment.ts";
+import * as AutomationHold from "../automationHold.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
@@ -114,11 +115,14 @@ export const make = Effect.gen(function* () {
   const activity = yield* MemoryHubActivity;
   const quota = yield* Quota.MemoryQuotaService;
   const configuration = yield* MemoryHubConfiguration;
+  const automationHold = yield* AutomationHold.AutomationHold;
   const decode = <A, I>(schema: Schema.Codec<A, I>, value: unknown) =>
     Schema.decodeUnknownEffect(schema)(value, { onExcessProperty: "error" }).pipe(
       Effect.mapError(() => new M.MemoryHubError({ code: "invalid_output" })),
     );
   const checkConfiguration = Effect.fnUntraced(function* (principal: M.MemoryHubPrincipal) {
+    if ((yield* automationHold.current) !== null)
+      return yield* new M.MemoryHubError({ code: "hub_disabled" });
     const hub = yield* configuration.read;
     if (!hub) return yield* new M.MemoryHubError({ code: "hub_disabled" });
     if (hub.memorySpaceId !== principal.memorySpaceId)

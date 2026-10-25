@@ -1,3 +1,4 @@
+import * as AutomationHold from "../automationHold.ts";
 import {
   CommandId,
   MessageId,
@@ -136,6 +137,7 @@ export class QuestionEscalationService extends Context.Service<
 >()("goat/orchestration-v2/QuestionEscalationService") {}
 
 const make = Effect.gen(function* () {
+  const hold = yield* AutomationHold.AutomationHold;
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const sink = yield* EventSink.EventSinkV2;
@@ -430,7 +432,12 @@ const make = Effect.gen(function* () {
     Effect.suspend(() => {
       if (started) return Effect.void;
       started = true;
-      return forkParked(listenAndRecover.pipe(Effect.catchCause(logFailure("subscription", {}))));
+      return forkParked(
+        hold.awaitRelease.pipe(
+          Effect.andThen(listenAndRecover),
+          Effect.catchCause(logFailure("subscription", {})),
+        ),
+      );
     });
   return QuestionEscalationService.of({
     start,
