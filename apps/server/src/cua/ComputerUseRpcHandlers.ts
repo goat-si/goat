@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseStatusChanges from "./ComputerUseStatusChanges.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
@@ -102,14 +103,23 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
   const receiver = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
+  const connections = yield* Effect.serviceOption(
+    ComputerUseAgentConnections.ComputerUseAgentConnections,
+  );
 
   return {
     [WS_METHODS.computerUseStatusChanges]: (_input: {}) =>
-      ComputerUseStatusChanges.statusChanges(receiver),
+      ComputerUseStatusChanges.statusChanges(receiver, connections),
     [WS_METHODS.serverCheckComputerUse]: (_input: {}) =>
       Option.isNone(driver)
         ? Effect.succeed({ platform: "other", running: false } as const)
-        : driver.value.status,
+        : Option.isNone(connections)
+          ? driver.value.status
+          : Effect.zipWith(
+              driver.value.status,
+              connections.value.failure,
+              ComputerUseAgentConnections.withAgentConnections,
+            ),
     [WS_METHODS.computerUseStop]: (input: { readonly threadId: ThreadId }) =>
       stopComputerUse(leases, handoffs, sessionId, input.threadId).pipe(
         Effect.map(({ stopped }) => ({ stopped })),

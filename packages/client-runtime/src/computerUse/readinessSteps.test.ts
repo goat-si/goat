@@ -484,3 +484,19 @@ it("keeps the accessibility wording on macOS and Windows when the tree is unread
     expect(lines.join(" ")).not.toContain("agents cannot read app controls");
   }
 });
+
+// A host whose agent connections keep failing reports it as the tools' failure (the server's
+// withAgentConnections), so Settings, the readiness card and mobile all show it as blocked.
+it("agent connections that keep failing block the tools step with the host's reason", () => {
+  const failing = computerUseReadinessSteps({
+    readiness: ready,
+    platform: "darwin",
+    tools: "unavailable",
+    failure:
+      "GOAT Computer Use refused the agent connections on this host: it did not trust the process that launched it. Restarting the agent session will not fix it; GOAT needs an update.",
+  });
+  expect(failing.steps[3]?.state).toBe("blocked");
+  expect(failing.steps[3]?.detail.join(" ")).toContain("will not fix it");
+  expect(failing.ready).toBe(false);
+  expect(failing.startsWithNextTurn).toBe(false);
+});

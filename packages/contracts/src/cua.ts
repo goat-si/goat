@@ -224,11 +224,41 @@ export const ComputerUseLeaseCursor = Schema.Struct({
 });
 export type ComputerUseLeaseCursor = typeof ComputerUseLeaseCursor.Type;
 
+/**
+ * Why a proxy's driver child ended on its own (the lease proxy's driverExitReason): it refused
+ * the process that launched it (exit 77), cannot run on this host (64, 78, 79), or stopped or
+ * restarted.
+ */
+export const ComputerUseDriverEndReason = Schema.Literals([
+  "helper_refused",
+  "helper_unsupported",
+  "helper_restarted",
+]);
+export type ComputerUseDriverEndReason = typeof ComputerUseDriverEndReason.Type;
+
+/**
+ * Proxy -> server: the driver this connection started ended without the proxy stopping it, or
+ * answered its first handshake (`ended: false`). The server counts the host's consecutive endings
+ * so agents and Settings stop calling computer use available while every connection fails.
+ */
+export const ComputerUseLeaseDriverEnded = Schema.Struct({
+  // A fact about the host's helper, not one control: thread-mode proxies report it as well.
+  driverEnded: Schema.Union([
+    Schema.Struct({
+      reason: ComputerUseDriverEndReason,
+      exitCode: Schema.optionalKey(Schema.Int),
+    }),
+    Schema.Literal(false),
+  ]),
+});
+export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
+
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
   ComputerUseLeaseCursor,
+  ComputerUseLeaseDriverEnded,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 
@@ -390,6 +420,17 @@ export const CuaHostStatus = Schema.Struct({
   signals: ForwardCompatibleOptional(ComputerUseCapabilities.fields.signals),
   /** Decided by the server's setting and running driver, never by the helper. */
   tools: ForwardCompatibleOptional(CuaToolsAvailability),
+  /**
+   * Agent connections on this host whose driver ended before working, in a row, with the last
+   * reason; absent once one works. Older hosts omit it.
+   */
+  agentConnections: ForwardCompatibleOptional(
+    Schema.Struct({
+      failing: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+      reason: ComputerUseDriverEndReason,
+      message: Schema.String,
+    }),
+  ),
 });
 export type CuaHostStatus = typeof CuaHostStatus.Type;
 

@@ -28,6 +28,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { threadLeaseUpdates } from "./ComputerUseLeaseThreadStream.ts";
 
@@ -144,8 +145,18 @@ export const reportLayer = HttpRouter.add(
     if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
     const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
     if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
     const value = report.value;
+    if ("driverEnded" in value) {
+      const connections = yield* Effect.serviceOption(
+        ComputerUseAgentConnections.ComputerUseAgentConnections,
+      );
+      if (Option.isSome(connections))
+        yield* connections.value.report(
+          value.driverEnded === false ? false : { reason: value.driverEnded.reason },
+        );
+      return HttpServerResponse.empty({ status: 204 });
+    }
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
     if ("humanInput" in value) {
       const outcome = yield* leases.humanInput(
         threadId,

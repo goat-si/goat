@@ -33,6 +33,7 @@ import { threadLeaseUpdateLines } from "./ComputerUseLeaseProxyThreadProtocol.ts
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
@@ -153,12 +154,24 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           overlay,
         );
         drivers.add(child);
-        child.once("exit", () => drivers.delete(child));
-        return child;
+        const watch = makeDriverWatch();
+        // Fire and forget: a lost report only delays the host's record, never this connection.
+        const send = (body: DriverWatchReport | undefined) =>
+          body === undefined ? undefined : void report(url, authorization, body);
+        child.once("exit", (code) => {
+          drivers.delete(child);
+          send(watch.exited(code ?? undefined));
+        });
+        child.stdout.once("data", () => send(watch.answered()));
+        return { child, watch };
       }),
-      (child) => Effect.sync(() => killDriverGroup(platform, child, "SIGTERM")),
+      ({ child, watch }) =>
+        Effect.sync(() => {
+          watch.stopping();
+          killDriverGroup(platform, child, "SIGTERM");
+        }),
     ).pipe(
-      Effect.flatMap((child) =>
+      Effect.flatMap(({ child, watch }) =>
         Effect.gen(function* () {
           // Ownership is released only after both the process and its pipes close.
           const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
@@ -197,6 +210,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               Effect.map(Option.getOrUndefined),
             ),
             kill: Effect.promise(() => {
+              watch.stopping();
               child.stdin.end();
               killDriverGroup(platform, child, "SIGKILL");
               return closed;

@@ -147,6 +147,11 @@ refuses it; switch **GOAT Computer Use** off and on again in **Privacy & Securit
 turn a permission off in **System Settings → Privacy & Security**, the setting
 shows it as off; choose **Set up** to allow it again.
 
+If agent connections to computer use keep failing on a computer even though its
+checks pass, the setting shows why, and agents are told computer use is
+unavailable there instead of retrying. It clears as soon as an agent connection
+works again.
+
 From another computer or the mobile app, the switch turns computer use on, but
 someone at that Mac still has to grant both permissions there. A GOAT server
 started from a terminal or a service cannot use computer use on a Mac, because

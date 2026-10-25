@@ -6,6 +6,7 @@ import {
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as Effect from "effect/Effect";
 
+import { makeHostConditions } from "../../hostConditions.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as Handoffs from "../../../handoffs/Handoffs.ts";
@@ -32,7 +33,7 @@ export const layer = McpToolAccess.toLayer(
     );
 
     const permissions = yield* Profiles.PermissionProfiles;
-    const describe = makeDescribe(dispatch, permissions);
+    const describe = makeDescribe(dispatch, permissions, yield* makeHostConditions);
     const describeOnHost = makeHostDescribe(dispatch, permissions);
 
     const call = Effect.fn("AgentSurface.call")(function* (input: {

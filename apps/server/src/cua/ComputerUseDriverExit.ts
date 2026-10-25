@@ -3,6 +3,7 @@
  *
  * @module ComputerUseDriverExit
  */
+import type { ComputerUseDriverEndReason } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 import type { LeaseProxyDriver } from "./ComputerUseLeaseProxyOptions.ts";
@@ -21,13 +22,13 @@ const HELPER_UNSUPPORTED_EXITS: ReadonlySet<number> = new Set([64, 78, 79]);
  */
 export const driverExitReason = (
   driver: LeaseProxyDriver,
-): Effect.Effect<"helper_refused" | "helper_unsupported" | "helper_restarted"> =>
-  (driver.exitCode ?? Effect.succeed(undefined)).pipe(
-    Effect.map((code) =>
-      code === HELPER_REFUSED_EXIT
-        ? "helper_refused"
-        : code !== undefined && HELPER_UNSUPPORTED_EXITS.has(code)
-          ? "helper_unsupported"
-          : "helper_restarted",
-    ),
-  );
+): Effect.Effect<ComputerUseDriverEndReason> =>
+  (driver.exitCode ?? Effect.succeed(undefined)).pipe(Effect.map(exitReason));
+
+/** The reason an exit code gives; see driverExitReason. */
+export const exitReason = (code: number | undefined): ComputerUseDriverEndReason =>
+  code === HELPER_REFUSED_EXIT
+    ? "helper_refused"
+    : code !== undefined && HELPER_UNSUPPORTED_EXITS.has(code)
+      ? "helper_unsupported"
+      : "helper_restarted";

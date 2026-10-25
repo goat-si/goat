@@ -14,7 +14,12 @@ import * as Schema from "effect/Schema";
 
 import type * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import { availability, type CallerProfile, callerProfile } from "../../toolAvailability.ts";
+import {
+  availability,
+  type CallerProfile,
+  callerProfile,
+  type HostConditions,
+} from "../../toolAvailability.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
 import { hostOfCursor, THIS_BUILD } from "./hostDescribe.ts";
 import { type Match, nearestPaths, searchEntries } from "./search.ts";
@@ -47,6 +52,8 @@ const SEARCHED_FIELDS = ["path", "name", "summary", "description", "guide"] as c
 interface Caller {
   readonly scope: McpInvocationContext.McpInvocationScope;
   readonly profile: CallerProfile | undefined;
+  /** What this host knows now, read once per describe. */
+  readonly host: HostConditions;
 }
 type Detail = "names" | "summary" | "full";
 
@@ -69,12 +76,13 @@ const refuse = (message: string) =>
 export const makeDescribe = (
   dispatch: ToolDispatch["Service"],
   permissions: Profiles.PermissionProfiles["Service"],
+  hostConditions: Effect.Effect<HostConditions> = Effect.succeed({}),
 ) => {
   const served = (entry: AgentSurfaceRegistryEntry) =>
     dispatch.served(listedToolName(entry)) !== undefined;
 
   const availableTo = (entry: AgentSurfaceRegistryEntry, caller: Caller, isServed: boolean) =>
-    availability(entry, caller.scope, isServed, caller.profile);
+    availability(entry, caller.scope, isServed, caller.profile, caller.host);
 
   const listed = (entry: AgentSurfaceRegistryEntry, caller: Caller, detail: Detail) =>
     detail === "names"
@@ -201,6 +209,7 @@ export const makeDescribe = (
         input.path === undefined && input.query === undefined
           ? undefined
           : yield* callerProfile(permissions, scope),
+      host: yield* hostConditions,
     };
     if (input.detail === "full" && (input.query !== undefined || input.path === undefined))
       return yield* refuse(
