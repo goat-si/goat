@@ -657,3 +657,55 @@ it.effect("a revocation during a positive attachment probe still refuses the cal
     expect((yield* registry.explainRefusal!(token)).reason).toBe("revoked");
   }),
 );
+
+it.effect(
+  "refuses the header a held Codex thread keeps until its deferred reload, from the moment authority changes (#1569)",
+  () =>
+    Effect.gen(function* () {
+      const registry = yield* makeRegistry(() => 1_000);
+      const threadId = ThreadId.make("thread-deferred-reload");
+      const policy = { grant: "read" as const, policyEpoch: 1 };
+      const request = {
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: new Set(["memory"] as const),
+        grantedScopes: ["memory:read"] as const,
+        memoryPolicy: policy,
+        readCurrentPolicy: () => Effect.succeed(policy),
+        isLiveCaller: Effect.succeed(true),
+      };
+      const list = (scope: McpInvocationContext.McpInvocationScope) =>
+        MemoryFixture.call(
+          "memory_list",
+          { memorySpaceId: MemoryFixture.space, includeQuarantined: false },
+          scope,
+        );
+      const first = yield* registry.issue(request);
+      const header = first.config.authorizationHeader.replace(/^Bearer\s+/, "");
+      const held = yield* registry.resolve(header);
+      expect((yield* list(held!)).result.isError).toBe(false);
+
+      // Memory withdrawn: GOAT renews under the same token, and the old header that Codex keeps
+      // sending, with memory tools still offered, can no longer run memory operations.
+      yield* registry.issue({
+        ...request,
+        grantedScopes: [],
+        readCurrentPolicy: () => Effect.succeed(undefined),
+        renew: {
+          authorizationHeader: first.config.authorizationHeader,
+          providerSessionId: first.config.providerSessionId,
+        },
+      });
+      for (const scope of [held!, (yield* registry.resolve(header))!])
+        expect((yield* list(scope)).body).toMatchObject({ code: "unavailable" });
+
+      // A new credential revokes the thread's old one first, so the old header stops resolving.
+      yield* registry.revokeThread(threadId);
+      const rotated = yield* registry.issue(request);
+      expect(yield* registry.resolve(header)).toBeUndefined();
+      expect((yield* registry.explainRefusal!(header)).reason).toBe("revoked");
+      expect(
+        yield* registry.resolve(rotated.config.authorizationHeader.replace(/^Bearer\s+/, "")),
+      ).toBeDefined();
+    }).pipe(Effect.provide(MemoryFixture.layer)),
+);
