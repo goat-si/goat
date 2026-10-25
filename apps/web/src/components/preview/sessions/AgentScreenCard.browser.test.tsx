@@ -667,3 +667,29 @@ it("leaves room for the pinned thread details card above the cards", async () =>
     details.remove();
   }
 });
+
+// A card whose session the server no longer knows (a newer control replaced it) used to do nothing
+// on Stop, with no word (WS9). It says so and offers Stop all.
+it("says when a card's Stop found no session to stop, and offers Stop all", async () => {
+  setup([desktopApp()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  state.control.mockResolvedValue({
+    _tag: "Success",
+    value: { applied: false, reason: "not_found" },
+  });
+  using toast = vi.spyOn(toastManager, "add");
+  await userEvent.hover(screen.getByRole("article"));
+  await userEvent.click(screen.getByRole("button", { name: "Stop", exact: true }));
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "This agent's session changed before Stop reached it" }),
+    ),
+  );
+  const offered = toast.mock.calls.at(-1)?.[0] as
+    | { readonly actionProps?: { readonly children?: unknown } }
+    | undefined;
+  expect(offered?.actionProps?.children).toBe("Stop all");
+});
