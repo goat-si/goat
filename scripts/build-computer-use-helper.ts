@@ -326,6 +326,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-o",
       slice,
       path.join(sourceDir, "main.swift"),
+      // What every driver the helper runs inherits (#1688).
+      path.join(sourceDir, "DriverEnvironment.swift"),
       path.join(sourceDir, "McpRelay.swift"),
       path.join(sourceDir, "McpFraming.swift"),
       path.join(sourceDir, "McpJsonSyntax.swift"),
