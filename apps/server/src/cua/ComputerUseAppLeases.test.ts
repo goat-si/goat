@@ -22,7 +22,7 @@ import {
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -506,6 +506,83 @@ describe("app leases between threads (D17)", () => {
       assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
   );
+  it.effect("a call queued behind another on one driver keeps its app for its own run", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const a = yield* fullAccess("queued-a");
+      const b = yield* fullAccess("queued-b");
+      const typing = (callId: string) =>
+        leases.callReservation(a.threadId, {
+          action: "reserve",
+          controlId: a.control.controlId,
+          connectionId: `proxy:${a.threadId}`,
+          callId,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "type_text",
+          args: { pid: 42, window_id: 7, text: "a long text" },
+          app: TEXTEDIT,
+        });
+      // Two long calls sent at once; the driver runs them one after the other.
+      const first = yield* typing("first");
+      assert.equal((yield* typing("second")).status, "admitted");
+      if (first.status !== "admitted" || first.reservationId === null)
+        return assert.fail("expected a ticket");
+      yield* TestClock.adjust(100_000);
+      // The first answers; the second starts now.
+      yield* leases.callReservation(a.threadId, {
+        action: "release",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+        reservationId: first.reservationId,
+        completed: true,
+      });
+      yield* TestClock.adjust(20_000);
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+      // Its own longest run, counted from when it could start, then the app is free.
+      yield* TestClock.adjust(MAX_CALL_MS - 20_000);
+      assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a later call that answers ends the earlier calls of its driver, lost releases included",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const a = yield* fullAccess("fifo-a");
+        const b = yield* fullAccess("fifo-b");
+        const ticket = (callId: string) =>
+          leases.callReservation(a.threadId, {
+            action: "reserve",
+            controlId: a.control.controlId,
+            connectionId: `proxy:${a.threadId}`,
+            callId,
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "click",
+            args: { pid: 42, window_id: 7, x: 1, y: 1 },
+            app: TEXTEDIT,
+          });
+        // The first call's release never arrives.
+        assert.equal((yield* ticket("lost")).status, "admitted");
+        const later = yield* ticket("later");
+        if (later.status !== "admitted" || later.reservationId === null)
+          return assert.fail("expected a ticket");
+        yield* leases.callReservation(a.threadId, {
+          action: "release",
+          controlId: a.control.controlId,
+          connectionId: `proxy:${a.threadId}`,
+          reservationId: later.reservationId,
+          completed: true,
+        });
+        // Only the app lease is left, and it ends after its idle window.
+        yield* TestClock.adjust(APP_LEASE_IDLE_MS);
+        assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
+      }).pipe(Effect.provide(layer)),
+  );
 });
 
 describe("app lease records (D17)", () => {
@@ -634,6 +711,21 @@ describe("call admission after an app lease check (D17)", () => {
       secondState = { _tag: "ended", reason: "revoked" };
       yield* Deferred.succeed(gate, undefined);
       assert.deepEqual(yield* Fiber.join(pending), { status: "refused", detail: "revoked" });
+    }),
+  );
+});
+
+describe("proxy releases (D17)", () => {
+  it.effect("a call the driver answered is released as completed", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1 }));
+      assert.equal((yield* h.nextReservation).action, "reserve");
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+      assert.equal((yield* h.nextToProvider).id, 1);
+      assert.deepInclude(yield* h.nextReservation, { action: "release", completed: true });
     }),
   );
 });

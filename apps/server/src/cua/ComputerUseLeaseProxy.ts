@@ -244,7 +244,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  const release = (request: { readonly reservationId?: string; readonly connectionId?: string }) =>
+  /** completed: the driver answered it, so its connection's earlier calls ended too (D17). */
+  const release = (request: { reservationId?: string; connectionId?: string }, completed?: true) =>
     request.reservationId === undefined || request.connectionId === undefined
       ? Effect.void
       : options
@@ -253,6 +254,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             controlId: options.controlId,
             connectionId: request.connectionId,
             reservationId: request.reservationId,
+            ...(completed && { completed }),
           })
           .pipe(Effect.asVoid);
 
@@ -283,7 +285,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             yield* agentInput.ended(key);
             if (request.cancelled) {
               yield* drawOverlay({ type: "reply", id: key, failed: true });
-              yield* release(request);
+              yield* release(request, true);
               if (
                 finished !== undefined ||
                 paused !== undefined ||
@@ -326,7 +328,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
                 !outstanding.has(key)
               )
                 return;
-              yield* release(request);
+              yield* release(request, true);
               const latest = outstanding.get(key);
               if (
                 finished !== undefined ||

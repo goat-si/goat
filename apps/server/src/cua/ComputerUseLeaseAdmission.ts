@@ -106,6 +106,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         threadId,
         request,
         current?.controlId === request.controlId && current.ended === undefined,
+        DateTime.toEpochMillis(yield* DateTime.now),
       );
     }
     return yield* admission.withPermits(1)(

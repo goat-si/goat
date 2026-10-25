@@ -110,6 +110,8 @@ interface Ticket {
   readonly call: Call;
   readonly resource: Resource;
   readonly reservedAt: number;
+  /** Reservation order within the lease service; a driver runs one connection's calls in it. */
+  readonly seq: number;
   /** When this call's control was first seen unable to act, or its proxy's stream ended. */
   stoppedAt?: number;
 }
@@ -122,6 +124,9 @@ const overlaps = (a: Resource, b: Resource) =>
 /** Owned by the lease service; all operations run without a yield during admission. */
 export const makeCallReservations = () => {
   const tickets = new Map<string, Ticket>();
+  let seq = 0;
+  /** When each connection's driver last answered a call: the next queued call starts then. */
+  const completedAt = new Map<string, number>();
   // A delayed POST must never reopen a driver generation already cut off by its proxy.
   const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
   return {
@@ -161,7 +166,11 @@ export const makeCallReservations = () => {
           ticket.call.app !== undefined &&
           call.app.toLowerCase() === ticket.call.app.toLowerCase();
         if (ticket.resource.pid !== resource.pid && !sameApp) continue;
-        if (now - ticket.reservedAt >= MAX_CALL_MS) continue;
+        const started = Math.max(
+          ticket.reservedAt,
+          completedAt.get(connectionKey(ticket.threadId, ticket.call)) ?? 0,
+        );
+        if (now - started >= MAX_CALL_MS) continue;
         // Marked per call, never per control: a later call of a reused control starts unmarked.
         if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
           ticket.stoppedAt = now;
@@ -197,7 +206,7 @@ export const makeCallReservations = () => {
           return { status: "refused", detail: "target_busy", holderThreadId: ticket.threadId };
       }
       const reservationId = NodeCrypto.randomUUID();
-      tickets.set(reservationId, { threadId, call, resource, reservedAt: now });
+      tickets.set(reservationId, { threadId, call, resource, reservedAt: now, seq: seq++ });
       return { status: "admitted", reservationId };
     },
     lookup(
@@ -221,17 +230,32 @@ export const makeCallReservations = () => {
       threadId: ThreadId,
       call: Extract<ComputerUseCallReservation, { action: "release" | "close" }>,
       rememberClosed: boolean,
+      now: number,
     ): ComputerUseCallAdmission {
       const key = connectionKey(threadId, call);
       if (call.action === "close" && rememberClosed)
         closed.set(key, { threadId, controlId: call.controlId });
+      const answered =
+        call.action === "release" && call.completed === true
+          ? tickets.get(call.reservationId)
+          : undefined;
+      const answeredHere =
+        answered !== undefined && connectionKey(answered.threadId, answered.call) === key;
+      if (answeredHere) completedAt.set(key, now);
       for (const [id, ticket] of tickets) {
+        if (connectionKey(ticket.threadId, ticket.call) !== key) continue;
+        // An answered call ends every earlier call of its connection, whose releases may be lost.
         if (
-          connectionKey(ticket.threadId, ticket.call) === key &&
-          (call.action === "close" || call.reservationId === id)
+          call.action === "close" ||
+          call.reservationId === id ||
+          (answeredHere && ticket.seq < answered.seq)
         )
           tickets.delete(id);
       }
+      if (
+        ![...tickets.values()].some((ticket) => connectionKey(ticket.threadId, ticket.call) === key)
+      )
+        completedAt.delete(key);
       return { status: "released" };
     },
   };

@@ -599,6 +599,11 @@ export const ComputerUseCallReservation = Schema.Union([
     ...ComputerUseCallOwner,
     action: Schema.Literal("release"),
     reservationId: TrimmedNonEmptyString,
+    /**
+     * The driver answered this call. A driver runs one connection's calls in order, so every
+     * earlier call of that connection has ended too (D17).
+     */
+    completed: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({ ...ComputerUseCallOwner, action: Schema.Literal("close") }),
 ]);
