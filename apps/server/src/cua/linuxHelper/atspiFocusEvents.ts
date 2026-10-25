@@ -216,10 +216,13 @@ export function readMessage(
       const size = data[at] ?? 0;
       fields.set(code, data.toString("ascii", at + 1, at + 1 + size));
       at += size + 2;
-    } else if (type === "u" || type === "i" || type === "b" || type === "h") {
+    } else if (type === "u") {
       at = align(at, 4);
       fields.set(code, u32(at));
       at += 4;
+    } else if (type === "i" || type === "b" || type === "h") {
+      // Never read as a value: a field this client uses keeps its prescribed type (UINT32).
+      at = align(at, 4) + 4;
     } else if (type === "y") {
       fields.set(code, data[at] ?? 0);
       at += 1;

@@ -4,7 +4,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   busSocketPath,
@@ -66,6 +66,8 @@ async function scriptedBus(
     firstString: string | undefined,
     signature: string | undefined,
   ) => boolean,
+  /** Calls the bus answers by closing the connection instead. */
+  drop: (member: string, signature: string | undefined) => boolean = () => false,
 ) {
   const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-bus-"));
   const path = NodePath.join(dir, "bus");
@@ -93,6 +95,10 @@ async function scriptedBus(
         data = data.subarray(next.length);
         const { message } = next;
         calls.push(message.member + "(" + (message.signature ?? "") + ")");
+        if (drop(message.member ?? "", message.signature)) {
+          socket.destroy();
+          return;
+        }
         const refused = refuse(message.member ?? "", message.firstString, message.signature);
         socket.write(reply(message.serial, refused ? "refused" : undefined));
         if (
@@ -348,6 +354,39 @@ describe("AT-SPI focus events", () => {
     } finally {
       events.close();
       bus.close();
+    }
+  });
+
+  it("stops trying older RegisterEvent forms once the bus closes the connection (#1680 r1)", async () => {
+    // Only the call deadlines are faked, to count them; sockets run for real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const bus = await scriptedBus(
+      () => false,
+      (member, signature) => member === "RegisterEvent" && signature === "sass",
+    );
+    const retried = Promise.withResolvers<void>();
+    const events = openFocusEvents({
+      address: async () => bus.address,
+      uid: 1000,
+      setupLimit: () => new Promise<void>(() => undefined),
+      retry: () => {
+        retried.resolve();
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const stop = events.subscribe(() => undefined);
+    try {
+      await retried.promise;
+      expect(bus.calls.filter((call) => call.startsWith("RegisterEvent"))).toEqual([
+        "RegisterEvent(sass)",
+      ]);
+      // No later form was attempted on the closed connection, so no call deadline is pending.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      stop();
+      events.close();
+      bus.close();
+      vi.useRealTimers();
     }
   });
 });
