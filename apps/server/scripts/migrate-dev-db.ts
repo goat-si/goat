@@ -23,6 +23,7 @@ import { Command, Flag } from "effect/cli";
 
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import { migrationManifest, runMigrations } from "../src/persistence/Migrations.ts";
+import { isProtectedDestination } from "./migrate-dev-db-protected.ts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 
 export class MigrateDevDbNotInWorktreeError extends Schema.TaggedError<MigrateDevDbNotInWorktreeError>()(
@@ -739,18 +740,6 @@ const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
   }
 });
 
-// Device and inode follow symlinks and ignore how a name is cased, so neither
-// can hide a live home or its userdata behind another path.
-const directoryIdentity = Effect.fn("migrateDevDb.directoryIdentity")(function* (target: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const info = yield* fs.stat(target).pipe(Effect.option);
-  if (Option.isNone(info)) return undefined;
-  return Option.match(info.value.ino, {
-    onNone: () => `path:${target}`,
-    onSome: (ino) => `${info.value.dev}:${ino}`,
-  });
-});
-
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   input: RunMigrateDevDbInput,
   options: RunMigrateDevDbOptions = {},
@@ -797,23 +786,8 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const baseIdentity = yield* directoryIdentity(baseDir);
-  const baseAndAncestors = new Set<string>();
-  for (let directory = baseDir; ; directory = path.dirname(directory)) {
-    const identity = yield* directoryIdentity(directory);
-    if (identity !== undefined) baseAndAncestors.add(identity);
-    if (path.dirname(directory) === directory) break;
-  }
-  for (const home of protectedHomes) {
-    const homeIdentity = yield* directoryIdentity(home);
-    // Only the home itself and its live userdata: <home>/dev is a dev home.
-    const liveIdentity = yield* directoryIdentity(path.join(home, "userdata"));
-    if (
-      (homeIdentity !== undefined && homeIdentity === baseIdentity) ||
-      (liveIdentity !== undefined && baseAndAncestors.has(liveIdentity))
-    ) {
-      return yield* new MigrateDevDbSharedHomeError();
-    }
+  if (yield* isProtectedDestination(baseDir, protectedHomes)) {
+    return yield* new MigrateDevDbSharedHomeError();
   }
   // The destination db and snapshot both get deleted below; a --source that
   // resolves to either (e.g. a leftover snapshot file) would be destroyed

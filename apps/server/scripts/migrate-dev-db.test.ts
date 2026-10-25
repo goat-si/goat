@@ -7,6 +7,7 @@ import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 
@@ -153,12 +154,15 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         const source = yield* createFixtureSource(home);
         const liveState = path.dirname(source);
         yield* fs.symlink(liveState, path.join(elsewhere, "link"));
+        yield* fs.makeDirectory(path.join(liveState, "existing"));
+        yield* fs.symlink(path.join(liveState, "existing"), path.join(elsewhere, "into-live"));
         const liveBefore = yield* fs.readDirectory(liveState);
 
         for (const baseDir of [
           liveState,
           path.join(liveState, "nested"),
           path.join(elsewhere, "link", "nested"),
+          path.join(elsewhere, "into-live", "nested"),
         ]) {
           const error = yield* runMigrateDevDb(
             { baseDir, source, projects: 1, threadsPerProject: 1 },
@@ -166,7 +170,26 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
           ).pipe(Effect.flip);
           assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
         }
+        // A filesystem that reports no inode still sees through the link.
+        const withoutInodes = yield* runMigrateDevDb(
+          {
+            baseDir: path.join(elsewhere, "link", "nested"),
+            source,
+            projects: 1,
+            threadsPerProject: 1,
+          },
+          { sourceHomes: [home] },
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fs,
+            stat: (target) =>
+              fs.stat(target).pipe(Effect.map((info) => ({ ...info, ino: Option.none() }))),
+          }),
+          Effect.flip,
+        );
+        assert.equal(withoutInodes._tag, "MigrateDevDbSharedHomeError");
         assert.deepEqual(yield* fs.readDirectory(liveState), liveBefore);
+        assert.deepEqual(yield* fs.readDirectory(path.join(liveState, "existing")), []);
 
         // A live userdata that is itself a link, and a differently cased name
         // where the filesystem ignores case, are the same directory.
