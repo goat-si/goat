@@ -174,6 +174,12 @@ export const makeRemoteWorkers = (deps: {
             ".",
         });
       yield* check(now.scope);
+      // Placement and every check here ran with no goatclaw policy; one turned on since would
+      // bound hosts and capabilities this write never saw, so it is planned again under it.
+      if (!effective.enabled && (yield* permissions.resolve(now.scope, now.runtimeMode)).enabled)
+        return yield* new RemoteAuthorityLost({
+          message: "Goatclaw permission profiles were turned on while this was prepared.",
+        });
       // A profile that narrowed while this write was prepared refuses it.
       yield* permissions.recheck(now.scope, effective, context(workerMode));
       return sessionMode;

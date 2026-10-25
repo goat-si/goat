@@ -606,6 +606,39 @@ describe("GoalWorkerRuntime", () => {
       },
     );
 
+    it.effect(
+      "refuses a move admitted without goatclaw once a profile is turned on, before any write",
+      () => {
+        const seen = fullOwner();
+        return Effect.gen(function* () {
+          const runtime = yield* GoalWorkerRuntime;
+          const may = yield* runtime.moveAuthority(
+            ownerAccess("full-access"),
+            far,
+            confirmed(seen),
+            "other-box",
+          );
+          // Admitted with no policy: only the goal's own host list bounds placement.
+          expect(may.allowedHosts).toEqual(["mac-studio"]);
+          expect(may.permissionProfileCeiling).toBeUndefined();
+          // A profile that reaches only the source is turned on before the move writes anywhere.
+          seen.profileHosts = ["other-box"];
+          expect(yield* may.authorize.pipe(Effect.flip)).toMatchObject({
+            _tag: "RescheduleNotAllowed",
+          });
+          // Admitted again under that profile, the move has nowhere to go.
+          const again = yield* runtime.moveAuthority(
+            ownerAccess("full-access"),
+            far,
+            confirmed(seen),
+            "other-box",
+          );
+          expect(again.allowedHosts).toEqual([]);
+          expect(again.permissionProfileCeiling).toMatchObject({ id: "worker" });
+        }).pipe(Effect.provide(layerFor(seen)));
+      },
+    );
+
     it.effect("forwards the owner's goatclaw ceiling after syncing the destination", () => {
       const seen = fullOwner();
       seen.profileHosts = ["mac-studio"];
