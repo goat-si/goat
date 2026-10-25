@@ -338,6 +338,43 @@ it.effect("wakes once when a clocked handoff expires before a person answers", (
   ),
 );
 
+// #1521: a card's Stop ends the thread's grant. Waking the agent about it started a new turn,
+// which took the screen again and replaced the stopped card.
+it.effect(
+  "stays quiet when a person ends an approved computer use grant, but not a pending request",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        const pending = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: pending.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* world.reactor.reconcile;
+        const sent = yield* wakes(world);
+        expect(sent.map((message) => message.id).sort()).toEqual(
+          [
+            `message:handoff-wake:${approved.handoffId}:completed`,
+            `message:handoff-wake:${pending.handoffId}:cancelled`,
+          ].sort(),
+        );
+      }),
+    ),
+);
+
 it.effect("wakes nothing before waking began, or resolved before it began", () =>
   withWorld((world) =>
     Effect.gen(function* () {
