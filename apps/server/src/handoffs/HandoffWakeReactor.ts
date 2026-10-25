@@ -234,6 +234,8 @@ const make = Effect.gen(function* () {
           });
         // A late event for a state this grant has left wakes nothing; its current state does.
         if (current.state !== handoff.state) return;
+        // A request whose call is waiting, or already returned this answer, needs no wake.
+        return yield* handoffs.deliverComputerUseWake(current, dispatchWake(threadId, wake));
       }
       if (
         handoff.state !== "completed" ||
