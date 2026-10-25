@@ -386,54 +386,54 @@ const make = Effect.gen(function* () {
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     // A driver started for this thread after all; the session list drops the blocked entry.
     if (blockedTurns.delete(threadId)) yield* changed;
-    const existing = controls.get(threadId);
-    if (
-      existing !== undefined &&
-      existing.ended === undefined &&
-      existing.handoffId === handoffId &&
-      existing.everyApp === everyApp &&
-      DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
-    ) {
-      const reused: ControlRecord = {
-        ...nextTurn(existing),
-        uses: existing.uses + 1,
-        ...(runId === undefined ? {} : { runId }),
-      };
-      controls.set(threadId, reused);
-      // Proxies must hear of an earlier run's grant this dropped (#1617), with no gap to interrupt.
-      yield* Effect.uninterruptible(
-        Effect.suspend(() =>
-          implyFocus(reused) || existing.idle === true ? changed : Effect.void,
-        ),
-      );
-      return reused as ComputerUseControl;
-    }
-    const next: ControlRecord = {
-      controlId: `control:${NodeCrypto.randomUUID()}`,
-      threadId,
-      expiresAt: Option.isSome(lease)
-        ? lease.value.expiresAt
-        : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
-      ...(handoffId === undefined ? {} : { handoffId }),
-      ...(everyApp === undefined ? {} : { everyApp }),
-      ...(runId === undefined ? {} : { runId }),
-      uses: 0,
-    };
-    if (existing !== undefined) {
-      reservations.forgetClosed(threadId, existing.controlId);
-      foreground.revokeControl(threadId, existing.controlId);
-      stoppedCards.replaced(existing);
-    }
-    controls.set(threadId, next);
-    foreground.bindPending(
-      threadId,
-      next.controlId,
-      everyApp === undefined ? handoffId : undefined,
+    // Read, decision, state change and notice are one synchronous, uninterruptible step: a Stop
+    // cannot land between the read and the write, and an interrupt cannot skip the notice of a
+    // grant this added or dropped (#1617, #1653).
+    return yield* Effect.uninterruptible(
+      Effect.suspend(() => {
+        const existing = controls.get(threadId);
+        if (
+          existing !== undefined &&
+          existing.ended === undefined &&
+          existing.handoffId === handoffId &&
+          existing.everyApp === everyApp &&
+          DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
+        ) {
+          const reused: ControlRecord = {
+            ...nextTurn(existing),
+            uses: existing.uses + 1,
+            ...(runId === undefined ? {} : { runId }),
+          };
+          controls.set(threadId, reused);
+          const notice = implyFocus(reused) || existing.idle === true ? changed : Effect.void;
+          return Effect.as(notice, reused as ComputerUseControl);
+        }
+        const next: ControlRecord = {
+          controlId: `control:${NodeCrypto.randomUUID()}`,
+          threadId,
+          expiresAt: Option.isSome(lease)
+            ? lease.value.expiresAt
+            : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
+          ...(handoffId === undefined ? {} : { handoffId }),
+          ...(everyApp === undefined ? {} : { everyApp }),
+          ...(runId === undefined ? {} : { runId }),
+          uses: 0,
+        };
+        if (existing !== undefined) {
+          reservations.forgetClosed(threadId, existing.controlId);
+          foreground.revokeControl(threadId, existing.controlId);
+          stoppedCards.replaced(existing);
+        }
+        controls.set(threadId, next);
+        foreground.bindPending(
+          threadId,
+          next.controlId,
+          everyApp === undefined ? handoffId : undefined,
+        );
+        implyFocus(next);
+        return Effect.as(changed, next as ComputerUseControl);
+      }),
     );
-    implyFocus(next);
-    // New controls publish immediately; reusing an existing control above publishes nothing.
-    yield* changed;
-    return next as ComputerUseControl;
   });
 
   const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
