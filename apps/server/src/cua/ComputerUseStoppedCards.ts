@@ -58,10 +58,13 @@ export const makeStoppedCards = () => {
             state.apps?.length === 0
           ),
       );
+      // Covered by a newer control only once the list shows it: its agent acted this turn (#1555).
       const covered = new Set(
         shown
-          .filter(({ control, state }) =>
-            state._tag === "ended" ? stoppedBy(state) : control.idle !== true,
+          .filter(
+            ({ control, state }) =>
+              control.acted === true &&
+              (state._tag === "ended" ? stoppedBy(state) : control.idle !== true),
           )
           .map(({ control }) => control.threadId),
       );
