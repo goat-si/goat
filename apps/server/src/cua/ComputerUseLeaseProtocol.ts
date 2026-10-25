@@ -1,8 +1,12 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Reads only the raw MCP fields the lease proxy uses.
+import { ComputerUseLeaseUpdate } from "@goat/contracts";
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
+import * as Option from "effect/Option";
 import * as Scheduler from "effect/Scheduler";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 
@@ -138,3 +142,17 @@ export const sendUnlessShared = Effect.fnUntraced(
   },
   Effect.provideService(Scheduler.PreventSchedulerYield, true),
 );
+
+const decodeUpdate = Schema.decodeUnknownOption(ComputerUseLeaseUpdate);
+
+/** Parses one NDJSON chunk stream from the lease route into updates, dropping unknown lines. */
+export const leaseUpdateLines = <E>(lines: Stream.Stream<string, E>) =>
+  lines.pipe(
+    Stream.filter((line) => line.trim().length > 0),
+    Stream.map((line) => {
+      const parsed = parse(line);
+      return parsed === undefined ? Option.none() : decodeUpdate(parsed);
+    }),
+    Stream.filter(Option.isSome),
+    Stream.map((update) => update.value),
+  );
