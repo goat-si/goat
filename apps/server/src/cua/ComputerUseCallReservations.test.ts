@@ -63,6 +63,16 @@ const fixture = Effect.fn("reservations.fixture")(function* () {
 });
 
 describe("server computer-use call reservations", () => {
+  it.effect("notification settle is an observation, so it takes no mutation reservation", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const holder = yield* f.reserve(f.a);
+      assert.equal(holder.status, "admitted");
+      const settle = yield* f.reserve(f.b, { pid: 42, window_id: 7 }, "wait_for_window_settle");
+      assert.deepInclude(settle, { status: "admitted", reservationId: null });
+    }).pipe(Effect.provide(Layer.merge(serviceLayer, database))),
+  );
+
   it.effect(
     "admits overlay cursor moves on a shared screen but refuses desktop moves (#1501)",
     () =>

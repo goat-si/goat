@@ -500,7 +500,15 @@ notice goes into the helper's third-party notices with them.
   nothing from their binaries, keys, names or reverse-engineered sources enters the repository,
   test fixtures included (#1161). Ego Lite's public harness is MIT and is used only as a naming
   and behavior reference.
-- Research behind this design lives outside the repository (notes L1–L5 and R1–R4 for the epic,
+- Orca (`stablyai/orca` at `d058e8f026`) was compared on 2026-10-25 (#1596). Orca's own code is
+  MIT (Lovecast Inc.); the third-party material it bundles keeps its own licenses (for example the
+  Geist font under OFL-1.1 and PCRE2 under BSD-3-Clause), and GOAT used none of it. GOAT takes
+  three ideas and none of its code or text: a short settle window before a fresh helper reports a
+  permission missing (#1597), NordPass, Proton Pass and 1Password for Safari in the
+  credential-store exclusions (#1598), and skill guidance on how to report an action whose effect
+  no read confirmed (#1599). It rejects Orca's TCC reset of the helper's grants and its
+  pattern-matched process kills.
+- Research behind this design lives outside the repository (notes L1–L5 and R1–R5 for the epic,
   a static analysis of the Codex computer use build 26.1016.51333, and a live probe of the Codex
   baseline). It is cited by name only.
 

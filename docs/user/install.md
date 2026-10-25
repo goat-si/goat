@@ -88,7 +88,7 @@ through the normal sign-in flow. OpenCodex serves the provider; GOAT serves MCP.
 ### Intel Macs
 
 There is no `goat` executable for Intel Macs (the desktop app is available). To
-run a server there, build it from source with Node.js 24 and `vp`
+run a server there, build it from source with Node.js 26 and `vp`
 ([Install vp](https://github.com/goat-si/goat#development)):
 
 ```bash

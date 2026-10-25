@@ -329,6 +329,13 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "McpRelay.swift"),
       path.join(sourceDir, "McpFraming.swift"),
       path.join(sourceDir, "McpJsonSyntax.swift"),
+      path.join(sourceDir, "McpObject.swift"),
+      path.join(sourceDir, "McpWire.swift"),
+      path.join(sourceDir, "McpNativeToolContract.swift"),
+      path.join(sourceDir, "McpNativeSession.swift"),
+      path.join(sourceDir, "NativeManifest.swift"),
+      path.join(sourceDir, "WindowSettle.swift"),
+      path.join(sourceDir, "WindowAXObserver.swift"),
       // The agent cursor overlay (#1214); main.swift runs it in agent connection mode.
       path.join(sourceDir, "Overlay.swift"),
       // A person's input while an agent connection runs (#1235); the overlay channel carries it.
@@ -337,6 +344,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "Frames.swift"),
       // GOAT's own windows, which the live picture never shows (#1321).
       path.join(sourceDir, "HostIdentity.swift"),
+      // Grants read again for a moment before they count as missing (#1597).
+      path.join(sourceDir, "PermissionSettle.swift"),
     ]);
     slices.push(slice);
   }

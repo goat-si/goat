@@ -197,6 +197,20 @@ describe("orchestration V2 wire projection", () => {
     expect(item.output).toEqual({ ok: true });
   });
 
+  it("keeps a settle wait's outcome on the wire, so a row that never fetches detail shows it", () => {
+    const settle = { outcome: "pending", reason: "deadline" };
+    const item = {
+      ...base,
+      toolName: "mcp__cua-driver__wait_for_window_settle",
+      output: {
+        content: [{ type: "text", text: "Notification settle: pending (deadline)." }],
+        structuredContent: { settle },
+      },
+    } satisfies OrchestrationV2TurnItem;
+    const sent = decodeTurnItemJson(encodeTurnItemJson(projectTurnItemForWire(item)));
+    expect(sent.type === "dynamic_tool" ? sent.output : undefined).toEqual({ settle });
+  });
+
   it("uses encoded JSON bytes for strings near the dynamic-value limit", () => {
     const small = '"'.repeat(8_191);
     const large = '"'.repeat(8_192);

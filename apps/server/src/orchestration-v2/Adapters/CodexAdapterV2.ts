@@ -88,6 +88,7 @@ import type {
 } from "@goat/contracts";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as CodexClient from "effect-codex-app-server/client";
+import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -768,6 +769,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     readonly deviceToolsAvailable?: boolean;
     /** The managed `cua-driver` MCP server is attached to this thread. */
     readonly computerUse?: boolean;
+    readonly computerUseDeferred?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly memoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["memoryContext"];
@@ -829,7 +831,15 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               )).renderedText,
             },
           };
-    const additionalContext = { ...goatContext, ...appContext, ...memoryContext };
+    const deferredContext = input.computerUseDeferred
+      ? { goat_computer_use_deferred: { kind: "application" as const, value: CUA_DEFERRED_NOTE } }
+      : {};
+    const additionalContext = {
+      ...goatContext,
+      ...deferredContext,
+      ...appContext,
+      ...memoryContext,
+    };
     const collaborationMode: CodexSchema.ClientRequest__CollaborationMode | undefined =
       input.runtimePolicy.interactionMode !== "plan" && developerInstructions === undefined
         ? undefined
@@ -1979,13 +1989,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         // Only successful native attachments enter this cache, including effective authority.
+        // The computer use part comes first so a changed driver can be told from other changes.
         const attachmentKey = (
           config: McpProviderSession.McpProviderSessionConfig,
           cuaDriver: CuaDriverMcpConfiguration | undefined,
         ) => {
           const { read, write, source } = McpProviderSession.memoryToolAvailability(config);
-          return `${config.providerSessionId}:${read}:${write}:${source}:${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`;
+          return JSON.stringify([
+            `${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`,
+            `${config.providerSessionId}:${read}:${write}:${source}`,
+          ]);
         };
+        const cuaPartOf = (key: string | undefined) =>
+          key === undefined ? undefined : (JSON.parse(key) as ReadonlyArray<string>)[0];
         const credentialsByThread = new Map<string, string>();
         /**
          * The subagent limits each live native thread's Codex session was built with. Codex ignores
@@ -5752,6 +5768,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }).pipe(Effect.orDie, turnTerminalizationPermit.withPermits(1)),
         );
 
+        const threadStatuses = makeCodexThreadStatuses();
+        yield* client.handleServerNotification("thread/status/changed", (payload) =>
+          Effect.sync(() => threadStatuses.record(payload.threadId, payload.status.type)),
+        );
+        yield* client.handleServerNotification("turn/started", (payload) =>
+          Effect.sync(() => threadStatuses.turnStarted(payload.threadId, payload.turn.id)),
+        );
         yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
           Effect.gen(function* () {
             const context = yield* awaitActiveTurn(payload.turnId);
@@ -7159,24 +7182,42 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 managedCuaByThread.delete(threadId);
               }
             }
-            if (
-              mcpSession &&
-              credentialsByThread.get(threadId) !== attachmentKey(mcpSession, runtime.cuaDriver)
-            ) {
-              // Reconfigure the same native conversation; stale credentials are already denied by the registry.
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
-                ...runtime.params,
-              });
+            // Codex ignores resume overrides on a held thread: a new driver (#1564) needs a cold
+            // reload, only while Codex reports this thread and its subagent threads quiet, and none
+            // has an active goal that can start a continuation turn on its own.
+            const ownSubagents = Array.from((yield* Ref.get(subagentThreads)).entries()).filter(
+              ([, { parentContext }]) =>
+                approvalOwnerCodexTurn(parentContext).owner.providerThread.id ===
+                turnInput.providerThread.id,
+            );
+            const conversation = [threadId, ...ownSubagents.map(([nativeId]) => nativeId)];
+            const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
+              (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
+                Effect.andThen(
+                  client.raw.request("thread/resume", { threadId, excludeTurns: true, ...params }),
+                ),
+              );
+            const applied = credentialsByThread.get(threadId);
+            const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
+            const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            const busy =
+              (mcpSession ? cuaChanged : managedCuaByThread.has(threadId)) &&
+              (yield* threadStatuses.busy(client, conversation));
+            const computerUseDeferred = mcpSession !== undefined && cuaChanged && busy;
+            if (mcpSession && applied !== next && !(cuaChanged && busy)) {
+              // Other authority changes keep the same native conversation; stale credentials are
+              // already denied by the registry.
+              yield* reconfigure(cuaChanged, runtime.params);
               credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
               rememberCuaDriver(threadId, runtime.cuaDriver);
             }
-            if (!mcpSession && credentialsByThread.has(threadId)) {
-              const previousCuaDriver = managedCuaByThread.get(threadId);
-              yield* client.raw.request("thread/resume", {
-                threadId,
-                excludeTurns: true,
+            const previousCuaDriver = managedCuaByThread.get(threadId);
+            if (
+              !mcpSession &&
+              applied !== undefined &&
+              !(previousCuaDriver !== undefined && busy)
+            ) {
+              yield* reconfigure(previousCuaDriver !== undefined, {
                 config: {
                   ...CODEX_THREAD_CONFIG,
                   mcp_servers: {
@@ -7220,6 +7261,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 mcpSession !== undefined &&
                 runtime.cuaDriver !== undefined &&
                 McpProviderSession.carriesComputerUseSkill(mcpSession),
+              computerUseDeferred,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
@@ -7236,7 +7278,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return next;
             });
             if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
-            const started = yield* client.request("turn/start", turnStartParams);
+            const start = threadStatuses.starting(threadId);
+            const started = yield* client
+              .request("turn/start", turnStartParams)
+              .pipe(Effect.tapError(() => Effect.sync(start.failed)));
+            start.answered(started.turn.id);
             // Codex folds input into a turn that is still running. If that turn
             // belongs to another attempt, adopting it would leave this run
             // waiting on events routed to that attempt forever (#489).
@@ -7529,6 +7575,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       Effect.tap((response) =>
                         Effect.sync(() => {
                           appliedSubagentsByThread.set(response.thread.id, runtime.subagentKey);
+                          threadStatuses.record(response.thread.id, response.thread.status.type);
                           if (!mcpSession) return;
                           credentialsByThread.set(
                             response.thread.id,
