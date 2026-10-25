@@ -1,4 +1,8 @@
 import {
+  composerCapabilityDetail,
+  type ComposerCapabilityItem,
+} from "@goat/client-runtime/composerCapabilityItems";
+import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@goat/client-runtime/providerSkills";
@@ -60,7 +64,8 @@ export type ComposerCommandItem =
       readonly skill: ServerProviderSkill;
       readonly label: string;
       readonly description: string;
-    };
+    }
+  | ComposerCapabilityItem;
 
 interface ComposerCommandPopoverProps {
   readonly items: ReadonlyArray<ComposerCommandItem>;
@@ -111,6 +116,8 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
       return null;
     case "thread":
       return "text.bubble";
+    case "capability":
+      return item.capability === "computer-use" ? "desktopcomputer" : "globe";
   }
 }
 
@@ -123,7 +130,7 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
     case "skill":
       return "Skills";
     case "path":
-      return "Files";
+      return "Mentions";
     default:
       return null;
   }
@@ -154,10 +161,23 @@ const CommandRow = memo(function CommandRow(props: {
   readonly isSlashSkill: boolean;
 }) {
   const iconName = itemIcon(props.item);
+  const inactive =
+    props.item.type === "capability" && props.item.availability.state !== "available";
+  // A row that opens setup still acts on press, so only rows that do nothing read as disabled.
+  const inert =
+    inactive &&
+    props.item.type === "capability" &&
+    !(props.item.availability.state === "unavailable" && props.item.availability.setup);
+  const description =
+    props.item.type === "capability"
+      ? composerCapabilityDetail(props.item)
+      : props.item.description;
 
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityHint={inactive ? description : undefined}
+      accessibilityState={inert ? { disabled: true } : undefined}
       onPress={props.onPress}
       className="flex-row items-center gap-2.5 border-border px-3.5 py-2.5 active:opacity-60"
       style={{ borderBottomWidth: props.isLast ? 0 : StyleSheet.hairlineWidth }}
@@ -176,7 +196,14 @@ const CommandRow = memo(function CommandRow(props: {
           type="monochrome"
         />
       ) : null}
-      <Text className="shrink-0 text-base font-goat-medium text-foreground" numberOfLines={1}>
+      <Text
+        className={
+          !inactive
+            ? "shrink-0 text-base font-goat-medium text-foreground"
+            : "shrink-0 text-base font-goat-medium text-foreground-muted"
+        }
+        numberOfLines={1}
+      >
         {props.isSlashSkill && props.item.type === "skill" ? (
           <>
             <Text className="text-foreground-muted">skill:</Text>
@@ -186,9 +213,9 @@ const CommandRow = memo(function CommandRow(props: {
           props.item.label
         )}
       </Text>
-      {props.item.description ? (
+      {description ? (
         <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-          {props.item.description}
+          {description}
         </Text>
       ) : null}
     </Pressable>
