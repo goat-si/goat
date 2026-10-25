@@ -2207,7 +2207,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
           threadResult,
         ];
-        const reload = (id: number, limits: Record<string, unknown>) =>
+        const quietCheck = (id: number, terminals: ReadonlyArray<object> = []) =>
           entries.push(
             {
               type: "expect_outbound",
@@ -2223,7 +2223,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 params: { threadId: nativeThreadId },
               },
             },
-            { type: "emit_inbound", frame: { id: id + 1, result: { data: [], nextCursor: null } } },
+            {
+              type: "emit_inbound",
+              frame: { id: id + 1, result: { data: terminals, nextCursor: null } },
+            },
+          );
+        const reload = (id: number, limits: Record<string, unknown>) => {
+          quietCheck(id);
+          entries.push(
             {
               type: "expect_outbound",
               frame: {
@@ -2243,6 +2250,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             },
             withReplayRequestId(threadResult, id + 3),
           );
+        };
         const turn = (id: number, ordinal: number) =>
           Effect.gen(function* () {
             const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -2279,14 +2287,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           });
         // Turn 1 runs on the limit thread/start applied.
         yield* turn(3, 1);
-        // Turn 2: the profile dropped to no lanes, so the quiet thread is rebuilt first.
-        reload(4, none);
-        yield* turn(8, 2);
-        // Turn 3: unchanged limit, no reload.
-        yield* turn(9, 3);
+        // Turn 2: the profile dropped to no lanes while a background terminal runs; a reload
+        // would stop it, so the turn runs on the held thread and the new limit waits (#1572).
+        quietCheck(4, [{ processId: "dev-server" }]);
+        yield* turn(6, 2);
+        // Turn 3: the thread is quiet now and is rebuilt under the new limit first.
+        reload(7, none);
+        yield* turn(11, 3);
         // Turn 4: goatclaw turned off; the thread returns to Codex's own limits.
-        reload(10, {});
-        yield* turn(14, 4);
+        reload(12, {});
+        yield* turn(16, 4);
         const terminals = yield* Queue.unbounded<void>();
         const harness = yield* makeCodexReplayHarness(
           makeCodexReplayTranscript({ scenario: "subagent-limits", entries }),
