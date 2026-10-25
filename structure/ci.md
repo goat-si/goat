@@ -67,10 +67,12 @@ job summary lists each chosen server test file and the change that reached it.
 Labels widen a run as soon as they are added: `ci:full` runs everything, `ci:affected` what the
 changes reach, `ci:server` adds the full server suite, and `ci:memory` the memory growth suite.
 Retargeting a pull request onto `dev` or `goat/**` starts a run against the new base and
-supersedes the old one. Any other label, and any edit that keeps the base, starts a run in a
-concurrency group of its own whose jobs all skip. GitHub lists a skipped job under its raw name
-expression, so the run neither cancels the real one nor puts a skipped check with a real name on
-the commit. `goat-ci-result` is the one check to read: it fails when goat-scope or any
+supersedes the old one. Any other label, and any edit that keeps the base, runs no task, but GitHub
+still creates a goat-ci suite for it and reads the required `goat-ci-result` from the newest suite
+on the head commit (#1672). That run waits in the pull request's concurrency group without
+cancelling the real run, then its `goat-ci-result` republishes the newest real result on the same
+head: success passes, anything else fails. Its skipped tasks keep their raw name expressions, so no
+skipped check carries a real name. `goat-ci-result` is the one check to read: it fails when goat-scope or any
 selected task failed or was cancelled, and its notice says whether the run was quick and names the
 label and the command that start the full run.
 

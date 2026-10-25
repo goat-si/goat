@@ -28,7 +28,7 @@ on:
     # labeled lets a ci:* label start its run without a re-run. A draft gets the same quick run as
     # a ready pull request, so leaving draft starts nothing. edited counts only when the base
     # changed: retargeting onto dev or goat/** puts the checks on the new base, and a title or body
-    # edit runs nothing.
+    # edit runs no CI.
     types: [opened, synchronize, reopened, labeled, edited]
   workflow_dispatch:
     inputs:
@@ -46,19 +46,20 @@ permissions:
 
 # A pull request run supersedes the previous run of its ref. A manual run is evidence about one
 # commit, so it gets a group of its own (the run id): a merge into dev or a second dispatch cannot
-# cancel it, and it cancels nothing. A label other than ci:*, or an edit that keeps the base, starts
-# a run in which every job skips, so it takes its own group too and leaves the real run alone. A
-# missing changes.base is null, and null != '' is false in GitHub's loose equality.
+# cancel it, and it cancels nothing. A label other than ci:*, or an edit that keeps the base, is an
+# ignored event: its run joins the pull request's group without cancelling, so it waits for the real
+# run to finish and a later real run cancels it. A missing changes.base is null, and null != '' is
+# false in GitHub's loose equality.
 concurrency:
   group: >-
-    goat-ci-${{ (github.event_name == 'workflow_dispatch' || !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))) && github.run_id || github.ref }}
+    goat-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
 
-# Every job runs unless the event is a label other than ci:* or an edit that keeps the base. Those
-# runs skip every job. GitHub does not evaluate a skipped job's name, so its check carries the raw
-# name expression, which no required check matches: no skipped check named like a real one lands on
-# the commit and hides an earlier result. .github/scripts/goat-ci-trigger.test.cjs evaluates these
-# expressions per event.
+# An ignored event skips every task. GitHub does not evaluate a skipped job's name, so its check
+# carries the raw name expression, which no required check matches. GitHub reads a required check
+# from the newest goat-ci suite on the head commit, though, and an ignored event creates one, so
+# its goat-ci-result republishes the real run's verdict (#1672). .github/scripts/goat-ci-trigger.test.cjs
+# evaluates these expressions per event.
 jobs:
   scope:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}
@@ -359,6 +360,7 @@ jobs:
           node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
           .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
           .github/scripts/release-train.test.cjs .github/scripts/goat-ci-trigger.test.cjs
+          .github/scripts/goat-ci-result-mirror.test.cjs
 
       # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
       # A leftover goat-test-* sandbox means a test worker died before its file finished.
@@ -432,14 +434,18 @@ jobs:
         run: node .github/scripts/pr-screenshot-gate.cjs
 
   result:
-    name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-ci-result' || 'goat-ci (event ignored)' }}
+    # A fork's run skips it, so its check keeps the raw name and never reads as goat-ci-result.
+    name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'goat-ci-result' || 'goat-ci (fork)' }}
     needs: [scope, ci, screenshot-gate]
     # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
+    env:
+      REAL_RUN: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
     steps:
       - name: Require every selected task
+        if: env.REAL_RUN == 'true'
         env:
           SCOPE: ${{ needs.scope.result }}
           CI: ${{ needs.ci.result }}
@@ -458,3 +464,27 @@ jobs:
             success | skipped) ;;
             *) echo "::error::goat-screenshot-gate did not succeed ($SCREENSHOT_GATE)"; exit 1 ;;
           esac
+
+      # An ignored event ran no task. This run waited in the pull request's concurrency group, so
+      # the real run has finished; republish its goat-ci-result (.github/scripts/goat-ci-result-mirror.cjs).
+      - name: Checkout
+        if: env.REAL_RUN != 'true'
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: Setup Vite+
+        if: env.REAL_RUN != 'true'
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          # Cone-mode sparse checkout keeps the root files, package.json among them.
+          node-version-file: package.json
+          cache: false
+          run-install: false
+
+      - name: Republish the newest goat-ci-result
+        if: env.REAL_RUN != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node .github/scripts/goat-ci-result-mirror.cjs
