@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
-import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -515,6 +514,21 @@ describe("request-time listing on standalone servers, review round 1 (#1574)", (
       const binaryPath = NodePath.join(directory, "cua-driver");
       NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       const controller = new AbortController();
+      const held = new Set<unknown>();
+      const add = controller.signal.addEventListener.bind(controller.signal);
+      const remove = controller.signal.removeEventListener.bind(controller.signal);
+      controller.signal.addEventListener = ((
+        type: string,
+        listener: unknown,
+        options?: unknown,
+      ) => {
+        held.add(listener);
+        add(type, listener as EventListener, options as AddEventListenerOptions);
+      }) as AbortSignal["addEventListener"];
+      controller.signal.removeEventListener = ((type: string, listener: unknown) => {
+        held.delete(listener);
+        remove(type, listener as EventListener);
+      }) as AbortSignal["removeEventListener"];
       for (let run = 0; run < 3; run++)
         await expect(
           listCuaRequestableApplications({
@@ -525,7 +539,7 @@ describe("request-time listing on standalone servers, review round 1 (#1574)", (
             signal: controller.signal,
           }),
         ).rejects.toThrow();
-      expect(NodeEvents.getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expect(held.size).toBe(0);
     },
   );
 
