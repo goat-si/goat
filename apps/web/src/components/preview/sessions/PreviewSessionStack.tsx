@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 
 import { SquareIcon } from "~/components/solar";
 import { Button } from "~/components/ui/button";
+import { toastManager } from "~/components/ui/toast";
 import {
   previewMiniPlayerSourceKey,
   selectThreadPreviewMiniPlayer,
@@ -109,8 +110,22 @@ export function PreviewSessionStack(props: {
   const column = (large !== null ? layout?.large : null) ?? layout?.card;
 
   const environmentId = props.environmentId;
-  const send = (input: { readonly sessionId?: string; readonly control: PreviewSessionControl }) =>
-    environmentId === null ? undefined : void control({ environmentId, input });
+  const send = async (input: {
+    readonly sessionId?: string;
+    readonly control: PreviewSessionControl;
+  }) => {
+    if (environmentId === null) return;
+    const result = await control({ environmentId, input });
+    // A failed call is reported by the command itself. A desktop Stop that could not end the
+    // thread's approval leaves its apps held from other threads (#1519); Stop all ends it.
+    if (input.control !== "stop" || result._tag !== "Success" || result.value.applied) return;
+    if (result.value.reason !== "not_allowed") return;
+    toastManager.add({
+      type: "error",
+      title: "The agent stopped, but its apps are still reserved",
+      description: "Its computer use approval could not be ended. Use Stop all to release them.",
+    });
+  };
   return (
     <>
       {/* Resolves the conversation's width setting, which decides whether a card fits beside it. */}
@@ -182,7 +197,7 @@ export function PreviewSessionStack(props: {
                       expand(session);
                     }}
                     onCollapse={collapse}
-                    onControl={(next) => send({ sessionId: session.id, control: next })}
+                    onControl={(next) => void send({ sessionId: session.id, control: next })}
                     onDismiss={() => dismiss(session)}
                   />
                 );
