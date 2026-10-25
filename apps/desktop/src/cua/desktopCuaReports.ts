@@ -1,4 +1,4 @@
-import type { CuaAgentBlock } from "@goat/contracts";
+import type { ComputerUseReadiness, CuaAgentBlock, CuaAgentDesktopBlock } from "@goat/contracts";
 import { COMPUTER_USE_HELPER_NAME } from "@goat/shared/cuaDriverRelease";
 import * as Effect from "effect/Effect";
 
@@ -53,5 +53,26 @@ export function cuaDriverReports(
           holder,
         },
       ),
+    /**
+     * Agents get no driver while the Windows helper cannot use this desktop: the same sentence,
+     * with its cause typed where readiness names one, so every surface can say what to do (#1516).
+     */
+    desktopUnavailable: (
+      requestId: string,
+      detail: string,
+      blocker?: ComputerUseReadiness["blockers"][number],
+    ) =>
+      report(requestId, "unavailable", detail, {
+        reason: "desktopUnavailable",
+        detail,
+        ...(blocker !== undefined && isDesktopBlocker(blocker) ? { blocker } : {}),
+      }),
   };
 }
+
+const isDesktopBlocker = (
+  blocker: ComputerUseReadiness["blockers"][number],
+): blocker is NonNullable<CuaAgentDesktopBlock["blocker"]> =>
+  blocker === "noInteractiveDesktop" ||
+  blocker === "screenLocked" ||
+  blocker === "otherUserAtConsole";

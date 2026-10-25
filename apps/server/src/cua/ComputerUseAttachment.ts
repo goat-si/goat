@@ -129,8 +129,17 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
     const block = CuaDriver.agentBlock(yield* cua.value.lastFailure);
     // The trace says why a turn ran without computer use, not only that it did.
     yield* Effect.annotateCurrentSpan({
-      "computerUse.refusal": block === undefined ? "unavailable" : "not-granted",
-      ...(block === undefined ? {} : { "computerUse.missing": block.missing.join(",") }),
+      "computerUse.refusal":
+        block === undefined
+          ? "unavailable"
+          : block.reason === "permissionsNotGranted"
+            ? "not-granted"
+            : "desktop-unavailable",
+      ...(block?.reason === "permissionsNotGranted"
+        ? { "computerUse.missing": block.missing.join(",") }
+        : block?.reason === "desktopUnavailable"
+          ? { "computerUse.blocker": block.blocker ?? "helper" }
+          : {}),
     });
     if (block === undefined) return none("unavailable", unattended);
     // The session list shows the turn as waiting for the grant while it runs.

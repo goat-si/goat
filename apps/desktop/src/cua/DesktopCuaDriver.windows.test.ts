@@ -124,12 +124,15 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
     ),
   );
 
-  it.effect("keeps computer use off on a desktop it cannot use and says why", () =>
+  it.effect("keeps computer use off on a desktop it cannot use and says why, typed (#1516)", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const detail =
           "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Start GOAT from the signed-in desktop on this computer to use computer use.";
-        const test = yield* fixture({ platform: "win32", helper: { granted: false, detail } });
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: false, detail, blocker: "noInteractiveDesktop" },
+        });
         yield* test.request("agent");
         assert.deepEqual(yield* test.next, {
           version: 1,
@@ -137,6 +140,7 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
           requestId: "agent",
           status: "unavailable",
           message: detail,
+          block: { reason: "desktopUnavailable", detail, blocker: "noInteractiveDesktop" },
         });
         assert.isEmpty(test.helperLaunches);
         assert.deepEqual((yield* test.verify).steps, [{ id: "grants", ok: false, detail }]);

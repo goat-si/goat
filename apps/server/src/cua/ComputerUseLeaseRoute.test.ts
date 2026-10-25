@@ -71,6 +71,7 @@ const fixture = Effect.fnUntraced(function* () {
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
+    release: () => Effect.die("unused"),
     pause: () => Effect.die("unused"),
     detection: Effect.succeed({ humanInput: true, privateMode: true, frames: false }),
     resume: Effect.die("unused"),

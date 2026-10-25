@@ -59,6 +59,7 @@ import { type InputKind, makeAgentInputLog } from "./agentInputLog.ts";
 import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
 import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
+import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
@@ -224,8 +225,9 @@ export class ComputerUseLeases extends Context.Service<
     readonly settle: Effect.Effect<void>;
     /** Ends every control because computer use was turned off. */
     readonly disable: Effect.Effect<void>;
-    /** Every live grant on this host, for the kill switch to end. */
+    /** Every live grant on this host, released ones too, for the kill switch to end. */
     readonly grants: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
+    readonly release: (handoffIds: ReadonlyArray<string>) => Effect.Effect<void>; // #1521
     /** Which safety reports this host's helper sends; unattended turns need private mode. */
     readonly detection: Effect.Effect<ComputerUseDetection>;
     /** Holds every control on this host until resume. */
@@ -288,6 +290,7 @@ const make = Effect.gen(function* () {
     Effect.orElseSucceed(() => false),
   );
   const controls = new Map<ThreadId, ControlRecord>();
+  const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
   const foreground = makeForegroundApprovals();
   /** Turns the desktop gave no driver for want of a grant, while they run (#1399). */
@@ -296,7 +299,10 @@ const make = Effect.gen(function* () {
   let paused: ComputerUsePauseReason | undefined;
   const changed = PubSub.publish(signals, undefined).pipe(Effect.andThen(kick));
 
-  const live = Effect.fn("ComputerUseLeases.live")(function* (threadId?: ThreadId) {
+  const live = Effect.fn("ComputerUseLeases.live")(function* (
+    threadId?: ThreadId,
+    withReleased = false,
+  ) {
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items
@@ -312,7 +318,8 @@ const make = Effect.gen(function* () {
         Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
       );
       const lease = leaseOf(handoff, now);
-      if (Option.isSome(lease)) leases.push(lease.value);
+      if (Option.isSome(lease) && (withReleased || !stoppedCards.isReleased(lease.value.handoffId)))
+        leases.push(lease.value);
     }
     return [...leases].sort(
       (a, b) => DateTime.toEpochMillis(b.expiresAt) - DateTime.toEpochMillis(a.expiresAt),
@@ -329,7 +336,8 @@ const make = Effect.gen(function* () {
       WHERE thread_id = ${threadId} AND turn_item_id = ${handoffId} AND type = 'human_handoff'
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
     const json = rows[0]?.handoff_json;
-    if (json == null) return { _tag: "ended", reason: "revoked" } as const;
+    if (json == null || stoppedCards.isReleased(handoffId))
+      return { _tag: "ended", reason: "revoked" } as const;
     const handoff = yield* decodeHandoff(json).pipe(
       Effect.mapError((cause) => new ComputerUseLeaseError({ cause })),
     );
@@ -395,6 +403,7 @@ const make = Effect.gen(function* () {
     if (existing !== undefined) {
       reservations.forgetClosed(threadId, existing.controlId);
       foreground.revokeControl(threadId, existing.controlId);
+      stoppedCards.replaced(existing);
     }
     controls.set(threadId, next);
     foreground.bindPending(
@@ -418,7 +427,7 @@ const make = Effect.gen(function* () {
       return Option.fromNullishOr(yield* mint(threadId, Option.none(), "interactive"));
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
-        if ((yield* live()).some((lease) => lease.threadId !== threadId))
+        if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
         return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended"));
       }),
@@ -453,7 +462,7 @@ const make = Effect.gen(function* () {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
-    const grants = yield* live();
+    const grants = yield* live(undefined, true);
     const others = grants.filter((lease) => lease.threadId !== threadId);
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
@@ -464,7 +473,7 @@ const make = Effect.gen(function* () {
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
-    const own = grants.filter((lease) => lease.threadId === threadId);
+    const own = stoppedCards.own(grants, threadId);
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
@@ -751,7 +760,7 @@ const make = Effect.gen(function* () {
       except: ThreadId | undefined,
       apps: ReadonlyArray<string> | undefined,
     ) {
-      for (const lease of yield* live()) {
+      for (const lease of yield* live(undefined, true)) {
         if (lease.threadId === except) continue;
         const shared = overlap(lease.apps, apps);
         if (shared !== undefined)
@@ -949,7 +958,9 @@ const make = Effect.gen(function* () {
       const ended = [...controls.keys()].filter((id) => end(id, "disabled"));
       return listed || ended.length > 0;
     }).pipe(Effect.flatMap((cleared) => (cleared ? changed : Effect.void))),
-    grants: live(),
+    grants: live(undefined, true),
+    release: (handoffIds) =>
+      Effect.sync(() => stoppedCards.release(handoffIds)).pipe(Effect.andThen(changed)),
     pause,
     detection,
     resume: Effect.sync(() => {
@@ -970,7 +981,7 @@ const make = Effect.gen(function* () {
             return { control: latest as ComputerUseControl, state };
           }),
         ),
-      ),
+      ).pipe(Effect.map(stoppedCards.merge)),
     ),
     subscribe: PubSub.subscribe(signals),
     changed,
