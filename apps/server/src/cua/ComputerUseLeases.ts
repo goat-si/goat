@@ -399,12 +399,12 @@ const make = Effect.gen(function* () {
         uses: existing.uses + 1,
         ...(runId === undefined ? {} : { runId }),
       };
-      controls.set(threadId, reused);
-      // Proxies must hear of an earlier run's grant this dropped (#1617), with no gap to interrupt.
+      // Proxies must hear of a grant this added or dropped (#1617, #1653), with no gap to interrupt.
       yield* Effect.uninterruptible(
-        Effect.suspend(() =>
-          implyFocus(reused) || existing.idle === true ? changed : Effect.void,
-        ),
+        Effect.suspend(() => {
+          controls.set(threadId, reused);
+          return implyFocus(reused) || existing.idle === true ? changed : Effect.void;
+        }),
       );
       return reused as ComputerUseControl;
     }
@@ -419,20 +419,24 @@ const make = Effect.gen(function* () {
       ...(runId === undefined ? {} : { runId }),
       uses: 0,
     };
-    if (existing !== undefined) {
-      reservations.forgetClosed(threadId, existing.controlId);
-      foreground.revokeControl(threadId, existing.controlId);
-      stoppedCards.replaced(existing);
-    }
-    controls.set(threadId, next);
-    foreground.bindPending(
-      threadId,
-      next.controlId,
-      everyApp === undefined ? handoffId : undefined,
+    // A new control publishes at once, in the same uninterruptible step as the state it changed.
+    yield* Effect.uninterruptible(
+      Effect.suspend(() => {
+        if (existing !== undefined) {
+          reservations.forgetClosed(threadId, existing.controlId);
+          foreground.revokeControl(threadId, existing.controlId);
+          stoppedCards.replaced(existing);
+        }
+        controls.set(threadId, next);
+        foreground.bindPending(
+          threadId,
+          next.controlId,
+          everyApp === undefined ? handoffId : undefined,
+        );
+        implyFocus(next);
+        return changed;
+      }),
     );
-    implyFocus(next);
-    // New controls publish immediately; reusing an existing control above publishes nothing.
-    yield* changed;
     return next as ComputerUseControl;
   });
 

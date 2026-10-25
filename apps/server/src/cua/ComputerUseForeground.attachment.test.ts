@@ -6,6 +6,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -576,5 +577,50 @@ describe("foreground through real computer-use attachment", () => {
       assert.equal(result.structuredContent.detail, "screen_shared");
       assert.equal(yield* h.driverQueued, 0);
     }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect(
+    "a full access run that reuses the control after the previous run's grant was revoked brings apps forward at once (#1653)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const sql = yield* SqlClient.SqlClient;
+          const run = (id: string, status: string, ordinal: number) =>
+            sql`INSERT INTO orchestration_v2_projection_runs
+              (run_id, thread_id, ordinal, provider, status, requested_at, payload_json)
+              VALUES (${id}, ${threadId}, ${ordinal}, 'codex', ${status}, '2026-01-01', '{}')
+              ON CONFLICT (run_id) DO UPDATE SET status = excluded.status`;
+          yield* run("run:R", "running", 2);
+          const { attachment, leases, h } = yield* attach(
+            true,
+            true,
+            undefined,
+            RunId.make("run:R"),
+          );
+          yield* h.applied;
+          // R ends while Q waits: R's implied foreground is revoked and the proxy applies that.
+          yield* run("run:Q", "queued", 3);
+          yield* run("run:R", "completed", 2);
+          assert.isFalse(yield* leases.turnEnded(threadId));
+          yield* h.applied;
+          const signals = yield* leases.subscribe;
+          if ((yield* PubSub.remaining(signals)) > 0) yield* PubSub.takeAll(signals);
+          // Q starts on the same control and gets its own implied foreground.
+          const reused = Option.getOrThrow(
+            yield* leases.everyAppControl(threadId, false, {
+              person: true,
+              runId: RunId.make("run:Q"),
+            }),
+          );
+          assert.equal(reused.controlId, attachment.control.controlId);
+          assert.isTrue(yield* leases.foregroundAvailable(threadId, "anything"));
+          // The running proxy hears of Q's grant, so Q's first foreground call is not refused.
+          assert.isAbove(yield* PubSub.remaining(signals), 0);
+          yield* h.applied;
+          yield* h.send(call(1, "bring_to_front", { pid: 42, window_id: 7 }));
+          assert.equal((yield* h.nextToDriver).id, 1);
+        }),
+      ).pipe(Effect.provide(layer)),
   );
 });
