@@ -113,10 +113,16 @@ function BrowserThumbnail(props: {
 }
 
 /** Why a desktop window shows no picture, said only when a person can do something about it. */
-const NO_PICTURE: Partial<Record<PreviewSessionNoPicture, string>> = {
+/** Why there is no picture, every reason the server or helper gives; "private" draws a lock. */
+const NO_PICTURE: Record<Exclude<PreviewSessionNoPicture, "private">, string> = {
   screenRecordingNotGranted: "Allow Screen Recording for GOAT Computer Use",
   appNotApproved: "This app is not approved for the agent",
   windowGone: "The window is closed",
+  windowUnknown: "Waiting for the agent's window",
+  paused: "Paused",
+  stopped: "Stopped",
+  unsupported: "This computer cannot show a picture",
+  captureFailed: "Could not capture the window",
 };
 
 /**

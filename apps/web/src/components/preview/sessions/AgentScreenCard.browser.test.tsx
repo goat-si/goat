@@ -632,6 +632,23 @@ it("shows a desktop thread's live frames, drops them in private mode, and keeps 
   expect(picture()?.getAttribute("src")).toBe("data:image/jpeg;base64,BBBB");
 });
 
+it("says why a desktop thread has no picture instead of a bare No preview", async () => {
+  setup([]);
+  const desk = desktopApp({
+    capabilities: { controls: ["stop"], frames: true, privateMode: true, humanInput: true },
+  });
+  await using screen = await render(cardView(desk).element);
+  await sendFrame({ type: "unavailable", reason: "windowUnknown" });
+  await expect.element(screen.getByText("Waiting for the agent's window")).toBeVisible();
+  await sendFrame({ type: "unavailable", reason: "captureFailed" });
+  await expect.element(screen.getByText("Could not capture the window")).toBeVisible();
+  await sendFrame({ type: "unavailable", reason: "unsupported" });
+  await expect.element(screen.getByText("This computer cannot show a picture")).toBeVisible();
+  await sendFrame({ type: "unavailable", reason: "paused" });
+  await expect.element(screen.getByText("Paused")).toBeVisible();
+  expect(screen.container.textContent).not.toContain("No preview");
+});
+
 it("tells a turn left without computer use which grant to allow, and watches no picture (#1399)", async () => {
   setup([]);
   const desk = desktopApp({

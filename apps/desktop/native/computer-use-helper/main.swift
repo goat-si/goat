@@ -674,6 +674,9 @@ func runService() -> Never {
 }
 
 if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
+  // Before any capture, window listing or overlay: without it the first live-picture capture
+  // aborted the service (CGS_REQUIRE_INIT), and with it every capture the agent was promised.
+  WindowServer.connect()
   if CommandLine.arguments.contains("--mcp") { runMcp() }
   runService()
 } else {
