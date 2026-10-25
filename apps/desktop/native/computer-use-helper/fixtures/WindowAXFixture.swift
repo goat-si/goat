@@ -63,6 +63,11 @@ private final class FakeAX: WindowAXFunctions {
   let foreignChild = WindowAXElement("foreign-child" as NSString)
   let focus = WindowAXElement("focus" as NSString)
   let unknown = WindowAXElement("unknown" as NSString)
+  let group = WindowAXElement("group" as NSString)
+  let button = WindowAXElement("button" as NSString)
+  let field = WindowAXElement("field" as NSString)
+  let mystery = WindowAXElement("mystery" as NSString)
+  let web = WindowAXElement("web" as NSString)
   let subscription = FakeAXSubscription()
   var receive: ((WindowAXElement, String) -> Void)?
   var queries: [String] = []
@@ -70,6 +75,26 @@ private final class FakeAX: WindowAXFunctions {
   var owner: Int32? = 42
   var privateFocus = false
   var missingFocus = false
+  // No focused element at all (AX noValue), as in Calculator; the window tree decides privacy.
+  var noFocus = false
+  var secureInTree = false
+  var unreadableTree = false
+  var hugeTree = false
+  // attributeUnsupported for focus: the app's focus is unknown, unlike noValue.
+  var unsupportedFocus = false
+  var unknownInTree = false
+  var opaqueWebInTree = false
+  var leafCount: Int?
+  var chainLength: Int?
+  var childRequests: [Int] = []
+  // Real app shapes (Calculator, #1585) as per-element tables; they take precedence when set.
+  var focusOverride: String?
+  var roles: [String: String] = [:]
+  var subroles: [String: WindowAXAttribute] = [:]
+  var childrenMap: [String: WindowAXAttribute] = [:]
+  var parents: [String: String] = [:]
+  // AXUIElementGetAttributeValueCount results for AXChildren; unset falls back to the children read.
+  var childCounts: [String: WindowAXCount] = [:]
   var missingSubrole = false
   var duplicateTarget = false
   var unknownMapping = false
@@ -100,11 +125,45 @@ private final class FakeAX: WindowAXFunctions {
     queries.append("\(key(element)):\(name)")
     duringAttribute?()
     if cannotComplete { return .failure }
+    let k = key(element)
+    if name == "AXFocusedUIElement", let focusOverride { return .element(WindowAXElement(focusOverride as NSString)) }
+    if name == "AXRole", let role = roles[k] { return .string(role) }
+    if name == "AXSubrole", let subrole = subroles[k] { return subrole }
+    if name == "AXChildren", let children = childrenMap[k] { return children }
+    if name == "AXParent", let parent = parents[k] { return .element(WindowAXElement(parent as NSString)) }
     switch name {
     case "AXWindows": return .elements(duplicateTarget ? [window, window] : [window, other])
-    case "AXFocusedUIElement": return missingFocus ? .failure : .element(focus)
-    case "AXRole": return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
-    case "AXSubrole": return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
+    case "AXFocusedUIElement":
+      if unsupportedFocus { return .unsupported }
+      return missingFocus ? .failure : noFocus ? .absent : .element(focus)
+    case "AXRole":
+      if element.same(group) { return .string("AXGroup") }
+      if key(element).hasPrefix("chain-") { return .string("AXGroup") }
+      if element.same(mystery) { return .string("AXUnknown") }
+      if element.same(web) { return .string("AXWebArea") }
+      if element.same(button) || key(element).hasPrefix("leaf-") { return .string("AXButton") }
+      if element.same(field) { return .string("AXTextField") }
+      return .string(element.same(window) || element.same(other) ? "AXWindow" : "AXTextField")
+    case "AXSubrole":
+      if element.same(button) || element.same(group) || element.same(mystery) || element.same(web)
+        || key(element).hasPrefix("leaf-") || key(element).hasPrefix("chain-") { return .absent }
+      if element.same(field) { return .string(secureInTree ? "AXSecureTextField" : "AXSearchField") }
+      return missingSubrole ? .absent : .string(privateFocus && element.same(focus) ? "AXSecureTextField" : "AXStandardWindow")
+    case "AXChildren":
+      if element.same(window) { return .elements([group]) }
+      if element.same(group) {
+        if unreadableTree { return .failure }
+        if hugeTree { return .elements((0..<2000).map { WindowAXElement("leaf-\($0)" as NSString) }) }
+        if let leafCount { return .elements((0..<leafCount).map { WindowAXElement("leaf-\($0)" as NSString) }) }
+        if chainLength != nil { return .elements([WindowAXElement("chain-1" as NSString)]) }
+        return .elements([button, field] + (unknownInTree ? [mystery] : []) + (opaqueWebInTree ? [web] : []))
+      }
+      if let chainLength, key(element).hasPrefix("chain-"), let n = Int(key(element).dropFirst(6)) {
+        return n < chainLength ? .elements([WindowAXElement("chain-\(n + 1)" as NSString)]) : .absent
+      }
+      // Real controls often do not support AXChildren at all; a button is still a known leaf.
+      if element.same(button) || element.same(mystery) || element.same(web) { return .unsupported }
+      return .absent
     case "AXParent":
       if element.same(focus) { return .element(window) }
       if element.same(child) { return .element(childParent ?? window) }
@@ -113,6 +172,24 @@ private final class FakeAX: WindowAXFunctions {
       return .failure
     default: return .failure
     }
+  }
+  func childCount(_ element: WindowAXElement) -> WindowAXCount {
+    queries.append("\(key(element)):AXChildrenCount")
+    if let count = childCounts[key(element)] { return count }
+    switch attribute(element, "AXChildren") {
+    case .elements(let list): return .count(list.count)
+    case .absent: return .absent
+    case .unsupported: return .unsupported
+    case .error(let code): return .error(code)
+    default: return .error(-25200)
+    }
+  }
+  /// Bounded read like AXUIElementCopyAttributeValues: at most `max` children come back.
+  func children(_ element: WindowAXElement, max: Int) -> WindowAXAttribute {
+    childRequests.append(max)
+    let all = attribute(element, "AXChildren")
+    if case .elements(let list) = all { return .elements(Array(list.prefix(max))) }
+    return all
   }
   func observer(_ pid: Int32, _ receive: @escaping (WindowAXElement, String) -> Void) -> WindowAXSubscription? {
     observerCount += 1
@@ -128,6 +205,7 @@ private final class WatchFixture {
   var events: [String] = []
   var received = 0
   var ignored = 0
+  var diagnostics = ""
   var admitted = true
   var duringPermitted: (() -> Void)?
   lazy var watch = WindowAXWatch(pid: 42, windowID: 7, api: api, executor: executor,
@@ -143,7 +221,10 @@ private final class WatchFixture {
       case .received: received += 1
       case .ignored: ignored += 1
       case .destroyed: events.append("destroyed")
-      case .unsupported(let reason): events.append("unsupported:\(reason)")
+      // Refusals end with "seen:" read summaries; events keep the decision, diagnostics the rest.
+      case .unsupported(let reason):
+        diagnostics = reason
+        events.append("unsupported:" + reason.split(separator: ",").filter { !$0.hasPrefix("seen:") }.joined(separator: ","))
       }
     }
     executor.drain()
@@ -153,6 +234,30 @@ private final class WatchFixture {
     check(events.last?.hasPrefix("unsupported:") == true, why)
     check(!events.contains("destroyed"), "unknown AX errors never become destruction")
   }
+}
+
+/// Calculator as WS13's live run saw it (#1585): the app reports a focused element whose role is
+/// AXUnknown, and the window holds 63 nodes at depth 2, mostly keypad buttons.
+private func calculator(_ api: FakeAX) {
+  let el = { (name: String) in WindowAXElement(name as NSString) }
+  api.focusOverride = "calc-focus"
+  api.roles["calc-focus"] = "AXUnknown"
+  api.subroles["calc-focus"] = .absent
+  api.childrenMap["calc-focus"] = .absent
+  api.parents["calc-focus"] = "window"
+  let keys = (0..<53).map { "key-\($0)" }
+  let labels = (0..<6).map { "label-\($0)" }
+  for name in keys {
+    api.roles[name] = "AXButton"; api.subroles[name] = .absent; api.childrenMap[name] = .unsupported
+    api.parents[name] = "keypad"
+  }
+  for name in labels + ["display"] {
+    api.roles[name] = "AXStaticText"; api.subroles[name] = .absent; api.childrenMap[name] = .unsupported
+    api.parents[name] = "window"
+  }
+  api.roles["keypad"] = "AXGroup"; api.subroles["keypad"] = .absent; api.parents["keypad"] = "window"
+  api.childrenMap["keypad"] = .elements(keys.map(el))
+  api.childrenMap["window"] = .elements((["keypad", "display", "calc-focus"] + labels).map(el))
 }
 
 private func runObserverFixture(_ scenario: String) {
@@ -251,7 +356,21 @@ private func runObserverFixture(_ scenario: String) {
       f.start()
       f.unsupported("privacy gate \(defect)")
       check(f.api.observerCount == 0, "privacy gate precedes observation")
+      // The reason names the failed check and at most a role, never a value (#1585 diagnostics).
+      let expected = ["private": "focus_subrole:AXTextField", "unknown": "focus_unreadable",
+        "subrole": "focus_subrole:AXTextField"][defect]
+      if let expected {
+        check(f.events.last == "unsupported:private_or_unknown_focus:" + expected,
+          "privacy gate \(defect) names its check: \(f.events)")
+      }
     }
+    // App-supplied role names are reported only when they are standard AX names.
+    let named = WatchFixture()
+    named.api.roles["focus"] = "AXCustomerAliceSecret123"
+    named.api.subroles["focus"] = .failure
+    named.start()
+    check(named.events == ["unsupported:private_or_unknown_focus:focus_subrole_unreadable:other"],
+      "a non-standard role name never reaches the reason: \(named.events)")
     let f = WatchFixture()
     f.start()
     f.api.privateFocus = true
@@ -267,6 +386,263 @@ private func runObserverFixture(_ scenario: String) {
     revoked.send(revoked.api.child)
     revoked.executor.drain()
     revoked.unsupported("revoked AX trust cannot deliver changes")
+  case "no-focus":
+    // Calculator reports no focused element; a window tree without secure fields is safe (#1585).
+    let calm = WatchFixture()
+    calm.api.noFocus = true
+    calm.start()
+    check(calm.events == ["ready"], "a window with no focused element and no secure field starts: \(calm.events)")
+    check(calm.api.queries.contains("field:AXSubrole"), "the walk reads every node's subrole")
+    calm.send(calm.api.window)
+    check(calm.events == ["ready", "changed"], "changes are delivered while focus stays absent")
+    for defect in ["secure", "unreadable", "huge", "unsupported-focus", "unknown", "opaque-web"] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      if defect == "secure" { f.api.secureInTree = true }
+      if defect == "unreadable" { f.api.unreadableTree = true }
+      if defect == "huge" { f.api.hugeTree = true }
+      if defect == "unsupported-focus" { f.api.unsupportedFocus = true }
+      if defect == "unknown" { f.api.unknownInTree = true }
+      if defect == "opaque-web" { f.api.opaqueWebInTree = true }
+      f.start()
+      f.unsupported("no focus with a \(defect) window tree fails closed")
+      check(f.api.observerCount == 0, "the tree check precedes observation (\(defect))")
+      let expected = ["secure": "tree_subrole:AXTextField", "unreadable": "tree_children_unreadable:AXGroup:count_err25200",
+        "huge": "tree_node_limit", "unsupported-focus": "focus_unsupported", "unknown": "tree_role:AXUnknown",
+        "opaque-web": "tree_children_unsupported:AXWebArea"][defect] ?? ""
+      check(f.events.last == "unsupported:private_or_unknown_focus:" + expected,
+        "no focus with a \(defect) window tree names its check: \(f.events)")
+    }
+    let appears = WatchFixture()
+    appears.api.noFocus = true
+    appears.start()
+    appears.api.secureInTree = true
+    appears.send(appears.api.window)
+    appears.unsupported("a secure field that appears later ends the wait")
+    check(!appears.events.contains("changed"), "no change is delivered once a secure field is present")
+    let huge = WatchFixture()
+    huge.api.noFocus = true
+    huge.api.hugeTree = true
+    huge.start()
+    huge.unsupported("a window with too many children fails closed")
+    check(!huge.api.childRequests.isEmpty && huge.api.childRequests.allSatisfy { $0 <= 513 },
+      "children are read within the remaining budget plus one: \(huge.api.childRequests)")
+    for (leaves, ok) in [(510, true), (511, false)] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.api.leafCount = leaves
+      f.start()
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus:tree_node_limit"]),
+        "\(leaves + 2) nodes: \(ok ? "within" : "past") the 512-node bound: \(f.events)")
+    }
+    for (links, ok) in [(31, true), (32, false)] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.api.chainLength = links
+      f.start()
+      check(f.events == (ok ? ["ready"] : ["unsupported:private_or_unknown_focus:tree_depth_limit"]),
+        "depth \(links + 1): \(ok ? "within" : "past") the depth-32 bound: \(f.events)")
+    }
+    // Focus can move while the window is read; the sample gate's verdict holds only if focus is
+    // checked again after the walk.
+    for secure in [true, false] {
+      let f = WatchFixture()
+      f.api.noFocus = true
+      f.start()
+      check(f.events == ["ready"], "a no-focus window starts before its sample gate")
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "field:AXSubrole" { f.api.noFocus = false; f.api.privateFocus = secure }
+      }
+      var answers: [Bool] = []
+      f.watch.check { answers.append($0) }
+      f.executor.drain()
+      check(answers == [!secure],
+        "focus that moved into a \(secure ? "secure" : "plain") field during the gate's walk: \(answers)")
+    }
+  case "calculator":
+    let calm = WatchFixture()
+    calculator(calm.api)
+    calm.start()
+    check(calm.events == ["ready"], "Calculator's AXUnknown focus inside a clean window starts: \(calm.events)")
+    var answers: [Bool] = []
+    calm.watch.check { answers.append($0) }
+    calm.executor.drain()
+    check(answers == [true], "the sample gate allows Calculator's window: \(answers)")
+    let cases: [(String, (FakeAX) -> Void, String)] = [
+      ("focus outside the window", { $0.parents["calc-focus"] = "other" }, "focus_outside_window"),
+      ("focus under a secure field", { api in
+        api.roles["secret"] = "AXTextField"; api.subroles["secret"] = .string("AXSecureTextField")
+        api.parents["secret"] = "window"; api.parents["calc-focus"] = "secret"
+      }, "focus_ancestor:AXTextField"),
+      ("a secure field in the window", { api in
+        api.roles["display"] = "AXTextField"; api.subroles["display"] = .string("AXSecureTextField")
+      }, "tree_subrole:AXTextField"),
+      ("another AXUnknown node", { $0.roles["label-0"] = "AXUnknown" }, "tree_role:AXUnknown"),
+      ("focused AXUnknown hiding its children", { $0.childrenMap["calc-focus"] = .unsupported },
+        "tree_children_unsupported:AXUnknown"),
+    ]
+    for (name, mutate, reason) in cases {
+      let f = WatchFixture()
+      calculator(f.api)
+      mutate(f.api)
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:" + reason], "Calculator with \(name): \(f.events)")
+    }
+    // The same focused element can turn secure, or move out of the window, after its node was read.
+    let sameCases: [(String, (FakeAX) -> Void)] = [
+      ("turns secure", { $0.subroles["calc-focus"] = .string("AXSecureTextField") }),
+      ("moves outside the window", { $0.parents["calc-focus"] = "other" }),
+      ("becomes a secure field by role", { $0.roles["calc-focus"] = "AXSecureTextField" }),
+    ]
+    for (name, mutate) in sameCases {
+      let f = WatchFixture()
+      calculator(f.api)
+      f.start()
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "key-52:AXRole" { mutate(f.api) }
+      }
+      var gate: [Bool] = []
+      f.watch.check { gate.append($0) }
+      f.executor.drain()
+      check(gate == [false], "the same focused element that \(name) during the walk refuses: \(gate)")
+    }
+    // An ancestor that loses its known role after the walk visited it fails the final recheck.
+    for role in ["AXUnknown", ""] {
+      let f = WatchFixture()
+      calculator(f.api)
+      let el = { (name: String) in WindowAXElement(name as NSString) }
+      f.api.roles["pane"] = "AXGroup"; f.api.subroles["pane"] = .absent; f.api.parents["pane"] = "window"
+      f.api.childrenMap["pane"] = .elements([el("calc-focus")])
+      f.api.parents["calc-focus"] = "pane"
+      // Listed after the keypad, so the walk visits the pane before the keypad's buttons.
+      f.api.childrenMap["window"] = .elements((["keypad", "display", "pane"] + (0..<6).map { "label-\($0)" }).map(el))
+      f.start()
+      check(f.events == ["ready"], "Calculator's focus under a known group starts: \(f.events)")
+      f.api.duringAttribute = { [unowned f] in
+        if f.api.queries.last == "key-52:AXRole" { f.api.roles["pane"] = role }
+      }
+      var gate: [Bool] = []
+      f.watch.check { gate.append($0) }
+      f.executor.drain()
+      check(gate == [false], "an ancestor whose role became '\(role)' during the walk refuses: \(gate)")
+    }
+    // WS13's rerun: reading a Calculator button's AXChildren returns an AX error, not noValue.
+    let erring = WatchFixture()
+    calculator(erring.api)
+    for i in 0..<53 {
+      erring.api.childrenMap["key-\(i)"] = .error(-25204)
+      erring.api.childCounts["key-\(i)"] = .count(0)
+    }
+    erring.start()
+    check(erring.events == ["ready"], "a child read that errors but counts zero means no children: \(erring.events)")
+    // A role proves nothing about children: a "button" hiding a secure field behind a failing read refuses.
+    for (count, reason) in [(WindowAXCount.count(1), "tree_children_unreadable:AXButton:err25204:count1"),
+                            (WindowAXCount.error(-25204), "tree_children_unreadable:AXButton:err25204:count_err25204")] {
+      let f = WatchFixture()
+      calculator(f.api)
+      for i in 0..<53 { f.api.childrenMap["key-\(i)"] = .error(-25204); f.api.childCounts["key-\(i)"] = .count(0) }
+      f.api.childCounts["key-7"] = count
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:" + reason],
+        "a button whose child read errors and whose count is not zero refuses: \(f.events)")
+    }
+    let container = WatchFixture()
+    calculator(container.api)
+    container.api.childrenMap["keypad"] = .error(-25204)
+    container.start()
+    check(container.events == ["unsupported:private_or_unknown_focus:tree_children_unreadable:AXGroup:err25204:count_err25204"],
+      "a container whose child read and count both error refuses with the codes: \(container.events)")
+    // Every distinct problem in one run, so a live check shows all remaining blockers at once.
+    let several = WatchFixture()
+    calculator(several.api)
+    several.api.childrenMap["keypad"] = .error(-25204)
+    several.api.roles["label-0"] = "AXUnknown"
+    several.api.roles["display"] = "AXTextField"; several.api.subroles["display"] = .string("AXSecureTextField")
+    several.start()
+    let reason = several.events.last ?? ""
+    for problem in ["tree_children_unreadable:AXGroup:err25204", "tree_role:AXUnknown", "tree_subrole:AXTextField"] {
+      check(reason.hasPrefix("unsupported:private_or_unknown_focus:") && reason.contains(problem),
+        "the reason lists \(problem): \(reason)")
+    }
+    // A focus whose parent claims the window but which the window never lists cannot be judged.
+    let hidden = WatchFixture()
+    calculator(hidden.api)
+    hidden.api.childrenMap["window"] = .elements(["keypad", "display"].map { WindowAXElement($0 as NSString) })
+    hidden.api.childrenMap["calc-focus"] = .unsupported
+    hidden.start()
+    check(hidden.events == ["unsupported:private_or_unknown_focus:tree_children_unsupported:AXUnknown"],
+      "an unknown focus the window never lists is walked from itself and still judged: \(hidden.events)")
+    // WS13's third run: button subrole reads error too, and the window does not list the focus.
+    let live = WatchFixture()
+    calculator(live.api)
+    live.api.childrenMap["window"] = .elements((["keypad", "display"] + (0..<6).map { "label-\($0)" }).map { WindowAXElement($0 as NSString) })
+    for i in 0..<53 {
+      live.api.childrenMap["key-\(i)"] = .error(-25204)
+      live.api.childCounts["key-\(i)"] = .count(0)
+      live.api.subroles["key-\(i)"] = .error(-25204)
+    }
+    live.start()
+    check(live.events == ["ready"], "Calculator as WS13 saw it settles: \(live.events) \(live.diagnostics)")
+    // A subrole read error refuses only where the role could be a secure text input.
+    let textField = WatchFixture()
+    calculator(textField.api)
+    textField.api.roles["display"] = "AXTextField"
+    textField.api.subroles["display"] = .error(-25204)
+    textField.start()
+    check(textField.events == ["unsupported:private_or_unknown_focus:tree_subrole_unreadable:AXTextField:err25204"],
+      "a text field whose subrole cannot be read refuses: \(textField.events)")
+    // The focus's own subtree is walked even when the window does not list the focus.
+    let underFocus = WatchFixture()
+    calculator(underFocus.api)
+    underFocus.api.childrenMap["window"] = .elements(["keypad", "display"].map { WindowAXElement($0 as NSString) })
+    underFocus.api.roles["secret"] = "AXTextField"
+    underFocus.api.subroles["secret"] = .string("AXSecureTextField")
+    underFocus.api.childrenMap["calc-focus"] = .elements([WindowAXElement("secret" as NSString)])
+    underFocus.start()
+    check(underFocus.events == ["unsupported:private_or_unknown_focus:tree_subrole:AXTextField"],
+      "a secure field under an unlisted focus refuses: \(underFocus.events)")
+    // An ancestor the window does not list is walked too, so a secure sibling of the focus refuses.
+    for container in ["AXGroup", "AXSheet", "AXPopover"] {
+      let f = WatchFixture()
+      calculator(f.api)
+      let el = { (name: String) in WindowAXElement(name as NSString) }
+      f.api.roles["pane"] = container; f.api.subroles["pane"] = .absent; f.api.parents["pane"] = "window"
+      f.api.roles["secret"] = "AXTextField"; f.api.subroles["secret"] = .string("AXSecureTextField")
+      f.api.parents["secret"] = "pane"
+      f.api.childrenMap["pane"] = .elements([el("calc-focus"), el("secret")])
+      f.api.parents["calc-focus"] = "pane"
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:tree_subrole:AXTextField"],
+        "a secure sibling of the focus under an unlisted \(container) refuses: \(f.events)")
+    }
+    // An unreadable subrole counts as none only on controls known not to take input.
+    for (role, name) in [("AXGroup", "AXGroup"), ("AXCustomVault", "other")] {
+      let f = WatchFixture()
+      calculator(f.api)
+      f.api.roles["label-0"] = role
+      f.api.subroles["label-0"] = .error(-25204)
+      f.api.childrenMap["label-0"] = .absent
+      f.start()
+      check(f.events == ["unsupported:private_or_unknown_focus:tree_subrole_unreadable:\(name):err25204"],
+        "an unreadable subrole on \(role) refuses: \(f.events)")
+    }
+    // A refusal summarizes what each kind of node returned, with roles, codes and counts only.
+    check(textField.diagnostics.contains("seen:AXButton:sub_absent:kids_unsupported:x53")
+      && textField.diagnostics.contains("seen:AXTextField:sub_err25204"),
+      "a refusal carries the read summary: \(textField.diagnostics)")
+    let moved = WatchFixture()
+    calculator(moved.api)
+    moved.start()
+    moved.api.roles["secret"] = "AXTextField"
+    moved.api.subroles["secret"] = .string("AXSecureTextField")
+    moved.api.parents["secret"] = "window"
+    moved.api.duringAttribute = { [unowned moved] in
+      if moved.api.queries.last == "key-52:AXRole" { moved.api.focusOverride = "secret" }
+    }
+    var movedAnswers: [Bool] = []
+    moved.watch.check { movedAnswers.append($0) }
+    moved.executor.drain()
+    check(movedAnswers == [false], "focus that moved into a secure field during the walk refuses: \(movedAnswers)")
   case "sample-gate":
     let safe = WatchFixture()
     safe.start()

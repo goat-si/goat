@@ -53,8 +53,9 @@ export interface ToolOutputSettle {
 }
 
 const SETTLE_PREFIX = "Notification settle: ";
-// A reason can name an AX notification, such as notification_unsupported:AXMoved.
-const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([A-Za-z0-9_:]{0,128})\)/;
+// A reason can name an AX notification (notification_unsupported:AXMoved) or list several privacy
+// problems separated by commas.
+const SETTLE_SUMMARY = /^Notification settle: ([a-z_]{1,32}) \(([A-Za-z0-9_:,]{0,640})\)/;
 const MAX_SETTLE_TEXTS = 32;
 
 function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
@@ -67,7 +68,7 @@ function settleRecord(value: unknown, depth = 0): ToolOutputSettle | undefined {
   )
     return {
       outcome: settle.outcome,
-      reason: typeof settle.reason === "string" ? settle.reason.slice(0, 128) : "",
+      reason: typeof settle.reason === "string" ? settle.reason.slice(0, 640) : "",
     };
   for (const key of ["structuredContent", "result", "value"] as const) {
     const nested = settleRecord(value[key], depth + 1);
@@ -110,7 +111,7 @@ export function toolOutputSettle(value: unknown): ToolOutputSettle | undefined {
     for (let at = text.indexOf(SETTLE_PREFIX); at >= 0; at = text.indexOf(SETTLE_PREFIX, at + 1)) {
       // The same words inside a sample (a window title) are not the helper's line.
       if (at > 0 && text[at - 1] !== "\n") continue;
-      const summary = SETTLE_SUMMARY.exec(text.slice(at, at + 256));
+      const summary = SETTLE_SUMMARY.exec(text.slice(at, at + 720));
       if (summary?.[1] !== undefined) return { outcome: summary[1], reason: summary[2] ?? "" };
     }
     if (text.length > MAX_PARSED_BYTES || !text.trimStart().startsWith("{")) continue;

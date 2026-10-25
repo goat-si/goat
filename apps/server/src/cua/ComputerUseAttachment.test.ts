@@ -221,12 +221,36 @@ describe("computerUseAttachment", () => {
     }),
   );
 
-  it.effect.each([
-    { label: "interactive", origin: interactive, unattendedWork: false },
-    { label: "unattended", origin: unattended, unattendedWork: true },
-  ])(
-    "gives a $label full access turn every app without a grant when the host allows it",
-    ({ origin, unattendedWork }) =>
+  // Every origin a run can have: a person's client, an interactive run no person sent (a task's
+  // completion wake), and each unattended reason (automation, schedule, webhook, Slack, channels).
+  const everyOrigin: ReadonlyArray<{
+    readonly label: string;
+    readonly origin: ComputerUse.ComputerUseAttachmentInput["origin"];
+    readonly personStarted: boolean;
+  }> = [
+    { label: "a person", origin: interactive, personStarted: true },
+    { label: "an interactive wake", origin: interactive, personStarted: false },
+    ...(
+      [
+        "goat_bot",
+        "channel_task",
+        "channel_message",
+        "scheduled_task",
+        "sent_by_unattended",
+        "launched_by_unattended",
+        "launched_remotely",
+        "unknown",
+      ] as const
+    ).map((reason) => ({
+      label: `unattended ${reason}`,
+      origin: { _tag: "unattended", reason } as const,
+      personStarted: false,
+    })),
+  ];
+
+  it.effect.each(everyOrigin)(
+    "D16: a full access run started by $label uses every app without approval, with the host setting off",
+    ({ origin, personStarted }) =>
       Effect.gen(function* () {
         const driver = fakeDriver({ enabled: true, running: true });
         const leases = fakeLeases({
@@ -235,69 +259,48 @@ describe("computerUseAttachment", () => {
         const attached = yield* decide(driver, {
           origin,
           runtimeMode: "full-access",
+          runId: RunId.make("run:origin"),
+          personStarted,
+          leases: leases.leases,
+        }).pipe(Effect.provide(allowFullAccess(false)));
+        assert.equal(
+          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+          "control:every-app",
+        );
+        assert.deepEqual(leases.everyApp, [origin._tag === "unattended"]);
+        assert.deepEqual(leases.minted, []);
+      }),
+  );
+
+  it.effect.each(everyOrigin)(
+    "a run outside full access started by $label still needs approval, with the host setting on",
+    ({ origin, personStarted }) =>
+      Effect.gen(function* () {
+        const driver = fakeDriver({ enabled: true, running: true });
+        const leases = fakeLeases({});
+        const attached = yield* decide(driver, {
+          origin,
+          runtimeMode: "approval-required",
+          runId: RunId.make("run:origin"),
+          personStarted,
           leases: leases.leases,
         }).pipe(Effect.provide(allowFullAccess(true)));
-        assert.equal(
-          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
-          "control:every-app",
-        );
-        assert.deepEqual(leases.everyApp, [unattendedWork]);
-        assert.deepEqual(leases.minted, []);
-      }),
-  );
-
-  it.effect(
-    "keeps asking an unattended turn for a grant unless it runs in full access on a host that allows it",
-    () =>
-      Effect.gen(function* () {
-        const driver = fakeDriver({ enabled: true, running: true });
-        const unattendedTurn = (runtimeMode: "full-access" | "auto", allow: boolean) =>
-          decide(driver, { origin: unattended, runtimeMode, leases: fakeLeases({}).leases }).pipe(
-            Effect.provide(allowFullAccess(allow)),
-          );
-        const needsApproval = {
-          _tag: "none",
-          reason: "needs-approval",
-          blockUserConfig: true,
-        } as const;
-        assert.deepEqual(yield* unattendedTurn("auto", true), needsApproval);
-        assert.deepEqual(yield* unattendedTurn("full-access", false), needsApproval);
-        // An interactive turn outside full access still attaches, limited to the apps it was granted.
-        const leases = fakeLeases({});
-        yield* decide(driver, { runtimeMode: "auto", leases: leases.leases }).pipe(
-          Effect.provide(allowFullAccess(true)),
-        );
         assert.deepEqual(leases.everyApp, []);
-        assert.deepEqual(leases.minted, [Option.none()]);
-      }),
-  );
-
-  it.effect(
-    "gives a person-directed full access turn every app without the host's unattended setting",
-    () =>
-      Effect.gen(function* () {
-        const driver = fakeDriver({ enabled: true, running: true });
-        const leases = fakeLeases({});
-        const turn = (personStarted: boolean) =>
-          decide(driver, {
-            runtimeMode: "full-access",
-            runId: RunId.make("run:person"),
-            personStarted,
-            leases: leases.leases,
-          }).pipe(Effect.provide(allowFullAccess(false)));
-        const attached = yield* turn(true);
-        assert.equal(
-          attached._tag === "proxied" ? attached.control.controlId : attached._tag,
-          "control:every-app",
-        );
-        assert.deepEqual(leases.everyApp, [false]);
-        assert.deepEqual(leases.minted, []);
-        // A run no person started (a task's completion wake) keeps the apps it was granted.
-        const woken = yield* turn(false);
-        assert.equal(
-          woken._tag === "proxied" ? woken.control.controlId : woken._tag,
-          "control:interactive",
-        );
+        if (origin._tag === "unattended") {
+          assert.deepEqual(attached, {
+            _tag: "none",
+            reason: "needs-approval",
+            blockUserConfig: true,
+          });
+          assert.deepEqual(leases.minted, []);
+        } else {
+          // An interactive control reaches only the apps a person approved for the thread.
+          assert.equal(
+            attached._tag === "proxied" ? attached.control.controlId : attached._tag,
+            "control:interactive",
+          );
+          assert.deepEqual(leases.minted, [Option.none()]);
+        }
       }),
   );
 
