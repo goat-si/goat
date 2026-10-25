@@ -1,11 +1,9 @@
 # 10 — T3 chase MOC
 
 > 축: upstream `pingdotgg/t3code` `main`
-> reviewed-through: `2c592a108` · 열린 카드 011 · 갱신 2026-10-24
+> reviewed-through: `2c592a108` · 열린 카드 없음 · 갱신 2026-10-25
 
-| NNN | 카드                                                        | GOAT 영역  | P   | 상태              |
-| --- | ----------------------------------------------------------- | ---------- | --- | ----------------- |
-| 011 | [upstream Node 26.12.1 고정](./10.011_t3_chase_node_pin.md) | `cli-home` | P1  | ⛔ needs decision |
+열린 카드 없음.
 
 머지 순서: 사이클 PR goat-ci green → dev에 merge commit으로 랜딩 → 000 기준선 갱신, 카드 `_fin` 이동.
 
@@ -23,5 +21,6 @@
 | 008 | [사이클 261020 머지](./_fin/10/10.008_t3_chase_cycle_261020.md)                | ✅ _fin PR #562               |
 | 009 | [사이클 261021 머지](./_fin/10/10.009_t3_chase_cycle_261021.md)                | ✅ _fin PR #658               |
 | 010 | [사이클 261022 머지](./_fin/10/10.010_t3_chase_cycle_261022.md)                | ✅ _fin PR #743-#757          |
+| 011 | [upstream Node 26.12.1 고정](./_fin/10/10.011_t3_chase_node_pin.md)            | ✅ _fin PR #1587              |
 | 012 | [사이클 261024 머지](./_fin/10/10.012_t3_chase_cycle_261024.md)                | ✅ _fin PR #1097, #1102-#1109 |
 | 013 | [사이클 261024b 머지](./_fin/10/10.013_t3_chase_cycle_261024b.md)              | ✅ _fin PR #1118              |
