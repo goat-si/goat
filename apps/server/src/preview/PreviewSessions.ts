@@ -14,7 +14,7 @@ import {
   WS_METHODS,
   type ComputerUseRefusalReason,
   type CuaAgentBlock,
-  cuaAgentBlockLists,
+  cuaAgentBlockTitle,
   type PreviewSession,
   type PreviewSessionControl,
   type PreviewSessionControlInput,
@@ -77,8 +77,9 @@ const parseBrowserId = (id: string) => {
 type Base = Pick<PreviewSession, "environmentId" | "host" | "platform">;
 
 /**
- * A running turn the desktop gave no driver for want of a grant (#1399). It holds no control, so
- * there is nothing to stop or take over; the tile says which grant a person must allow.
+ * A running turn the desktop gave no driver: a grant macOS has not given (#1399), or a Windows
+ * desktop the helper cannot use (#1516). It holds no control, so there is nothing to stop or take
+ * over; the tile says what a person must do.
  */
 export const blockedSession = (
   base: Base,
@@ -91,11 +92,16 @@ export const blockedSession = (
   threadId,
   target: {
     kind: "desktop",
-    title: `Allow ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}`,
+    title: cuaAgentBlockTitle(block),
   },
   owner: "agent",
   status: "permission-needed",
-  reason: "permissionsNotGranted",
+  reason:
+    block.reason === "permissionsNotGranted"
+      ? "permissionsNotGranted"
+      : block.blocker === "screenLocked"
+        ? "screenLocked"
+        : "helperUnavailable",
   capabilities: { controls: [], frames: false, privateMode: false, humanInput: false },
 });
 

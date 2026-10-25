@@ -76,6 +76,27 @@ describe("preview sessions", () => {
     });
   });
 
+  it("shows a turn the Windows helper cannot run on this desktop as permission-needed, saying where to act (#1516)", () => {
+    const session = blockedSession(base, threadId, {
+      reason: "desktopUnavailable",
+      blocker: "noInteractiveDesktop",
+      detail: "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop.",
+    });
+    expect(previewSessionChip(session)).toBe("Permission needed");
+    expect(session.reason).toBe("helperUnavailable");
+    expect(session.capabilities.controls).toEqual([]);
+    expect(session.target).toEqual({
+      kind: "desktop",
+      title: "Start GOAT from the signed-in Windows desktop",
+    });
+    const locked = blockedSession(base, threadId, {
+      reason: "desktopUnavailable",
+      blocker: "screenLocked",
+      detail: "The screen is locked or showing a Windows security prompt.",
+    });
+    expect(locked.reason).toBe("screenLocked");
+  });
+
   it("names every state with the chips both kinds share", () => {
     expect(previewSessionChip(browserSession(base, { ...tab, private: true })!)).toBe(
       "Private (paused)",
