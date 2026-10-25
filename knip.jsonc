@@ -41,7 +41,7 @@
         "computer-use-windows-capture-guard-smoke.ts",
       ],
       "ignoreDependencies": ["esbuild"],
-      // The `goat` npm package's files: copied into the package, never imported.
+      // The `@goat-si/goat` npm package's files: copied into the package, never imported.
       // knip-schemas.test.ts writes a throwaway project to .knip-test-*, which a
       // knip run beside it in check:changed must not report.
       "ignore": ["npm-launcher/**", ".knip-test-*/**"],

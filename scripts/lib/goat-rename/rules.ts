@@ -15,7 +15,7 @@ import { WIRE_TEXT_RULES, WIRE_KEEP_RULES } from "./rules-wire.ts";
 import type { DropRule, KeepRule, PathRule, TextRule } from "./engine.ts";
 import { VISIBLE_KEEP_RULES, VISIBLE_TEXT_RULES } from "./rules-visible.ts";
 import { LEFTOVER_PATH_RULES, LEFTOVER_TEXT_RULES } from "./rules-leftovers.ts";
-import { META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
+import { META_KEEP_RULES, META_TEXT_RULES, TITLE_TEXT_RULES } from "./rules-meta.ts";
 export { isMovableAsset } from "./rules-leftovers.ts";
 
 /**
@@ -535,6 +535,7 @@ export const DROP_RULES: readonly DropRule[] = [
 
 /** T3 spellings that stay, each with the reason. Plan decisions D7, D12, D13, D16, D17. */
 export const KEEP_RULES: readonly KeepRule[] = [
+  ...META_KEEP_RULES,
   ...EXTERNAL_KEEP_RULES,
   ...RESIDUE_KEEP_RULES,
   ...VISIBLE_KEEP_RULES,

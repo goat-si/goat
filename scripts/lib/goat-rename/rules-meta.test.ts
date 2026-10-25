@@ -57,6 +57,24 @@ describe("GOAT meta", () => {
     ).toBe("https://github.com/pingdotgg/t3code/blob/main/CONTRIBUTING.md");
   });
 
+  it("documents the .goat default and the legacy .t3 fallback in one pass over upstream's guide", () => {
+    const path = "docs/operations/observability.md";
+    const upstream = [
+      "`<home>/userdata/logs/server.trace.ndjson` (so `~/.t3/userdata/...` by default, or",
+      "Only an implicit dev run outside a linked worktree uses the shared dev directory:",
+      'TRACE_FILE="$HOME/.t3/dev/logs/server.trace.ndjson"',
+    ].join("\n");
+    const renamed = apply(path, upstream);
+    expect(renamed).toBe(
+      [
+        "`<home>/userdata/logs/server.trace.ndjson` (so `~/.goat/userdata/...` by default, `~/.t3/userdata/...` while only that legacy home holds state, or",
+        "Only an implicit dev run outside a linked worktree uses the shared dev directory (`~/.t3/dev` while only that one exists):",
+        'TRACE_FILE="$HOME/.goat/dev/logs/server.trace.ndjson"',
+      ].join("\n"),
+    );
+    expect(apply(path, renamed)).toBe(renamed);
+  });
+
   it("says in .env.example that the upstream values enable nothing in GOAT", () => {
     const upstream =
       "# Optional: T3 Connect source builds\n# `cp .env.example .env` enables T3 Connect against the production deployment.";

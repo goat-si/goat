@@ -1,4 +1,4 @@
-import type { TextRule } from "./engine.ts";
+import type { KeepRule, TextRule } from "./engine.ts";
 
 /**
  * GOAT meta outside the product tree: the dev container, issue templates, contribution links, the
@@ -98,10 +98,11 @@ export const META_TEXT_RULES: readonly TextRule[] = [
   ),
   rule(
     "launcher-package-comments",
-    at("knip.jsonc", "vite.config.ts"),
-    /(?<=The `)t3(?=` npm (?:package|launcher))/g,
+    at("vite.config.ts"),
+    /(?<=The `)t3(?=` npm launcher)/g,
     "goat",
   ),
+  rule("npm-package-comment", at("knip.jsonc"), /(?<=The `)t3(?=` npm package)/g, "@goat-si/goat"),
   rule(
     "dev-runner-worktree-home",
     at("scripts/dev-runner.ts"),
@@ -109,16 +110,47 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     ".goat",
   ),
   rule(
-    "dev-runner-home-flag",
-    at("scripts/dev-runner.ts"),
-    /(?<=Explicit )T3 Code(?= data directory)/g,
-    "GOAT",
-  ),
-  rule(
     "observability-home-paths",
     at("docs/operations/observability.md"),
     /(?<=`~\/|\$HOME\/|`<worktree>\/|\$WORKTREE\/)\.t3(?=[/}])/g,
     ".goat",
+  ),
+  // The default home is .goat, but an install whose state is still only in .t3 keeps using it (resolveGoatHome).
+  rule(
+    "observability-home-fallback",
+    at("docs/operations/observability.md"),
+    /(?<=\(so `~\/\.goat\/userdata\/\.\.\.` by default), or$/g,
+    ", `~/.t3/userdata/...` while only that legacy home holds state, or",
+  ),
+  rule(
+    "observability-home-fallback-snippets",
+    at("docs/operations/observability.md"),
+    /^state under the base directory's `userdata` folder:$/g,
+    "state under the base directory's `userdata` folder. An install whose state is still only in `~/.t3` keeps using it, so set `GOAT_HOME=~/.t3` there first:",
+  ),
+  rule(
+    "observability-worktree-fallback",
+    at("docs/operations/observability.md"),
+    /^A dev server started from a linked worktree defaults to that worktree's local home:$/g,
+    "A dev server started from a linked worktree defaults to that worktree's local home (its `.t3` if the worktree was created before the GOAT rename):",
+  ),
+  rule(
+    "observability-dev-fallback",
+    at("docs/operations/observability.md"),
+    /^Only an implicit dev run outside a linked worktree uses the shared dev directory:$/g,
+    "Only an implicit dev run outside a linked worktree uses the shared dev directory (`~/.t3/dev` while only that one exists):",
+  ),
+  rule(
+    "observability-pid-fallback",
+    at("docs/operations/observability.md"),
+    /^different process, so check the pid first\.$/g,
+    "different process, so check the pid first. On an install still using `~/.t3`, set `GOAT_HOME=~/.t3` first.",
+  ),
+  rule(
+    "dev-runner-home-flag",
+    at("scripts/dev-runner.ts"),
+    /(?<=Explicit )T3 Code(?= data directory)/g,
+    "GOAT",
   ),
   rule(
     "release-wsl-runtime-path",
@@ -447,3 +479,15 @@ export const TITLE_TEXT_RULES: readonly TextRule[] = TEST_TITLES.map(([path, fro
     to,
   ),
 );
+
+export const META_KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "meta:observability-legacy-home",
+    // The fallback these sentences describe; held so observability-home-paths does not turn it into .goat.
+    pattern:
+      /`~\/\.t3\/userdata\/\.\.\.` while only that legacy home holds state|`~\/\.t3\/dev` while only that one exists/g,
+    scope: (path) => path === "docs/operations/observability.md",
+    holdsOnApply: true,
+    reason: "An install whose state is still only in .t3 keeps using it (resolveGoatHome).",
+  },
+];
