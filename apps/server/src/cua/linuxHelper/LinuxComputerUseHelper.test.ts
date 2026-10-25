@@ -718,9 +718,10 @@ describe("pngColors", () => {
 describe("Linux readiness on a Wayland desktop the driver cannot read (#1610)", () => {
   // Native GNOME Wayland: readiness's own listing answers, but the agent's listing passes the
   // driver's consent, which needs the screen layout get_screen_size cannot read there.
-  const readinessWith = (screenSize: "fails" | "answers") =>
+  const readinessWith = (screenSize: "fails" | "answers", agentLacksHyprland = false) =>
     readLinuxReadiness(
       {
+        agentLacksHyprland,
         session: detectLinuxSession(
           linuxSessionFacts(
             {
@@ -761,5 +762,8 @@ describe("Linux readiness on a Wayland desktop the driver cannot read (#1610)", 
     expect(refused.grants.accessibility).toBe("granted");
     const answered = await readinessWith("answers");
     expect(answered.tree).toBe("ready");
+    // Native Hyprland: this helper's driver reads the layout, the agents' embedded one cannot.
+    const hyprland = await readinessWith("answers", true);
+    expect(hyprland.tree).toBe("unavailable");
   });
 });

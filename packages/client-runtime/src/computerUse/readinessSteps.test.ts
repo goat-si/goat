@@ -471,3 +471,15 @@ it("a Linux helper that stopped answering names that one cause and proves no lat
   expect(grants?.grants.map((row) => row.detail.join(" "))).not.toContain("Access granted.");
   expect(result.ready).toBe(false);
 });
+
+it("keeps the accessibility wording on macOS and Windows when the tree is unread (#1610)", () => {
+  // Desktop helpers report a granted permission with no tree read yet, for example with no
+  // GOAT window open; that is not the Linux listing refusal.
+  for (const platform of ["darwin", "win32"] as const) {
+    const lines = view({ ...ready, tree: "unavailable" }, platform).steps.flatMap(
+      (step) => step.detail,
+    );
+    expect(lines.join(" ")).toContain("The accessibility tree is unavailable.");
+    expect(lines.join(" ")).not.toContain("agents cannot read app controls");
+  }
+});

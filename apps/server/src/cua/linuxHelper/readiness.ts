@@ -41,6 +41,12 @@ export async function readLinuxReadiness(
     readonly uinputWritable: () => Promise<boolean>;
     readonly secureFocus: (pid: number) => Promise<SecureFocus>;
     readonly capture: CaptureRoute;
+    /**
+     * This driver sees a Hyprland instance that the agents' driver does not: the server's
+     * embedded daemon passes no HYPRLAND_INSTANCE_SIGNATURE on (cua-driver-sdk embedded.rs), so
+     * there the screen layout, and with it listing, fails for agents even when it reads here.
+     */
+    readonly agentLacksHyprland?: boolean;
     readonly call: (
       tool: string,
       args: Readonly<Record<string, unknown>>,
@@ -70,7 +76,8 @@ export async function readLinuxReadiness(
       // Agents list windows through the driver's consent, which needs the screen layout; on a
       // Wayland desktop the driver cannot read, readiness's own listing below still answers.
       if (deps.session.displayServer === "wayland")
-        facts.listingRefused = (await call("get_screen_size", {})) === null;
+        facts.listingRefused =
+          deps.agentLacksHyprland === true || (await call("get_screen_size", {})) === null;
       // A capture that may not be the window's own proves nothing, so it is not even taken.
       if (deps.capture.route === "refused") facts.captureRefused = deps.capture.reason;
       const list = await call("list_windows", {});

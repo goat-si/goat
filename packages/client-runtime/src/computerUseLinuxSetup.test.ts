@@ -189,5 +189,7 @@ describe("linuxComputerUseSetup", () => {
     expect(setup.ready).toBe(false);
     expect(step).toMatchObject({ status: "unavailable", title: "App controls" });
     expect(step?.guidance.some((entry) => entry.kind === "command")).toBe(false);
+    const input = setup.steps.find((entry) => entry.id === "input");
+    expect(input?.detail).not.toMatch(/AT-SPI/);
   });
 });
