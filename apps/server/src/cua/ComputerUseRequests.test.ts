@@ -70,6 +70,7 @@ const requestFrom = (
   signals: Signals | undefined,
   request: ComputerUseRequestInput = { purpose: "Check the build status window", minutes: 30 },
   failure: Option.Option<CuaDriver.CuaDriverError> = Option.none(),
+  created: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [],
 ) =>
   Effect.gen(function* () {
     const environmentId = EnvironmentId.make("test-environment");
@@ -77,7 +78,12 @@ const requestFrom = (
       environmentId,
       sessions: Effect.succeed([]),
     });
-    const handoffs = yield* start;
+    const started = yield* start;
+    const handoffs = Handoffs.Handoffs.of({
+      ...started,
+      create: (input) =>
+        Effect.sync(() => void created.push(input)).pipe(Effect.andThen(started.create(input))),
+    });
     return requestComputerUse({
       threadId,
       providerInstanceId: instanceId,
@@ -147,6 +153,36 @@ it.effect(
           message:
             "Computer use cannot start: macOS has not allowed GOAT Computer Use in Screen & System Audio Recording. A person turns it on in System Settings > Privacy & Security.",
         });
+      }),
+    ),
+);
+
+it.effect(
+  "the approval says once, in words a person reads, what is asked: no run id, ISO time or second summary",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const created: Array<Parameters<Handoffs.Handoffs["Service"]["create"]>[0]> = [];
+        const result = yield* yield* requestFrom(
+          orchestrator,
+          supported,
+          { purpose: "Check the build status window", minutes: 30, apps: ["com.example.build"] },
+          Option.none(),
+          created,
+        );
+        assert.equal(result.kind, "needs_human");
+        const [handoff] = created;
+        const iso = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+        // The card shows the expiry in the reader's own time, so the text carries no clock time.
+        assert.notMatch(handoff?.reason ?? "", /UTC|run:|%3A/);
+        assert.notMatch(handoff?.reason ?? "", iso);
+        assert.include(handoff?.reason ?? "", "for 30 minutes: Check the build status window");
+        const details = handoff?.human.location ?? "";
+        // What the card shows after "Review request" adds to the summary; it does not repeat it.
+        assert.notInclude(details, "asks to");
+        assert.notInclude(details, "Check the build status window");
+        assert.notMatch(details, /run:|%3A|UTC/);
+        assert.notMatch(details, iso);
       }),
     ),
 );
