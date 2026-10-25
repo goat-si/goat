@@ -91,6 +91,7 @@ const fakeLeases = (input: {
     settle: Effect.die("unused"),
     disable: Effect.die("unused"),
     grants: Effect.die("unused"),
+    release: () => Effect.die("unused"),
     pause: () => Effect.die("unused"),
     detection: Effect.succeed(
       input.detection ?? { humanInput: true, privateMode: true, frames: false },

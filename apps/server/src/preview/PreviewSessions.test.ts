@@ -187,6 +187,7 @@ describe("preview sessions", () => {
             stopAllAgents: Effect.sync(() => void stopped.push("browser")),
           }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             foregroundApprovalEpoch: Effect.die("unused"),
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
@@ -213,6 +214,7 @@ describe("preview sessions", () => {
         Layer.mergeAll(
           Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             stopAll: Effect.succeed([]),
             grants: Effect.succeed([
               {
@@ -236,6 +238,52 @@ describe("preview sessions", () => {
       const sessions = yield* PreviewSessions.PreviewSessions;
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: false, reason: "not_allowed" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  // #1519: the card's Stop ended the control and left the grant holding the app for 30 minutes.
+  effectIt.effect("a card's Stop ends that thread's grant and leaves other threads' grants", () => {
+    const stopped: Array<string> = [];
+    const ended: Array<string> = [];
+    const other = ThreadId.make("thread-other");
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
+            sessions: Effect.succeed([{ control, state: active }]),
+            stop: (thread) => Effect.sync(() => (stopped.push(thread), true)),
+            grants: Effect.succeed([
+              { threadId, handoffId: TurnItemId.make("handoff:own"), expiresAt: control.expiresAt },
+              {
+                threadId: other,
+                handoffId: TurnItemId.make("handoff:other"),
+                expiresAt: control.expiresAt,
+              },
+            ]),
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
+            proxy: undefined,
+          }),
+          Layer.mock(Handoffs.Handoffs)({
+            respond: (input) =>
+              Effect.sync(() => void ended.push(`${input.handoffId}:${input.action}`)).pipe(
+                Effect.as({} as never),
+              ),
+          }),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control(
+        { control: "stop", sessionId: `desktop:${control.controlId}` },
+        AuthSessionId.make("session"),
+      );
+      expect(result).toEqual({ applied: true });
+      expect(stopped).toEqual([threadId]);
+      expect(ended).toEqual(["handoff:own:cancelled"]);
     }).pipe(Effect.provide(layer));
   });
 });

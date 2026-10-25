@@ -135,6 +135,7 @@ const fixture = Effect.fnUntraced(function* (
     settle: unused,
     disable: unused,
     grants: unused,
+    release: () => unused,
     pause: () => unused,
     detection: Effect.succeed(detects),
     resume: unused,

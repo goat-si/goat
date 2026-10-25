@@ -13,6 +13,7 @@ import {
   Handoff,
   HandoffError,
   HandoffHuman,
+  MessageId,
   handoffSummary,
   isHandoffPending,
   isClockedHandoffPath,
@@ -106,6 +107,8 @@ const PrivatePayload = Schema.fromJsonString(
       human: HandoffHuman,
       args: Schema.Record(Schema.String, Schema.Unknown),
     }),
+    // A person ended this computer use grant after approving it; the sweep drops it with the rest.
+    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
   ]),
 );
 const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
@@ -225,6 +228,12 @@ export class Handoffs extends Context.Service<
     readonly providerApplyState: (
       input: HandoffReadInput,
     ) => Effect.Effect<{ readonly applying: boolean; readonly progress?: unknown }, HandoffError>;
+    /** Whether a person ended this computer use grant after approving it, which stopped its agent. */
+    readonly computerUseEndedByPerson: (handoff: Handoff) => Effect.Effect<boolean, HandoffError>;
+    /** Withdraws that grant's approval wake while it has not started its turn. */
+    readonly withdrawComputerUseWake: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<void, HandoffError>;
     readonly completedSshContinuations: Effect.Effect<
       ReadonlyArray<{
         readonly handoff: Handoff;
@@ -322,6 +331,7 @@ const make = Effect.gen(function* () {
     input: HandoffReadInput,
     state: Handoff["state"],
     actor: Handoff["actor"],
+    keepPrivate = false,
   ) {
     yield* threads
       .dispatch({
@@ -339,12 +349,55 @@ const make = Effect.gen(function* () {
     const handoff = yield* read(input);
     // Completed payloads retain continuation arguments until the next rollout consumes them.
     if (
+      !keepPrivate &&
       !isHandoffPending(handoff.state) &&
       handoff.state !== "completed" &&
       !handoff.target.path.startsWith("ssh.")
     )
       yield* store.remove(storeName(input.handoffId)).pipe(Effect.mapError(unavailable));
     return handoff;
+  });
+  /**
+   * A person ending an approved computer use grant (a card's Stop, Stop all, End computer use)
+   * stops that agent (#1521). The wake reactor withdraws the grant's approval wake while it has
+   * not taken the screen yet: queued behind the thread's running turn, or still starting. A turn
+   * already running keeps the control the Stop ended.
+   */
+  const withdrawComputerUseWake = Effect.fn("Handoffs.withdrawComputerUseWake")(function* (
+    input: HandoffReadInput,
+  ) {
+    const records = yield* threads
+      .getThreadRecords(input.threadId, ["runs"], { turnItemTypes: [], messageRoles: [] })
+      .pipe(Effect.mapError(unavailable));
+    const wake = MessageId.make(`message:handoff-wake:${input.handoffId}:completed`);
+    const run = records.runs.find((candidate) => candidate.userMessageId === wake);
+    if (run === undefined) return;
+    // A wake run that started only after the grant ended is a turn the Stop should have kept from
+    // starting. One already working before the Stop keeps going, like every other turn then.
+    const ended = (yield* read(input)).resolvedAt;
+    const startedAfterEnd =
+      (run.status === "running" || run.status === "waiting") &&
+      run.startedAt !== null &&
+      ended !== undefined &&
+      DateTime.toEpochMillis(run.startedAt) >= DateTime.toEpochMillis(ended);
+    // A retry after a rejection needs a fresh id; the run's state decides whether one is due.
+    const commandId = CommandId.make(
+      `handoff:${input.handoffId}:withdraw-wake:${run.status}:${NodeCrypto.randomUUID()}`,
+    );
+    if (run.status === "queued")
+      yield* threads
+        .dispatch({ type: "queued-run.cancel", commandId, threadId: input.threadId, runId: run.id })
+        .pipe(Effect.mapError(unavailable));
+    else if (run.status === "preparing" || run.status === "starting" || startedAfterEnd)
+      yield* threads
+        .dispatch({
+          type: "run.interrupt",
+          commandId,
+          threadId: input.threadId,
+          runId: run.id,
+          reason: "A person ended this thread's computer use before this turn started.",
+        })
+        .pipe(Effect.mapError(unavailable));
   });
   const clientLabel = Effect.fn("Handoffs.clientLabel")(function* (
     input: HandoffReadInput & { readonly action?: HandoffRespondInput["action"] },
@@ -435,7 +488,18 @@ const make = Effect.gen(function* () {
           true,
         );
       }
-      const result = yield* transition(input, input.action, { type: "client", label });
+      const endsApproved =
+        isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
+      // Recorded before the transition commits, so the wake reactor never sees the end without
+      // it; a repeated cancel keeps it.
+      if (endsApproved)
+        yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      const result = yield* transition(
+        input,
+        input.action,
+        { type: "client", label },
+        endsApproved || (isComputerUseGrant && record.state === "cancelled"),
+      );
       if (
         foregroundEpoch !== undefined &&
         isComputerUseGrant &&
@@ -886,6 +950,13 @@ const make = Effect.gen(function* () {
     finishSshContinuation,
     bindSshContinuation,
     readSshProgressBinding,
+    computerUseEndedByPerson: (handoff) =>
+      handoff.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH || handoff.state !== "cancelled"
+        ? Effect.succeed(false)
+        : loadPrivate(handoff.handoffId).pipe(
+            Effect.map((payload) => payload?.kind === "computer_use_ended"),
+          ),
+    withdrawComputerUseWake,
   });
 });
 export const layer = Layer.effect(Handoffs, make);
