@@ -50,6 +50,50 @@ layer("ComputerUseLeases controls", (it) => {
   );
 
   it.effect(
+    "a turn's control counts as acting once its agent's call reaches it, until the turn ends",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* runMigrations();
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const owner = ThreadId.make("thread-acted");
+          yield* Effect.addFinalizer(() => leases.stop(owner));
+          const control = yield* leases.control(owner, Option.none());
+          const acted = () =>
+            leases.sessions.pipe(
+              Effect.map(
+                (all) =>
+                  all.find((entry) => entry.control.controlId === control.controlId)?.control,
+              ),
+              Effect.map((listed) => listed?.acted === true),
+            );
+          assert.isFalse(yield* acted());
+          const signals = yield* leases.subscribe;
+          // Refused or admitted, the call means this agent wants the screen.
+          yield* leases.callReservation(owner, {
+            action: "reserve",
+            controlId: control.controlId,
+            connectionId: "driver:acted",
+            callId: "list",
+            interruptions: 0,
+            idleEpoch: 0,
+            name: "list_apps",
+            args: {},
+          });
+          assert.isTrue(yield* acted());
+          assert.isAbove(yield* PubSub.remaining(signals), 0);
+          yield* run(owner, "run-acted-1", 1, "completed");
+          assert.isTrue(yield* leases.turnEnded(owner));
+          // Idle keeps the mark, so a card a person stops between turns still shows as stopped.
+          assert.isTrue(yield* acted());
+          // The next turn reuses the control, and has not asked for the screen yet.
+          yield* leases.control(owner, Option.none());
+          assert.isFalse(yield* acted());
+        }),
+      ),
+  );
+
+  it.effect(
     "marks a thread's control idle when its last open run ends, and its next turn reuses it",
     () =>
       Effect.gen(function* () {

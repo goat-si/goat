@@ -71,7 +71,10 @@ small live picture; it pauses while the stack is hidden or GOAT is in the
 background. Click a browser tile to open its full preview, where **Take
 control** hands it to you.
 
-**Stop** on a tile stops that agent until you choose **Hand back**. **Stop all**
+**Stop** on a tile stops that agent until you choose **Hand back**. On a tile
+for this computer, Stop also ends that thread's approval, so its apps are free
+for other threads at once; the thread asks again to go on, unless **Full access
+without approval** lets it use every app. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor

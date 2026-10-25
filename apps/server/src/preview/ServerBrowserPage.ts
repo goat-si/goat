@@ -806,6 +806,10 @@ export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationS
     throw cause instanceof Error && cause.name === "TimeoutError" ? tooBusy() : cause;
   } finally {
     clearTimeout(timer);
+    // CDP cannot cancel a capture: the caller's capture lock and paused screencasts wait for the
+    // one Chromium still owes, so no second capture runs beside it. The caller's own deadline
+    // answers it meanwhile (CaptureLock).
+    await captured.then(constVoid, constVoid);
   }
 };
 

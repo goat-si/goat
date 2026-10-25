@@ -206,7 +206,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     Effect.tap(() => noteHelper((state) => withRunning(state, false))),
     Effect.tap(() => followers.detach),
   );
-  const { report, unavailable, ungranted } = cuaDriverReports(publisher, () => closed);
+  const { report, unavailable, ungranted, desktopUnavailable } = cuaDriverReports(
+    publisher,
+    () => closed,
+  );
 
   const restartHost = Effect.gen(function* () {
     const request = owned ? currentRequest : undefined;
@@ -684,10 +687,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           helperSeen = true;
           yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
-            yield* report(
+            yield* desktopUnavailable(
               request.requestId,
-              "unavailable",
               ready.detail ?? `${COMPUTER_USE_HELPER_NAME} cannot use this desktop.`,
+              ready.blocker,
             );
             return;
           }
@@ -741,7 +744,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
                   "unavailable",
                   "Cua Driver refused GOAT's capability manifest or launch options. The desktop log has the driver's reason.",
                 )
-              : unavailable(request.requestId),
+              : // On Windows the helper owns the desktop; one that could not start is the reason.
+                environment.platform === "win32" && selected.kind === "helper"
+                ? desktopUnavailable(
+                    request.requestId,
+                    `${COMPUTER_USE_HELPER_NAME} could not start. Restart GOAT on this computer, then try again.`,
+                  )
+                : unavailable(request.requestId),
           ),
         ),
       ),

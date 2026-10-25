@@ -338,6 +338,151 @@ it.effect("wakes once when a clocked handoff expires before a person answers", (
   ),
 );
 
+// #1521: a card's Stop ends the thread's grant. Waking the agent about it started a new turn,
+// which took the screen again and replaced the stopped card.
+it.effect(
+  "stays quiet when a person ends an approved computer use grant, but not a pending request",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        const pending = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: pending.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* world.reactor.reconcile;
+        const sent = yield* wakes(world);
+        expect(sent.map((message) => message.id).sort()).toEqual(
+          [
+            `message:handoff-wake:${approved.handoffId}:completed`,
+            `message:handoff-wake:${pending.handoffId}:cancelled`,
+          ].sort(),
+        );
+        // The approval's wake waited behind the thread's running turn; ending the grant withdrew
+        // it, so it never starts a turn that takes the screen again.
+        const runs = (yield* world.orchestrator.getThreadProjection(threadId)).runs;
+        const approvalWake = runs.find(
+          (run) => run.userMessageId === `message:handoff-wake:${approved.handoffId}:completed`,
+        );
+        expect(approvalWake?.status).toBe("cancelled");
+      }),
+    ),
+);
+
+it.effect(
+  "a late approval event or a repeated end still wakes no agent whose grant a person ended",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        const approval = yield* resolution(world, approved.handoffId);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        // The approval's event reaches the reactor only now, after the end.
+        yield* world.reactor.handle(approval);
+        // A second end of the same grant, as a repeated Stop sends.
+        yield* world.handoffs
+          .respond({ threadId, handoffId: approved.handoffId, action: "cancelled" }, person)
+          .pipe(Effect.ignore);
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+      }),
+    ),
+);
+
+it.effect(
+  "interrupts an approval wake that started its turn only after a person ended the grant",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        yield* world.reactor.reconcile;
+        yield* TestClock.adjust("1 second");
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        // Before the reactor hears of the end, the thread's turn ends and the wake starts.
+        yield* TestClock.adjust("1 second");
+        yield* world.orchestrator.dispatch({
+          type: "thread.stop",
+          commandId: CommandId.make("stop-first"),
+          threadId,
+        });
+        yield* world.worker.drain();
+        const wake = `message:handoff-wake:${approved.handoffId}:completed`;
+        yield* world.orchestrator.dispatch({
+          type: "queue.resume",
+          commandId: CommandId.make("resume-queue"),
+          threadId,
+        });
+        yield* world.worker.drain();
+        const started = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === wake,
+        );
+        expect(["running", "waiting", "starting"]).toContain(started?.status);
+        yield* world.reactor.reconcile;
+        yield* world.worker.drain();
+        const after = (yield* world.orchestrator.getThreadProjection(threadId)).runs.find(
+          (run) => run.userMessageId === wake,
+        );
+        expect(after?.status).toBe("interrupted");
+      }),
+    ),
+);
+
+it.effect(
+  "stays quiet when a person ends an approved computer use grant whose approval wake failed",
+  () =>
+    withWorld((world) =>
+      Effect.gen(function* () {
+        yield* startEpoch(world);
+        const expiresAt = DateTime.add(yield* DateTime.now, { minutes: 30 });
+        const approved = yield* ask(world, COMPUTER_USE_GRANT_HANDOFF_PATH, expiresAt);
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "completed" },
+          person,
+        );
+        world.outage.failing = 1;
+        yield* world.reactor.reconcile;
+        yield* world.handoffs.respond(
+          { threadId, handoffId: approved.handoffId, action: "cancelled" },
+          person,
+        );
+        yield* TestClock.adjust("20 minutes");
+        yield* world.reactor.reconcile;
+        expect(yield* wakes(world)).toEqual([]);
+      }),
+    ),
+);
+
 it.effect("wakes nothing before waking began, or resolved before it began", () =>
   withWorld((world) =>
     Effect.gen(function* () {

@@ -37,6 +37,7 @@ const control = {
   controlId: "control:1",
   threadId,
   expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+  acted: true,
 };
 const detected = { humanInput: true, privateMode: true, frames: true } as const;
 const active = {
@@ -74,6 +75,27 @@ describe("preview sessions", () => {
       kind: "desktop",
       title: "Allow GOAT Computer Use in Accessibility and Screen & System Audio Recording",
     });
+  });
+
+  it("shows a turn the Windows helper cannot run on this desktop as permission-needed, saying where to act (#1516)", () => {
+    const session = blockedSession(base, threadId, {
+      reason: "desktopUnavailable",
+      blocker: "noInteractiveDesktop",
+      detail: "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop.",
+    });
+    expect(previewSessionChip(session)).toBe("Permission needed");
+    expect(session.reason).toBe("helperUnavailable");
+    expect(session.capabilities.controls).toEqual([]);
+    expect(session.target).toEqual({
+      kind: "desktop",
+      title: "Start GOAT from the signed-in Windows desktop",
+    });
+    const locked = blockedSession(base, threadId, {
+      reason: "desktopUnavailable",
+      blocker: "screenLocked",
+      detail: "The screen is locked or showing a Windows security prompt.",
+    });
+    expect(locked.reason).toBe("screenLocked");
   });
 
   it("names every state with the chips both kinds share", () => {
@@ -145,6 +167,16 @@ describe("preview sessions", () => {
     ).toBeDefined();
   });
 
+  it("leaves out a turn's control until its agent asks to act, so a browser tab gets one card", () => {
+    const { acted: _acted, ...unused } = control;
+    // A person moving the mouse pauses every control, the unused one included.
+    for (const state of [active, { _tag: "paused", reason: "human_input" } as const])
+      expect(desktopSession(base, unused, state, detected)).toBeUndefined();
+    expect(
+      desktopSession(base, unused, { _tag: "ended", reason: "stopped_all" }, detected),
+    ).toBeUndefined();
+  });
+
   it("keeps a stopped control's app label instead of calling it the whole screen", () => {
     const stopped = { _tag: "ended", reason: "stopped" } as const;
     const none = desktopSession(base, { ...control, scope: { apps: [] } }, stopped, detected)!;
@@ -187,6 +219,7 @@ describe("preview sessions", () => {
             stopAllAgents: Effect.sync(() => void stopped.push("browser")),
           }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             foregroundApprovalEpoch: Effect.die("unused"),
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
@@ -213,6 +246,7 @@ describe("preview sessions", () => {
         Layer.mergeAll(
           Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             stopAll: Effect.succeed([]),
             grants: Effect.succeed([
               {
@@ -236,6 +270,52 @@ describe("preview sessions", () => {
       const sessions = yield* PreviewSessions.PreviewSessions;
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: false, reason: "not_allowed" });
+    }).pipe(Effect.provide(layer));
+  });
+
+  // #1519: the card's Stop ended the control and left the grant holding the app for 30 minutes.
+  effectIt.effect("a card's Stop ends that thread's grant and leaves other threads' grants", () => {
+    const stopped: Array<string> = [];
+    const ended: Array<string> = [];
+    const other = ThreadId.make("thread-other");
+    const layer = PreviewSessions.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerBrowser.ServerBrowser)({}),
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
+            sessions: Effect.succeed([{ control, state: active }]),
+            stop: (thread) => Effect.sync(() => (stopped.push(thread), true)),
+            grants: Effect.succeed([
+              { threadId, handoffId: TurnItemId.make("handoff:own"), expiresAt: control.expiresAt },
+              {
+                threadId: other,
+                handoffId: TurnItemId.make("handoff:other"),
+                expiresAt: control.expiresAt,
+              },
+            ]),
+            subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
+            proxy: undefined,
+          }),
+          Layer.mock(Handoffs.Handoffs)({
+            respond: (input) =>
+              Effect.sync(() => void ended.push(`${input.handoffId}:${input.action}`)).pipe(
+                Effect.as({} as never),
+              ),
+          }),
+          Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const sessions = yield* PreviewSessions.PreviewSessions;
+      const result = yield* sessions.control(
+        { control: "stop", sessionId: `desktop:${control.controlId}` },
+        AuthSessionId.make("session"),
+      );
+      expect(result).toEqual({ applied: true });
+      expect(stopped).toEqual([threadId]);
+      expect(ended).toEqual(["handoff:own:cancelled"]);
     }).pipe(Effect.provide(layer));
   });
 });
