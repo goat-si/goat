@@ -228,14 +228,19 @@ export function computerUseReadinessSteps({
     ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
   }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
-  // The tree and input are read through a confirmed helper; before that they are unchecked,
-  // not unsupported.
+  // Capture, the tree and input are read through a confirmed helper; before that, or while it
+  // does not answer (#1514), they are unchecked, not unsupported.
   const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
   const capture = readiness
     ? [
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
-          : captureCopy[readiness.capture],
+          : unconfirmed && readiness.capture === "unavailable"
+            ? ({
+                state: "unknown",
+                detail: "Window capture is checked once the helper is confirmed.",
+              } as const)
+            : captureCopy[readiness.capture],
         unconfirmed && readiness.tree === "unavailable"
           ? ({
               state: "unknown",
@@ -253,12 +258,18 @@ export function computerUseReadinessSteps({
   const toolsStatus =
     block !== undefined && tools !== "off" && tools !== "available"
       ? ({ state: "blocked", detail: cuaAgentBlockMessage(block) } as const)
-      : tools
-        ? toolsCopy[tools]
-        : ({
+      : tools === "available" && unconfirmed
+        ? ({
             state: "unknown",
-            detail: "The server has not reported whether agent tools are available yet.",
-          } as const);
+            detail:
+              "The driver is running, but agents cannot use computer use until the helper is confirmed.",
+          } as const)
+        : tools
+          ? toolsCopy[tools]
+          : ({
+              state: "unknown",
+              detail: "The server has not reported whether agent tools are available yet.",
+            } as const);
   const steps: ReadinessStep[] = [
     {
       id: "grants",
@@ -295,11 +306,12 @@ export function computerUseReadinessSteps({
     if (step)
       steps[index] = { ...step, state: "blocked", detail: [...step.detail, blocker.remedy] };
   }
-  // Linux reasons come from capture/tree/input probes, including foreground-only limitations.
-  // Other helpers give one reason per not-ready step in onboarding order; reasons never gate readiness.
+  // Linux reasons come from capture/tree/input probes, including foreground-only limitations,
+  // unless the helper is unconfirmed: then they say why. Other helpers give one reason per
+  // not-ready step in onboarding order; reasons never gate readiness.
   const notReady =
     platform === "linux"
-      ? [2]
+      ? [unconfirmed ? 1 : 2]
       : steps.slice(0, 3).flatMap((step, index) => (step.state !== "ok" ? [index] : []));
   for (const [index, reason] of (readiness?.reasons ?? []).entries()) {
     const stepIndex = notReady[Math.min(index, notReady.length - 1)] ?? 2;
