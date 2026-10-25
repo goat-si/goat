@@ -332,6 +332,8 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       path.join(sourceDir, "HumanInput.swift"),
       // Single-window live pictures (#1370), requested with the frames method.
       path.join(sourceDir, "Frames.swift"),
+      // GOAT's own windows, which the live picture never shows (#1321).
+      path.join(sourceDir, "HostIdentity.swift"),
     ]);
     slices.push(slice);
   }
