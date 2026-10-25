@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { MinimizeIcon, PictureInPictureIcon } from "~/components/solar";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
+import { TooltipContainerContext } from "~/components/ui/tooltip";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { observeResize } from "~/lib/observeResize";
 
@@ -182,14 +183,16 @@ export function PreviewSessionStackSurface(props: {
     : null;
   if (!target) return stack;
   const portal = createPortal(
-    <div
-      ref={content}
-      className="p-1"
-      onMouseMove={(event) => setInteractive(event.target)}
-      onMouseLeave={() => setInteractive(null)}
-    >
-      {stack}
-    </div>,
+    <TooltipContainerContext value={target.ownerDocument.body}>
+      <div
+        ref={content}
+        className="p-1"
+        onMouseMove={(event) => setInteractive(event.target)}
+        onMouseLeave={() => setInteractive(null)}
+      >
+        {stack}
+      </div>
+    </TooltipContainerContext>,
     target,
   );
   return (
