@@ -318,8 +318,11 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     if (entry.main || !entry.managed) continue;
     const blocker = WorktreeInventory.abandonedWorktreeBlocker(fact);
     const live = entry.threads.some((thread) => !thread.archived || thread.busy);
-    const otherReason = otherServerReason(other, entry.path, rules);
-    const working = processInside(cwds, [entry.path], rules);
+    // Git keeps the path a worktree was added at; another server may record where it really is.
+    const realEntry = yield* real(entry.path);
+    const otherReason =
+      otherServerReason(other, entry.path, rules) ?? otherServerReason(other, realEntry, rules);
+    const working = processInside(cwds, [entry.path, realEntry], rules);
     const goatReason = goatDataReason(entry.path, goat, rules);
     const decision =
       goatReason !== null
@@ -574,7 +577,11 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
   const previous = runtimes.runtimes
     .filter((runtime) => runtime.version !== packageJson.version)
     .toSorted((left, right) => right.completedAt - left.completedAt)[0];
+  /** Whether a folder holds a GOAT home or GOAT data below it, such as another server's home. */
+  const holdsOtherGoatData = (target: string) =>
+    [...goat.data, ...goat.homes].some((inner) => isStrictlyInside(target, inner, rules));
   for (const runtime of runtimes.runtimes) {
+    const realRuntime = yield* real(runtime.directory);
     // Removal renames the folder aside, so a leftover of an earlier removal or a link inside the
     // home (which could lead outside it) keeps it from being offered.
     const linked = !(yield* reachedWithoutLinks(config.baseDir, runtime.directory));
@@ -600,6 +607,10 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                       "An earlier removal of this version left a folder behind; check it yourself",
                     )
                   : (usedBy(runtime.directory) ??
+                    usedBy(realRuntime) ??
+                    (holdsOtherGoatData(realRuntime)
+                      ? state("protected", "It holds another GOAT server's home or data")
+                      : null) ??
                     state("removable", "No service, process, launcher or thread uses it", true));
     add(
       {

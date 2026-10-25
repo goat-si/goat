@@ -225,4 +225,77 @@ describe("StorageReclaim leaves GOAT's own data alone", () => {
       expect(yield* fs.exists(rotated)).toBe(true);
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
+
+  it.live("keeps an old runtime that holds another GOAT server's home", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const versions = pinnedRuntimeVersionsDir(path, config.baseDir);
+      for (const version of ["0.0.1", "0.0.2"]) {
+        const sentinel = path.join(versions, version, ".install-complete");
+        yield* fs.makeDirectory(path.dirname(sentinel), { recursive: true });
+        yield* fs.writeFileString(sentinel, version + "\n");
+        yield* fs.utimes(sentinel, version === "0.0.1" ? 1 : 2, version === "0.0.1" ? 1 : 2);
+      }
+      const runtime = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(
+            Effect.map((report) =>
+              report.items.find(
+                (item) => item.kind === "runtime_version" && item.path.endsWith("0.0.1"),
+              ),
+            ),
+          );
+      const offered = (yield* runtime())!;
+      expect(offered.state).toBe("removable");
+      // Another server's home inside it, found once that server is running.
+      const database = path.join(versions, "0.0.1", "other-home", "userdata", "statev2.sqlite");
+      yield* fs.makeDirectory(path.dirname(database), { recursive: true });
+      yield* fs.writeFileString(database, "");
+      machine.others = { ...machine.others, databases: [database] };
+      expect(yield* runtime()).toMatchObject({
+        state: "protected",
+        reason: "It holds another GOAT server's home or data",
+      });
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.exists(database)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("keeps a worktree another server records by its real path, not the one git lists", () =>
+    Effect.gen(function* () {
+      const { fs, path, worktrees, reclaim, find, outside } = yield* setup;
+      const realCheckout = path.join(outside, "moved-checkout");
+      yield* fs.makeDirectory(realCheckout);
+      const listed = path.join(worktrees, "goat", "moved");
+      yield* fs.symlink(realCheckout, listed);
+      machine.facts = [
+        {
+          entry: {
+            path: listed,
+            repository: path.join(worktrees, "repo"),
+            branch: "moved",
+            main: false,
+            missing: false,
+            managed: true,
+            threads: [],
+            dirtyCount: 0,
+            aheadCount: 0,
+          },
+          head: "abc",
+          holdsProject: false,
+          leaseKeys: [listed],
+        },
+      ];
+      machine.others = { ...machine.others, worktreePaths: [realCheckout] };
+      expect(find((yield* reclaim.usage({ rescan: true })).items, listed)).toMatchObject({
+        state: "protected",
+        reason: "A thread of another GOAT server on this machine uses it",
+      });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
 });

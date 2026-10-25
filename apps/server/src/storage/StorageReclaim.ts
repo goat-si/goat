@@ -191,9 +191,11 @@ const make = Effect.gen(function* () {
   /** Why a checkout or its build outputs must stay right now; null when nothing uses it. */
   const inUse = Effect.fn("StorageReclaim.inUse")(function* (folder: string) {
     const other = yield* resolveOtherServerPaths(config.dbPath);
-    const otherReason = otherServerReason(other, folder, rules);
-    if (otherReason !== null) return otherReason;
     const realFolder = (yield* real(folder)) ?? folder;
+    // Another server may record the folder where it really is, not where it was added.
+    const otherReason =
+      otherServerReason(other, folder, rules) ?? otherServerReason(other, realFolder, rules);
+    if (otherReason !== null) return otherReason;
     const working = processInside(
       yield* (yield* LocalGoatServers).workingDirectories,
       [folder, realFolder],
@@ -289,6 +291,19 @@ const make = Effect.gen(function* () {
     if (working) return "a process is running in this folder";
     return null;
   });
+
+  /** Whether a GOAT home or GOAT data lies below folder, read now (another server's home in it). */
+  const holdsGoatDataBelow = Effect.fn("StorageReclaim.holdsGoatDataBelow")(function* (
+    folder: string,
+  ) {
+    const goat = yield* resolveGoatDataPaths(
+      (yield* resolveOtherServerPaths(config.dbPath)).bindings.databases,
+    );
+    const folders = [path.resolve(folder), (yield* real(folder)) ?? path.resolve(folder)];
+    return [...goat.data, ...goat.homes].some((inner) =>
+      folders.some((each) => isStrictlyInside(each, inner, rules)),
+    );
+  }, Effect.provideContext(context));
 
   /** Why removing folder would reach GOAT's own data or a GOAT home, read now; null when not. */
   const goatDataNow = Effect.fn("StorageReclaim.goatDataNow")(function* (folder: string) {
@@ -489,6 +504,8 @@ const make = Effect.gen(function* () {
             if (reason !== null) return reason;
             const own = yield* ownReference(item.path);
             if (own !== null) return own;
+            if (yield* holdsGoatDataBelow(item.path))
+              return "it holds another GOAT server's home or data";
             return yield* removeUnusedPinnedRuntime({
               baseDir: config.baseDir,
               keep: [packageJson.version],
