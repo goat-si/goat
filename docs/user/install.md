@@ -165,8 +165,8 @@ nightly keep working from it. Logs and caches are not copied. Worktrees and
 project folders are not copied either: both apps keep using the same folders on
 disk. Neither app's automatic cleanup removes a worktree the other app still
 uses, but nothing stops both apps from working in the same worktree at once, so
-continue a copied thread in one app only. A large history can make that first launch take a little longer. If the
-copy fails, for example because the disk is full, GOAT (Nightly) says why and
+continue a copied thread in one app only. A large history can make that first
+launch take a little longer. If the copy fails, for example because the disk is full, GOAT (Nightly) says why and
 quits without changing anything; it tries again the next time you open it. On
 macOS, reading saved connections may ask once for permission to use GOAT's
 keychain item. Sign in to your GOAT account again in the nightly app.
