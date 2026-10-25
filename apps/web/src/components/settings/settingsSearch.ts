@@ -1009,7 +1009,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "project-actions",
     title: "Actions",
     to: "/settings/projects",
-    searchTerms: ["commands scripts setup run dev server checkout worktree goat.json t3.json import"],
+    searchTerms: [
+      "commands scripts setup run dev server checkout worktree goat.json t3.json import",
+    ],
   },
   {
     id: "environment-icon",

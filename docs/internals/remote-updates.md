@@ -285,7 +285,7 @@ means pairing with explicit scopes. GOAT adds no administrator role.
 | Paired desktop, web, or mobile                            | R                       | M                                                          | M and a confirmation                     | W                           |
 | Owning SSH client (saved key)                             | R                       | Idle refresh of a runtime it owns; M for the manual update | M and a confirmation                     | Never changed by connecting |
 | MCP agent                                                 | R                       | M, `when_idle`                                             | Only after a person approves the handoff | Not through update tools    |
-| Linked host, GOAT Connect route                             | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
+| Linked host, GOAT Connect route                           | The destination's grant | The destination's grant                                    | The destination's grant                  | The destination's grant     |
 
 Rules that hold for every row:
 
