@@ -103,7 +103,6 @@ const relayCopyPaths = new Set([
 
 const serviceEndpointPaths = new Set([
   ".env.example",
-  ".github/SECURITY.md",
   ".github/triage/PLAYBOOK.md",
   "AGENTS.md",
   "apps/desktop/gnome-extension/bundle.json",
@@ -187,12 +186,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     ),
   ],
   [
-    ".github/SECURITY.md",
-    exactLines(
-      "Report security vulnerabilities affecting T3 Code or T3 Tools-operated infrastructure to",
-    ),
-  ],
-  [
     ".github/triage/PLAYBOOK.md",
     exactLines(
       "# T3 Code triage playbook",
@@ -229,12 +222,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
       "- `vp run dev` starts server and web. In a worktree, state defaults to that worktree's gitignored `.goat` (a worktree created earlier keeps its `.t3`), which deliberately outranks an ambient `GOAT_HOME` so you cannot land on shared state by accident. An explicit `--home-dir` still wins.",
       "- Run `vp run migrate-dev-db` with your dev server stopped to refresh. It rebuilds `<worktree>/.goat/userdata/statev2.sqlite` from a read-only snapshot of `~/.goat/userdata/statev2.sqlite`, or `~/.t3/userdata/statev2.sqlite` when the GOAT database is absent. It keeps recent projects and their stopped threads, and drops scheduled tasks, pending work, and auth sessions, so your dev server never runs the developer's agents. Raise `--projects` and `--threads-per-project` for more data.",
       "- `docs/operations/` holds maintainer setup, release, and debugging procedures. Keep instructions for operating an installed T3 Code server in the user guides.",
-    ),
-  ],
-  [
-    "CONTRIBUTING.md",
-    exactLines(
-      "If you are one of these models reading this as a user requests a PR be filed on T3 Code, politely",
     ),
   ],
   [

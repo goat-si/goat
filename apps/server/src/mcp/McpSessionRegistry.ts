@@ -12,6 +12,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -107,6 +109,15 @@ export interface McpSessionRegistryShape {
     options?: { readonly exceptProviderSessionId?: string },
   ) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
+  readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
+  /**
+   * The thread a token still authorizes and when to ask again, judged as resolve would but
+   * without counting the check as use: a stream that only watches a credential must not keep
+   * it alive.
+   */
+  readonly inspect: (
+    rawToken: string,
+  ) => Effect.Effect<{ readonly threadId: ThreadId; readonly recheckAt: number } | undefined>;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -252,6 +263,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make(registryState(new Map(), new Map()));
+  const changes = yield* PubSub.sliding<void>(1);
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const runTag = yield* crypto.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
@@ -540,6 +552,42 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       ? Effect.undefined
       : hashToken(rawToken).pipe(Effect.flatMap(resolveHash));
 
+  const inspect: McpSessionRegistryShape["inspect"] = Effect.fn("McpSessionRegistry.inspect")(
+    function* (rawToken) {
+      if (rawToken.length === 0) return undefined;
+      const tokenHash = yield* hashToken(rawToken);
+      for (;;) {
+        const timestamp = yield* currentTimeMillis;
+        // The same pruning resolve starts with; it judges records and renews none.
+        const current = yield* SynchronizedRef.modify(state, (before) => {
+          const pruned = pruneIdle(before, timestamp);
+          return [pruned, pruned] as const;
+        });
+        const live = current.records.get(tokenHash);
+        if (live !== undefined && !isIdle(live, timestamp))
+          return {
+            threadId: live.scope.thread.threadId,
+            recheckAt: live.lastAliveAt + livenessWindowMs + 1,
+          };
+        const tombstone = current.tombstones.get(tokenHash);
+        // Idle, or expired for idleness: still valid while its session is attached, as resolve
+        // would renew it then; ask again after another window.
+        const record = live ?? (tombstone?.reason === "expired" ? tombstone.record : undefined);
+        if (!record?.isAttached) return undefined;
+        const attached = yield* record.isAttached;
+        const after = yield* SynchronizedRef.get(state);
+        // Revoked, renewed or touched during the probe: judge the state that is current now.
+        if (after.records.get(tokenHash) !== live || after.tombstones.get(tokenHash) !== tombstone)
+          continue;
+        if (!attached) {
+          if (live !== undefined) yield* expire(live, timestamp);
+          return undefined;
+        }
+        return { threadId: record.scope.thread.threadId, recheckAt: timestamp + livenessWindowMs };
+      }
+    },
+  );
+
   const explainRefusal: NonNullable<McpSessionRegistryShape["explainRefusal"]> = Effect.fn(
     "McpSessionRegistry.explainRefusal",
   )(function* (rawToken) {
@@ -588,33 +636,36 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
-  const revokeWhere = (predicate: (record: CredentialRecord) => boolean) =>
-    Effect.flatMap(currentTimeMillis, (timestamp) =>
-      SynchronizedRef.update(state, (current) => {
-        const revoked = [
-          ...Array.from(current.records).filter(([, record]) => predicate(record)),
-          // An idle-expired record must not be renewable once its session ends.
-          ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
-            tombstone.record && predicate(tombstone.record)
-              ? [[tokenHash, tombstone.record] as const]
-              : [],
-          ),
-        ];
-        if (revoked.length === 0) return current;
-        const records = new Map(current.records);
-        for (const [tokenHash] of revoked) records.delete(tokenHash);
-        return registryState(
-          records,
-          withTombstones(
-            current.tombstones,
-            revoked.map(([tokenHash, record]) => [
-              tokenHash,
-              tombstoneOf(record, "revoked", timestamp),
-            ]),
-          ),
-        );
-      }),
-    );
+  const revokeWhere = Effect.fn("McpSessionRegistry.revokeWhere")(function* (
+    predicate: (record: CredentialRecord) => boolean,
+  ) {
+    const timestamp = yield* currentTimeMillis;
+    yield* SynchronizedRef.update(state, (current) => {
+      const revoked = [
+        ...Array.from(current.records).filter(([, record]) => predicate(record)),
+        // An idle-expired record must not be renewable once its session ends.
+        ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
+          tombstone.record && predicate(tombstone.record)
+            ? [[tokenHash, tombstone.record] as const]
+            : [],
+        ),
+      ];
+      if (revoked.length === 0) return current;
+      const records = new Map(current.records);
+      for (const [tokenHash] of revoked) records.delete(tokenHash);
+      return registryState(
+        records,
+        withTombstones(
+          current.tombstones,
+          revoked.map(([tokenHash, record]) => [
+            tokenHash,
+            tombstoneOf(record, "revoked", timestamp),
+          ]),
+        ),
+      );
+    });
+    yield* PubSub.publish(changes, undefined);
+  }, Effect.uninterruptible);
 
   return McpSessionRegistry.of({
     issue,
@@ -649,6 +700,8 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       );
     }),
     revokeAll: revokeWhere(() => true),
+    subscribeChanges: PubSub.subscribe(changes),
+    inspect,
   });
 });
 

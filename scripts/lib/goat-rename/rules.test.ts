@@ -445,10 +445,6 @@ const keptVisibleCopy = [
     "description: Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review.",
   ],
   [
-    ".github/SECURITY.md",
-    "Report security vulnerabilities affecting T3 Code or T3 Tools-operated infrastructure to",
-  ],
-  [
     ".github/triage/PLAYBOOK.md",
     "- How is T3 Code running on this machine: `npx t3 serve` in a terminal, the",
   ],

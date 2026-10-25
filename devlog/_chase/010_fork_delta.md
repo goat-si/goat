@@ -151,6 +151,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 경로: `apps/server/src/orchestration-v2/goat/`, `apps/server/src/orchestration-v2/Orchestrator.ts`
 - 정책: GOAT 전용 명령 처리는 `orchestration-v2/goat/`의 factory 모듈에 둔다: 원격 위임 작업, thread notice와 GOAT 봇 timeline 기록, 스레드 승격, human handoff, review ledger, 서버 drain admission, PR 자동 watch, fleet fallback 전제 조건(`FallbackSelectionSource` 포함), 질문 이미 답함 오류(`goat/QuestionAnswers.ts`, Orchestrator가 다시 export한다). `Orchestrator.ts`에는 `makeOrchestrator` 안의 factory 호출, switch case, 오류 union 항목, import만 남긴다. upstream이 Orchestrator를 바꾸면 upstream을 받고 이 hook만 다시 얹는다. 새 GOAT 명령도 이 폴더에 둔다. 모듈은 `Orchestrator.ts`를 type으로만 import하고 오류 class와 closure를 인자로 받는다. 런타임 import 순환을 피하기 위해서다. `makeOrchestrator`에서 뒤에 선언되는 closure(`stopReachedRun`, `planDelegatedCompletionDelivery`)는 화살표 함수로 감싸 넘긴다. 바로 넘기면 TDZ에 걸린다. 사이클 261023에 `f054d1b` 대비 Orchestrator 차이가 +2114/−225에서 +959/−230으로 줄었다.
 
+### `owner-security` 패키지 소유자, 보안 신고, 기여 정책
+
+- 경로: `scripts/build-desktop-artifact.ts`의 Linux `maintainer`와 staged `author`, `.github/SECURITY.md`, `CONTRIBUTING.md`, `scripts/lib/goat-rename/rules-owner.ts`
+- 정책: maintainer·author는 `GOAT <jun@lidgeai.com>`, 보안 신고는 goat-si/goat의 GitHub private vulnerability reporting이다. `.github/SECURITY.md`는 GOAT 파일이라 충돌에서 GOAT 쪽을 둔다. CONTRIBUTING은 upstream 변경을 받고 GOAT 주인 문단, Ideas 링크, maintainer 문장, triage 신뢰 기준 문단을 다시 얹는다. upstream 쪽을 받은 줄은 머지 뒤 `--apply`가 `rules-owner.ts` 규칙으로 GOAT 값으로 바꾼다. triage 스킬과 `TRIAGE_EXEMPTIONS.td`는 아직 upstream 기준이다 ([10.015](./10.015_t3_chase_owner_and_security.md)).
+
 ### `pdf-viewer` PDF.js 파일 뷰어
 
 - 커밋: `3a13908a0`
