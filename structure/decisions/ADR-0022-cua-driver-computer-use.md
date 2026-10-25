@@ -6,8 +6,9 @@
   record the alternatives below; they come from the lane plan and research for this program.
 - Related: [ADR-0003](ADR-0003-effect-services.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 - Amended by: [ADR-0023](ADR-0023-goat-computer-use-app.md). The Electron-owned host and the
-  `si.goat.desktop` identity under "Identity" are superseded by a separate signed helper app; the
-  rest of this record stands.
+  `si.goat.desktop` identity under "Identity" are superseded by a separate signed helper app, and
+  the source of the pinned archives under "Pin 0.37.0" moves to GOAT's fork of the driver (D15);
+  the rest of this record stands.
 
 ## Decision record
 
@@ -35,10 +36,13 @@
   - **Port upstream.** GOAT carries the upstream stack at its frozen heads with GOAT renames
     (`scripts/goat-rename.ts`), and reconciles file by file when upstream merges its version
     (fork delta area `cua-driver`).
-  - **Pin 0.37.0.** `packages/shared/src/cuaDriverRelease.ts` pins the official 0.37.0 archive
-    names, byte sizes and SHA-256 from the release's `SHA256SUMS`, and the pnpm catalog pins
-    `@trycua/cua-driver` 0.37.0, the newest version published for both halves. Updates happen only
-    through GOAT releases. The driver's own update check and `update --apply` are never used.
+  - **Pin 0.37.0.** `packages/shared/src/cuaDriverRelease.ts` pins the 0.37.0 archive names, byte
+    sizes and SHA-256, and the pnpm catalog pins `@trycua/cua-driver` 0.37.0, the newest version
+    published for both halves. ADR-0023 (D15) moves the archives from upstream's official release
+    to artifacts GOAT builds from its fork, `goat-si/cua-driver`, at the same 0.37.0 protocol,
+    through the same pin and verification; until #1591 lands, the pin names upstream's official
+    archives from the release's `SHA256SUMS`. Updates happen only through GOAT releases. The
+    driver's own update check and `update --apply` are never used.
   - **MIT parts only.** GOAT ships the `cua-driver` executable and the `@trycua/cua-driver` SDK
     (MIT; the SDK's native packages add an MPL-2.0 Node runtime with its notice). Never the Cua
     SDK, Spaces, perception or set-of-marks components (FSL or AGPL), extensions or skill packs.

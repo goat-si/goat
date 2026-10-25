@@ -16,6 +16,10 @@
   pointer input no longer pauses an agent with approved control, unattended attachment requires
   private-mode detection but not human-input detection, and human-input detection remains for
   input arbitration and reports only. The Safety bullet below states the amended decision.
+- Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
+  its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
+  downloading upstream release binaries. The Engine and Driver fork bullets below state the
+  decision; until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 archives.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -62,6 +66,12 @@
     does. It avoids the private disclaim interface but needs a listener, peer verification on
     every connect and its own lifetime management. It is kept as the fallback if a macOS release
     breaks the disclaim interface.
+  - Keep downloading upstream's release binaries (D15). A driver bug that blocks GOAT then waits
+    for an upstream release, upstream moves several times a day (0.38.0 is already out), and GOAT
+    ships bytes it cannot rebuild from source it has reviewed.
+  - Vendor the driver under `third_party/` in this repository (D15). Its Rust workspace of 642
+    crates would put a Rust toolchain into every pull request's CI, fight the repository's lint
+    and code-budget tooling, and mix two release cadences.
 - **Decision.**
   - **Helper app per OS.** GOAT Computer Use is a separate signed native helper with its own
     identity, signing, notarization and version. On macOS it is "GOAT Computer Use.app",
@@ -70,8 +80,9 @@
     embedded in GOAT.app under `Contents/Helpers/` and launched by the desktop host. Windows (UI
     Automation) and Linux (AT-SPI, X11 and the Wayland portals) get helpers of their own behind the
     same protocol.
-  - **Engine.** Cua Driver (MIT, pinned 0.37.0; 0.38.0 is evaluated separately) runs as a child of
-    the helper. The macOS helper disclaims responsibility at its own start, so it becomes the TCC
+  - **Engine.** Cua Driver (MIT, at the 0.37.0 protocol, built from GOAT's fork; see Driver fork)
+    runs as a child of the helper. The macOS helper disclaims responsibility at its own start, so
+    it becomes the TCC
     principal whoever launched it, then spawns
     `cua-driver mcp --direct --embedded --host-bundle-id <helper bundle id>`: one stdio process per
     session that owns the driver runtime and listens on no socket, inherits the helper's grants and
@@ -79,7 +90,19 @@
     proxy starts its own helper with `--mcp` for that driver, and Stop ends the pair (D3 amendment
     2); only the desktop's readiness check still runs `serve --embedded` on a private socket. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
-    driver patches with recorded provenance, never in a rewritten driver.
+    driver changes in the fork with recorded provenance, never in a rewritten driver.
+  - **Driver fork (D15).** `goat-si/cua-driver` is a `git subtree split` of trycua/cua
+    `libs/cua-driver` that keeps upstream history: the `upstream` branch holds only upstream splits
+    (`upstream-v0.37.0` is the split of `cua-driver-rs-v0.37.0`, `2d2f99228d`), `main` adds GOAT's
+    changes through pull requests, and releases are tagged `cua-driver-rs-v0.37.0-goat.N`. Its
+    artifacts are unsigned; GOAT signs the driver in its helper build, so the helper's identity
+    and people's grants do not change. GOAT consumes the fork through the same pin-and-verify path
+    it uses today, so switching is a pin change (#1591). When the driver has a problem, GOAT does
+    not work around it: the fix goes into the fork, the same fix goes upstream as a pull request,
+    and the problem is reported upstream. Upstream is synced on purpose, not tracked: split the
+    new range onto `upstream`, review the diff for security and behavior, merge into `main` with
+    `cargo deny`, pass the 0.37.0 protocol-compatibility test and one live check per OS, then tag
+    and bump GOAT's pin.
   - **Channel.** The desktop's helper talks to its launcher over line-delimited JSON on stdio for
     readiness, app listing and watches; an agent connection's helper passes MCP straight between
     its launcher and the driver. A release helper serves only a parent
@@ -169,9 +192,12 @@
   - Running the driver in direct mode behind the helper's stdio leaves nothing for another process
     to connect to, which closes the same-user socket gap ADR-0022 recorded without a driver patch;
     the cost is the driver's cursor overlay, which the helper replaces.
-  - Small patches rebase; a cumulative fork does not. The deltas GOAT needs that upstream lacks
-    (batched accessibility reads, input cancellation with held-input release, host liveness,
-    settle waits, text selection, a wider keymap) are each tens to a few hundred lines.
+  - Small reviewed changes merge; one cumulative patch does not. The deltas GOAT needs that
+    upstream lacks (batched accessibility reads, input cancellation with held-input release, host
+    liveness, settle waits, text selection, a wider keymap) are each tens to a few hundred lines.
+  - Building from a fork lets GOAT fix a blocking driver bug on its own schedule and makes the
+    driver reproducible from source GOAT reviewed, while sending each fix upstream keeps the fork
+    close to upstream (D15).
   - One preview contract lets a person read the same chips and press the same buttons whichever
     surface the agent uses and whichever client they hold.
 - **Tradeoffs.**
@@ -191,3 +217,10 @@
     blocked until then (#1202).
   - Background input and private mode depend on what each platform exposes. Wayland has no
     background input path, so foreground actions there need an exclusive lease.
+  - The fork is GOAT's to maintain (D15): a Rust toolchain and builds for three operating systems;
+    a security and behavior review of every upstream range taken, never blind tracking; the
+    supply chain (the fork's CI, artifact attestations, `cargo deny` and the license audit, #1589);
+    and the 0.37.0 protocol, which the helper and the `@trycua/cua-driver` SDK depend on, so any
+    protocol change needs its own decision. The fork keeps upstream's MIT license and copyright,
+    uses the Cua Driver name only to say where the code comes from, and GOAT never presents its
+    builds as official upstream releases.
