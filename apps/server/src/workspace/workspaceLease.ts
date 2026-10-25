@@ -1,6 +1,8 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import type * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 
@@ -17,15 +19,16 @@ const HeldSubtrees = Context.Reference<ReadonlyArray<string>>(
   { defaultValue: () => [] },
 );
 
-const comparable = (folder: string) => {
+const comparable = (folder: string, platform: NodeJS.Platform) => {
   const slashed = folder.replaceAll("\\", "/").replace(/\/+$/u, "");
-  return process.platform === "linux" ? slashed : slashed.toLowerCase();
+  return platform === "linux" ? slashed : slashed.toLowerCase();
 };
 const inside = (root: string, key: string) => key === root || key.startsWith(root + "/");
 
 /** The subtree hold covering cwd that this fiber does not hold itself, if any. */
-const blockingSubtree = (cwd: string, held: ReadonlyArray<string>) => {
-  const key = comparable(cwd);
+const blockingSubtree = (cwd: string, fiber: Fiber.Fiber<unknown, unknown>) => {
+  const held = fiber.getRef(HeldSubtrees);
+  const key = comparable(cwd, fiber.getRef(HostProcess.Platform));
   for (const [root, released] of subtrees)
     if (inside(root, key) && !held.includes(root)) return released;
   return undefined;
@@ -56,7 +59,7 @@ export const withWorkspaceLease = <A, E, R>(
 ): Effect.Effect<A, E, R> =>
   Effect.withFiber((fiber) => {
     // Checked and registered in one synchronous step, so a subtree hold cannot slip between.
-    const blocking = blockingSubtree(cwd, fiber.getRef(HeldSubtrees));
+    const blocking = blockingSubtree(cwd, fiber);
     return blocking === undefined
       ? withLeaseSemaphore(cwd, (semaphore) => semaphore.withPermit(effect))
       : Deferred.await(blocking).pipe(Effect.andThen(withWorkspaceLease(cwd, effect)));
@@ -68,7 +71,7 @@ export const tryWithWorkspaceLease = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<Option.Option<A>, E, R> =>
   Effect.withFiber((fiber) =>
-    blockingSubtree(cwd, fiber.getRef(HeldSubtrees)) === undefined
+    blockingSubtree(cwd, fiber) === undefined
       ? withLeaseSemaphore(cwd, (semaphore) => semaphore.withPermitsIfAvailable(1)(effect))
       : Effect.succeed(Option.none()),
   );
@@ -84,9 +87,10 @@ export const tryWithWorkspaceSubtree = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<Option.Option<A>, E, R> =>
   Effect.withFiber((fiber) => {
-    const key = comparable(root);
+    const platform = fiber.getRef(HostProcess.Platform);
+    const key = comparable(root, platform);
     const busy =
-      [...leases.keys()].some((cwd) => inside(key, comparable(cwd))) ||
+      [...leases.keys()].some((cwd) => inside(key, comparable(cwd, platform))) ||
       [...subtrees.keys()].some((other) => inside(other, key) || inside(key, other));
     if (busy) return Effect.succeed(Option.none());
     const released = Deferred.makeUnsafe<void>();
