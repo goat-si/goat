@@ -63,18 +63,24 @@ const stopped = <T extends TurnLike, S extends Stoppable<T>>(
   subagents: ReadonlyMap<string, S>,
   stops: (turn: T) => boolean,
   activeTurns: ReadonlyMap<string, unknown>,
+  idleLineage: boolean,
 ) =>
   [...subagents.values()].filter((subagent) => {
     if (subagent.task.status !== "running" && subagent.task.status !== "pending") return false;
     if ([...subagent.nativeTurnIds].some((turnId) => activeTurns.has(turnId))) return false;
-    for (const parent of turnsUp(subagent.parentContext))
+    for (const parent of turnsUp(subagent.parentContext)) {
+      if (idleLineage && activeTurns.has(parent.nativeTurnId)) return false;
       if (stops(parent as T)) return (subagent.endedByStop = subagent.workStopped = true);
+    }
     return false;
   });
 
 /**
  * After Stop, ends every subagent of the stopped thread that registered but runs no known turn,
  * whichever path Stop took: a goal pause, between goal turns, after the root finished (#1645).
+ * A Stop that failed passes the turns Codex confirmed ended before the failure: only a subagent
+ * under one of them, with no turn above it still running, ends then (#1654). GOAT finalizes the
+ * rest of a failed Stop's turns itself, which says nothing about whether their work stopped.
  */
 export const endStopped = Effect.fn("CodexAdapterV2.endStoppedSubagents")(function* <
   T extends TurnLike,
@@ -85,9 +91,14 @@ export const endStopped = Effect.fn("CodexAdapterV2.endStoppedSubagents")(functi
   activeTurns: Ref.Ref<Map<string, A>>,
   providerThreadId: string,
   end: (subagent: S) => Effect.Effect<void>,
+  confirmed?: ReadonlySet<string>,
 ) {
-  const owned = (turn: T) => turn.subagent === null && turn.providerThread.id === providerThreadId;
-  for (const subagent of stopped(yield* Ref.get(subagents), owned, yield* Ref.get(activeTurns)))
+  const owned = (turn: T) =>
+    turn.subagent === null &&
+    turn.providerThread.id === providerThreadId &&
+    (confirmed === undefined || confirmed.has(turn.nativeTurnId));
+  const active = yield* Ref.get(activeTurns);
+  for (const subagent of stopped(yield* Ref.get(subagents), owned, active, confirmed !== undefined))
     yield* end(subagent);
 });
 

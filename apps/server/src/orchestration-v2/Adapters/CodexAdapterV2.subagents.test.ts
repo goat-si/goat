@@ -3,6 +3,7 @@ import { ProviderThreadId, ThreadId } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { CODEX_TEST_MODEL_SELECTION, CODEX_TEST_RUNTIME_POLICY } from "./CodexAdapterV2.testkit.ts";
@@ -30,6 +31,15 @@ const sendInput = (root: string, child: string, turnId = "turn-2") => ({
     },
   },
 });
+
+// What a spawned child shows: its subagent node in the parent and its own thread's root node.
+const childNodes = (allocator: IdAllocator.IdAllocatorV2["Service"], child: string) =>
+  ["", ":thread-root"].map((suffix) =>
+    allocator.derive.nodeFromProviderItem({
+      driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+      nativeItemId: `spawn-${child}:${child}${suffix}`,
+    }),
+  );
 
 describe("Codex native subagents as their thread's background work", () => {
   // Settling a run and releasing an idle session ask the adapter per thread (#1571).
@@ -129,6 +139,11 @@ describe("Codex native subagents as their thread's background work", () => {
             yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
           );
           assert.isFalse(yield* replay.runtime.hasPendingBackgroundWork!);
+          // Its nodes end with its task, so neither the parent nor its own thread shows it running.
+          assert.deepStrictEqual(
+            childNodes(allocator, root + "-agent").map((id) => replay.nodeStatuses.get(id)?.at(-1)),
+            ["interrupted", "interrupted"],
+          );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -228,6 +243,14 @@ describe("Codex native subagents as their thread's background work", () => {
           yield* replay.terminal;
           assert.equal(replay.subagentStatuses.at(-1), "completed");
           assert.include(replay.subagentStatuses, "interrupted");
+          // Both of its nodes run again for the new work, then end with it (#1654).
+          assert.deepStrictEqual(
+            childNodes(allocator, child).map((id) => replay.nodeStatuses.get(id)),
+            [
+              ["running", "interrupted", "running", "completed"],
+              ["running", "interrupted", "running", "completed"],
+            ],
+          );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -816,5 +839,181 @@ describe("Codex native subagents as their thread's background work", () => {
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
+  );
+});
+describe("Codex Stop that fails after it ended the turn (#1654)", () => {
+  const devServer = (status: "inProgress") => ({
+    type: "commandExecution",
+    id: "dev-server-command",
+    command: "vp run dev",
+    cwd: "/workspace",
+    processId: "dev-server",
+    source: "unifiedExecStartup",
+    status,
+    commandActions: [{ type: "unknown", command: "vp run dev" }],
+    aggregatedOutput: null,
+    exitCode: null,
+    durationMs: null,
+  });
+  // Codex says it terminated nothing and still lists the terminal, so Stop fails.
+  const terminalSurvives = (f: ReturnType<typeof fixture>, root: string, first: number) =>
+    f.entries.push(
+      {
+        type: "expect_outbound",
+        frame: {
+          id: first,
+          method: "thread/backgroundTerminals/terminate",
+          params: { threadId: root, processId: "dev-server" },
+        },
+      },
+      { type: "emit_inbound", frame: { id: first, result: { terminated: false } } },
+      {
+        type: "expect_outbound",
+        frame: {
+          id: first + 1,
+          method: "thread/backgroundTerminals/list",
+          params: { threadId: root },
+        },
+      },
+      {
+        type: "emit_inbound",
+        frame: { id: first + 1, result: { data: [{ processId: "dev-server" }], nextCursor: null } },
+      },
+    );
+  const stop = (
+    replay: Effect.Success<ReturnType<typeof fixture>["open"]>,
+    nativeTurnId: string,
+    requestRuntimeRestart: boolean,
+  ) =>
+    Effect.gen(function* () {
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      return yield* replay.runtime
+        .interruptTurn({
+          providerThread: replay.providerThread,
+          providerTurnId: allocator.derive.providerTurn({
+            driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+            nativeTurnId,
+          }),
+          requestRuntimeRestart,
+        })
+        .pipe(Effect.exit);
+    });
+
+  it.effect("still ends a never-started subagent of the turn it confirmed stopped", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "late-stop-error";
+        const child = root + "-agent";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, child);
+        f.entries.push(
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "item/started",
+              params: {
+                threadId: root,
+                turnId: "turn-1",
+                item: devServer("inProgress"),
+                startedAtMs: 1782622441500,
+              },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "turn/interrupt",
+              params: { threadId: root, turnId: "turn-1" },
+            },
+          },
+          { type: "emit_inbound", frame: { id: 4, result: {} } },
+        );
+        terminalSurvives(f, root, 5);
+        f.status(root, "idle");
+        f.entries.push({
+          type: "emit_inbound",
+          frame: {
+            method: "turn/completed",
+            params: {
+              threadId: root,
+              turn: makeCodexReplayTurn({ id: "turn-1", status: "interrupted" }),
+            },
+          },
+        });
+        terminalSurvives(f, root, 7);
+        // The next turn's events come after whatever the failed Stop emitted.
+        yield* f.turnStart(9, 2, false);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        const stopped = yield* stop(replay, "turn-1", true);
+        assert.isTrue(Exit.isFailure(stopped));
+        yield* replay.terminal;
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        assert.deepStrictEqual(
+          {
+            task: replay.subagentStatuses.at(-1),
+            nodes: childNodes(allocator, child).map((id) => replay.nodeStatuses.get(id)?.at(-1)),
+          },
+          { task: "interrupted", nodes: ["interrupted", "interrupted"] },
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  // Codex refused the interrupt and reported nothing ended. GOAT still finalizes the turn
+  // itself, but that proves nothing about the child, which may start its work any moment.
+  it.effect("leaves a never-started subagent running when Codex refused the Stop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "stop-refused";
+        const child = root + "-agent";
+        const f = fixture(root);
+        const sessions = yield* McpProviderSessions.McpProviderSessions;
+        yield* sessions.set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, child);
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 4,
+              method: "turn/interrupt",
+              params: { threadId: root, turnId: "turn-1" },
+            },
+          },
+          { type: "emit_inbound", frame: { id: 4, error: { code: -32603, message: "busy" } } },
+        );
+        // The next turn's events come after whatever the failed Stop emitted.
+        yield* f.turnStart(5, 2, false);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        const stopped = yield* stop(replay, "turn-1", true);
+        assert.isTrue(Exit.isFailure(stopped));
+        yield* replay.terminal;
+        yield* replay.startTurn(2);
+        yield* replay.terminal;
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        assert.deepStrictEqual(
+          {
+            task: replay.subagentStatuses.at(-1),
+            nodes: childNodes(allocator, child).map((id) => replay.nodeStatuses.get(id)?.at(-1)),
+          },
+          { task: "running", nodes: ["running", "running"] },
+        );
+        assert.isTrue(
+          yield* replay.runtime.hasPendingBackgroundWorkForThread!(replay.providerThread),
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 });
