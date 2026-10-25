@@ -5,6 +5,7 @@ import type {
 } from "@goat/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
+import { movesPointer } from "./computerUseTarget.ts";
 
 const READS = new Set([
   "check_permissions",
@@ -54,7 +55,6 @@ export const foreground = (value: unknown, depth = 0): boolean => {
   if (Array.isArray(value)) return value.some((item) => foreground(item, depth + 1));
   const object = record(value);
   if (object === undefined) return false;
-  // Raw MCP arguments bypass the enum; the driver parses mode strings case-insensitively.
   return Object.entries(object).some(
     ([key, child]) =>
       ((key === "delivery_mode" || key === "dispatch") &&
@@ -65,14 +65,19 @@ export const foreground = (value: unknown, depth = 0): boolean => {
   );
 };
 
+export const requiresForeground = (call: Pick<Call, "name" | "args">) =>
+  // Overlay moves ignore delivery mode; only the driver's desktop form moves the real pointer.
+  call.name === "move_cursor"
+    ? movesPointer(call.args)
+    : call.name === "run_steps" ||
+      call.name === "run_script" ||
+      call.name === "bring_to_front" ||
+      call.name === "launch_app" ||
+      foreground(call.args);
+
 /** Numeric identity is execution scope only; it never preserves approval across window reuse. */
 export const callResource = (call: Pick<Call, "name" | "args">): Resource | "read" | "invalid" => {
-  const desktop =
-    call.name === "run_steps" ||
-    call.name === "run_script" ||
-    call.name === "bring_to_front" ||
-    call.name === "launch_app" ||
-    foreground(call.args);
+  const desktop = requiresForeground(call);
   if (!WINDOW_MUTATIONS.has(call.name))
     return !desktop && READS.has(call.name) ? "read" : "desktop";
   const args = record(call.args);
@@ -126,13 +131,26 @@ export const makeCallReservations = () => {
       tickets.set(reservationId, { threadId, call, resource });
       return { status: "admitted", reservationId };
     },
+    lookup(
+      threadId: ThreadId,
+      call: Extract<ComputerUseCallReservation, { action: "validate" }>,
+    ): Call | undefined {
+      const ticket = tickets.get(call.reservationId);
+      if (
+        closed.has(connectionKey(threadId, call)) ||
+        ticket === undefined ||
+        connectionKey(ticket.threadId, ticket.call) !== connectionKey(threadId, call)
+      )
+        return undefined;
+      return ticket.call;
+    },
     forgetClosed(threadId: ThreadId, controlId: string) {
       for (const [key, owner] of closed)
         if (owner.threadId === threadId && owner.controlId === controlId) closed.delete(key);
     },
     release(
       threadId: ThreadId,
-      call: Exclude<ComputerUseCallReservation, Call>,
+      call: Extract<ComputerUseCallReservation, { action: "release" | "close" }>,
       rememberClosed: boolean,
     ): ComputerUseCallAdmission {
       const key = connectionKey(threadId, call);

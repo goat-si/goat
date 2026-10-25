@@ -12,6 +12,7 @@ import {
   CUA_DRIVER_ALLOWED_TOOLS,
   CUA_DRIVER_EXCLUDED_TOOLS,
   admittedCuaApplications,
+  cuaRequestableApps,
   cuaDriverCapabilityManifest,
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
@@ -23,6 +24,15 @@ import {
 vi.mock("node:fs/promises", { spy: true });
 
 describe("cuaDriverManifest", () => {
+  it("retains every attested identity when a best-effort listing loses the bundle id", () => {
+    const apps = cuaRequestableApps(
+      [{ name: " Editor.exe ", executable: " C:\\Apps\\Editor.exe " }],
+      [],
+    );
+    expect(apps).toEqual(["C:\\Apps\\Editor.exe", "Editor.exe"]);
+    expect(apps).not.toContain("Editor window");
+  });
+
   it("keeps every admin, install, file and exfiltration tool out of the allow list", () => {
     const allowed = new Set<string>(CUA_DRIVER_ALLOWED_TOOLS);
     for (const tool of Object.keys(CUA_DRIVER_EXCLUDED_TOOLS))
@@ -45,6 +55,49 @@ describe("cuaDriverManifest", () => {
       "get_desktop_state",
     ])
       expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
+  });
+
+  it("offers only list_apps identities outside the manifest's protected apps", () => {
+    expect(
+      cuaRequestableApps(
+        [
+          { bundle_id: " com.apple.TextEdit ", name: "Editor window" },
+          { bundle_id: "com.apple.TextEdit", name: "Duplicate" },
+          { bundle_id: " ", name: " fixture.exe ", executable: "C:\\Apps\\fixture.exe" },
+          { name: "Linux Editor", executable: "/usr/bin/editor" },
+          { name: "Name only" },
+          { bundle_id: "SI.GOAT.DESKTOP", name: "GOAT" },
+          { name: "GOAT.exe", executable: "c:/Program Files/GOAT/GOAT.exe" },
+          { bundle_id: "com.trycua.driver", name: "Driver" },
+          { bundle_id: "com.apple.Passwords", name: "Vault" },
+          { bundle_id: "org.example.vault", name: "Bitwarden" },
+          { name: "1Password.exe" },
+          { name: "Driver", executable: "C:\\Tools\\cua-driver.exe" },
+          {
+            bundle_id: "org.example.host",
+            name: "Host alias",
+            executable: "C:\\Program Files\\GOAT\\GOAT.exe",
+          },
+          {
+            bundle_id: "org.example.vault",
+            name: "Vault alias",
+            executable: "C:\\Apps\\1Password.exe",
+          },
+          { bundle_id: "com.example.Passwords", name: "Vault" },
+          { name: " ", executable: "/usr/bin/anonymous" },
+          {},
+        ],
+        ["si.goat.desktop", "\\\\?\\C:\\Program Files\\GOAT\\GOAT.exe"],
+      ),
+    ).toEqual([
+      "/usr/bin/anonymous",
+      "/usr/bin/editor",
+      "C:\\Apps\\fixture.exe",
+      "Linux Editor",
+      "Name only",
+      "com.apple.TextEdit",
+      "fixture.exe",
+    ]);
   });
 
   it("admits every listed app except GOAT, the driver and credential stores", () => {
@@ -116,6 +169,77 @@ describe("cuaDriverManifest", () => {
     ])
       expect(admittedCuaApplications(listed, host)).toEqual(["C:\\Apps\\notes.exe"]);
   });
+
+  it("admits a running Linux app with no desktop entry by its executable, one entry per path (#1513)", () => {
+    expect(
+      admittedCuaApplications(
+        [
+          { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+          { bundle_id: null, name: "python3", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "fixture.py", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "cua-driver", executable: "/opt/goat/cua-driver/cua-driver" },
+          { bundle_id: null, name: "keepassxc", executable: "/usr/bin/keepassxc" },
+          { bundle_id: null, name: "node", executable: "/usr/bin/node" },
+        ],
+        ["/usr/bin/node"],
+      ),
+    ).toEqual([
+      { executable: "/usr/bin/python3.12", names: ["fixture.py", "python3"] },
+      "org.gnome.Calculator",
+    ]);
+  });
+
+  it("writes a Linux executable grant the driver matches, and reads back the names approvals use (#1513)", () => {
+    const text = cuaDriverCapabilityManifest({
+      applications: [
+        "org.gnome.Calculator",
+        { executable: "/usr/bin/python3.12", names: ["python3"] },
+      ],
+      tools: ["list_apps"],
+    });
+    expect(text).toContain('    - executable: "/usr/bin/python3.12" # names: ["python3"]');
+    expect(cuaDriverManifestApplications(text)).toEqual([
+      "org.gnome.Calculator",
+      "/usr/bin/python3.12",
+      "python3",
+    ]);
+    expect(
+      missingCuaDriverApplications(["python3", "gedit"], cuaDriverManifestApplications(text)),
+    ).toEqual(["gedit"]);
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "reads a windowed Linux app's executable from /proc, never GOAT's own process or a windowless one (#1513)",
+    async () => {
+      const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-"));
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const pid = child.pid ?? 0;
+        const path = await prepareCuaDriverCapabilityManifest({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          path: NodePath.join(directory, "manifest.yaml"),
+          listApplications: async () => [
+            { bundle_id: null, name: "sleep", pid, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "windowless", pid, windows: [] },
+            { bundle_id: null, name: "goat", pid: process.pid, windows: [{ window_id: 2 }] },
+          ],
+        });
+        const text = await NodeFSP.readFile(path, "utf8");
+        const sleep = await NodeFSP.realpath(`/proc/${pid}/exe`);
+        expect(text).toContain(`    - executable: ${JSON.stringify(sleep)} # names: ["sleep"]`);
+        expect(text).not.toContain("windowless");
+        expect(text).not.toContain(JSON.stringify(await NodeFSP.realpath(process.execPath)));
+      } finally {
+        child.kill();
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("writes a v3 manifest: tools, display, admitted apps and no file or profile scope", () => {
     const text = cuaDriverCapabilityManifest({

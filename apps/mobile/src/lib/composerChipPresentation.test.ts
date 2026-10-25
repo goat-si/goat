@@ -22,6 +22,7 @@ const CHIP_ACCENTS = [
         "pull-request",
         "skill",
         "thread",
+        "capability",
       ].map((kind) => contextChipPresentation(kind)),
       ...[
         { state: "open", isDraft: false },

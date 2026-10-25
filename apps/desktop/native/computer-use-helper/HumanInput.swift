@@ -5,19 +5,41 @@ import Foundation
 
 /// Which tapped events are reported, kept free of the system so it can be tested
 /// (apps/desktop/src/cua/ComputerUseHelperInput.test.ts). It is given an event's type and the time
-/// it arrived, nothing else. The tap takes button presses only: a person's click is the input that
-/// must not hide behind an agent's (#1488), and presses come a few a second at most, so every
-/// one is reported with its own time and none is ever dropped or held back. Moves, drags and
-/// scrolls come dozens a second; reporting each would queue the safety reports behind each other,
-/// and thinning them would drop some, so they stay polled.
+/// it arrived, nothing else, and reports every pointer event with its own time: none is dropped,
+/// held back or merged here (#1488). The lease proxy sends whatever has piled up in one report
+/// (apps/server/src/cua/agentInputReports.ts), so a stream of moves cannot queue the safety
+/// reports behind each other.
 enum PointerTap {
   /// The event types the tap receives. Keyboard events are never among them (D7: the helper does
   /// not use Input Monitoring); keyboard input is polled.
-  static let types: [CGEventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+  static let types: [CGEventType] = [
+    .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
+    .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+  ]
 
   /// The time to report for a tapped event of `type` that arrived at `at`, or nil.
   static func report(_ type: CGEventType, at: Double) -> Double? {
     types.contains(type) ? at : nil
+  }
+}
+
+/// One kind's poll of its newest event, kept free of the system so it can be tested. The system
+/// keeps only each kind's newest event, so a poll reports at most one; two events of a kind within
+/// one interval show as the later one. The interval is short so that hardly happens between a
+/// person's key and an agent's next one: the driver types about one key every 38 ms.
+struct PolledKind {
+  static let interval = 0.025
+  private var latest: Double
+
+  /// Whatever happened before this connection is no one's concern here.
+  init(newestAtStart: Double) { latest = newestAtStart }
+
+  /// The time to report for the kind's newest event, or nil when it was already reported.
+  mutating func poll(newest at: Double) -> Double? {
+    // A millisecond of slack: the same event read twice must not count as a new one.
+    guard at.isFinite, at > latest + 0.001 else { return nil }
+    latest = at
+    return at
   }
 }
 
@@ -26,30 +48,17 @@ enum PointerTap {
 /// system, so this reports the agent's events too; the lease proxy and the server know when input
 /// calls ran and keep only the rest (apps/server/src/cua/agentInputLog.ts).
 ///
-/// Button presses come one by one from a listen-only event tap, which needs no grant, so a
-/// person's click just before an agent's pointer input is reported with its own time (#1488).
-/// Everything else is polled: each kind's newest event age, read every 250 ms, which needs no
-/// grant either but reports only the newest event of a kind per poll, so a person's key, move or
-/// scroll right before an agent's of the same kind can hide behind it. A keyboard tap would need
-/// Input Monitoring, which the helper does not use (D7). Polling sees presses too, so a press both
-/// see is reported twice, which the server judges the same way, and a tap that could not be made
-/// leaves presses polled as before. Nothing listens once the connection ends.
+/// Pointer events come one by one from a listen-only event tap, which needs no grant. Keyboard
+/// events are polled every PolledKind.interval, as the newest key's age, since a keyboard tap
+/// would need Input Monitoring, which the helper does not use (D7). If no tap can be made, the
+/// pointer is polled the same way. Nothing listens once the connection ends.
 final class InputActivity {
-  private static let polled: [(source: String, types: [CGEventType])] = [
-    ("keyboard", [.keyDown, .flagsChanged]),
-    (
-      "pointer",
-      [
-        .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
-        .leftMouseDragged, .rightMouseDragged,
-      ]
-    ),
-  ]
+  private static let keyboard: [CGEventType] = [.keyDown, .flagsChanged]
   private let report: (String, Double) -> Void
   private let queue = DispatchQueue(label: "si.goat.computer-use.input")
   private var tap: CFMachPort?
   private var timer: DispatchSourceTimer?
-  private var latest: [String: Double] = [:]
+  private var polled: [(source: String, types: [CGEventType], kind: PolledKind)] = []
 
   /// `at` is on `InputActivity.now()`'s clock, so a later writer can say how long ago it was.
   init(report: @escaping (_ source: String, _ at: Double) -> Void) {
@@ -60,13 +69,14 @@ final class InputActivity {
   static func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
 
   func start() {
-    startTap()
-    startPolling()
+    let tapped = startTap()
+    startPolling(
+      [("keyboard", Self.keyboard)] + (tapped ? [] : [("pointer", PointerTap.types)]))
   }
 
   // MARK: Pointer tap
 
-  private func startTap() {
+  private func startTap() -> Bool {
     let mask = PointerTap.types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
     guard
       let tap = CGEvent.tapCreate(
@@ -81,7 +91,7 @@ final class InputActivity {
           return Unmanaged.passUnretained(event)
         },
         userInfo: Unmanaged.passUnretained(self).toOpaque())
-    else { return }
+    else { return false }
     self.tap = tap
     let thread = Thread {
       let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
@@ -91,6 +101,7 @@ final class InputActivity {
     }
     thread.name = "si.goat.computer-use.pointer-tap"
     thread.start()
+    return true
   }
 
   /// On the tap's thread, as each event arrives, with its type only.
@@ -108,19 +119,23 @@ final class InputActivity {
 
   // MARK: Polling
 
-  /// Seconds since the newest event of a kind, on the clock the system counts it with.
-  private static func age(_ types: [CGEventType]) -> Double {
-    types.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min()
-      ?? .infinity
+  /// When the newest event of these types happened, on now()'s clock.
+  private static func newest(_ types: [CGEventType], now: Double) -> Double {
+    now
+      - (types.map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }
+        .min() ?? .infinity)
   }
 
-  private func startPolling() {
+  private func startPolling(_ kinds: [(source: String, types: [CGEventType])]) {
     queue.async { [self] in
-      // Whatever happened before this connection is no one's concern here.
       let now = Self.now()
-      for kind in Self.polled { latest[kind.source] = now - Self.age(kind.types) }
+      polled = kinds.map {
+        ($0.source, $0.types, PolledKind(newestAtStart: Self.newest($0.types, now: now)))
+      }
       let timer = DispatchSource.makeTimerSource(queue: queue)
-      timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+      timer.schedule(
+        deadline: .now() + PolledKind.interval, repeating: PolledKind.interval,
+        leeway: .milliseconds(5))
       timer.setEventHandler { [weak self] in self?.poll() }
       timer.resume()
       self.timer = timer
@@ -129,14 +144,9 @@ final class InputActivity {
 
   private func poll() {
     let now = Self.now()
-    for kind in Self.polled {
-      let age = Self.age(kind.types)
-      guard age.isFinite else { continue }
-      let at = now - age
-      // A millisecond of slack: the same event read twice must not count as a new one.
-      guard at > (latest[kind.source] ?? -.infinity) + 0.001 else { continue }
-      latest[kind.source] = at
-      report(kind.source, at)
+    for index in polled.indices {
+      let at = Self.newest(polled[index].types, now: now)
+      if let at = polled[index].kind.poll(newest: at) { report(polled[index].source, at) }
     }
   }
 }

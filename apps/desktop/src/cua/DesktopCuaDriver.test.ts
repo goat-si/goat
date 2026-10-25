@@ -19,6 +19,7 @@ import {
   descriptor,
   HOST_PID,
   HELPER_ID,
+  HELPER_BUNDLE,
   toolResult,
   healthyTools,
   fixture,
@@ -28,6 +29,88 @@ import {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("DesktopCuaDriver", () => {
+  it.effect.each(["darwin", "win32"] as const)(
+    "answers fresh app-list requests through the %s helper, and refuses disabled or failed listings",
+    (platform) =>
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform, helper: { granted: true } });
+        yield* test.listApps([
+          { bundle_id: " com.example.Editor ", name: "Editor window" },
+          { name: "fixture.exe", executable: "C:\\Apps\\fixture.exe" },
+          { bundle_id: HELPER_ID, name: "GOAT Computer Use" },
+          { bundle_id: "codes.t3.host-test", name: "GOAT" },
+          { bundle_id: "com.apple.Passwords", name: "Passwords" },
+        ]);
+        yield* test.requestApps("apps-1");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "apps-1",
+          status: "listed",
+          apps: ["C:\\Apps\\fixture.exe", "com.example.Editor", "fixture.exe"],
+        });
+        yield* test.listApps([{ name: "New app" }]);
+        yield* test.requestApps("apps-2");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "apps-2",
+          status: "listed",
+          apps: ["New app"],
+        });
+        assert.equal(test.helperAppListings.length, 2);
+        yield* test.setComputerUseEnabled(false);
+        yield* test.requestApps("off");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "off",
+          status: "unavailable",
+        });
+        assert.equal(
+          test.helperAppListings.length,
+          2,
+          "disabled requests do not run the helper listing",
+        );
+        yield* test.setComputerUseEnabled(true);
+        yield* test.failAppListing;
+        yield* test.requestApps("failed");
+        assert.deepEqual(yield* test.nextApps, {
+          version: 1,
+          type: "cuaApps",
+          requestId: "failed",
+          status: "unavailable",
+        });
+        assert.equal(test.helperAppListings.length, 3);
+        assert.equal(test.constructors.length, 0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("starts an updated helper after the running generation is restarted", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+        });
+        yield* test.request("before-update");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.applyHelperUpdate;
+        yield* test.restart;
+        assert.equal((yield* test.next).status, "stopped");
+        yield* test.request("after-update");
+        assert.equal((yield* test.next).status, "ready");
+        assert.deepEqual(
+          test.helperLaunches.map(({ driverPath }) => driverPath),
+          [
+            HELPER_BUNDLE + "/Contents/Resources/cua-driver/cua-driver",
+            HELPER_BUNDLE + "/generations/new/Contents/Resources/cua-driver/cua-driver",
+          ],
+        );
+      }),
+    ),
+  );
+
   it.effect("hosts with the app identity, preserves the descriptor, reuses and releases once", () =>
     Effect.gen(function* () {
       vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/ignored-in-packaged-app");

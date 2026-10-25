@@ -96,8 +96,13 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 /// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
 /// serves an unpackaged Electron or a terminal.
 ///
-/// This is not enough on its own while GOAT's signed executable can run arbitrary JavaScript
-/// with ELECTRON_RUN_AS_NODE; release builds ship the helper only once that is closed (#1210).
+/// This is not enough on its own: GOAT's signed executable runs any JavaScript under
+/// ELECTRON_RUN_AS_NODE, NODE_OPTIONS or Node inspect arguments (its Electron fuses are on, since
+/// GOAT's backend, CLI and lease proxy run it as Node), so any same-user program can pass this
+/// check by running its own code as GOAT. The helper does not read the parent's fuses at launch:
+/// a check of the framework on disk cannot be tied to the image the parent loaded without copying
+/// the whole framework, and could only refuse every signed GOAT today. Closing this (a separate
+/// runtime for those, the fuses off, checked when the app is packaged) is #1352.
 func parentRefusal(_ parent: pid_t) -> String? {
   if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
     return nil
@@ -195,6 +200,8 @@ func runLauncher() -> Never {
   let executable = Bundle.main.executablePath ?? CommandLine.arguments[0]
   var environment = ProcessInfo.processInfo.environment
   environment[disclaimedVariable] = "1"
+  // Whatever the inherited environment says: the service learns GOAT's pid only from here.
+  environment[HostIdentity.hostPidVariable] = String(parent)
   let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
   // The service gets this launch's arguments: --mcp selects the agent connection mode.
   let argv = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]

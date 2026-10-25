@@ -27,6 +27,86 @@ describe("Self invocation", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("uses the bundled background helper for macOS Electron children", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      for (const [name, executableName, helperName] of [
+        ["GOAT (Nightly)", "GOAT (Nightly)", "GOAT (Nightly) Helper"],
+        ["GOAT (Dev)", "Electron", "Electron Helper"],
+      ] as const) {
+        const executable = path.join(directory, `${name}.app`, "Contents", "MacOS", executableName);
+        const helper = path.join(
+          directory,
+          `${name}.app`,
+          "Contents",
+          "Frameworks",
+          `${helperName}.app`,
+          "Contents",
+          "MacOS",
+          helperName,
+        );
+        yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+        yield* fs.makeDirectory(path.dirname(helper), { recursive: true });
+        yield* fs.writeFileString(executable, "app", { flag: "wx" });
+        yield* fs.writeFileString(helper, "helper", { flag: "wx" });
+        yield* fs.writeFileString(
+          path.join(path.dirname(path.dirname(helper)), "Info.plist"),
+          "<plist><dict><key>NSHighResolutionCapable</key><true/><key>LSUIElement</key>\n<true/></dict></plist>",
+          { flag: "wx" },
+        );
+        const invocation = yield* resolveSelfInvocation().pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs", "serve"]),
+        );
+        expect(invocation.command).toBe(helper);
+        expect(invocation.entrypoint).toBe(path.resolve("dist/bin.mjs"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps the current executable without a background Electron helper", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const executable = path.join(directory, "App.app", "Contents", "MacOS", "node");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.writeFileString(executable, "node", { flag: "wx" });
+      for (const plist of [
+        undefined,
+        "<plist><dict><key>LSUIElement</key><false/><key>NSHighResolutionCapable</key><true/></dict></plist>",
+      ]) {
+        if (plist !== undefined) {
+          const contents = path.join(
+            directory,
+            "App.app",
+            "Contents",
+            "Frameworks",
+            "node Helper.app",
+            "Contents",
+          );
+          yield* fs.makeDirectory(path.join(contents, "MacOS"), { recursive: true });
+          yield* fs.writeFileString(path.join(contents, "Info.plist"), plist, { flag: "wx" });
+          yield* fs.writeFileString(path.join(contents, "MacOS", "node Helper"), "helper", {
+            flag: "wx",
+          });
+        }
+        const invocation = yield* resolveSelfInvocation().pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, false),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Arguments, [executable, "dist/bin.mjs", "serve"]),
+        );
+        expect(invocation.command).toBe(executable);
+        expect(invocation.entrypoint).toBe(path.resolve("dist/bin.mjs"));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("passes subcommands straight to the standalone executable", () =>
     Effect.gen(function* () {
       // Node repeats the binary at argv[1] for a single-executable; it is not a script.

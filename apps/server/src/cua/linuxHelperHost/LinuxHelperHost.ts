@@ -7,9 +7,11 @@
  * safety signals (a secure field focused, a person's own input), for host status and for
  * ComputerUseLeases, in the same shapes the desktop host's helper reports them.
  *
- * It runs only while the driver daemon runs, with the daemon's display environment and binary,
- * and the session's variables only (SESSION_NAMES). While an agent controls the host it watches
+ * It runs while the driver daemon runs, with the daemon's display environment and binary, and
+ * the session's variables only (SESSION_NAMES). While an agent controls the host it watches
  * every window on screen, so a secret field anywhere pauses agents (the broad side of D7).
+ * Before the first agent turn starts the daemon, it runs once against the session the daemon
+ * would use, only to read readiness, so setup can be proven before a turn (#1542).
  *
  * @module LinuxHelperHost
  */
@@ -19,6 +21,7 @@ import * as NodeURL from "node:url";
 
 import {
   ComputerUseReadiness,
+  computerUseReady,
   type ComputerUseEvent,
   type ComputerUseWindowTarget,
   type DesktopCuaReadinessReport,
@@ -46,8 +49,17 @@ import { LinuxHelperReport } from "./LinuxHelperReport.ts";
 export class LinuxHelperHost extends Context.Service<
   LinuxHelperHost,
   {
-    /** The running helper's readiness and signals; none while no helper runs. */
+    /**
+     * Readiness for setup: the running helper's, or before the first turn the last check's
+     * (#1542). None while neither has reported.
+     */
     readonly readiness: Effect.Effect<Option.Option<DesktopCuaReadinessReport>>;
+    /**
+     * Only a report from the helper that runs with the driver, which is the one that watches for
+     * the safety signals. A check before the first turn proves setup but watches nothing, so it
+     * never counts as detection for unattended use.
+     */
+    readonly liveReadiness: Effect.Effect<Option.Option<DesktopCuaReadinessReport>>;
     /** Its safety reports, shaped as the desktop host's helper sends them. */
     readonly safety: Stream.Stream<DesktopCuaSafetyReport>;
     /** Whether agents control this host, so the helper watches only then (D7). */
@@ -72,6 +84,15 @@ export interface DriverSession {
 
 export interface HostDeps {
   readonly session: Effect.Effect<Option.Option<DriverSession>>;
+  /**
+   * Before the first turn (#1542): whether a check is wanted (computer use on, no driver), read
+   * every tick, and the session a driver would start on, read only when a check is due because
+   * it probes the display. The host checks readiness there with a helper it stops right after.
+   */
+  readonly check?: {
+    readonly wanted: Effect.Effect<boolean>;
+    readonly session: Effect.Effect<Option.Option<DriverSession>>;
+  };
   readonly spawn: (env: Readonly<Record<string, string>>) => HelperProcess;
   /** The server's own environment; only SESSION_NAMES reach the helper. */
   readonly environment: Readonly<Record<string, string | undefined>>;
@@ -87,6 +108,9 @@ const HELLO_MS = 10_000;
 const REQUEST_MS = 15_000;
 const WATCH_MS = 5_000;
 const RESTART_MS = [2_000, 5_000, 15_000, 60_000] as const;
+/** How long a check before the first turn stands, and how soon a failed one is tried again. */
+const CHECK_EVERY_MS = 5 * 60_000;
+const CHECK_RETRY_MS = 60_000;
 
 const decodeReadiness = Schema.decodeUnknownOption(ComputerUseReadiness);
 
@@ -108,8 +132,10 @@ const UNANSWERED_REASON =
   "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
 
 /**
- * Readiness after a check the helper did not answer: the grants and helper it last reported
- * stand, while capture, the tree, input and both safety signals are unproven.
+ * Readiness after a check the helper did not answer. Nothing it proved earlier stands (D10): the
+ * helper is unconfirmed, the grants unchecked, and capture, the tree, input and both safety
+ * signals unproven. What it said about the session and its blockers stays, so setup can still
+ * name the desktop and keep a pause in place (#1514).
  */
 const unanswered = (
   previous: DesktopCuaReadinessReport | undefined,
@@ -119,15 +145,14 @@ const unanswered = (
   type: "cuaReadiness",
   generation: launch,
   readiness: {
-    ...(previous?.readiness ?? {
-      grants: { accessibility: "unknown", screenCapture: "unknown" },
-      helper: "authenticated",
-      blockers: [],
-    }),
+    grants: { accessibility: "unknown", screenCapture: "unknown" },
+    helper: "unauthenticated",
     capture: "unavailable",
     tree: "unavailable",
     input: "unavailable",
+    blockers: previous?.readiness.blockers ?? [],
     reasons: [UNANSWERED_REASON],
+    ...(previous?.readiness.platform ? { platform: previous.readiness.platform } : {}),
   },
   signals: { privateMode: "unsupported", humanInput: "unsupported" },
 });
@@ -240,7 +265,8 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     }
   });
 
-  const start = Effect.fnUntraced(function* (session: DriverSession) {
+  /** The session's variables, the display it uses and the driver to run; nothing else. */
+  const helperEnvironment = (session: DriverSession) => {
     const env: Record<string, string> = {};
     for (const name of SESSION_NAMES) {
       const value = deps.environment[name];
@@ -251,8 +277,103 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     // empty, and the helper must not dial it either.
     for (const name of CUA_DRIVER_PROBED_SESSION_NAMES)
       if (!(name in session.display)) delete env[name];
+    return env;
+  };
+
+  /** When the last check before a turn may run again, and whether its report is the one shown. */
+  let checked: { readonly next: number } | undefined;
+  let reportFromCheck = false;
+  const dropCheck = Effect.fnUntraced(function* () {
+    checked = undefined;
+    if (!reportFromCheck) return;
+    reportFromCheck = false;
+    yield* Ref.set(deps.report, Option.none());
+  });
+
+  /**
+   * Runs a helper once on the session a driver would use, reads readiness and stops it. It
+   * watches nothing, so it raises no safety events; its hello proves the binding pid and names
+   * the signals this session supports, which a later helper started with the driver watches for.
+   */
+  const check = Effect.fnUntraced(function* (session: DriverSession, now: number) {
     const launch = ++launches;
-    const process = deps.spawn(env);
+    const process = deps.spawn(helperEnvironment(session));
+    const client = makeHelperClient({
+      write: process.write,
+      pid: process.pid,
+      newId: deps.newId,
+      after: deps.after,
+      onEvent: () => undefined,
+    });
+    process.onLine(client.line);
+    process.onExit(() => client.close("The computer use helper ended."));
+    const answered = yield* Effect.promise(async () => {
+      const hello = await Promise.race([
+        client.start().catch(() => undefined),
+        new Promise<undefined>((resolve) => deps.after(HELLO_MS, () => resolve(undefined))),
+      ]);
+      if (hello === undefined) return undefined;
+      // A driver started while this helper said hello has its own helper; stop here.
+      if (current !== undefined) return undefined;
+      const readiness = decodeReadiness(await client.request("permissions", {}, REQUEST_MS));
+      return Option.isSome(readiness)
+        ? { readiness: readiness.value, signals: hello.capabilities.signals }
+        : undefined;
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          client.close("The readiness check ended.");
+          process.stop();
+        }),
+      ),
+    );
+    checked = { next: now + (answered ? CHECK_EVERY_MS : CHECK_RETRY_MS) };
+    // A driver that started meanwhile has its own helper, whose report counts instead, and an
+    // answer that came after computer use was turned off reports nothing.
+    if (current !== undefined || Option.isSome(yield* deps.session)) return;
+    if (deps.check === undefined || !(yield* deps.check.wanted)) return yield* dropCheck();
+    if (answered === undefined) {
+      yield* Effect.logWarning("The Linux computer use readiness check got no answer", {
+        launch,
+        pid: process.pid,
+      });
+      if (reportFromCheck) {
+        reportFromCheck = false;
+        yield* Ref.set(deps.report, Option.none());
+      }
+      return;
+    }
+    const report: DesktopCuaReadinessReport = {
+      version: 1,
+      type: "cuaReadiness",
+      generation: launch,
+      ...answered,
+    };
+    reportFromCheck = true;
+    yield* Ref.set(deps.report, Option.some(report));
+    publish(report);
+    yield* Effect.logInfo("Checked Linux computer use readiness before the first turn", {
+      launch,
+      pid: process.pid,
+      ready: computerUseReady(report.readiness),
+    });
+  });
+
+  const checkBeforeTurn = Effect.fnUntraced(function* (now: number) {
+    if (deps.check === undefined || !(yield* deps.check.wanted)) return yield* dropCheck();
+    if (checked !== undefined && now < checked.next) return;
+    const session = yield* deps.check.session;
+    if (Option.isNone(session)) {
+      // An unusable display or a missing binary is probed again only after the retry interval.
+      yield* dropCheck();
+      checked = { next: now + CHECK_RETRY_MS };
+      return;
+    }
+    yield* check(session.value, now);
+  });
+  const start = Effect.fnUntraced(function* (session: DriverSession) {
+    const launch = ++launches;
+    const process = deps.spawn(helperEnvironment(session));
     const client = makeHelperClient({
       write: process.write,
       pid: process.pid,
@@ -418,7 +539,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       retryAt = now + backoff();
       entry = undefined;
     }
-    if (Option.isNone(session)) return;
+    if (Option.isNone(session)) return yield* checkBeforeTurn(now);
+    // The driver's own helper reports from here on; a check it outdates is not shown meanwhile.
+    yield* dropCheck();
     if (entry === undefined) {
       if (now < retryAt) return;
       const started = yield* start(session.value);
@@ -449,6 +572,9 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
 
   return LinuxHelperHost.of({
     readiness: Ref.get(deps.report),
+    liveReadiness: Effect.map(Ref.get(deps.report), (report) =>
+      reportFromCheck ? Option.none() : report,
+    ),
     safety: Stream.fromPubSub(hub),
     setWatch: (active) =>
       Effect.sync(() => {
@@ -517,6 +643,7 @@ const spawnHelper =
 const inert = (report: Ref.Ref<Option.Option<DesktopCuaReadinessReport>>) =>
   LinuxHelperHost.of({
     readiness: Ref.get(report),
+    liveReadiness: Ref.get(report),
     safety: Stream.empty,
     setWatch: () => Effect.void,
   });
@@ -548,6 +675,23 @@ export const layer = Layer.effect(
           })),
         ),
       ),
+      ...(driver.value.beforeTurn === undefined
+        ? {}
+        : {
+            check: {
+              wanted: driver.value.beforeTurn.wanted,
+              session: driver.value.beforeTurn.session.pipe(
+                Effect.map(
+                  Option.map(({ command, display }) => ({
+                    command,
+                    display: Object.fromEntries(
+                      display.map((variable) => [variable.name, variable.value]),
+                    ),
+                  })),
+                ),
+              ),
+            },
+          }),
       spawn: spawnHelper(platform, node, entry),
       environment,
       report: latest,

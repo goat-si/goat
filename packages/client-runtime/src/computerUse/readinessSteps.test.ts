@@ -96,7 +96,7 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
     const blocker = result.blockers[0];
     const remedies = {
       screenLocked: "Unlock the screen",
-      userIntervened: "person's input ends",
+      userIntervened: "hands control back",
       noInteractiveDesktop: "Windows Session 0",
       otherUserAtConsole: "Another user",
       restartRequired: "Restart the helper or GOAT",
@@ -109,6 +109,62 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
     expect(result.ready).toBe(false);
   },
 );
+
+// #1538: a passing check stops its own helper, so the driver is idle until the next agent turn.
+// Every desktop platform says that the same neutral way; only a real failure needs attention.
+describe("tools after a passing check, on every platform", () => {
+  it.each(platforms)(
+    "%s: an idle driver starts with the next turn, a failure needs attention",
+    (platform) => {
+      const idle = computerUseReadinessSteps({ readiness: ready, platform, tools: "unavailable" });
+      expect(idle.steps[3]).toMatchObject({
+        state: "pending",
+        detail: ["Starts with the next agent turn. GOAT starts the driver when an agent needs it."],
+      });
+      expect(idle.ready).toBe(false);
+      expect(idle.startsWithNextTurn).toBe(true);
+
+      const failed = computerUseReadinessSteps({
+        readiness: ready,
+        platform,
+        tools: "unavailable",
+        failure: "The helper exited during start.",
+      });
+      expect(failed.steps[3]?.state).toBe("blocked");
+      expect(failed.steps[3]?.detail.join(" ")).toContain("The helper exited during start.");
+      expect(failed.startsWithNextTurn).toBe(false);
+
+      const running = computerUseReadinessSteps({ readiness: ready, platform, tools: "available" });
+      expect([running.steps[3]?.state, running.ready, running.startsWithNextTurn]).toEqual([
+        "ok",
+        true,
+        false,
+      ]);
+      // An unproven setup is not waiting for a turn.
+      expect(
+        computerUseReadinessSteps({
+          readiness: { ...ready, capture: "blank" },
+          platform,
+          tools: "unavailable",
+        }).startsWithNextTurn,
+      ).toBe(false);
+      // A screen the host already says it cannot use is not waiting for a turn either, though
+      // no start has failed yet: another user took the console after the check.
+      const noScreen = computerUseReadinessSteps({
+        readiness: ready,
+        platform,
+        tools: "unavailable",
+        display: {
+          capability: "unavailable",
+          reason: "Another user is using this computer's screen.",
+        },
+      });
+      expect(noScreen.startsWithNextTurn).toBe(false);
+      expect(noScreen.steps[3]?.state).toBe("blocked");
+      expect(noScreen.steps[3]?.detail.join(" ")).toContain("Another user is using");
+    },
+  );
+});
 
 it("keeps missing helper reports and older server tools unknown instead of inferring readiness", () => {
   const result = view(undefined);
@@ -220,6 +276,21 @@ it("tells Windows users about the security prompt, administrator apps and a bloc
   expect(view(ready, "darwin").steps[2]?.detail.join(" ")).not.toContain("administrator");
 });
 
+it("calls an unchecked Windows desktop not checked, not unsupported or waiting for consent (#1520)", () => {
+  // What the Windows helper reports after it authenticated but before a check read a window.
+  const unchecked = { ...ready, capture: "pending", tree: "unavailable" } as const;
+  const step = view(unchecked, "win32").steps[2];
+  expect(step?.state).toBe("pending");
+  expect(step?.detail.join(" ")).not.toContain("consent");
+  expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
+  // A remote client cannot run the check, so the text names where it runs.
+  expect(step?.detail.join(" ")).toContain("in the GOAT desktop app on this computer");
+  // A tree that a check really could not read still says so.
+  expect(view({ ...ready, tree: "unavailable" }, "win32").steps[2]?.state).toBe("unsupported");
+  // macOS keeps its consent wording.
+  expect(view(unchecked, "darwin").steps[2]?.detail.join(" ")).toContain("consent");
+});
+
 it("uses host-specific names and reports the Linux display server", () => {
   expect(view(ready).steps[0]?.grants[1]?.title).toBe("Screen & System Audio Recording");
   expect(view(ready, "win32").steps[0]?.grants[0]?.title).toBe("UI Automation");
@@ -231,7 +302,7 @@ it("uses host-specific names and reports the Linux display server", () => {
   }
 });
 
-it("shows detection support separately and explains the unattended requirement", () => {
+it("shows detection support separately and explains private-mode and human-input policy", () => {
   for (const support of ComputerUseCapabilities.fields.signals.fields.humanInput.literals) {
     const result = computerUseReadinessSteps({
       readiness: ready,
@@ -245,7 +316,12 @@ it("shows detection support separately and explains the unattended requirement",
         `Private mode detection: ${support}.`,
       ]),
     );
-    expect(result.steps[1]?.detail.join(" ")).toContain("Unattended turns require both signals");
+    expect(result.steps[1]?.detail.join(" ")).toContain(
+      "Unattended turns require private mode detection",
+    );
+    expect(result.steps[1]?.detail.join(" ")).toContain(
+      "a person typing does not pause admitted work",
+    );
     expect(result.ready).toBe(true);
   }
   expect(view(ready).steps[1]?.detail).toContain("Human input detection: not reported.");
@@ -361,4 +437,32 @@ it("does not call input unsupported while the helper has not confirmed itself ye
   expect(unconfirmed.steps[1]?.detail.join(" ")).toContain("Run the readiness check");
   // A confirmed helper in a session without input still says so.
   expect(view({ ...ready, input: "unavailable" }).steps[2]?.state).toBe("unsupported");
+});
+
+// The server's readiness after a check the Linux helper did not answer (#1514).
+const UNANSWERED_REASON =
+  "The computer use helper did not answer its readiness check, so window capture, app controls and the safety signals are not proven right now.";
+const unanswered: ComputerUseReadiness = {
+  grants: { accessibility: "unknown", screenCapture: "unknown" },
+  helper: "unauthenticated",
+  capture: "unavailable",
+  tree: "unavailable",
+  input: "unavailable",
+  blockers: [],
+  reasons: [UNANSWERED_REASON],
+  platform: { linux: { displayServer: "x11" } },
+};
+
+it("a Linux helper that stopped answering names that one cause and proves no later step (#1514)", () => {
+  const result = view(unanswered, "linux", "available");
+  const [grants, helper, capture, tools] = result.steps;
+  expect(helper?.state).not.toBe("ok");
+  expect(helper?.detail).toContain(UNANSWERED_REASON);
+  expect(capture?.detail).not.toContain(UNANSWERED_REASON);
+  // Nothing was found unsupported; the helper did not answer.
+  expect(result.steps.map((step) => step.state)).not.toContain("unsupported");
+  expect(capture?.detail.join(" ")).not.toContain("Check accessibility access");
+  expect(tools?.state).not.toBe("ok");
+  expect(grants?.grants.map((row) => row.detail.join(" "))).not.toContain("Access granted.");
+  expect(result.ready).toBe(false);
 });

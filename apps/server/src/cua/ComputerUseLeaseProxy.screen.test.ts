@@ -7,15 +7,12 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
+import { active as backgroundActive, foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 
 const call = (id: number, name: string, args: object) =>
   JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
-const active: ComputerUseLeaseUpdate = {
-  state: "active",
-  controlId: "control:one",
-  expiresAt: "1970-01-01T00:30:00.000Z",
-};
+const active: ComputerUseLeaseUpdate = foregroundActive();
 const window = { pid: 4, window_id: 9 };
 
 /**
@@ -28,8 +25,7 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
   const toDriver = yield* Queue.unbounded<string>();
   const fromDriver = yield* Queue.unbounded<string, Cause.Done>();
   const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate>();
-  // The proxy asks for the next update only once it has acted on the one before.
-  const pulls = yield* Queue.unbounded<void>();
+  const applied = yield* Queue.unbounded<void>();
   const overlay: Array<ComputerUseOverlayCommand> = [];
   yield* runLeaseProxy({
     connectionId: "proxy:screen-test",
@@ -45,9 +41,8 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
     bundleIds: true,
     input: Stream.fromQueue(input),
     output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
-    leaseUpdates: Stream.fromEffectRepeat(
-      Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(updates))),
-    ),
+    leaseUpdates: Stream.fromQueue(updates),
+    onLeaseUpdateApplied: () => Queue.offer(applied, undefined).pipe(Effect.asVoid),
     startDriver: Effect.succeed({
       send: (line: string) => Queue.offer(toDriver, line).pipe(Effect.asVoid),
       lines: Stream.fromQueue(fromDriver),
@@ -58,11 +53,10 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
     revokeSessions: () => Effect.void,
     ...(onTarget === undefined ? {} : { onTarget }),
   }).pipe(Effect.scoped, Effect.forkChild);
-  yield* Queue.take(pulls);
   return {
     send: (line: string) => Queue.offer(input, line),
     push: (update: ComputerUseLeaseUpdate) =>
-      Queue.offer(updates, update).pipe(Effect.andThen(Queue.take(pulls))),
+      Queue.offer(updates, update).pipe(Effect.andThen(Queue.take(applied))),
     raw: Queue.take(output),
     answer: Queue.take(output).pipe(
       Effect.map(
@@ -113,6 +107,34 @@ it.effect(
       assert.equal(yield* h.driverQueued, 0);
       yield* h.send(call(9, "click", { ...window, x: 5, y: 5 }));
       assert.equal(yield* h.sentToDriver, 9);
+    }),
+);
+
+it.effect(
+  "forwards overlay cursor moves without foreground approval but refuses real pointer moves",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(backgroundActive());
+      const overlays = [
+        { x: 5, y: 5 },
+        { ...window, x: 5, y: 5, delivery_mode: "foreground" },
+        { scope: "desktop", ...window, x: 5, y: 5 },
+        { target: { kind: "window", ...window }, x: 5, y: 5, dispatch: "foreground" },
+      ];
+      for (const [index, args] of overlays.entries()) {
+        yield* h.send(call(index + 1, "move_cursor", args));
+        assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
+      }
+      for (const args of [
+        { scope: "desktop", x: 5, y: 5 },
+        { target: { kind: "desktop", display_id: "primary" }, x: 5, y: 5 },
+      ]) {
+        yield* h.send(call(10, "move_cursor", args));
+        const answer = yield* h.answer;
+        assert.deepInclude(answer.result.structuredContent, { detail: "foreground_not_approved" });
+      }
+      assert.equal(yield* h.driverQueued, 0);
     }),
 );
 

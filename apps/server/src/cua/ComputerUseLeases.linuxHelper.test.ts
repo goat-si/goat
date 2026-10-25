@@ -29,6 +29,7 @@ it.effect(
       const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
       const watching = yield* Queue.unbounded<boolean>();
       const helperReport = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+      const liveReport = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
       yield* Effect.gen(function* () {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -38,24 +39,29 @@ it.effect(
           privateMode: false,
           frames: false,
         });
-        yield* Ref.set(
-          helperReport,
-          Option.some({
-            version: 1,
-            type: "cuaReadiness",
-            generation: 1,
-            readiness: {
-              grants: { accessibility: "granted", screenCapture: "granted" },
-              helper: "authenticated",
-              capture: "ready",
-              tree: "ready",
-              input: "background",
-              blockers: [],
-              reasons: [],
-            },
-            signals: { humanInput: "supported", privateMode: "supported" },
-          }),
-        );
+        const report: DesktopCuaReadinessReport = {
+          version: 1,
+          type: "cuaReadiness",
+          generation: 1,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { humanInput: "supported", privateMode: "supported" },
+        };
+        // A check before the first turn proves setup, but no helper watches yet (#1542).
+        yield* Ref.set(helperReport, Option.some(report));
+        assert.deepEqual(yield* leases.detection, {
+          humanInput: false,
+          privateMode: false,
+          frames: false,
+        });
+        yield* Ref.set(liveReport, Option.some(report));
         // No desktop host reports, so the server's own helper speaks for the host.
         assert.deepEqual(yield* leases.detection, {
           humanInput: true,
@@ -89,6 +95,7 @@ it.effect(
                   LinuxHelperHost.LinuxHelperHost,
                   LinuxHelperHost.LinuxHelperHost.of({
                     readiness: Ref.get(helperReport),
+                    liveReadiness: Ref.get(liveReport),
                     safety: Stream.fromQueue(reports),
                     setWatch: (active) => Queue.offer(watching, active).pipe(Effect.asVoid),
                   }),

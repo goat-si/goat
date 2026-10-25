@@ -229,3 +229,28 @@ it("still fits a person's own tab to the view it follows", async () => {
   await control({ controller: "you" });
   expect(state.sent.some((input) => input.type === "resize")).toBe(true);
 });
+it("a tab this desktop draws opens no stream, which would wait on a page that is not painting", async () => {
+  setup();
+  await using screen = await render(
+    <AgentScreenCardView
+      session={tab}
+      size="large"
+      width={640}
+      threadTitle="Thread"
+      live
+      canControl
+      canOperateBrowser
+      drawnHere
+      focused={false}
+      focusRequest={0}
+      onExpand={() => undefined}
+      onControl={() => undefined}
+      onDismiss={() => undefined}
+    />,
+  );
+  await expect.element(screen.getByText("Open to watch")).toBeVisible();
+  expect(state.created).toBe(0);
+  expect(screen.container.querySelector("canvas")).toBeNull();
+  // No stream means nothing to take control through; it would do nothing.
+  expect(screen.container.querySelector('[aria-label="Take over"]')).toBeNull();
+});

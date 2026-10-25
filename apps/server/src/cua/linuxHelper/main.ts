@@ -78,7 +78,7 @@ const signals = makeSignalMonitor({
   secureFocus,
   windowOpen: (target) => windowOpen(target),
   input,
-  // The pause goes out first; then the helper ends so a restart reports humanInput unsupported.
+  // The lost-input report goes out first; then the helper ends so a restart reports it unsupported.
   inputLost: () => void setImmediate(() => end(1)),
   now: monotonic,
   every: (ms, task) => {

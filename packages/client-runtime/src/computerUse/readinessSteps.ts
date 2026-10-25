@@ -124,15 +124,27 @@ const toolsCopy = {
       "The driver is not running or attachable on this host. Start computer use on this computer.",
   },
 } as const satisfies Record<CuaToolsAvailability, { state: ReadinessStepState; detail: string }>;
+// A passing check stops its own helper, so with nothing failed the driver is only idle (#1538).
+const STARTS_WITH_NEXT_TURN =
+  "Starts with the next agent turn. GOAT starts the driver when an agent needs it.";
 
 // The Linux helper reports pending both before a Wayland desktop's consent and when its
 // compositor cannot capture one window, so it is not described as a prompt to answer.
 const LINUX_CAPTURE_UNPROVEN =
   "Screen capture is not proven yet. A Wayland desktop may be waiting for consent, or may not capture one window at all.";
+// Windows asks nobody for consent: pending there means no check has read a window since the
+// helper started, and the tree it reports unavailable meanwhile is unread, not refused (#1520).
+// Only GOAT's desktop app on that computer can run the check; a remote client only saves.
+const windowsCaptureUnchecked = (machine: string) =>
+  `Not checked yet. Turning computer use on in the GOAT desktop app on ${machine} restarts the helper and proves a real window capture.`;
+const WINDOWS_TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {
   screenLocked: { step: "capture", remedy: "Unlock the screen on this computer." },
-  userIntervened: { step: "capture", remedy: "Computer use resumes when the person's input ends." },
+  userIntervened: {
+    step: "capture",
+    remedy: "Computer use resumes after the person hands control back.",
+  },
   noInteractiveDesktop: {
     step: "capture",
     remedy:
@@ -174,6 +186,8 @@ export function computerUseReadinessSteps({
   signals,
   machine,
   block,
+  failure,
+  display,
 }: {
   readonly readiness?: ComputerUseReadiness | undefined;
   readonly platform?: CuaHostStatus["platform"] | undefined;
@@ -183,7 +197,12 @@ export function computerUseReadinessSteps({
   readonly machine?: string | undefined;
   /** Why the desktop gave agents no driver, when it was a grant macOS has not given (#1399). */
   readonly block?: CuaAgentBlock | undefined;
+  /** Why the driver last failed to start on the host, when it did. */
+  readonly failure?: string | undefined;
+  /** What the host's screen allows now; an unusable one stops agents before any start fails. */
+  readonly display?: CuaHostStatus["display"] | undefined;
 }) {
+  const noScreen = display?.capability === "unavailable" ? display.reason : undefined;
   const report = platform === "other" ? "unsupported" : readiness ? "reported" : "notReported";
   const unreported = "The helper has not reported readiness yet.";
   const unavailable = {
@@ -228,20 +247,33 @@ export function computerUseReadinessSteps({
     ...(platform === "win32" && windowsRemedies[id] ? { remedy: windowsRemedies[id] } : {}),
   }));
   const helper = readiness ? helperCopy[readiness.helper] : unavailable;
-  // The tree and input are read through a confirmed helper; before that they are unchecked,
-  // not unsupported.
+  // Capture, the tree and input are read through a confirmed helper; before that, or while it
+  // does not answer (#1514), they are unchecked, not unsupported.
   const unconfirmed = readiness !== undefined && readiness.helper !== "authenticated";
+  const windowsUnchecked = platform === "win32" && readiness?.capture === "pending";
   const capture = readiness
     ? [
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
-          : captureCopy[readiness.capture],
+          : windowsUnchecked
+            ? ({
+                state: "pending",
+                detail: windowsCaptureUnchecked(machine ?? "this computer"),
+              } as const)
+            : unconfirmed && readiness.capture === "unavailable"
+              ? ({
+                  state: "unknown",
+                  detail: "Window capture is checked once the helper is confirmed.",
+                } as const)
+              : captureCopy[readiness.capture],
         unconfirmed && readiness.tree === "unavailable"
           ? ({
               state: "unknown",
               detail: "The accessibility tree is read once the helper is confirmed.",
             } as const)
-          : treeCopy[readiness.tree],
+          : windowsUnchecked && readiness.tree === "unavailable"
+            ? ({ state: "pending", detail: WINDOWS_TREE_UNCHECKED } as const)
+            : treeCopy[readiness.tree],
         unconfirmed && readiness.input === "unavailable"
           ? ({
               state: "unknown",
@@ -253,12 +285,27 @@ export function computerUseReadinessSteps({
   const toolsStatus =
     block !== undefined && tools !== "off" && tools !== "available"
       ? ({ state: "blocked", detail: cuaAgentBlockMessage(block) } as const)
-      : tools
-        ? toolsCopy[tools]
-        : ({
+      : tools === "available" && unconfirmed
+        ? ({
             state: "unknown",
-            detail: "The server has not reported whether agent tools are available yet.",
-          } as const);
+            detail:
+              "The driver is running. Whether agents can use computer use is not proven until the helper is confirmed.",
+          } as const)
+        : tools === "unavailable" && noScreen !== undefined
+          ? ({ state: "blocked", detail: noScreen } as const)
+          : tools === "unavailable" && failure === undefined
+            ? ({ state: "pending", detail: STARTS_WITH_NEXT_TURN } as const)
+            : tools === "unavailable"
+              ? ({
+                  state: "blocked",
+                  detail: `${failure} ${toolsCopy.unavailable.detail}`,
+                } as const)
+              : tools
+                ? toolsCopy[tools]
+                : ({
+                    state: "unknown",
+                    detail: "The server has not reported whether agent tools are available yet.",
+                  } as const);
   const steps: ReadinessStep[] = [
     {
       id: "grants",
@@ -295,11 +342,12 @@ export function computerUseReadinessSteps({
     if (step)
       steps[index] = { ...step, state: "blocked", detail: [...step.detail, blocker.remedy] };
   }
-  // Linux reasons come from capture/tree/input probes, including foreground-only limitations.
-  // Other helpers give one reason per not-ready step in onboarding order; reasons never gate readiness.
+  // Linux reasons come from capture/tree/input probes, including foreground-only limitations,
+  // unless the helper is unconfirmed: then they say why. Other helpers give one reason per
+  // not-ready step in onboarding order; reasons never gate readiness.
   const notReady =
     platform === "linux"
-      ? [2]
+      ? [unconfirmed ? 1 : 2]
       : steps.slice(0, 3).flatMap((step, index) => (step.state !== "ok" ? [index] : []));
   for (const [index, reason] of (readiness?.reasons ?? []).entries()) {
     const stepIndex = notReady[Math.min(index, notReady.length - 1)] ?? 2;
@@ -317,7 +365,7 @@ export function computerUseReadinessSteps({
       detail: [
         ...helperStep.detail,
         ...signalDetail,
-        "Interactive turns may proceed without both detection signals. Unattended turns require both signals to be supported.",
+        "Interactive turns may proceed without both detection signals. Unattended turns require private mode detection; a person typing does not pause admitted work.",
       ],
     };
   }
@@ -341,6 +389,14 @@ export function computerUseReadinessSteps({
   }
   return {
     ready: readiness !== undefined && computerUseReady(readiness) && tools === "available",
+    // Everything is proven and nothing failed; the driver only waits for an agent's turn.
+    startsWithNextTurn:
+      readiness !== undefined &&
+      computerUseReady(readiness) &&
+      tools === "unavailable" &&
+      failure === undefined &&
+      noScreen === undefined &&
+      block === undefined,
     report,
     steps,
     blockers,

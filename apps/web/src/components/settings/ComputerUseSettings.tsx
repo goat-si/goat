@@ -50,6 +50,15 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     bridge?.getClientPlatform?.() === "darwin" &&
     typeof bridge.checkSystemPermission === "function" &&
     typeof bridge.verifyCuaDriver === "function";
+  // The desktop that runs the environment can also restart and prove its helper on Windows,
+  // which has no grants to read (#1520).
+  const localCheck =
+    localMac ||
+    (isElectron &&
+      local &&
+      query.data?.platform === "win32" &&
+      bridge?.getClientPlatform?.() === "win32" &&
+      typeof bridge.verifyCuaDriver === "function");
 
   const save = async (patch: ComputerUseSettingsPatch): Promise<string | null> => {
     if (!registry.get(serverEnvironment.updateSettings.permissionAtom(environmentId)))
@@ -66,6 +75,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     status: query.data,
     error: query.error,
     localMac,
+    localCheck,
     save,
     refresh: query.refresh,
   };
@@ -96,6 +106,7 @@ export function ComputerUseSetup({
       hostLabel={hostLabel}
       status={host.status}
       localMac={host.localMac}
+      localCheck={host.localCheck}
       onCheck={checkGrants}
       onAllow={openGuide}
       onReveal={window.desktopBridge?.revealCuaGrantTarget}
@@ -157,6 +168,7 @@ function ComputerUseControls({
       status={host.status}
       error={host.error}
       localMac={host.localMac}
+      localCheck={host.localCheck}
       disabledSkills={host.disabledSkills}
       fullAccessAutoAdmit={host.fullAccessAutoAdmit}
       save={host.save}

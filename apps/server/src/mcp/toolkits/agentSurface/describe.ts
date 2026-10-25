@@ -16,6 +16,7 @@ import type * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { availability, type CallerProfile, callerProfile } from "../../toolAvailability.ts";
 import type { ToolDispatch } from "../../ToolDispatch.ts";
+import { hostOfCursor, THIS_BUILD } from "./hostDescribe.ts";
 import { type Match, nearestPaths, searchEntries } from "./search.ts";
 import type { DescribeResult } from "./tools.ts";
 
@@ -118,6 +119,11 @@ export const makeDescribe = (
       );
     let offset = 0;
     if (input.cursor !== undefined) {
+      const cursorHost = hostOfCursor(input.cursor);
+      if (cursorHost !== undefined)
+        return yield* refuse(
+          `This cursor continues a search on ${cursorHost}. Pass host ${cursorHost} with it.`,
+        );
       const cursor = decodeCursor(Buffer.from(input.cursor, "base64url").toString("utf8"));
       if (
         cursor._tag === "None" ||
@@ -143,6 +149,7 @@ export const makeDescribe = (
     return {
       depth: "search" as const,
       surfaceVersion,
+      build: THIS_BUILD,
       query: input.query,
       mode: outcome.mode,
       entries: page.map((match) => matched(match, caller, input.detail)),
