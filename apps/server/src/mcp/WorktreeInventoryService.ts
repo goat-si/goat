@@ -214,6 +214,15 @@ const make = Effect.gen(function* () {
       (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))
     );
   };
+  /** Threads bound to the checkout at key or to a folder inside it, such as a monorepo package. */
+  const threadsWithin = (context: ScanContext, key: string) => {
+    const result: Array<OrchestrationV2ThreadShell> = [];
+    for (const [bound, list] of context.threadsByPath)
+      if (within(key, bound))
+        for (const thread of list)
+          if (!result.some((known) => known.id === thread.id)) result.push(thread);
+    return result;
+  };
   const gitRead = (cwd: string, args: ReadonlyArray<string>) =>
     git
       .execute({
@@ -301,7 +310,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const worktreePath = path.resolve(cwd, record.path);
           const key = yield* real(worktreePath);
-          const shells = context.threadsByPath.get(key) ?? [];
+          const shells = threadsWithin(context, key);
           const missing =
             record.prunable ||
             !(yield* fs.exists(worktreePath).pipe(Effect.orElseSucceed(() => false)));
@@ -582,9 +591,7 @@ const make = Effect.gen(function* () {
   const busyNow = (key: string) =>
     loadContext.pipe(
       Effect.map(({ context }) =>
-        (context.threadsByPath.get(key) ?? []).find((thread) =>
-          worktreeThreadBusy(thread, context.nowMs),
-        ),
+        threadsWithin(context, key).find((thread) => worktreeThreadBusy(thread, context.nowMs)),
       ),
     );
 

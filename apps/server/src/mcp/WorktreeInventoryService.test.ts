@@ -557,6 +557,31 @@ describe("WorktreeInventoryService", () => {
       }).pipe(Effect.provide(testLayer), Effect.scoped),
   );
 
+  it.live("a thread working in a folder inside a checkout keeps the whole checkout", () =>
+    Effect.gen(function* () {
+      const { service, fs, run, addWorktree, commit, setThreads } = yield* fixture;
+      const path = yield* addWorktree("monorepo");
+      const head = yield* commit(path);
+      yield* run(path, ["push", "origin", "monorepo"]);
+      const pkg = path + "/packages/app";
+      yield* fs.makeDirectory(pkg, { recursive: true });
+      // Idle, unarchived, no provider session: only its binding says it uses the checkout.
+      setThreads([{ id: "t1", worktreePath: pkg, status: "completed" }]);
+
+      const listed = (yield* service.inventory({})).worktrees.find((entry) => entry.path === path);
+      expect(listed?.threads).toEqual([expect.objectContaining({ threadId: "t1" })]);
+      expect(
+        yield* service.removeAbandoned({
+          path,
+          head,
+          branch: "monorepo",
+          verify: Effect.succeed(null),
+        }),
+      ).toEqual({ removed: false, reason: "thread t1 (Thread t1) uses it" });
+      expect(yield* fs.exists(pkg)).toBe(true);
+    }).pipe(Effect.provide(testLayer), Effect.scoped),
+  );
+
   it.live(
     "storage cleanup keeps checkouts with work, a live thread, a changed head, or a failed check",
     () =>
