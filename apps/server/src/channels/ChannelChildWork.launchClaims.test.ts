@@ -126,8 +126,12 @@ describe("ChannelChildWork launch claims (#1387)", () => {
     return Effect.gen(function* () {
       const taskId = yield* seedWorker;
       const childWork = yield* ChannelChildWork.ChannelChildWork;
-      const failing = yield* threadChild("failing stop");
-      const stopping = yield* threadChild("stopping");
+      // The stop visits records in key order. The failing child goes first, so a pass that
+      // returned on its failure would leave the other child running.
+      const [failing, stopping] = [yield* threadChild("one"), yield* threadChild("two")].toSorted(
+        (left, right) => (left.record.childWorkId < right.record.childWorkId ? -1 : 1),
+      );
+      if (failing === undefined || stopping === undefined) return yield* Effect.die("two children");
       for (const [child, threadId] of [
         [failing, childThread],
         [stopping, otherThread],
