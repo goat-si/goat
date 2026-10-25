@@ -5,6 +5,8 @@
  */
 import * as Layer from "effect/Layer";
 
+import * as McpClientAuthority from "../../auth/McpClientAuthority.ts";
+import * as Profiles from "../../goatclaw/PermissionProfiles.ts";
 import * as HostThreadsMcpService from "../../mcp/HostThreadsMcpService.ts";
 import * as OrchestratorMcpService from "../../mcp/OrchestratorMcpService.ts";
 import * as ThreadLaunchMcpService from "../../mcp/ThreadLaunchMcpService.ts";
@@ -18,6 +20,8 @@ import * as GoalStore from "./GoalStore.ts";
 import * as GoalWorkerRuntime from "./GoalWorkerRuntime.ts";
 
 const layerRuntime = GoalWorkerRuntime.layer.pipe(
+  // An outside client's goal is held to the goatclaw profile it would have when calling itself.
+  Layer.provide(Profiles.layer),
   Layer.provide(ThreadLaunchMcpService.layer),
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
@@ -30,6 +34,8 @@ const layerCore = GoalController.layer.pipe(
   Layer.provideMerge(GoalRecovery.layer.pipe(Layer.provide(ProcessRunner.layer))),
   Layer.provideMerge(layerRuntime),
   Layer.provideMerge(GoalStore.layer),
+  // Outside clients' goals re-read their session's live grant from the server's SessionStore.
+  Layer.provideMerge(McpClientAuthority.layer),
 );
 
 export const layer = GoalController.layerRunning.pipe(Layer.provideMerge(layerCore));

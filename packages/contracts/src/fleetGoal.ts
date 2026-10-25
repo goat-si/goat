@@ -45,7 +45,10 @@ export type FleetGoalKind = typeof FleetGoalKind.Type;
 export const FleetGoalOwner = Schema.Struct({
   kind: Schema.Literals(["thread", "mcp_client"]),
   threadId: Schema.NullOr(ThreadId),
-  /** The MCP request namespace of an outside owner, as LaunchWatch.owner. */
+  /**
+   * "client:<auth session id>" for an outside MCP client owner. The session id is all the goal
+   * keeps of the client's credential; its live grant is read again whenever the goal acts.
+   */
   mcpOwner: Schema.NullOr(Schema.String),
   /** Captured at apply, lowered by an update, never raised by the controller. */
   runtimeModeCeiling: RuntimeMode,

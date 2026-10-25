@@ -284,6 +284,47 @@ it.effect("records the launcher on the thread and on every shell read", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect(
+  "asks a launcher's confirm right before it creates the thread and right before its first message (#493)",
+  () => {
+    const harness = makeHarness({ runSetup: () => Effect.never });
+    return Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      // Refused before the thread exists: nothing is created.
+      const beforeCreate = yield* launches
+        .launch({
+          ...launchInput({
+            command: "command:confirm-create",
+            thread: "thread:confirm-create",
+            message: "go",
+          }),
+          confirm: Effect.succeed(false),
+        })
+        .pipe(Effect.flip);
+      assert.propertyVal(beforeCreate, "operation", "create-thread");
+      assert.isNull(yield* threads.getThreadShell(ThreadId.make("thread:confirm-create")));
+      // Allowed to create the thread, refused for its first message: the thread has no run.
+      const answers = [true, false];
+      const beforeMessage = yield* launches
+        .launch({
+          ...launchInput({
+            command: "command:confirm-message",
+            thread: "thread:confirm-message",
+            message: "go",
+          }),
+          confirm: Effect.sync(() => answers.shift() ?? false),
+        })
+        .pipe(Effect.flip);
+      assert.propertyVal(beforeMessage, "operation", "dispatch-message");
+      const shell = yield* threads.getThreadShell(ThreadId.make("thread:confirm-message"));
+      assert.isNotNull(shell);
+      assert.isNull(shell?.latestRunId ?? null);
+      assert.deepEqual(answers, []);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
 it.effect("provisions independent launches concurrently instead of behind a global semaphore", () =>
   Effect.gen(function* () {
     const setupCount = yield* Ref.make(0);

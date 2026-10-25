@@ -59,6 +59,7 @@ import { decodeHandoff, leaseOf } from "./ComputerUseAdmissions.ts";
 import { appsOf, overlap, type ComputerUseHolder } from "./computerUseGrants.ts";
 import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
+import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -553,20 +554,26 @@ const make = Effect.gen(function* () {
   // they detect neither (#1235). Read on every admission from the receiver's accepted report,
   // so a downgrade counts from the moment it arrives.
   const linuxFrames = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
-  const fromDesktop: Effect.Effect<ComputerUseDetection> = Option.isSome(desktop)
-    ? desktop.value.cuaReadiness.pipe(
-        Effect.map(
-          Option.match({
-            onNone: () => ({ humanInput: false, privateMode: false, frames: false }),
-            onSome: ({ signals, frames }) => ({
-              humanInput: signals.humanInput === "supported",
-              privateMode: signals.privateMode === "supported",
-              frames: frames === true,
-            }),
-          }),
-        ),
-      )
-    : Effect.succeed({ humanInput: false, privateMode: false, frames: false });
+  // A standalone Linux server runs its own helper (#1223) and reports the same way; the desktop
+  // host's helper, when one reports, speaks for the host.
+  const linuxHelper = yield* Effect.serviceOption(LinuxHelperHost.LinuxHelperHost);
+  const readinessReport = Effect.gen(function* () {
+    const reported = Option.isSome(desktop) ? yield* desktop.value.cuaReadiness : Option.none();
+    if (Option.isSome(reported) || Option.isNone(linuxHelper)) return reported;
+    return yield* linuxHelper.value.readiness;
+  });
+  const fromDesktop: Effect.Effect<ComputerUseDetection> = readinessReport.pipe(
+    Effect.map(
+      Option.match({
+        onNone: () => ({ humanInput: false, privateMode: false, frames: false }),
+        onSome: ({ signals, frames }) => ({
+          humanInput: signals.humanInput === "supported",
+          privateMode: signals.privateMode === "supported",
+          frames: frames === true,
+        }),
+      }),
+    ),
+  );
   // A Linux server that runs the driver itself captures its own frames (#1370).
   const detection: Effect.Effect<ComputerUseDetection> = Option.isSome(linuxFrames)
     ? Effect.zipWith(fromDesktop, linuxFrames.value.supported, (reported, linux) => ({
@@ -574,8 +581,12 @@ const make = Effect.gen(function* () {
         frames: reported.frames || linux,
       }))
     : fromDesktop;
-  if (Option.isSome(desktop))
-    yield* desktop.value.cuaSafety.pipe(
+  const safetyReports = [
+    ...(Option.isSome(desktop) ? [desktop.value.cuaSafety] : []),
+    ...(Option.isSome(linuxHelper) ? [linuxHelper.value.safety] : []),
+  ];
+  if (safetyReports.length > 0)
+    yield* Stream.mergeAll(safetyReports, { concurrency: "unbounded" }).pipe(
       Stream.runForEach((report) => {
         if (report.type === "cuaHumanInput") return pause("human_input");
         if (report.type === "cuaReadiness") return changed;
@@ -590,11 +601,12 @@ const make = Effect.gen(function* () {
       Effect.forkScoped,
     );
 
-  // The desktop's helper watches for secret fields and a person's input only while an agent
-  // controls this host (D7): from the first live control until the last one ends or expires.
-  if (Option.isSome(desktop)) {
+  // The helper watches for secret fields and a person's input only while an agent controls this
+  // host (D7): from the first live control until the last one ends or expires. The desktop's
+  // helper hears it over the control pipe; the server's own Linux helper directly.
+  if (Option.isSome(desktop) || Option.isSome(linuxHelper)) {
     const kicks = yield* PubSub.subscribe(watchKick);
-    const receiver = desktop.value;
+    const receiver = Option.getOrUndefined(desktop);
     yield* Effect.gen(function* () {
       // What the desktop last heard; it starts out not watching. After a failed write it may
       // have heard either value, so the current one goes out until a write succeeds.
@@ -644,11 +656,16 @@ const make = Effect.gen(function* () {
           apps.some((app, index) => app !== deliveredApps[index]);
         const active = current.length > 0;
         let retry = false;
+        // The server's own helper takes the wanted state as is, so it cannot fall behind.
+        if (Option.isSome(linuxHelper)) yield* linuxHelper.value.setWatch(active);
         if (active !== delivered || appsChanged || unsure) {
-          const sent = yield* receiver.setCuaWatch(active, apps).pipe(
-            Effect.as(true),
-            Effect.orElseSucceed(() => false),
-          );
+          const sent =
+            receiver === undefined
+              ? true
+              : yield* receiver.setCuaWatch(active, apps).pipe(
+                  Effect.as(true),
+                  Effect.orElseSucceed(() => false),
+                );
           if (sent) {
             delivered = active;
             deliveredApps = apps;

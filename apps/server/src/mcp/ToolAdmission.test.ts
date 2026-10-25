@@ -45,6 +45,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
+import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { liveThreadShell } from "./McpToolAccess.testkit.ts";
@@ -168,6 +169,8 @@ const served = (defaultProfile: string, enabled = true) =>
     Layer.provideMerge(Profiles.layer),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threadsLayer),
+    // goat_describe reaches other hosts through it; these tests never pass host.
+    Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
     Layer.provideMerge(Sqlite.layerMemory),
     Layer.provideMerge(ServerSettings.layerTest({ goatclaw: { enabled, defaultProfile } })),
   );
