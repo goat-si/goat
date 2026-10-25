@@ -210,7 +210,7 @@ export interface ReadinessFacts {
 }
 
 const LISTING_REFUSED =
-  "Cua Driver cannot read this Wayland desktop's screen layout, so it does not list windows for agents here. Use an X11 or XWayland session, or Hyprland.";
+  "Cua Driver cannot read this Wayland desktop's screen layout, so it does not list windows for agents here. Use an X11 or XWayland session.";
 
 export function linuxReadiness(facts: ReadinessFacts): ComputerUseReadiness {
   const { session } = facts;

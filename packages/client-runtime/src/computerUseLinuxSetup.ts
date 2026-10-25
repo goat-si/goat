@@ -136,7 +136,7 @@ function accessibilityStep(readiness: ComputerUseReadiness): ComputerUseSetupSte
       title: "App controls",
       detail:
         "Cua Driver cannot read this Wayland desktop's screen layout, so agents cannot list or use windows here.",
-      guidance: [text("Use an X11 or XWayland session, or Hyprland.")],
+      guidance: [text("Use an X11 or XWayland session.")],
     };
   return {
     id: "accessibility",
