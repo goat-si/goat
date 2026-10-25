@@ -37,12 +37,6 @@ export class DesktopSafeStorageKeyMigration extends Context.Service<
 
 export const MARKER_FILE_NAME = "safe-storage-key-migrated";
 
-/**
- * The source package's productName before it became "GOAT". Unpackaged dev builds took their initial
- * `app.name` from it, so a profile that has not migrated yet keeps its key under this name.
- */
-const SOURCE_PRODUCT_NAME_BEFORE_GOAT = "T3 Code (Alpha)";
-
 /** Where one platform keeps safeStorage keys, by Electron runtime name. */
 export interface SafeStorageKeyStore {
   /** The key, or null when the runtime name has none. Rejects when the store cannot answer. */
@@ -237,11 +231,7 @@ export const makeWith = (
       }) {
         const markerPath = path.join(input.userDataPath, MARKER_FILE_NAME);
         if (yield* fs.exists(markerPath).pipe(Effect.orElseSucceed(() => false))) return;
-        const legacyRuntimeNames = [
-          initialRuntimeName,
-          SOURCE_PRODUCT_NAME_BEFORE_GOAT,
-          input.legacyRuntimeName,
-        ];
+        const legacyRuntimeNames = [initialRuntimeName, input.legacyRuntimeName];
         const result = yield* Effect.tryPromise({
           try: async () => {
             const store = await openStore(platform);

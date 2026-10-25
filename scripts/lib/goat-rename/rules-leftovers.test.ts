@@ -146,7 +146,6 @@ describe("leftover GOAT names", () => {
       'NodePath.join(cacheRoot, "t3code", "compile-cache")',
       'NodePath.join(cacheRoot, "goat", "compile-cache")',
     ],
-    ["apps/desktop/package.json", '  "productName": "T3 Code (Alpha)"', '  "productName": "GOAT"'],
     [
       "apps/mobile/src/lib/debugLog.ts",
       "console.log(`[t3-${namespace}] ${event}`);",
@@ -165,6 +164,12 @@ describe("leftover GOAT names", () => {
   ])("renames the label in %s once", (path, source, expected) => {
     expect(apply(path, source)).toBe(expected);
     expect(apply(path, expected)).toBe(expected);
+  });
+
+  it("keeps the source productName, which names legacy safeStorage keys", () => {
+    const line = '  "productName": "T3 Code (Alpha)"';
+    expect(apply("apps/desktop/package.json", line)).toBe(line);
+    expect(findResidue("apps/desktop/package.json", line, KEEP_RULES)).toEqual([]);
   });
 
   it("flags the old spelling if it comes back", () => {

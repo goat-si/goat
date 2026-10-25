@@ -37,6 +37,7 @@ describe("recurrence gate", () => {
   it.each([
     ["apps/server/src/provider/CodexProvider.ts", 'const CODEX_CLIENT_NAME = "T3 Code";'],
     ["apps/server/src/provider/CodexChatGptAuth.ts", 'agent_name_hint: "T3 Code"'],
+    ["apps/desktop/package.json", '"productName": "T3 Code (Alpha)"'],
     [
       "packages/provider-muse/src/server/sdk.ts",
       'clientInfo: { name: "t3_code", title: "T3 Code", version: "1" }',

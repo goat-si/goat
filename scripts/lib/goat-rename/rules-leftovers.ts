@@ -191,13 +191,6 @@ export const LEFTOVER_TEXT_RULES: readonly TextRule[] = [
     /(?<=assets\/prod\/|ico: ")t3-black-/g,
     "goat-black-",
   ),
-  // Packaged builds already set "GOAT"; the safeStorage migration still checks the old initial name.
-  rule(
-    "desktop-source-product-name",
-    at("apps/desktop/package.json"),
-    /(?<="productName": ")T3 Code \(Alpha\)(?=")/g,
-    "GOAT",
-  ),
   // The current app in capture fixtures; the frozen desktop entry name stays (ADR-0014).
   rule(
     "capture-fixture-app",

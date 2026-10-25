@@ -246,6 +246,7 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
       "MIT. [LICENSE](./LICENSE) keeps the original T3 Code copyright notice. Icons: [Solar](https://www.figma.com/community/file/1166831539721848736) by 480 Design, [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).",
     ),
   ],
+  ["apps/desktop/package.json", /(?:"productName": "T3 Code \(Alpha\)")/g],
   ["apps/desktop/scripts/electron-launcher.mjs", /(?:"T3 Code \(Dev\)"|"T3 Code \(Alpha\)")/g],
   ["apps/desktop/src/app/DesktopLegacyLocalStorage.ts", /(?:"T3 Code \(Alpha\)")/g],
   [
