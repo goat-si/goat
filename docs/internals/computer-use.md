@@ -38,9 +38,8 @@ provider (Codex, Claude, ...)
   stdio process that owns the driver runtime and listens on nothing, so no provider and no other
   process of the user ever gets a socket path. Spawned by the helper it reports host attribution
   and the helper as its parent application, exactly as `serve --embedded` does. Agent calls reach
-  it only through the helper, which brokers them in the #1207 envelope. The first helper
-  (#1211) still starts `serve --embedded` on a host-chosen socket; signed helper builds stay blocked
-  until the broker replaces it (#1202).
+  it only through the helper, which brokers them in the #1207 envelope. Signed desktop artifacts
+  carry this helper (#1351).
 - The driver's own cursor overlay is unavailable in direct mode, so the helper draws the agent
   cursor and window highlight itself (#1214), hidden in private mode and during a takeover.
 - Desktop servers ask Electron for the driver over the existing private control pipe
@@ -58,9 +57,6 @@ provider (Codex, Claude, ...)
   revoke do not stop a running `run_script`, and killing its transport does. WS3 qualifies
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
-- Current state, not the design: the first helper (#1211) runs one `serve --embedded` daemon that
-  every session shares, and Stop behaves as ADR-0022 describes: only a leased turn's proxy kills
-  its `cua-driver mcp` client.
 - Stop, stop all, lease end, a lost stream, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the

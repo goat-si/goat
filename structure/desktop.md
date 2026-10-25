@@ -81,7 +81,7 @@ that is present but unusable keeps computer use off. A release helper
 with the GOAT app identifier; a development or ad-hoc helper, built with
 `GOATComputerUseAllowAnyParent`, serves any parent. The helper then re-execs itself
 with responsibility disclaimed, speaks line-delimited
-JSON on stdio and starts `cua-driver serve --embedded` as its direct child, so macOS attributes
+JSON on stdio and starts `cua-driver mcp --direct --embedded` as its direct child (no socket), so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
 and that the driver it reports is the helper's child. Packaged macOS builds without the helper
 keep computer use off. Development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
@@ -105,9 +105,8 @@ come from `@trycua/cua-driver` and are unpacked beside `app.asar`;
 helper's driver and excludes the SDK and its native packages. The license
 notices are vendored in `apps/desktop/src/cua/notices/`.
 
-Proposed (not implemented): the helper runs the driver socketless as
-`cua-driver mcp --direct --embedded` and brokers agent calls over its stdio, it ships in signed
-desktop artifacts, and it draws the agent cursor itself; see `docs/internals/computer-use.md`.
+The driver's own cursor overlay is off in direct mode, so the helper draws the agent cursor and
+window glow itself (`Overlay.swift`, #1214); see `docs/internals/computer-use.md`.
 
 > Decision record: [ADR-0023](decisions/ADR-0023-goat-computer-use-app.md)
 
