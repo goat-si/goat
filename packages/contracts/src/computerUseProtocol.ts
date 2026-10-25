@@ -106,7 +106,8 @@ export const ComputerUseReadiness = Schema.Struct({
    * can choose the remedy: screenLocked (unlock the screen), noInteractiveDesktop (a service or
    * SSH session with no desktop, such as Windows Session 0), otherUserAtConsole, restartRequired
    * (a grant changed and the helper must start again to see it). A person's takeover is not a
-   * host blocker: it pauses that session and shows as its userIntervened stop reason (#1560).
+   * readiness blocker: it pauses every agent on the host until they hand control back, and
+   * shows as the userIntervened stop reason on each card (#1560).
    */
   blockers: Schema.Array(
     Schema.Literals([
