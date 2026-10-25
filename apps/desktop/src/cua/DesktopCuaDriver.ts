@@ -1,4 +1,5 @@
 import {
+  CUA_STALE_ACCESSIBILITY_ADVICE,
   CuaDriverMcpConfiguration,
   type CuaVerificationStep,
   type CuaVerificationStepId,
@@ -162,7 +163,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         version: 1,
         type: "cuaReadiness",
         generation: helperGeneration,
-        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME),
+        readiness: toReadiness(helperState, COMPUTER_USE_HELPER_NAME, environment.platform),
         signals: helperSignals(helperCanWatch, helperReportsInput),
         frames: helperCanFrame,
         // handleAppsRequest below answers app listing requests on every platform.
@@ -682,7 +683,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const treeFailure =
       elements > 0
         ? undefined
-        : (degradedDetail ?? "The driver could not read GOAT's window. Check Accessibility.");
+        : (degradedDetail ??
+          `The driver could not read GOAT's window. Check Accessibility.${environment.platform === "darwin" ? " " + CUA_STALE_ACCESSIBILITY_ADVICE : ""}`);
     record("accessibility", treeFailure);
     if (!identityHolds()) return done();
     yield* noteChecked((current) =>

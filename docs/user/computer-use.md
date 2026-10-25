@@ -140,7 +140,10 @@ and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
 a GOAT window visible and the Mac unlocked while it checks.
 
-If a permission stays off after you allow it, quit and reopen GOAT. If you later
+If a permission stays off after you allow it, quit and reopen GOAT. After GOAT
+updates, **Accessibility** can show as on in System Settings while macOS still
+refuses it; switch **GOAT Computer Use** off and on again in **Privacy & Security
+→ Accessibility**. If you later
 turn a permission off in **System Settings → Privacy & Security**, the setting
 shows it as off; choose **Set up** to allow it again.
 

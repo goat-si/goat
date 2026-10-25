@@ -1,4 +1,8 @@
-import type { ComputerUseCapabilities, ComputerUseReadiness } from "@goat/contracts";
+import {
+  CUA_STALE_ACCESSIBILITY_ADVICE,
+  type ComputerUseCapabilities,
+  type ComputerUseReadiness,
+} from "@goat/contracts";
 
 type Readiness = ComputerUseReadiness;
 type Blocker = Readiness["blockers"][number];
@@ -127,7 +131,11 @@ export const withProof = (
   details: proof.details,
 });
 
-export const toReadiness = (state: HelperReadinessState, principal: string): Readiness => {
+export const toReadiness = (
+  state: HelperReadinessState,
+  principal: string,
+  platform: NodeJS.Platform = "darwin",
+): Readiness => {
   const off = [
     ...(state.grants.accessibility === "granted" ? [] : ["Accessibility"]),
     ...(state.grants.screenCapture === "granted" ? [] : ["Screen Recording"]),
@@ -155,7 +163,12 @@ export const toReadiness = (state: HelperReadinessState, principal: string): Rea
         ? [state.desktop.detail]
         : off.length === 0
           ? []
-          : [`${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`]),
+          : [
+              `${off.join(" and ")} ${off.length > 1 ? "are" : "is"} not on for ${principal}.`,
+              ...(platform !== "darwin" || state.grants.accessibility === "granted"
+                ? []
+                : [CUA_STALE_ACCESSIBILITY_ADVICE]),
+            ]),
       ...(usable ? [] : [`${principal} has not been confirmed by a readiness check yet.`]),
       ...state.details,
       ...(unproven

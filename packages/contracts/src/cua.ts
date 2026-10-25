@@ -252,10 +252,19 @@ export const cuaAgentBlockTitle = (block: CuaAgentBlock): string =>
       ? "GOAT Computer Use cannot use this desktop"
       : desktopTitle[block.blocker];
 
+/**
+ * An Accessibility row can show on while macOS refuses a rebuilt or updated app (a stale grant,
+ * Apple TN3127 and DTS on developer.apple.com/forums/thread/721745); switching the row off and
+ * on records the running code again. Screen Recording has not shown this, so only Accessibility
+ * carries the advice.
+ */
+export const CUA_STALE_ACCESSIBILITY_ADVICE =
+  "If it is already on, switch it off and on again: an updated app can leave the old switch stale.";
+
 /** The sentence every surface shows for a block. */
 export const cuaAgentBlockMessage = (block: CuaAgentBlock): string =>
   block.reason === "permissionsNotGranted"
-    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security.`
+    ? `Computer use cannot start: macOS has not allowed ${block.holder === "helper" ? "GOAT Computer Use" : "GOAT"} in ${cuaAgentBlockLists(block)}. A person turns it on in System Settings > Privacy & Security${block.missing.includes("accessibility") ? ` > Accessibility. ${CUA_STALE_ACCESSIBILITY_ADVICE}` : "."}`
     : `Computer use cannot start: ${block.detail}`;
 
 /**
