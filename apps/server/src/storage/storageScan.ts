@@ -29,6 +29,7 @@ import {
   type ContentStamp,
   contentStamp,
   type FileIdentity,
+  holdsGitCheckout,
   type Lstat,
   lstatOf,
 } from "./fileState.ts";
@@ -611,6 +612,12 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
                     (holdsOtherGoatData(realRuntime)
                       ? state("protected", "It holds another GOAT server's home or data")
                       : null) ??
+                    ((yield* holdsGitCheckout(realRuntime)) !== false
+                      ? state(
+                          "needs_attention",
+                          "It holds a git checkout; check it for work before deleting it yourself",
+                        )
+                      : null) ??
                     state("removable", "No service, process, launcher or thread uses it", true));
     add(
       {
@@ -862,7 +869,10 @@ const rotatedLogFiles = Effect.fn("storageScan.rotatedLogFiles")(function* (logs
   ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const { folder, depth } = next;
-    for (const name of yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => []))) {
+    const names = yield* fs.readDirectory(folder).pipe(Effect.orElseSucceed(() => []));
+    // A checkout's files are its work, whatever their names say.
+    if (names.some((name) => name.toLowerCase() === ".git")) continue;
+    for (const name of names) {
       const target = path.join(folder, name);
       const stat = yield* lstatOf(target);
       if (stat === null || stat.isLink) continue;

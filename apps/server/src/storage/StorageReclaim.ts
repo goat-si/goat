@@ -45,6 +45,7 @@ import {
   contentStamp,
   type FileIdentity,
   holdsGitCheckout,
+  insideCheckout,
   lstatOf,
   sameIdentity,
 } from "./fileState.ts";
@@ -506,6 +507,8 @@ const make = Effect.gen(function* () {
             if (own !== null) return own;
             if (yield* holdsGoatDataBelow(item.path))
               return "it holds another GOAT server's home or data";
+            if ((yield* holdsGitCheckout(item.path)) !== false)
+              return "it holds a git checkout now, or could not be searched for one";
             return yield* removeUnusedPinnedRuntime({
               baseDir: config.baseDir,
               keep: [packageJson.version],
@@ -521,6 +524,9 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const reason = yield* workedInNow(target.root);
             if (reason !== null) return reason;
+            for (const file of target.files)
+              if ((yield* insideCheckout(target.root, file.path)) !== false)
+                return file.path + " is in a git checkout now, or its folder could not be read";
             return yield* removeGroup(item, target, actor);
           }),
         );

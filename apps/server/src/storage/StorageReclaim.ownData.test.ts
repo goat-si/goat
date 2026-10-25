@@ -298,4 +298,75 @@ describe("StorageReclaim leaves GOAT's own data alone", () => {
       });
     }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
   );
+
+  it.live("keeps an old runtime once a git checkout appears in it", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      const versions = pinnedRuntimeVersionsDir(path, config.baseDir);
+      for (const version of ["0.0.1", "0.0.2"]) {
+        const sentinel = path.join(versions, version, ".install-complete");
+        yield* fs.makeDirectory(path.dirname(sentinel), { recursive: true });
+        yield* fs.writeFileString(sentinel, version + "\n");
+        yield* fs.utimes(sentinel, version === "0.0.1" ? 1 : 2, version === "0.0.1" ? 1 : 2);
+      }
+      const runtime = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(
+            Effect.map((report) =>
+              report.items.find(
+                (item) => item.kind === "runtime_version" && item.path.endsWith("0.0.1"),
+              ),
+            ),
+          );
+      const offered = (yield* runtime())!;
+      expect(offered.state).toBe("removable");
+      // A checkout added inside it after review, with an edit in it.
+      const checkout = path.join(versions, "0.0.1", "checkout");
+      yield* fs.makeDirectory(path.join(checkout, ".git"), { recursive: true });
+      yield* fs.writeFileString(path.join(checkout, "work.ts"), "edited\n");
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      expect(yield* fs.readFileString(path.join(checkout, "work.ts"))).toBe("edited\n");
+      expect(yield* runtime()).toMatchObject({ state: "needs_attention" });
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
+
+  it.live("never takes a checkout's files for rotated logs", () =>
+    Effect.gen(function* () {
+      const { fs, path, config, reclaim } = yield* setup;
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        storageCleanup: { logsAfterDays: 7 },
+      });
+      const write = (file: string) =>
+        Effect.gen(function* () {
+          yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+          yield* fs.writeFileString(file, "log\n");
+          yield* fs.utimes(file, LONG_AGO, LONG_AGO);
+        });
+      // A checkout under the logs folder whose tracked file looks like a rotated log.
+      const inCheckout = path.join(config.logsDir, "evidence", "evidence.log.1");
+      yield* fs.makeDirectory(path.join(config.logsDir, "evidence", ".git"), { recursive: true });
+      yield* write(inCheckout);
+      const rotated = path.join(config.logsDir, "archive", "server.log.1");
+      yield* write(rotated);
+      const logs = () =>
+        reclaim
+          .usage({ rescan: true })
+          .pipe(Effect.map((report) => report.items.find((item) => item.kind === "rotated_logs")));
+      const offered = (yield* logs())!;
+      expect(offered).toMatchObject({ state: "removable", label: "1 rotated log files" });
+      // The folder of the offered log becomes a checkout after review.
+      yield* fs.makeDirectory(path.join(config.logsDir, "archive", ".git"));
+      const result = yield* reclaim.clean({
+        items: [{ id: offered.id, token: offered.token }],
+        actor: "test",
+      });
+      expect(result.results[0]?.outcome).toBe("skipped");
+      for (const file of [inCheckout, rotated]) expect(yield* fs.exists(file)).toBe(true);
+    }).pipe(Effect.provide(layer(process.env.TMPDIR ?? "/tmp")), Effect.scoped),
+  );
 });

@@ -128,3 +128,25 @@ export const holdsGitCheckout = Effect.fn("storage.holdsGitCheckout")(function* 
     Effect.orElseSucceed(() => null),
   );
 });
+
+/**
+ * Whether file sits in a git checkout below root: a folder from the file's own up to root holds a
+ * .git entry. Its contents are that checkout's work, whatever their names say. Null when a folder
+ * cannot be read, which callers treat as yes.
+ */
+export const insideCheckout = Effect.fn("storage.insideCheckout")(function* (
+  root: string,
+  file: string,
+) {
+  return yield* Effect.tryPromise(async () => {
+    const top = NodePath.resolve(root);
+    for (
+      let folder = NodePath.dirname(NodePath.resolve(file));
+      ;
+      folder = NodePath.dirname(folder)
+    ) {
+      if ((await NodeFSP.readdir(folder)).some(isGitEntry)) return true;
+      if (folder === top || NodePath.dirname(folder) === folder) return false;
+    }
+  }).pipe(Effect.orElseSucceed(() => null));
+});
