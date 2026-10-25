@@ -423,7 +423,7 @@ const make = Effect.gen(function* () {
       return Option.fromNullishOr(yield* mint(threadId, Option.none(), "interactive"));
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
-        if ((yield* live()).some((lease) => lease.threadId !== threadId))
+        if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
         return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended"));
       }),
@@ -458,7 +458,7 @@ const make = Effect.gen(function* () {
       if (end(threadId, "revoked")) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
-    const grants = yield* live();
+    const grants = yield* live(undefined, true);
     const others = grants.filter((lease) => lease.threadId !== threadId);
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
@@ -469,7 +469,7 @@ const make = Effect.gen(function* () {
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
     if (privateHost) return { _tag: "paused", reason: "private" };
     if (paused !== undefined) return { _tag: "paused", reason: paused };
-    const own = grants.filter((lease) => lease.threadId === threadId);
+    const own = stoppedCards.own(grants, threadId);
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     const focusWake = Math.min(...focus.map((grant) => grant.expiresAtMillis));
@@ -754,7 +754,7 @@ const make = Effect.gen(function* () {
       except: ThreadId | undefined,
       apps: ReadonlyArray<string> | undefined,
     ) {
-      for (const lease of yield* live()) {
+      for (const lease of yield* live(undefined, true)) {
         if (lease.threadId === except) continue;
         const shared = overlap(lease.apps, apps);
         if (shared !== undefined)

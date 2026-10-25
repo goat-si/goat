@@ -3,9 +3,9 @@
  *
  * The thread's stopped card outlives its control: a turn whose attachment was under way at the
  * Stop mints a newer control afterwards, and the card must stay until the person closes it. The
- * thread's approvals that were live at the Stop are released: they count for nothing here (no
- * holder, no apps for a newer control) even before, or without, their durable end. The kill
- * switch still lists them, so it can end them.
+ * thread's approvals that were live at the Stop are released for that thread at once: a newer
+ * control of it gets no apps from them. Other threads still see them as holders until their
+ * durable end, so a failed end, then a restart, cannot leave two threads holding one app.
  *
  * @module ComputerUseStoppedCards
  */
@@ -37,6 +37,11 @@ export const makeStoppedCards = () => {
       for (const id of handoffIds) released.add(id);
     },
     isReleased: (handoffId: string) => released.has(handoffId),
+    /** The grants a thread may use itself: its own, minus those its Stop released. */
+    own: <G extends { readonly threadId: ThreadId; readonly handoffId: string }>(
+      grants: ReadonlyArray<G>,
+      threadId: ThreadId,
+    ) => grants.filter((grant) => grant.threadId === threadId && !released.has(grant.handoffId)),
     /**
      * The session list with one entry per stopped thread: its kept stopped card while the
      * thread's current control is not worth a card of its own (it can act on no app, or is idle
