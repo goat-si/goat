@@ -144,7 +144,7 @@ const changedCode = files.filter((file) => CODE.test(file));
 const packages = readWorkspace();
 const { affected, outputs } = decide(files, packages, false);
 
-const tests = testsForChanges(root, changedCode);
+const tests = testsForChanges(root, changedCode, files);
 
 // knip:check cannot be scoped to a package. Any code change can leave a file,
 // export, or dependency unused (removing the last import of a helper does), so

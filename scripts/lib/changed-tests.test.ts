@@ -41,6 +41,27 @@ describe("testsForChanges", () => {
     ]);
   });
 
+  it("runs the whole ingest suite for its SQL, a deleted file and the shared allowlist", () => {
+    const ingestSuite = [
+      "infra/ingest/src/batch.test.ts",
+      "infra/ingest/src/store.test.ts",
+      "infra/ingest/src/worker.test.ts",
+    ];
+    for (const changed of [
+      ["infra/ingest/migrations/0001_batches.sql"],
+      ["infra/ingest/migrations/0002_removed.sql"],
+      ["packages/shared/src/analyticsAllowlist.ts"],
+    ]) {
+      const code = changed.filter((file) => file.endsWith(".ts"));
+      expect([...testsForChanges(root, code, changed)], changed[0]).toEqual(
+        expect.arrayContaining(ingestSuite),
+      );
+    }
+    expect([...testsForChanges(root, [], ["infra/relay/migrations/postgres/0001.sql"])]).toEqual(
+      [],
+    );
+  });
+
   // #1483 changed HubNodesSettings.tsx, passed its quick run, and left a compiler bailout that
   // failed every full run until #1491. The coverage suites scan their app's src, so no file sits
   // beside the component.

@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
-      # test-mobile, test-shared, test-memory-growth, build, and test-server in
+      # test-mobile, test-shared, test-ingest, test-memory-growth, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck and
       # test-changed. Each entry carries its job title.
@@ -311,6 +311,10 @@ jobs:
       - name: Test shared
         if: matrix.task == 'test-shared'
         run: vp run --filter @goat/shared test
+
+      - name: Test ingest
+        if: matrix.task == 'test-ingest'
+        run: vp run --filter @goat/ingest test
 
       - name: Test mobile
         if: matrix.task == 'test-mobile'
