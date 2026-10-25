@@ -28,6 +28,8 @@ import type { Borrower, Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 
+import { satisfiesSemverRange } from "./semver.ts";
+
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
 export interface SqliteClientConfig {
@@ -129,7 +131,7 @@ export class UnsupportedNodeSqliteVersionError extends Schema.TaggedError<Unsupp
   },
 ) {
   override get message(): string {
-    return `Node.js ${this.nodeVersion} is missing required node:sqlite APIs. Upgrade to ${this.requirement}.`;
+    return `Node.js ${this.nodeVersion} cannot run this node:sqlite client. Upgrade to Node.js ${this.requirement}.`;
   }
 }
 
@@ -142,17 +144,18 @@ export class UnsupportedNodeSqliteOperationError extends Schema.TaggedError<Unsu
   }
 }
 
-const checkNodeSqliteCompat = () => {
-  const parts = process.versions.node.split(".").map(Number);
-  const major = parts[0] ?? 0;
-  const minor = parts[1] ?? 0;
-  const supported = (major === 22 && minor >= 16) || (major === 23 && minor >= 11) || major >= 24;
+/**
+ * Before 24.16.0 and 26.1.0, `node:sqlite` returns a TEXT value cut off at its first
+ * NUL character (nodejs/node#61954). The server's `engines.node` is this same range.
+ */
+export const NODE_SQLITE_RUNTIME_RANGE = "^24.16.0 || >=26.1.0";
 
-  if (!supported) {
+const checkNodeSqliteCompat = () => {
+  if (!satisfiesSemverRange(process.versions.node, NODE_SQLITE_RUNTIME_RANGE)) {
     return Effect.die(
       new UnsupportedNodeSqliteVersionError({
         nodeVersion: process.versions.node,
-        requirement: "Node.js >=22.16, >=23.11, or >=24",
+        requirement: NODE_SQLITE_RUNTIME_RANGE,
       }),
     );
   }

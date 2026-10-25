@@ -438,9 +438,6 @@ jobs:
           cp "native/resource-monitor/target/${{ matrix.rust_target }}/release/$name" "$RUNNER_TEMP/cli-resource-monitor/${{ matrix.key }}/$name"
 
       - name: Build CLI single-executable
-        env:
-          # Exact version; keep in step with SEA_NODE_VERSION in apps/server/vite.config.ts.
-          VP_NODE_VERSION: "26.8.2"
         run: node apps/server/scripts/cli.ts build-exe --verbose
 
       - name: Build CLI archive
