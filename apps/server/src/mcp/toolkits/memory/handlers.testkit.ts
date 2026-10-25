@@ -8,6 +8,8 @@ import * as Schema from "effect/Schema";
 // eslint-disable-next-line goat/no-raw-mcp-registration -- Test harness calls only toolkits registered through McpHttpServer.toolkitRegistration.
 import { McpSchema, McpServer } from "effect/ai";
 import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
+import { ToolDispatch } from "../../ToolDispatch.ts";
+import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import profileMigration from "../../../persistence/Migrations/098_PermissionProfiles.ts";
 import migration from "../../../persistence/Migrations/077_Memory.ts";
@@ -254,5 +256,19 @@ export const call = (name: string, input: object, invocation = scope()) =>
     return { result, body };
   }).pipe(
     Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+    Effect.provideService(McpSchema.McpServerClient, client),
+  );
+
+/** The envelope goat_call answers with, built by its own dispatch over this server's tools. */
+export const callThroughGoatCall = (name: string, input: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const dispatch = ToolDispatch.of({
+      call: (tool, args) => server.callTool({ name: listedName(tool), arguments: args }),
+      served: () => undefined,
+    });
+    return yield* dispatchEnvelope(dispatch, listedName(name), input, "read");
+  }).pipe(
+    Effect.provideService(McpInvocationContext.McpInvocationContext, scope()),
     Effect.provideService(McpSchema.McpServerClient, client),
   );

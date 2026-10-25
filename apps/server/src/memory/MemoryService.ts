@@ -23,6 +23,7 @@ import type {
   PreparedImportCommit,
 } from "./imports/MemoryImportTypes.ts";
 import * as Quota from "./MemoryQuotaService.ts";
+import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 
@@ -288,7 +289,6 @@ const decodeSearch = Schema.decodeUnknownEffect(M.MemorySearchInput);
 const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryInput);
 const decodeSummary = Schema.decodeUnknownEffect(M.GenerateMemorySummaryExecutionResult);
 const encodeRevert = Schema.encodeSync(Schema.fromJsonString(M.MemoryRevertResolutionInput));
-const decodePage = Schema.decodeUnknownEffect(M.MemoryPage);
 const encodeHubReceipt = Schema.encodeEffect(Schema.fromJsonString(M.MemoryHubReceipt));
 const encodeReadSource = Schema.encodeEffect(Schema.fromJsonString(M.MemoryReadSourceInput));
 const decodeReadSource = Schema.decodeUnknownEffect(M.MemoryReadSourceInput);
@@ -301,7 +301,6 @@ const decodeResolutionRequest = Schema.decodeUnknownEffect(M.MemoryHubApplyResol
 const decodeHubEntry = Schema.decodeUnknownEffect(M.MemoryHubEntry);
 const decodeHubPage = Schema.decodeUnknownEffect(M.MemoryHubPullResult);
 const decodeHubReceipt = Schema.decodeUnknownEffect(M.MemoryHubReceipt);
-const decodeHistoryPage = Schema.decodeUnknownEffect(M.MemoryHistoryPage);
 const isConflict = Schema.is(Store.MemoryStoreConflict);
 const isFailureCode = Schema.is(M.MemoryFailureCode);
 const invalid = () => new Store.MemoryStoreConflict({ code: "invalid_output" });
@@ -1810,32 +1809,30 @@ const make = Effect.fnUntraced(function* (
           sourceThread,
           items.flatMap((item) => (item.status === "active" ? [item] : [])),
         );
-        return yield* decode(
-          decodePage(
-            {
-              items,
-              projectionWatermark: state.watermark,
-              nextCursor,
-              ...("query" in input
-                ? {
-                    indexCoverage: {
-                      status: !coverage?.ready
-                        ? "unavailable"
-                        : state.eligible === state.indexed
-                          ? "available"
-                          : state.indexed === 0
-                            ? "unavailable"
-                            : "partial",
-                      eligibleItems: state.eligible,
-                      indexedItems: state.indexed,
-                      unindexedItems: state.eligible - state.indexed,
-                      projectionWatermark: state.watermark,
-                    },
-                  }
-                : {}),
-            },
-            strict,
-          ),
+        return yield* checkedPage(
+          {
+            items,
+            projectionWatermark: state.watermark,
+            nextCursor,
+            ...("query" in input
+              ? {
+                  indexCoverage: {
+                    status: !coverage?.ready
+                      ? "unavailable"
+                      : state.eligible === state.indexed
+                        ? "available"
+                        : state.indexed === 0
+                          ? "unavailable"
+                          : "partial",
+                    eligibleItems: state.eligible,
+                    indexedItems: state.indexed,
+                    unindexedItems: state.eligible - state.indexed,
+                    projectionWatermark: state.watermark,
+                  },
+                }
+              : {}),
+          },
+          items,
         );
       }),
     );
@@ -1879,7 +1876,7 @@ const make = Effect.fnUntraced(function* (
         const { page, consumed } = yield* store.historyPage(value, current.item, environmentId);
         yield* permit;
         yield* consume(value.memorySpaceId, sourceThread, consumed);
-        return yield* decode(decodeHistoryPage(page, strict));
+        return yield* checkedHistoryPage(page);
       }),
     );
   });

@@ -11,7 +11,7 @@ export const memoryEntries = {
     description:
       "Search memory (default scope: user). fts is phrase search; use mode substring for partial text. Pass nextCursor unchanged with the same query and scope, even when items is empty. If indexCoverage is partial/unavailable, do not conclude a memory is absent.",
     guide:
-      "Needs memory:read. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
+      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -29,7 +29,8 @@ export const memoryEntries = {
     toolkit: "memory",
     summary: "List one bounded memory page.",
     description: "List one bounded page of memory items.",
-    guide: "Needs memory:read. The default scope is user.",
+    guide:
+      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports and includeQuarantined (false hides quarantined items). The default scope is user.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

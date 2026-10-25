@@ -6,6 +6,8 @@ import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../../memory/MemorySyncService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { schemaIssueSummary } from "../../../memory/memoryDiagnostics.ts";
+import { listedToolName, resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 import { MemoryToolkit } from "./tools.ts";
 
 const isMemoryError = Schema.is(M.MemoryRpcError);
@@ -91,15 +93,74 @@ export const invocationPermit = (requirement: MemoryAccess.MemoryAccessRequireme
     );
   });
 
-const decodeSearch = Schema.decodeUnknownEffect(M.MemorySearchInput);
-const decodeList = Schema.decodeUnknownEffect(M.MemoryListInput);
-const decodeReadSource = Schema.decodeUnknownEffect(M.MemoryReadSourceInput);
-const decodeRead = Schema.decodeUnknownEffect(M.MemoryReadInput);
-const decodeHistory = Schema.decodeUnknownEffect(M.MemoryHistoryInput);
-const decodeSyncStatus = Schema.decodeUnknownEffect(M.MemorySyncStatusInput);
-const decodeUpsert = Schema.decodeUnknownEffect(M.MemoryUpsertInput);
-const decodeForget = Schema.decodeUnknownEffect(M.MemoryForgetInput);
-const decodeRevertResolution = Schema.decodeUnknownEffect(M.MemoryRevertResolutionInput);
+const isRefusal = Schema.is(M.OrchestratorMcpFailure);
+
+/**
+ * A malformed call is the caller's to fix, so it is refused as invalid_request before anything
+ * runs. The message names fields, never their values: arguments can carry personal memory text.
+ */
+const argumentsOf =
+  <S extends Schema.Top>(tool: string, schema: S) =>
+  (input: unknown) =>
+    Schema.decodeUnknownEffect(schema)(input, { errors: "all" }).pipe(
+      Effect.mapError((error) => {
+        const entry = resolveAgentSurfaceEntry(tool);
+        const problems = schemaIssueSummary(error.issue);
+        const space = problems.includes("memorySpaceId")
+          ? " Read memorySpaceId from goat_memory_sync_status."
+          : "";
+        return new M.OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: `${entry === undefined ? tool : listedToolName(entry)} got invalid arguments (${problems}), so nothing ran.${space}`,
+        });
+      }),
+    );
+
+const failureShape = (error: unknown) => {
+  if (typeof error !== "object" || error === null) return { errorTag: typeof error };
+  const cause = "cause" in error ? error.cause : undefined;
+  const schema = Schema.isSchemaError(error)
+    ? error
+    : Schema.isSchemaError(cause)
+      ? cause
+      : undefined;
+  return {
+    errorTag: "_tag" in error ? String(error._tag) : "unknown",
+    ...("stage" in error && typeof error.stage === "string" ? { stage: error.stage } : {}),
+    ...(typeof cause === "object" && cause !== null && "_tag" in cause
+      ? { causeTag: String(cause._tag) }
+      : {}),
+    ...(schema ? { issues: schemaIssueSummary(schema.issue) } : {}),
+  };
+};
+
+/** Failures the caller cannot act on are logged by shape so they are never silent. */
+const memoryFailure =
+  (tool: string) =>
+  (error: unknown): Effect.Effect<never, M.MemoryRpcError | M.OrchestratorMcpFailure> => {
+    if (isRefusal(error)) return Effect.fail(error);
+    const mapped = memoryError(error);
+    return mapped.code === "invalid_output" || mapped.code === "storage_failed"
+      ? Effect.logWarning("memory tool failed", {
+          tool,
+          code: mapped.code,
+          ...failureShape(error),
+        }).pipe(Effect.andThen(Effect.fail(mapped)))
+      : Effect.fail(mapped);
+  };
+
+const decodeSearch = argumentsOf("memory_search", M.MemorySearchInput);
+const decodeList = argumentsOf("memory_list", M.MemoryListInput);
+const decodeReadSource = argumentsOf("memory_read_source", M.MemoryReadSourceInput);
+const decodeRead = argumentsOf("memory_read", M.MemoryReadInput);
+const decodeHistory = argumentsOf("memory_history", M.MemoryHistoryInput);
+const decodeSyncStatus = argumentsOf("memory_sync_status", M.MemorySyncStatusInput);
+const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
+const decodeForget = argumentsOf("memory_forget", M.MemoryForgetInput);
+const decodeRevertResolution = argumentsOf(
+  "memory_revert_resolution",
+  M.MemoryRevertResolutionInput,
+);
 const receipt = Schema.decodeUnknownEffect(M.MemoryMutationReceipt);
 const callerThread = Effect.gen(function* () {
   const caller = yield* McpInvocationContext.McpInvocationContext;
@@ -116,7 +177,7 @@ const handlers = {
         yield* invocationPermit("read"),
         yield* callerThread,
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_search"))),
   ),
   memory_list: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -126,7 +187,7 @@ const handlers = {
         yield* invocationPermit("read"),
         yield* callerThread,
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_list"))),
   ),
   memory_read: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -136,7 +197,7 @@ const handlers = {
         yield* invocationPermit("read"),
         yield* callerThread,
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_read"))),
   ),
   memory_read_source: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -146,7 +207,7 @@ const handlers = {
         yield* invocationPermit("source"),
         yield* callerThread,
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_read_source"))),
   ),
   memory_history: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -156,7 +217,7 @@ const handlers = {
         yield* invocationPermit("read"),
         yield* callerThread,
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_history"))),
   ),
   memory_sync_status: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -166,7 +227,7 @@ const handlers = {
         { ...(yield* decodeSyncStatus(input)), includeGenerationHold: true },
         yield* invocationPermit("read"),
       );
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_sync_status"))),
   ),
   memory_upsert: McpToolAccess.writesWithCapability((input) =>
     Effect.gen(function* () {
@@ -181,7 +242,7 @@ const handlers = {
             : undefined,
         )
         .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
-    }).pipe(Effect.mapError(memoryError)),
+    }).pipe(Effect.catch(memoryFailure("memory_upsert"))),
   ),
   memory_forget: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>
@@ -190,7 +251,7 @@ const handlers = {
         return yield* service
           .forget(yield* decodeForget(input), yield* invocationPermit("write"))
           .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
-      }).pipe(Effect.mapError(memoryError)),
+      }).pipe(Effect.catch(memoryFailure("memory_forget"))),
     ),
   ),
   memory_revert_resolution: McpToolAccess.destructive(
@@ -202,7 +263,7 @@ const handlers = {
           yield* invocationPermit("write"),
           yield* callerThread,
         );
-      }).pipe(Effect.mapError(memoryError)),
+      }).pipe(Effect.catch(memoryFailure("memory_revert_resolution"))),
     ),
   ),
 } satisfies McpToolAccess.Handlers<typeof MemoryToolkit.tools>;
