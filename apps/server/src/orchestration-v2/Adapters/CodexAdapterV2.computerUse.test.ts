@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
@@ -128,13 +129,18 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
   const terminals = yield* Queue.unbounded<void>();
+  const goalTokens = yield* Queue.unbounded<number>();
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
-      event.type === "turn.terminal" ? Queue.offer(terminals, undefined) : Effect.void,
+      event.type === "turn.terminal"
+        ? Queue.offer(terminals, undefined)
+        : event.type === "provider_thread.updated" && event.providerThread.goal
+          ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed)
+          : Effect.void,
     ),
     Effect.forkScoped,
   );
-  const startTurn = (ordinal: number) =>
+  const startTurn = (ordinal: number, text = `turn-${ordinal}`) =>
     Effect.gen(function* () {
       yield* runtime.startTurn(
         makeCodexTestTurnInput({
@@ -142,7 +148,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
           providerThread,
           now: yield* DateTime.now,
           attemptId: RunAttemptId.make(`${transcript.scenario}-${ordinal}`),
-          text: `turn-${ordinal}`,
+          text,
         }),
       );
     });
@@ -150,6 +156,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     threadConfigs,
     startTurn,
     terminal: Queue.take(terminals),
+    goalTokens: Queue.take(goalTokens),
   };
 });
 
@@ -583,6 +590,76 @@ describe("Codex computer use attachment", () => {
           assert.deepEqual(
             replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
             [f.managed("control:a"), f.managed("control:b")],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+  it.effect(
+    "defers the reload while an active goal can start a continuation turn on its own (#1564)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const root = "cua-goal-continuation";
+          const f = fixture(root);
+          const withCua = (control: string) => ({
+            ...f.config,
+            cuaDriver: f.driver(control),
+            cuaDriverOverridesUserConfig: true,
+          });
+          const goal = (tokensUsed: number, status = "active") => ({
+            threadId: root,
+            objective: "turn-1",
+            status,
+            tokenBudget: null,
+            tokensUsed,
+            timeUsedSeconds: 3,
+            createdAt: 1782622440,
+            updatedAt: 1782622450,
+          });
+          const request = (id: number, method: string, params: unknown, result: unknown) =>
+            f.entries.push(
+              { type: "expect_outbound", frame: { id, method, params } },
+              { type: "emit_inbound", frame: { id, result } },
+            );
+          const notice = (method: string, params: unknown) =>
+            f.entries.push({ type: "emit_inbound", frame: { method, params } });
+          const sessions = yield* McpProviderSessions.McpProviderSessions;
+          yield* sessions.set(withCua("control:a"));
+          f.start(f.managed("control:a"));
+          request(3, "thread/goal/get", { threadId: root }, { goal: null });
+          request(
+            4,
+            "thread/goal/set",
+            { threadId: root, objective: "turn-1", status: "paused" },
+            { goal: goal(0, "paused") },
+          );
+          yield* f.turnStart(5, 1, true);
+          request(6, "thread/goal/set", { threadId: root, status: "active" }, { goal: goal(0) });
+          notice("thread/goal/updated", { threadId: root, turnId: "turn-1", goal: goal(0) });
+          f.turnCompleted(1);
+          notice("thread/goal/updated", { threadId: root, turnId: null, goal: goal(11) });
+          // Codex has started a continuation turn but not yet published it; the person's input
+          // folds into it, so a new control must wait instead of reloading under it.
+          yield* f.turnStart(7, 3, true, true);
+          f.entries.splice(-2);
+          const folded = f.entries.at(-1);
+          if (folded?.type === "emit_inbound" && folded.frame.result)
+            (folded.frame.result as { turn: { id: string } }).turn.id = "turn-auto";
+          f.status(root, "active");
+          notice("turn/started", {
+            threadId: root,
+            turn: makeCodexReplayTurn({ id: "turn-auto", status: "inProgress" }),
+          });
+          const replay = yield* f.open;
+          yield* replay.startTurn(1, "/goal turn-1");
+          while ((yield* replay.goalTokens) !== 11) {}
+          yield* TestClock.adjust("5 seconds");
+          yield* replay.terminal;
+          yield* sessions.set(withCua("control:b"));
+          yield* replay.startTurn(3);
+          assert.deepEqual(
+            replay.threadConfigs.map((threadConfig) => threadConfig["mcp_servers.cua-driver"]),
+            [f.managed("control:a")],
           );
         }),
       ).pipe(Effect.provide(layerAdapterTest)),

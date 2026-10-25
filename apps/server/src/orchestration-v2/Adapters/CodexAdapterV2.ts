@@ -7183,18 +7183,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
             }
             // Codex ignores resume overrides on a held thread: a new driver (#1564) needs a cold
-            // reload, only while Codex reports this thread and its subagent threads quiet.
-            const subagents = Array.from((yield* Ref.get(subagentThreads)).entries());
-            const busy = !threadStatuses.quiet([
-              threadId,
-              ...subagents
-                .filter(
-                  ([, subagent]) =>
-                    approvalOwnerCodexTurn(subagent.parentContext).owner.providerThread.id ===
-                    turnInput.providerThread.id,
-                )
-                .map(([nativeId]) => nativeId),
-            ]);
+            // reload, only while Codex reports this thread and its subagent threads quiet, and no
+            // active goal can start a continuation turn on its own.
+            const ownSubagents = Array.from((yield* Ref.get(subagentThreads)).entries()).filter(
+              ([, { parentContext }]) =>
+                approvalOwnerCodexTurn(parentContext).owner.providerThread.id ===
+                turnInput.providerThread.id,
+            );
+            const busy =
+              goalsByNativeThread.get(threadId)?.status === "active" ||
+              !threadStatuses.quiet([threadId, ...ownSubagents.map(([nativeId]) => nativeId)]);
             const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
               (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(
