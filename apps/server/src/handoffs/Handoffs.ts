@@ -132,7 +132,7 @@ const targetKey = (args: Readonly<Record<string, unknown>>) =>
       : value,
   );
 
-type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations<HandoffError>>>;
+type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations>>;
 
 export class Handoffs extends Context.Service<
   Handoffs,

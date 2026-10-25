@@ -213,11 +213,11 @@ const APPROVAL_WAKE = /^message:handoff-wake:(.+):completed$/;
  * completion wake), which keep the approvals they had. Any failed read, or a chain longer than
  * lineage allows, is false.
  */
-export const personStarted = (
-  reads: PersonStartReads,
-  input: { readonly threadId: ThreadId; readonly runId: RunId },
-): Effect.Effect<boolean> =>
-  Effect.gen(function* () {
+export const personStarted = Effect.fn("ComputerUse.personStarted")(
+  function* (
+    reads: PersonStartReads,
+    input: { readonly threadId: ThreadId; readonly runId: RunId },
+  ) {
     let runId = input.runId;
     for (let depth = 0; depth <= MAX_DEPTH; depth++) {
       const origin = yield* computerUseOrigin(reads, { threadId: input.threadId, runId });
@@ -244,10 +244,9 @@ export const personStarted = (
       runId = asking;
     }
     return false;
-  }).pipe(
-    Effect.catchCause(() => Effect.succeed(false)),
-    Effect.withSpan("ComputerUse.personStarted"),
-  );
+  },
+  Effect.catchCause(() => Effect.succeed(false)),
+);
 
 interface OriginTurnItem {
   readonly id: string;

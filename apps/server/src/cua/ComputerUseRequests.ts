@@ -244,8 +244,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   if (input.wait !== undefined && origin._tag === "interactive" && Option.isSome(current)) {
     const controlId = current.value.controlId;
     // Under the Handoffs lock: whether this turn can still use the answer it is given.
-    const settle = (resolved: Handoff) =>
-      Effect.gen(function* () {
+    const settle = Effect.fn("ComputerUse.settleAnswer")(
+      function* (resolved: Handoff) {
         const { runs } = yield* threads.getThreadRecords(input.threadId, ["runs"], {
           runIds: [run.id],
         });
@@ -264,7 +264,9 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
           wanted !== undefined &&
           wanted.every((app) => held.some((name) => name.toLowerCase() === app.toLowerCase()))
         );
-      }).pipe(Effect.orElseSucceed(() => false));
+      },
+      Effect.orElseSucceed(() => false),
+    );
     const answer = yield* handoffs.awaitComputerUseAnswer(
       {
         threadId: input.threadId,

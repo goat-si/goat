@@ -27,7 +27,7 @@ export const appsOf = (
  * undefined when they share none. Without a list an admission reaches every app, so it overlaps
  * every other: the driver acts under it on the whole desktop and in scripts.
  */
-export const overlap = (
+const overlap = (
   held: ReadonlyArray<string> | undefined,
   wanted: ReadonlyArray<string> | undefined,
 ): { readonly apps?: ReadonlyArray<string> } | undefined => {
