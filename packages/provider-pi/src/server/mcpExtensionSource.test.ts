@@ -791,7 +791,7 @@ describe("Pi Cua Driver bridge", () => {
     }
   });
 
-  it("swaps to the driver a new control names after Stop, under the same tool names (#1564)", async () => {
+  it("swaps real drivers in either direction under the same tool names (#1629)", async () => {
     const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-pi-cua-swap-"));
     try {
       const launched = NodePath.join(directory, "launched-driver.mjs");
@@ -823,7 +823,7 @@ describe("Pi Cua Driver bridge", () => {
           type: "text",
           text: "window 1",
         });
-        // The adapter names the driver GOAT minted after a Stop beside the gate.
+        // A changed driver fingerprint names a replacement beside the gate.
         await NodeFSP.writeFile(
           `${gate}.driver`,
           JSON.stringify({ command: process.execPath, args: [minted], env: {} }),
@@ -834,6 +834,17 @@ describe("Pi Cua Driver bridge", () => {
         assert.deepEqual((await tool.execute("capture", { window_id: 2 })).content[0], {
           type: "text",
           text: "new control window 2",
+        });
+        // Reverting to the launch driver sets the gate back to "on".
+        await NodeFSP.writeFile(
+          `${gate}.driver`,
+          JSON.stringify({ command: process.execPath, args: [launched], env: {} }),
+        );
+        await NodeFSP.writeFile(gate, "on");
+        await turn();
+        assert.deepEqual((await tool.execute("capture", { window_id: 3 })).content[0], {
+          type: "text",
+          text: "window 3",
         });
       } finally {
         await (bridge.handlers.get("session_shutdown") as unknown as () => void)();
