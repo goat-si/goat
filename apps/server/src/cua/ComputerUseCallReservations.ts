@@ -99,10 +99,17 @@ export const callResource = (call: Pick<Call, "name" | "args">): Resource | "rea
  */
 export const ORPHAN_CALL_GRACE_MS = 10_000;
 
+/**
+ * The longest any call holds its app, from its reservation: past the driver's longest call (100 s
+ * for typed text in cua-driver 0.37.0), so an answer or release that never arrived frees it.
+ */
+export const MAX_CALL_MS = 120_000;
+
 interface Ticket {
   readonly threadId: ThreadId;
   readonly call: Call;
   readonly resource: Resource;
+  readonly reservedAt: number;
   /** When this call's control was first seen unable to act, or its proxy's stream ended. */
   stoppedAt?: number;
 }
@@ -154,6 +161,7 @@ export const makeCallReservations = () => {
           ticket.call.app !== undefined &&
           call.app.toLowerCase() === ticket.call.app.toLowerCase();
         if (ticket.resource.pid !== resource.pid && !sameApp) continue;
+        if (now - ticket.reservedAt >= MAX_CALL_MS) continue;
         // Marked per call, never per control: a later call of a reused control starts unmarked.
         if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
           ticket.stoppedAt = now;
@@ -171,7 +179,7 @@ export const makeCallReservations = () => {
         if (ticket.threadId === threadId && ticket.call.controlId === controlId)
           ticket.stoppedAt ??= now;
     },
-    reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
+    reserve(threadId: ThreadId, call: Call, now: number): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))
         return { status: "refused", detail: "replaced" };
       const resource = callResource(call);
@@ -189,7 +197,7 @@ export const makeCallReservations = () => {
           return { status: "refused", detail: "target_busy", holderThreadId: ticket.threadId };
       }
       const reservationId = NodeCrypto.randomUUID();
-      tickets.set(reservationId, { threadId, call, resource });
+      tickets.set(reservationId, { threadId, call, resource, reservedAt: now });
       return { status: "admitted", reservationId };
     },
     lookup(

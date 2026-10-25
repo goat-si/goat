@@ -14,7 +14,11 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { APP_LEASE_IDLE_MS, makeAppLeases } from "./ComputerUseAppLeases.ts";
-import { makeCallReservations, ORPHAN_CALL_GRACE_MS } from "./ComputerUseCallReservations.ts";
+import {
+  makeCallReservations,
+  MAX_CALL_MS,
+  ORPHAN_CALL_GRACE_MS,
+} from "./ComputerUseCallReservations.ts";
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -475,6 +479,31 @@ describe("app leases between threads (D17)", () => {
       // Past the app lease's idle window and the orphan grace, the running call still holds it.
       yield* TestClock.adjust(APP_LEASE_IDLE_MS + ORPHAN_CALL_GRACE_MS);
       assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+    }).pipe(Effect.provide(layer)),
+  );
+  it.effect("a call whose release was lost holds its app no longer than the longest call", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const a = yield* fullAccess("lost-release-a");
+      const b = yield* fullAccess("lost-release-b");
+      // The call finished, but its release never reached the server; A's turn stays open.
+      const lost = yield* leases.callReservation(a.threadId, {
+        action: "reserve",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+        callId: "lost",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7, x: 1, y: 1 },
+        app: TEXTEDIT,
+      });
+      assert.equal(lost.status, "admitted");
+      yield* TestClock.adjust(MAX_CALL_MS - 1);
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+      yield* TestClock.adjust(1);
+      assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
   );
 });

@@ -152,7 +152,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         const decision: ComputerUseCallAdmission =
           request.action === "validate"
             ? { status: "admitted", reservationId: request.reservationId }
-            : reservations.reserve(threadId, call);
+            : reservations.reserve(threadId, call, now);
         if (decision.status === "admitted") appLeases.hold(threadId, call.controlId, need, now);
         return withCallPermissions(decision, state);
       }),
