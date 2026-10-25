@@ -24,6 +24,15 @@ import {
 vi.mock("node:fs/promises", { spy: true });
 
 describe("cuaDriverManifest", () => {
+  it("retains every attested identity when a best-effort listing loses the bundle id", () => {
+    const apps = cuaRequestableApps(
+      [{ name: " Editor.exe ", executable: " C:\\Apps\\Editor.exe " }],
+      [],
+    );
+    expect(apps).toEqual(["C:\\Apps\\Editor.exe", "Editor.exe"]);
+    expect(apps).not.toContain("Editor window");
+  });
+
   it("keeps every admin, install, file and exfiltration tool out of the allow list", () => {
     const allowed = new Set<string>(CUA_DRIVER_ALLOWED_TOOLS);
     for (const tool of Object.keys(CUA_DRIVER_EXCLUDED_TOOLS))
@@ -64,13 +73,31 @@ describe("cuaDriverManifest", () => {
           { bundle_id: "org.example.vault", name: "Bitwarden" },
           { name: "1Password.exe" },
           { name: "Driver", executable: "C:\\Tools\\cua-driver.exe" },
+          {
+            bundle_id: "org.example.host",
+            name: "Host alias",
+            executable: "C:\\Program Files\\GOAT\\GOAT.exe",
+          },
+          {
+            bundle_id: "org.example.vault",
+            name: "Vault alias",
+            executable: "C:\\Apps\\1Password.exe",
+          },
           { bundle_id: "com.example.Passwords", name: "Vault" },
           { name: " ", executable: "/usr/bin/anonymous" },
           {},
         ],
         ["si.goat.desktop", "\\\\?\\C:\\Program Files\\GOAT\\GOAT.exe"],
       ),
-    ).toEqual(["Linux Editor", "Name only", "com.apple.TextEdit", "fixture.exe"]);
+    ).toEqual([
+      "/usr/bin/anonymous",
+      "/usr/bin/editor",
+      "C:\\Apps\\fixture.exe",
+      "Linux Editor",
+      "Name only",
+      "com.apple.TextEdit",
+      "fixture.exe",
+    ]);
   });
 
   it("admits every listed app except GOAT, the driver and credential stores", () => {

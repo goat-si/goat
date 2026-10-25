@@ -47,7 +47,7 @@ describe("DesktopCuaDriver", () => {
           type: "cuaApps",
           requestId: "apps-1",
           status: "listed",
-          apps: ["com.example.Editor", "fixture.exe"],
+          apps: ["C:\\Apps\\fixture.exe", "com.example.Editor", "fixture.exe"],
         });
         yield* test.listApps([{ name: "New app" }]);
         yield* test.requestApps("apps-2");

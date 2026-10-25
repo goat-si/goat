@@ -11,6 +11,7 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { cuaRequestableApps } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -193,6 +194,31 @@ it.effect(
         Option.some(["computer-use-windows-fixture.exe"]),
       ),
     ),
+);
+
+it.effect("admits an attested executable from a partial listing but refuses a window title", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          assert.equal((yield* request({ apps: ["c:\\apps\\editor.exe"] })).kind, "needs_human");
+          const refused = yield* request({ apps: ["Editor window"] });
+          assert.equal(refused.kind, "refused");
+          if (refused.kind !== "refused") return assert.fail("a title is not an app identity");
+          assert.equal(refused.reason, "unknown_app");
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.equal(records.turnItems.filter((item) => item.type === "human_handoff").length, 1);
+        }),
+      undefined,
+      undefined,
+      undefined,
+      Option.some(
+        cuaRequestableApps([{ name: "Editor.exe", executable: "C:\\Apps\\Editor.exe" }], []),
+      ),
+    ),
+  ),
 );
 
 it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<string>>()])(

@@ -181,7 +181,10 @@ function excludedCuaApplication(
   );
 }
 
-/** The namedApp identities approvals match, with the manifest's protected apps left out. */
+/**
+ * Listings are best effort: absence must be judged against every identity the host attests,
+ * including the executable when an installed-app lookup loses its bundle id.
+ */
 export function cuaRequestableApps(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
@@ -190,16 +193,9 @@ export function cuaRequestableApps(
   const requestable = new Set<string>();
   for (const app of apps) {
     const bundle = app.bundle_id?.trim() ?? "";
-    const id = bundle || app.name?.trim() || "";
-    // Windows and Linux can name an app while its executable identifies the protected host.
-    const manifestId = bundle || app.executable?.trim() || id;
-    if (
-      !id ||
-      excludedCuaApplication(app, id, host) ||
-      excludedCuaApplication(app, manifestId, host)
-    )
-      continue;
-    requestable.add(id);
+    const ids = [bundle || app.name?.trim() || "", app.executable?.trim() || ""].filter(Boolean);
+    if (ids.some((id) => excludedCuaApplication(app, id, host))) continue;
+    for (const id of ids) requestable.add(id);
   }
   return [...requestable].sort();
 }
