@@ -1,6 +1,6 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
-import { advertisesMemoryTools, remoteToolName } from "./remoteToolNames.ts";
+import { advertisesMemoryTools, remoteToolName, toolRefusal } from "./remoteToolNames.ts";
 export { refusedByRemote } from "./remoteRefusal.ts";
 import {
   AttachmentCreateUploadUrlInput,
@@ -431,8 +431,8 @@ const AGENT_CONNECTION = { reuseWhileRefreshPending: true } as const;
 /** An alias the SSH config or known_hosts names, with nothing ssh could read as an option. */
 const SAFE_HOST_ALIAS = /^[A-Za-z0-9_][A-Za-z0-9_.@:%+\-[\]]*$/u;
 
-const failure = (reason: SshRemoteDispatchError["reason"], message: string) =>
-  new SshRemoteDispatchError({ reason, message });
+const failure = (reason: SshRemoteDispatchError["reason"], message: string, facts = {}) =>
+  new SshRemoteDispatchError({ reason, message, ...facts });
 
 const describe = (error: unknown): string => {
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -1162,7 +1162,8 @@ const make = Effect.gen(function* () {
       }),
     );
     const result = readRemoteToolResult(input.tool, raw);
-    if (!result.ok) return yield* failure("remote_refused", result.message);
+    if (!result.ok)
+      return yield* failure("remote_refused", result.message, toolRefusal(input.tool, result));
     return result.value;
   });
 
@@ -1694,53 +1695,6 @@ const make = Effect.gen(function* () {
       );
     }
 
-    yield* beforeLaunch;
-    let project = yield* findProject(remote, folder);
-    let projectCreated = false;
-    if (project === undefined) {
-      if (input.existingSessionOnly || input.requireReady) {
-        return yield* failure(
-          "remote_refused",
-          "Automatic placement requires an existing remote project.",
-        );
-      }
-      if (Option.isSome(linked)) {
-        return yield* failure(
-          "remote_refused",
-          `${folder.path} is not a project on ${target.alias}. A linked host cannot be browsed, so it only runs threads in its existing projects: add the folder as a project on ${target.alias}, or pick one from ${goatCallText("project.list")} with host "${target.alias}".`,
-        );
-      }
-      if (!session.ceilingApplied) {
-        return yield* failure(
-          "remote_refused",
-          `${folder.path} is not a project on ${target.alias}, and GOAT there is too old to let an outside agent register one. Add it as a project from a client connected to ${target.alias}, or update GOAT there.`,
-        );
-      }
-      yield* beforeLaunch;
-      const rawCreated = yield* callRemote({
-        ...remote,
-        tool: "goat_project_create",
-        arguments: {
-          title:
-            input.projectTitle?.trim() ||
-            folder.path
-              .split(/[\\/]/u)
-              .findLast((part) => part.length > 0 && !part.endsWith(":")) ||
-            folder.path,
-          workspaceRoot: folder.path,
-          ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
-        },
-      });
-      const created = yield* decodeRemoteProject(rawCreated).pipe(
-        Effect.mapError(() =>
-          failure("remote_refused", "The remote goat_project_create returned no valid project id."),
-        ),
-      );
-      project = { id: created.id, workspaceRoot: folder.path };
-      projectCreated = true;
-      notes.push(`Registered ${folder.path} as a new project on ${target.alias}.`);
-    }
-
     // Each attempt admits memory from its current catalog; cached declarations are
     // only for optional lineage/UI arguments when an ordinary launch cannot list.
     const launchAdmission = Effect.fn("SshRemoteDispatch.launchAdmission")(function* () {
@@ -1773,6 +1727,52 @@ const make = Effect.gen(function* () {
       };
     });
     const admission = yield* launchAdmission();
+    let project = yield* findProject(remote, folder);
+    let projectCreated = false;
+    if (project === undefined) {
+      if (input.existingSessionOnly || input.requireReady) {
+        return yield* failure(
+          "remote_refused",
+          "Automatic placement requires an existing remote project.",
+        );
+      }
+      if (Option.isSome(linked)) {
+        return yield* failure(
+          "remote_refused",
+          `${folder.path} is not a project on ${target.alias}. A linked host cannot be browsed, so it only runs threads in its existing projects: add the folder as a project on ${target.alias}, or pick one from ${goatCallText("project.list")} with host "${target.alias}".`,
+        );
+      }
+      if (!session.ceilingApplied) {
+        return yield* failure(
+          "remote_refused",
+          `${folder.path} is not a project on ${target.alias}, and GOAT there is too old to let an outside agent register one. Add it as a project from a client connected to ${target.alias}, or update GOAT there.`,
+        );
+      }
+      const rawCreated = yield* callRemote({
+        ...remote,
+        beforeToolCall: beforeLaunch,
+        tool: "goat_project_create",
+        arguments: {
+          title:
+            input.projectTitle?.trim() ||
+            folder.path
+              .split(/[\\/]/u)
+              .findLast((part) => part.length > 0 && !part.endsWith(":")) ||
+            folder.path,
+          workspaceRoot: folder.path,
+          ...(input.scripts === undefined ? {} : { scripts: input.scripts }),
+        },
+      });
+      const created = yield* decodeRemoteProject(rawCreated).pipe(
+        Effect.mapError(() =>
+          failure("remote_refused", "The remote goat_project_create returned no valid project id."),
+        ),
+      );
+      project = { id: created.id, workspaceRoot: folder.path };
+      projectCreated = true;
+      notes.push(`Registered ${folder.path} as a new project on ${target.alias}.`);
+    }
+
     const declared = admission.declared;
     const forwardLaunchedBy =
       input.launchedBy !== undefined && declared?.has("launchedBy") === true;
