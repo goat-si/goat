@@ -22,8 +22,9 @@ import { captureX11Window } from "./linuxHelper/x11WindowCapture.ts";
  * Withholding fails closed: every driver line is read, not just a tool result's top-level image
  * blocks, and anything that looks like image data (an image block, a resource blob, a data: URL
  * or base64 PNG/JPEG/GIF/WebP bytes, including inside text) becomes a line of text saying why.
- * Calls that ask the driver to write its capture to a file are refused before they run, since
- * the agent could read the file without any of this.
+ * Calls that ask the driver to write its capture to a file, at any depth of their arguments or
+ * in a script's text, are refused before they run, since the agent could read the file without
+ * any of this.
  */
 
 /** Calls whose image is one window's screenshot, taken at the size in their structured result. */
@@ -40,9 +41,15 @@ export const SCREENSHOT_FILE_REFUSED =
 
 const WITHHELD = "GOAT withheld a screenshot from this result. ";
 
-// Base64 of PNG, JPEG, GIF and RIFF (WebP) headers, and data: image URLs, as written or with the
-// slashes JSON may escape.
-const IMAGE_TEXT = /data:image(?:\/|\\\/)|iVBORw0KGgo|(?:\/|\\\/)9j(?:\/|\\\/)|R0lGOD[dl]h|UklGR/;
+// Image data inside text: a data: image URL with its payload, or base64 that starts with a PNG,
+// JPEG, GIF or RIFF (WebP) header and runs on, as written or with the slashes JSON may escape.
+// Only the data is replaced, so prose that merely names a format keeps its words.
+const IMAGE_DATA = [
+  /data:image(?:\/|\\\/)[^\s"',;]+(?:;[^\s"',]*)?,[^\s"']*/g,
+  /(?:iVBORw0KGgo|(?:\/|\\\/)9j(?:\/|\\\/)|R0lGOD[dl]h|UklGR)(?:[A-Za-z0-9+=]|\\?\/){8,}/g,
+];
+const withholdText = (text: string, reason: string) =>
+  IMAGE_DATA.reduce((out, pattern) => out.replace(pattern, "[" + WITHHELD + reason + "]"), text);
 
 export interface DriverReply {
   readonly tool?: string;
@@ -75,17 +82,35 @@ const parse = (line: string): unknown => {
 /** value with everything image-like replaced by text saying why; keep is delivered as is. */
 function withhold(value: unknown, reason: string, keep?: unknown): unknown {
   if (value === keep && keep !== undefined) return value;
-  if (typeof value === "string") return IMAGE_TEXT.test(value) ? WITHHELD + reason : value;
+  if (typeof value === "string") return withholdText(value, reason);
   if (Array.isArray(value)) return value.map((item) => withhold(item, reason, keep));
   if (!isRecord(value)) return value;
   if (isImage(value)) return { type: "text", text: WITHHELD + reason };
   const mimeType = typeof value.mimeType === "string" ? value.mimeType.toLowerCase() : "";
   if (value.blob !== undefined && !mimeType.startsWith("text/")) {
     const { blob: _blob, ...rest } = value;
-    return { ...rest, mimeType: "text/plain", text: WITHHELD + reason };
+    return {
+      ...(withhold(rest, reason, keep) as object),
+      mimeType: "text/plain",
+      text: WITHHELD + reason,
+    };
   }
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, withhold(item, reason, keep)]),
+  );
+}
+
+/**
+ * Whether a call's arguments, at any depth, ask for a file: run_steps passes an observe step's
+ * arguments through, and a script names them in its text, so nested keys and any string that
+ * names one count too.
+ */
+function asksForFile(value: unknown): boolean {
+  if (typeof value === "string") return FILE_ARGUMENTS.some((name) => value.includes(name));
+  if (Array.isArray(value)) return value.some(asksForFile);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(
+    ([key, item]) => (FILE_ARGUMENTS.includes(key) && item !== undefined) || asksForFile(item),
   );
 }
 
@@ -120,7 +145,7 @@ export function linuxScreenshotPolicy(route: CaptureRoute): LinuxScreenshotPolic
     if (route.route === "driver") return line;
     const message = parse(line);
     if (message === undefined)
-      return IMAGE_TEXT.test(line)
+      return withholdText(line, reasonFor) !== line
         ? JSON.stringify({
             jsonrpc: "2.0",
             method: "notifications/message",
@@ -199,9 +224,7 @@ export function linuxScreenshotPolicy(route: CaptureRoute): LinuxScreenshotPolic
   });
 
   const refuseArguments = (args: unknown) =>
-    isRecord(args) && FILE_ARGUMENTS.some((name) => args[name] !== undefined)
-      ? SCREENSHOT_FILE_REFUSED
-      : undefined;
+    asksForFile(args) ? SCREENSHOT_FILE_REFUSED : undefined;
 
   return { admit, scrub, refuseArguments };
 }

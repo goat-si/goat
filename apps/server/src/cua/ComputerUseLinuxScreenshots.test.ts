@@ -10,6 +10,8 @@ import {
 import { CROPPED_CAPTURE, type CaptureRoute } from "./linuxHelper/windowCapture.ts";
 import { STILL_DRAWING, type X11WindowCapture } from "./linuxHelper/x11WindowCapture.ts";
 
+/** Bytes after an image header, enough to be a picture rather than a mention of one. */
+const PIXELS = Array.from({ length: 24 }, (_, index) => index);
 const DRIVER_PNG = Buffer.from("driver pixels").toString("base64");
 const OWN_PNG = new Uint8Array([137, 80, 78, 71, 1, 2, 3]);
 const SHOT = {
@@ -210,10 +212,18 @@ describe("Linux agent screenshots (#1677)", () => {
           width: 400,
           height: 300,
         });
-        const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]).toString(
-          "base64",
-        );
-        const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]).toString("base64");
+        const png = Buffer.from([
+          0x89,
+          0x50,
+          0x4e,
+          0x47,
+          0x0d,
+          0x0a,
+          0x1a,
+          0x0a,
+          ...PIXELS,
+        ]).toString("base64");
+        const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...PIXELS]).toString("base64");
         const line = JSON.stringify({
           jsonrpc: "2.0",
           id: 4,
@@ -221,7 +231,10 @@ describe("Linux agent screenshots (#1677)", () => {
             content: [
               { type: "text", text: JSON.stringify({ frame: png }) },
               { type: "text", text: "see data:image/jpeg;base64," + jpeg },
-              { type: "resource", resource: { uri: "x", mimeType: "image/png", blob: png } },
+              {
+                type: "resource",
+                resource: { uri: "data:image/png;base64," + png, mimeType: "image/png", blob: png },
+              },
             ],
             structuredContent: { nested: { image: { type: "image", data: png } }, raw: jpeg },
           },
@@ -267,7 +280,21 @@ describe("Linux agent screenshots (#1677)", () => {
           policy.refuseArguments({ window_id: 9, [name]: "/tmp/shot.png" }),
           SCREENSHOT_FILE_REFUSED,
         );
-      assert.isUndefined(policy.refuseArguments({ window_id: 9 }));
+      // run_steps passes an observe step's arguments through; a script names them in its text.
+      assert.equal(
+        policy.refuseArguments({
+          steps: [{ action: "click" }],
+          observe: { window_id: 9, screenshot_out_file: "/tmp/shot.png" },
+        }),
+        SCREENSHOT_FILE_REFUSED,
+      );
+      assert.equal(
+        policy.refuseArguments({
+          script: 'get_window_state(window_id=9, image_path="/tmp/s.png")',
+        }),
+        SCREENSHOT_FILE_REFUSED,
+      );
+      assert.isUndefined(policy.refuseArguments({ window_id: 9, observe: { window_id: 9 } }));
     }
   });
 
@@ -291,5 +318,31 @@ describe("Linux agent screenshots (#1677)", () => {
       }).route,
       "refused",
     );
+  });
+
+  it("text that only names an image format keeps its words; only image data is withheld", () => {
+    const policy = linuxScreenshotPolicy({ route: "refused", reason: CROPPED_CAPTURE });
+    const prose = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 5,
+      result: {
+        content: [
+          { type: "text", text: "Saves as data:image/png or image/jpeg; see /9j/ in the docs." },
+        ],
+      },
+    });
+    assert.equal(policy.scrub(prose), prose);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...PIXELS]).toString(
+      "base64",
+    );
+    const mixed = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 6,
+      result: { content: [{ type: "text", text: "label Count: 12 icon " + png + " end" }] },
+    });
+    const out = policy.scrub(mixed);
+    assert.notInclude(out, png);
+    assert.include(out, "label Count: 12 icon [GOAT withheld a screenshot");
+    assert.include(out, "] end");
   });
 });
