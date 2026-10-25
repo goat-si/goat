@@ -23,7 +23,7 @@ const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { buildImportGraph, dependents, isSource, mentionsOf } = require("./goat-ci-imports.cjs");
 // Node strips the types, so CI picks the same files check:changed runs before every push.
-const { testsForChanges } = require("../../scripts/lib/changed-tests.ts");
+const { INGEST_SUITE_TRIGGER, testsForChanges } = require("../../scripts/lib/changed-tests.ts");
 
 const FULL_LABEL = "ci:full";
 const AFFECTED_LABEL = "ci:affected";
@@ -85,6 +85,7 @@ const TASKS = [
   "test-client-runtime",
   "test-mobile",
   "test-shared",
+  "test-ingest",
   "test-memory-growth",
   "build",
   "test-server",
@@ -320,6 +321,8 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
     if (isDocument(file)) continue;
     // A dependency change can move any task, and the release version check reads every manifest.
     if (path.posix.basename(file) === "package.json") return everything(file);
+    // The ingest Worker's suite covers its SQL and config and the shared allowlist.
+    if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -502,7 +505,7 @@ function quickRun(changed, root) {
   const placed = changed.find((file) => !isDocument(file));
   if (placed !== undefined) reasons.set("typecheck", placed);
   const code = changed.filter((file) => CODE_RE.test(file));
-  const tests = [...testsForChanges(root, code)].sort();
+  const tests = [...testsForChanges(root, code, changed)].sort();
   const changedTests = {
     vitest: tests.filter((file) => !NODE_TEST_RE.test(file)),
     node: tests.filter((file) => NODE_TEST_RE.test(file)),
