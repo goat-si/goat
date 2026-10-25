@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
+import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
+import { runMigrations } from "../persistence/Migrations.ts";
+import { foregroundProxy, foregroundProxyLayer } from "./ComputerUseForeground.testkit.ts";
 
 import {
   active,
@@ -12,6 +15,56 @@ import {
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 describe("ComputerUseLeaseProxy telling a person's input from the agent's", () => {
+  it.effect.each(["pointer", "keyboard"] as const)(
+    "a capable helper's accepted human %s input leaves the in-flight call and control active",
+    (source) =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const thread = ThreadId.make("thread:foreground-human");
+        const { h, leases, control, humanReport } = yield* foregroundProxy(thread);
+        // A different input kind cannot be explained by the still-running agent action.
+        const original = call(1, source === "keyboard" ? "click" : "type_text", {
+          pid: 42,
+          window_id: 7,
+          ...(source === "keyboard" ? { x: 1, y: 1 } : { text: "approved foreground work" }),
+          delivery_mode: "foreground",
+        });
+        yield* h.send(original);
+        const observed = yield* Effect.raceFirst(
+          h.nextDispatch.pipe(Effect.map(({ message }) => ({ kind: "dispatch", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "answer", message }))),
+        );
+        assert.equal(observed.kind, "dispatch");
+        assert.deepEqual(observed.message, JSON.parse(original));
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal((yield* h.nextValidation).action, "validate");
+        assert.equal(yield* h.agentCall, "start 1");
+        yield* h.hid(source);
+        assert.equal(yield* h.person, source);
+        assert.equal(yield* humanReport, "agents");
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 1);
+        assert.equal(yield* h.agentCall, "end 1");
+        assert.equal((yield* h.nextReservation).action, "release");
+        assert.isTrue(yield* leases.foregroundAvailable(thread, "Check the build status"));
+        yield* h.send(
+          call(2, "type_text", {
+            pid: 42,
+            window_id: 7,
+            text: "while the person types",
+            delivery_mode: "foreground",
+          }),
+        );
+        assert.equal((yield* h.nextDispatch).message.id, 2);
+        assert.equal((yield* h.nextReservation).action, "reserve");
+        assert.equal((yield* h.nextValidation).action, "validate");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 2);
+        assert.equal((yield* h.nextReservation).action, "release");
+      }).pipe(Effect.provide(foregroundProxyLayer)),
+  );
+
   it.effect("a person's key during the agent's own click reaches the server", () =>
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });

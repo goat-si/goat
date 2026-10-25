@@ -5,7 +5,12 @@
  *
  * @module leaseUpdateFences
  */
-import type { ComputerUseLeaseUpdate, ComputerUsePauseReason } from "@goat/contracts";
+import type {
+  ComputerUseForegroundGrant,
+  ComputerUseLeaseUpdate,
+  ComputerUsePauseReason,
+  TurnItemId,
+} from "@goat/contracts";
 
 import type { LeaseEnd } from "./ComputerUseLeaseMessages.ts";
 import { approvedApps } from "./ComputerUseScope.ts";
@@ -22,6 +27,10 @@ export function makeLeaseFences(controlId: string) {
   /** The apps of the latest active update taken, applied or not; undefined allows every app. */
   let takenApps: ReadonlySet<string> | undefined;
   let takenActive = false;
+  let takenForeground: ReadonlyArray<ComputerUseForegroundGrant> = [];
+  // Grant identities cannot be replayed. Later application of an older update cannot restore one.
+  const removedForeground = new Set<TurnItemId>();
+  const foregroundLimits = new Map<TurnItemId, number>();
   const raise = (fence: Stopping) => {
     fences.push(fence);
     return fence;
@@ -35,12 +44,23 @@ export function makeLeaseFences(controlId: string) {
     take: (
       update: ComputerUseLeaseUpdate,
       applied: ReadonlySet<string> | undefined,
+      appliedForeground: ReadonlyArray<ComputerUseForegroundGrant>,
     ): Stopping | undefined => {
       if (update.state !== "ended" && update.controlId !== controlId) return raise({ end: "lost" });
       if (update.state === "paused") return raise({ pause: update.reason });
       if (update.state === "ended")
         return raise({ end: update.reason === "unauthorized" ? "lost" : update.reason });
       if (update.state === "idle") return raise({ idle: true });
+      const nextForeground = update.foreground ?? [];
+      for (const grant of [...takenForeground, ...appliedForeground])
+        if (!nextForeground.some((next) => next.handoffId === grant.handoffId))
+          removedForeground.add(grant.handoffId);
+      for (const grant of nextForeground)
+        foregroundLimits.set(
+          grant.handoffId,
+          Math.min(foregroundLimits.get(grant.handoffId) ?? Infinity, grant.expiresAtMillis),
+        );
+      takenForeground = nextForeground;
       const next = approvedApps(update.apps);
       const drops = (from: ReadonlySet<string> | undefined) =>
         next !== undefined && (from === undefined || [...from].some((app) => !next.has(app)));
@@ -49,6 +69,10 @@ export function makeLeaseFences(controlId: string) {
       takenActive = true;
       return narrowed ? raise({ narrowed: true }) : undefined;
     },
+    /** Deny only the selected grant; background authority remains independent. */
+    allowsForeground: (grant: ComputerUseForegroundGrant) =>
+      !removedForeground.has(grant.handoffId) &&
+      grant.expiresAtMillis <= (foregroundLimits.get(grant.handoffId) ?? -Infinity),
     /** The lease stream ended: the control is lost once what came before it applies. */
     lost: () => raise({ end: "lost" }),
     /** An update has been applied; its fence comes down. */

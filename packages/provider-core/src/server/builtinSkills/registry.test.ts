@@ -63,6 +63,14 @@ describe("built-in skill activation", () => {
 });
 
 describe("computer use skill text", () => {
+  it("continues through human input while preserving takeover and private-field stops", () => {
+    const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
+    expect(guidance).toContain("Keep working while the person uses their keyboard or pointer");
+    expect(guidance).toContain("An explicit takeover pause says `userIntervened`");
+    expect(guidance).toContain("password, one-time code, payment and passkey fields are private");
+    expect(guidance).not.toContain("the person's own keyboard or pointer where GOAT can detect it");
+  });
+
   it("fits every section into one Codex context entry on every host", () => {
     for (const platform of PLATFORMS)
       for (const section of builtInSkillSections(["computer-use"], platform))
@@ -197,5 +205,15 @@ describe("computer use skill against what agents receive today", () => {
 
   it("names no driver tool GOAT withholds from agents", () => {
     expect(codeSpans.filter((span) => Object.hasOwn(CUA_DRIVER_EXCLUDED_TOOLS, span))).toEqual([]);
+  });
+
+  it("teaches the foreground approval the proxy enforces, never a spoken ask or a self-restore", () => {
+    // The proxy refuses foreground input (foreground_not_approved) until a person approves
+    // computer_use.request with foreground:true and no apps; release never restores focus (#1480).
+    const line = guidance.split("\n").find((entry) => entry.includes("`bring_to_front`")) ?? "";
+    expect(line).toContain("`computer_use.request` with `foreground: true` and no `apps`");
+    expect(line).toMatch(/Pause, Stop or the end of the turn revokes it/);
+    expect(guidance).not.toContain("ask them first");
+    expect(guidance).toContain("Never restore focus yourself.");
   });
 });
