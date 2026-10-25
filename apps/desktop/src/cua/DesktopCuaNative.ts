@@ -148,6 +148,10 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
   return lit / sampled >= 0.01;
 }
 
+const decodeComputerUseSetting = Schema.decodeUnknownSync(
+  fromLenientJson(Schema.Struct({ enableCua: Schema.optionalKey(Schema.Boolean) })),
+);
+
 export const dependencies: DesktopCuaDriverDependencies = {
   loadEmbedded: async () => {
     const sdk = await import("@trycua/cua-driver/embedded");
@@ -200,9 +204,7 @@ export const dependencies: DesktopCuaDriverDependencies = {
   listApps: listCuaDriverApplications,
   computerUseEnabled: async (settingsPath) => {
     const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
-    const settings = Schema.decodeUnknownSync(
-      fromLenientJson(Schema.Struct({ enableCua: Schema.optionalKey(Schema.Boolean) })),
-    )(raw);
+    const settings = decodeComputerUseSetting(raw);
     return settings.enableCua === true;
   },
   readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),

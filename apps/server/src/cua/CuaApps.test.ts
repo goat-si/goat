@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import type { DesktopCuaAppsReport } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -18,27 +19,29 @@ const fixture = Effect.fnUntraced(function* (synchronous = false, failSend = fal
   const requests = yield* Queue.unbounded<string>();
   const listing = yield* CuaDriver.makeDesktopAppsListing().pipe(
     Effect.provide(
-      DesktopTelemetryReceiver.layerTest({
-        cuaApps: Stream.fromPubSub(reports),
-        requestCuaApps: (requestId) =>
-          Effect.gen(function* () {
-            yield* Queue.offer(requests, requestId);
-            if (failSend)
-              return yield* new DesktopTelemetryReceiver.DesktopTelemetryDescriptorUnavailable({
-                mode: "test",
-              });
-            if (synchronous)
-              yield* PubSub.publish(reports, {
-                version: 1,
-                type: "cuaApps",
-                requestId,
-                status: "listed",
-                apps: ["Editor"],
-              });
-          }),
-      }),
+      Layer.mergeAll(
+        NodeCrypto.layer,
+        DesktopTelemetryReceiver.layerTest({
+          cuaApps: Stream.fromPubSub(reports),
+          requestCuaApps: (requestId) =>
+            Effect.gen(function* () {
+              yield* Queue.offer(requests, requestId);
+              if (failSend)
+                return yield* new DesktopTelemetryReceiver.DesktopTelemetryDescriptorUnavailable({
+                  mode: "test",
+                });
+              if (synchronous)
+                yield* PubSub.publish(reports, {
+                  version: 1,
+                  type: "cuaApps",
+                  requestId,
+                  status: "listed",
+                  apps: ["Editor"],
+                });
+            }),
+        }),
+      ),
     ),
-    Effect.provide(NodeCrypto.layer),
   );
   return { listing, requests, reports };
 });

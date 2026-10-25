@@ -1,10 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
 import { it } from "@effect/vitest";
-import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { describe, expect } from "vite-plus/test";
 
@@ -18,18 +19,18 @@ import {
 describe("DesktopTelemetryReceiver", () => {
   it.effect("refuses an app-list request without desktop pipe descriptors", () =>
     Effect.gen(function* () {
-      const receiver = yield* make().pipe(
-        Effect.provide(
-          Layer.mock(ServerConfig.ServerConfig)({
-            mode: "desktop",
-            desktopTelemetryFd: undefined,
-            desktopTelemetryControlFd: undefined,
-          }),
-        ),
-      );
+      const receiver = yield* make();
       const error = yield* receiver.requestCuaApps("apps").pipe(Effect.flip);
       expect(error._tag).toBe("DesktopTelemetryDescriptorUnavailable");
-    }).pipe(Effect.provide(ServerSettings.layerTest()), Effect.scoped),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerSettings.layerTest(),
+          ServerConfig.layerTest("/test", { prefix: "goat-cua-apps" }),
+        ).pipe(Layer.provide(NodeServices.layer)),
+      ),
+      Effect.scoped,
+    ),
   );
 
   it.effect("models a zero-byte control write as a stalled descriptor", () =>

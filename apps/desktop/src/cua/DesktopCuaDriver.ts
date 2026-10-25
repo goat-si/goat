@@ -358,6 +358,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       scope,
       principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
     });
+    const listApplications = helperListing(engine);
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
@@ -366,7 +367,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       platform: environment.platform,
       // The helper verifies its driver before running it, so it lists the apps too; running
       // the driver here would execute it unchecked, under GOAT's identity (#1241).
-      ...(helperListing(engine) ? { listApplications: helperListing(engine) } : {}),
+      ...(listApplications === undefined ? {} : { listApplications }),
     };
     const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;

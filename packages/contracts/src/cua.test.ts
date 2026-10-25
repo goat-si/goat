@@ -18,6 +18,9 @@ import {
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
 
+const decodeControlMessage = Schema.decodeUnknownSync(DesktopTelemetryControlMessage);
+const decodeTelemetryMessage = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
+const decodeRequestResult = Schema.decodeUnknownSync(ComputerUseRequestResult);
 const decodeCallReservation = Schema.decodeUnknownSync(ComputerUseCallReservation);
 const decodeLeaseUpdate = Schema.decodeUnknownSync(ComputerUseLeaseUpdate);
 const decodeCallAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
@@ -46,8 +49,8 @@ const metrics = {
 describe("computer use on the wire", () => {
   it("decodes correlated app listing controls, reports and actionable unknown-app refusals", () => {
     const request = { version: 1, type: "cuaAppsRequest", requestId: "apps-1" };
-    expect(Schema.decodeUnknownSync(DesktopTelemetryControlMessage)(request)).toEqual(request);
-    const decode = Schema.decodeUnknownSync(DesktopHostTelemetryMessage);
+    expect(decodeControlMessage(request)).toEqual(request);
+    const decode = decodeTelemetryMessage;
     const listed = {
       version: 1,
       type: "cuaApps",
@@ -72,7 +75,7 @@ describe("computer use on the wire", () => {
       unknownApps: ["Editor window"],
       message: "Call list_apps and ask again.",
     };
-    expect(Schema.decodeUnknownSync(ComputerUseRequestResult)(refusal)).toEqual(refusal);
+    expect(decodeRequestResult(refusal)).toEqual(refusal);
   });
 
   it("preserves the admitted app scope and rejects malformed permission deadlines", () => {
