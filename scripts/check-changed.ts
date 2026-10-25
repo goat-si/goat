@@ -139,10 +139,12 @@ if (cached?.key === key) {
 
 const present = files.filter((file) => NodeFS.existsSync(NodePath.join(root, file)));
 const code = present.filter((file) => CODE.test(file));
+// Deleted files still select suites; see testsForChanges.
+const changedCode = files.filter((file) => CODE.test(file));
 const packages = readWorkspace();
 const { affected, outputs } = decide(files, packages, false);
 
-const tests = testsForChanges(root, code);
+const tests = testsForChanges(root, changedCode);
 
 // knip:check cannot be scoped to a package. Any code change can leave a file,
 // export, or dependency unused (removing the last import of a helper does), so

@@ -41,6 +41,15 @@ export const layerInteractive = (input: {
           threadId,
           expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
         }),
+      // A full access thread takes this one: every app, no grant (D16).
+      everyAppControl: (threadId) =>
+        Effect.succeed(
+          Option.some({
+            controlId: "control:every-app",
+            threadId,
+            expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+          }),
+        ),
       // Turns here keep their run open.
       turnEnded: () => Effect.succeed(false),
     }),

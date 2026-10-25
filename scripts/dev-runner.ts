@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+// First, so an unsupported Node stops here before any other module loads.
+import "./lib/dev-node-guard.ts";
 import * as NodeOS from "node:os";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -22,6 +24,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess } from "effect/process";
 
 import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
+import { prepareFirstStart } from "./lib/dev-first-start.ts";
 import { withDevMaxHttpHeaderSize } from "./lib/dev-max-header-size.ts";
 import { normalizeLegacyEnv } from "@goat/contracts/legacyT3Names";
 
@@ -50,9 +53,6 @@ const FETCH_BAD_PORTS = new Set([
 // Dev servers bind loopback, so loopback is the only interface whose
 // availability decides whether we can use a port.
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "::1"] as const;
-// A pruned migrate-dev-db copy is tens of MB; some worktrees hold a full copy
-// of the live database instead.
-const LARGE_DEV_DATABASE_BYTES = 500 * 1024 * 1024;
 
 /**
  * Loopback and the wildcards qualify; a specific interface (e.g. a LAN IP) does
@@ -599,92 +599,6 @@ export const resolveModePortOffsets = Effect.fn("dev-runner.resolveModePortOffse
   return { serverOffset: sharedOffset, webOffset: sharedOffset };
 });
 
-/** Best effort: a failed first-start step warns, and dev still starts. */
-const runRepoScript = Effect.fn("dev-runner.runRepoScript")(function* (
-  script: string,
-  args: ReadonlyArray<string>,
-  env: NodeJS.ProcessEnv,
-) {
-  const path = yield* Path.Path;
-  const repoRoot = path.dirname(import.meta.dirname);
-  const exitCode = yield* ChildProcess.make(
-    yield* HostProcess.ExecutablePath,
-    [path.join(repoRoot, script), ...args],
-    { cwd: repoRoot, stdin: "ignore", stdout: "inherit", stderr: "inherit", env, extendEnv: false },
-  ).pipe(
-    Effect.flatMap((child) => child.exitCode),
-    Effect.scoped,
-    Effect.orElseSucceed(() => -1),
-  );
-  if (exitCode !== 0) {
-    yield* Effect.logWarning(`[dev-runner] ${script} failed; starting anyway.`);
-  }
-});
-
-/**
- * The first start in a worktree seeds its empty database from the live install
- * and warms the web dependency cache. Each step checks for its own output, so
- * later starts skip it.
- */
-const prepareFirstStart = Effect.fn("dev-runner.prepareFirstStart")(function* (input: {
-  readonly mode: DevMode;
-  readonly seed: boolean;
-  readonly worktreeHome: string | undefined;
-  readonly env: NodeJS.ProcessEnv;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const exists = (file: string) => fs.exists(file).pipe(Effect.orElseSucceed(() => false));
-
-  if (input.worktreeHome !== undefined && input.mode !== "dev:web") {
-    const stateDir = path.join(input.worktreeHome, "userdata");
-    for (const name of ["statev2.sqlite", "state.sqlite"]) {
-      const file = path.join(stateDir, name);
-      const info = yield* fs.stat(file).pipe(Effect.option);
-      if (Option.isSome(info) && Number(info.value.size) > LARGE_DEV_DATABASE_BYTES) {
-        yield* Effect.logWarning(
-          `[dev-runner] ${file} is ${Math.round(Number(info.value.size) / 1024 / 1024)} MB. With the dev server stopped, \`vp run migrate-dev-db\` rebuilds statev2.sqlite as a small copy of recent data.`,
-        );
-      }
-    }
-    // GOAT's live data, or the legacy T3 home when GOAT has none, as migrate-dev-db picks it.
-    const homeDirectory = yield* HostProcess.HomeDirectory;
-    let source: string | undefined;
-    for (const home of [".goat", ".t3"]) {
-      const candidate = path.join(homeDirectory, home, "userdata", "statev2.sqlite");
-      if (yield* exists(candidate)) {
-        source = candidate;
-        break;
-      }
-    }
-    // A V1 state.sqlite counts as data too: the server imports it only while
-    // statev2.sqlite is missing, so seeding would hide it.
-    if (
-      input.seed &&
-      !(yield* exists(path.join(stateDir, "statev2.sqlite"))) &&
-      !(yield* exists(path.join(stateDir, "state.sqlite"))) &&
-      source !== undefined
-    ) {
-      yield* Effect.logInfo(
-        `[dev-runner] seeding ${input.worktreeHome} from ${source} (read-only). --no-seed or GOAT_DEV_SEED=0 skips this.`,
-      );
-      yield* runRepoScript(
-        "apps/server/scripts/migrate-dev-db.ts",
-        ["--base-dir", input.worktreeHome, "--source", source],
-        input.env,
-      );
-    }
-  }
-
-  const repoRoot = path.dirname(import.meta.dirname);
-  if (
-    input.mode !== "dev:server" &&
-    !(yield* exists(path.join(repoRoot, "apps/web/node_modules/.vite/deps/_metadata.json")))
-  ) {
-    yield* runRepoScript("apps/web/scripts/warm-dep-cache.ts", [], input.env);
-  }
-});
-
 interface DevRunnerCliInput {
   readonly mode: DevMode;
   readonly goatHome: string | undefined;
@@ -868,6 +782,7 @@ export const runDevRunnerWithInput = Effect.fn("dev-runner.runDevRunnerWithInput
 
   // After sharing, so the warm step sees the same bundled-dev env as Vite.
   yield* prepareFirstStart({
+    repoRoot: (yield* Path.Path).dirname(import.meta.dirname),
     mode: input.mode,
     seed: input.seed !== false,
     worktreeHome: baseDir === worktreeHome ? worktreeHome : undefined,
