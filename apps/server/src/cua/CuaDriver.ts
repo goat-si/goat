@@ -679,12 +679,22 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
 );
 
 /** The desktop host's helper readiness, as desktop telemetry last carried it. */
-const desktopHelperReadiness = Effect.map(
+/**
+ * The desktop app's last readiness report, while that app is still connected. One whose
+ * telemetry stopped cannot start the driver (acquire refuses it below), so its last report would
+ * call an idle driver ready for the next turn (#1538).
+ */
+export const desktopHelperReadiness = Effect.map(
   DesktopTelemetryReceiver.DesktopTelemetryReceiver,
   (receiver) =>
-    receiver.cuaReadiness.pipe(
-      Effect.map(Option.map(({ readiness, signals }) => ({ readiness, signals }))),
-    ),
+    Effect.gen(function* () {
+      const { status } = yield* receiver.health;
+      if (status === "stopped" || status === "unavailable") return Option.none();
+      return Option.map(yield* receiver.cuaReadiness, ({ readiness, signals }) => ({
+        readiness,
+        signals,
+      }));
+    }),
 );
 
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
