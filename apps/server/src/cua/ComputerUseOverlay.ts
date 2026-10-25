@@ -8,7 +8,7 @@
  * - A call that captures pixels hides everything until it answers. A recording hides everything
  *   until it stops. A script or batch counts as a capture, because it can take screenshots the
  *   proxy cannot see ahead of time.
- * - A pause (a person's input, takeover, a secret field) or the control's end hides it.
+ * - An explicit pause, takeover or secret field, or the control's end hides it.
  *
  * Points are fractions of the last screenshot the driver returned for that window. The helper
  * maps them onto the window's current frame. Without a screenshot size, or for an element or a
