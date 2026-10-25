@@ -24,6 +24,7 @@ vi.mock("@napi-rs/keyring", () => ({
 }));
 
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { ChromiumKeyError } from "../preview/BrowserImport/ChromiumKeys.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import type { SafeStorageKeyStore } from "./DesktopSafeStorageKeyMigration.ts";
 import * as DesktopSafeStorageSiblingKeys from "./DesktopSafeStorageSiblingKeys.ts";
@@ -53,6 +54,97 @@ const storeWith = (keys: Record<string, string | Error>, reads: string[] = []) =
 const acceptAll = () => true;
 
 describe("DesktopSafeStorageSiblingKeys", () => {
+  it.effect("#1009 recovers Windows v10 secrets from the sibling profile's DPAPI-wrapped key", () =>
+    Effect.gen(function* () {
+      const key = Buffer.alloc(32, 42);
+      const nonce = Buffer.alloc(12, 7);
+      const cipher = NodeCrypto.createCipheriv("aes-256-gcm", key, nonce);
+      const ciphertext = Buffer.concat([
+        Buffer.from("v10"),
+        nonce,
+        cipher.update("catalog", "utf8"),
+        cipher.final(),
+        cipher.getAuthTag(),
+      ]);
+      const wrapped = Buffer.from("wrapped-stable-key");
+      const siblingKeys = DesktopSafeStorageSiblingKeys.makeWith(
+        () => {
+          throw new Error("Windows must not open a keyring");
+        },
+        "win32",
+        "GOAT Nightly",
+        {
+          readLocalState: (profile) =>
+            profile === "goat-desktop"
+              ? Effect.succeed(
+                  JSON.stringify({
+                    os_crypt: {
+                      encrypted_key: Buffer.concat([Buffer.from("DPAPI"), wrapped]).toString(
+                        "base64",
+                      ),
+                    },
+                  }),
+                )
+              : Effect.fail(new ChromiumKeyError({ reason: "readFailed" })),
+          unprotect: (value) => {
+            assert.deepEqual(value, wrapped);
+            return Effect.succeed(key);
+          },
+        },
+      );
+      assert.deepStrictEqual(
+        yield* siblingKeys.decrypt(ciphertext, acceptAll),
+        Option.some({ plaintext: "catalog", runtimeName: "GOAT Alpha" }),
+      );
+      const tampered = Buffer.from(ciphertext);
+      tampered.writeUInt8(tampered.readUInt8(tampered.length - 1) ^ 1, tampered.length - 1);
+      assert.deepStrictEqual(yield* siblingKeys.decrypt(tampered, acceptAll), Option.none());
+      assert.deepStrictEqual(yield* siblingKeys.decrypt(ciphertext, () => false), Option.none());
+    }),
+  );
+
+  it.effect(
+    "rejects malformed Windows Local State, refused DPAPI access, and invalid AES keys",
+    () =>
+      Effect.gen(function* () {
+        const localState = JSON.stringify({
+          os_crypt: {
+            encrypted_key: Buffer.from("DPAPIwrapped").toString("base64"),
+          },
+        });
+        const denied = new ChromiumKeyError({ reason: "keychainUnavailable" });
+        for (const input of [
+          { state: "not JSON", key: Effect.succeed(Buffer.alloc(32)) },
+          {
+            state: JSON.stringify({ os_crypt: { encrypted_key: "not-base64" } }),
+            key: Effect.succeed(Buffer.alloc(32)),
+          },
+          {
+            state: JSON.stringify({
+              os_crypt: { encrypted_key: Buffer.from("wrong-prefix").toString("base64") },
+            }),
+            key: Effect.succeed(Buffer.alloc(32)),
+          },
+          { state: localState, key: Effect.fail(denied) },
+          { state: localState, key: Effect.succeed(Buffer.alloc(16)) },
+        ]) {
+          const siblings = DesktopSafeStorageSiblingKeys.makeWith(
+            async () => null,
+            "win32",
+            "GOAT Nightly",
+            {
+              readLocalState: () => Effect.succeed(input.state),
+              unprotect: () => input.key,
+            },
+          );
+          assert.deepStrictEqual(
+            yield* siblings.decrypt(Buffer.from("v10".padEnd(40, "x")), acceptAll),
+            Option.none(),
+          );
+        }
+      }),
+  );
+
   it.effect("decrypts with the sibling channel key that wrote the value", () =>
     Effect.gen(function* () {
       const reads: string[] = [];
