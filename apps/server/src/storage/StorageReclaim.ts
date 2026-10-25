@@ -335,11 +335,7 @@ const make = Effect.gen(function* () {
       }
       case "path": {
         if (target.worktree === null) {
-          if (item.kind !== "orphan_folder") {
-            const changed = yield* changedSinceReview(item.path, target.stamp);
-            if (changed !== null) return changed;
-            return yield* removeChecked(target.root, item.path, target.identity);
-          }
+          // Leftover and temp folders alike: a thread can be launched into either.
           // Everything on this server that writes into a folder (turn startup, terminals, git
           // workflows, rollback) takes a lease on it or a folder inside it, which the hold turns
           // away, so no write lands between these checks and removal. Recording a binding writes

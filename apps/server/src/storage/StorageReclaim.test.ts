@@ -332,6 +332,30 @@ describe("StorageReclaim", () => {
         );
         expect(temp.map((item) => path.basename(item.path))).toEqual(["goat-claude-title-old"]);
         expect(temp[0]).toMatchObject({ state: "removable", selected: false });
+
+        // A thread launched into that folder: it is the thread's workspace now.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`
+          INSERT INTO orchestration_v2_projection_threads
+            (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode,
+             created_at, updated_at, payload_json)
+          VALUES ('thread-in-temp', 'project', 'Notes', 'codex', 'full-access', 'default',
+            '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+            ${JSON.stringify({ worktreePath: temp[0]!.path })})
+        `;
+        const bound = (yield* reclaim.usage({ rescan: true })).items.find(
+          (item) => item.kind === "temp",
+        );
+        expect(bound).toMatchObject({
+          state: "protected",
+          reason: "A thread or project on this server uses it",
+        });
+        const result = yield* reclaim.clean({
+          items: [{ id: temp[0]!.id, token: temp[0]!.token }],
+          actor: "test",
+        });
+        expect(result.results[0]?.outcome).toBe("skipped");
+        expect(yield* fs.exists(temp[0]!.path)).toBe(true);
       });
       yield* run.pipe(Effect.provide(layer(tempRoot)));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),

@@ -420,16 +420,18 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     );
   }
 
+  /** Whether a thread, worktree or project of this server records the folder or one inside it. */
+  const referenced = (target: string) =>
+    [...ownBound].some(
+      (bound) => samePath(bound, target, rules) || isStrictlyInside(target, bound, rules),
+    ) ||
+    [...registered].some(
+      (known) => samePath(known, target, rules) || isStrictlyInside(target, known, rules),
+    ) ||
+    ownProjectRoots.some((projectRoot) => overlaps(projectRoot, target, rules));
+
   // Leftover folders: <root>/<name> or <root>/<repository>/<name>, as worktrees are laid out.
   if (facts._tag === "Success" && ownRows !== null) {
-    const referenced = (target: string) =>
-      [...ownBound].some(
-        (bound) => samePath(bound, target, rules) || isStrictlyInside(target, bound, rules),
-      ) ||
-      [...registered].some(
-        (known) => samePath(known, target, rules) || isStrictlyInside(target, known, rules),
-      ) ||
-      ownProjectRoots.some((projectRoot) => overlaps(projectRoot, target, rules));
     const known = [...ownBound, ...registered];
     for (const managedRoot of managedRoots) {
       for (const first of yield* childDirectories(managedRoot)) {
@@ -589,11 +591,30 @@ export const scanStorage = Effect.fn("storageScan.scan")(function* (options: {
     )
       continue;
     if (now - stat.mtimeMs < TEMP_MIN_AGE_MS) continue;
+    // A thread can be launched into any existing folder, a temporary one included.
+    const otherReason = otherServerReason(other, target, rules);
+    const working = processInside(cwds, [target], rules);
     const { decision, token, stamp } = yield* stamped(
       "temp:" + target,
       target,
       TEMP_MIN_AGE_MS,
-      state("removable", "A temporary folder GOAT left more than a day ago"),
+      ownRows === null
+        ? state("needs_attention", "This server's threads could not be read")
+        : referenced(target)
+          ? state("protected", "A thread or project on this server uses it")
+          : otherReason !== null
+            ? state(
+                other.bindings.unverified.length > 0 ? "needs_attention" : "protected",
+                sentenceCase(otherReason),
+              )
+            : working !== false
+              ? state(
+                  working === null ? "needs_attention" : "protected",
+                  working === null
+                    ? "Running processes could not be listed"
+                    : "A process is running in it",
+                )
+              : state("removable", "A temporary folder GOAT left more than a day ago"),
     );
     add(
       {
