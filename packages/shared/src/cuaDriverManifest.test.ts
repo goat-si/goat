@@ -17,6 +17,7 @@ import {
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
   isCuaDriverStartupRefusal,
+  cuaDriverSessionListingEnvironment,
   listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
@@ -465,6 +466,72 @@ describe("request-time listing on standalone servers, failure paths (#1561)", ()
           }),
         ).rejects.toThrow();
       expect(uncaught).toEqual([]);
+    },
+  );
+});
+
+describe("request-time listing on standalone servers, review round 1 (#1574)", () => {
+  it("lists on the probed session only: a session variable the probe left out is withheld, as for the daemon", () => {
+    const env = cuaDriverSessionListingEnvironment(
+      {
+        PATH: "/usr/bin",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/stale/bus",
+        GOAT_AUTH_TOKEN: "secret",
+      },
+      [{ name: "DISPLAY", value: ":7" }],
+      "linux",
+    );
+    expect(env).toMatchObject({ PATH: "/usr/bin", DISPLAY: ":7", DBUS_SESSION_BUS_ADDRESS: "" });
+    expect(env).not.toHaveProperty("GOAT_AUTH_TOKEN");
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a cancelled listing stops its driver instead of waiting out its own timeout",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-cancel-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // Never answers, so only cancellation can end the listing before its 15 s timeout.
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+      const controller = new AbortController();
+      const listing = listCuaRequestableApplications({
+        binaryPath,
+        platform: "linux",
+        environment: { PATH: "/usr/bin:/bin" },
+        hostBundleIds: [],
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(listing).rejects.toThrow(/cancel/i);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "on Linux a request may name only what the manifest would grant: never GOAT itself or an app with no identity",
+    async () => {
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const names = await listCuaRequestableApplications({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          listApplications: async () => [
+            { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+            { bundle_id: null, name: "sleep", pid: child.pid ?? 0, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "node", pid: process.pid, windows: [{ window_id: 2 }] },
+            { bundle_id: null, name: "bash", pid: child.pid ?? 0, windows: [] },
+          ],
+        });
+        expect(names).toContain("org.gnome.Calculator");
+        expect(names).toContain("sleep");
+        expect(names).not.toContain("node");
+        expect(names).not.toContain("bash");
+      } finally {
+        child.kill();
+      }
     },
   );
 });

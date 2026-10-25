@@ -17,6 +17,7 @@ import {
   withCuaDriverPrivacyEnvironment,
 } from "@goat/shared/cuaDriverRelease";
 import {
+  cuaDriverSessionListingEnvironment,
   isCuaDriverStartupRefusal,
   listCuaRequestableApplications,
   prepareCuaDriverCapabilityManifest,
@@ -929,17 +930,23 @@ export const layer = Layer.effect(
             const requestListing = (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
               startBinary.pipe(
                 Effect.flatMap((binaryPath) =>
-                  Effect.tryPromise(() =>
-                    listCuaRequestableApplications({
-                      binaryPath,
-                      platform,
-                      environment: {
-                        ...cuaDriverListingEnvironment(environment),
-                        ...Object.fromEntries(display.map(({ name, value }) => [name, value])),
-                      },
-                      hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
-                    }),
-                  ),
+                  // Interrupting the request (its deadline, or the server stopping) ends the
+                  // listing's driver as well.
+                  Effect.tryPromise({
+                    try: (signal) =>
+                      listCuaRequestableApplications({
+                        binaryPath,
+                        platform,
+                        environment: cuaDriverSessionListingEnvironment(
+                          environment,
+                          display,
+                          platform,
+                        ),
+                        hostBundleIds: [STANDALONE_HOST_BUNDLE_ID],
+                        signal,
+                      }),
+                    catch: (cause) => new CuaDriverHostError({ operation: "start", cause }),
+                  }),
                 ),
                 Effect.map((apps) => Option.some(apps)),
                 Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
