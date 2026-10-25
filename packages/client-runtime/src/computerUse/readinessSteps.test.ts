@@ -227,7 +227,8 @@ it("calls an unchecked Windows desktop not checked, not unsupported or waiting f
   expect(step?.state).toBe("pending");
   expect(step?.detail.join(" ")).not.toContain("consent");
   expect(step?.detail.join(" ")).not.toContain("Check accessibility access");
-  expect(step?.detail.join(" ")).toContain("Turning computer use on here");
+  // A remote client cannot run the check, so the text names where it runs.
+  expect(step?.detail.join(" ")).toContain("in the GOAT desktop app on this computer");
   // A tree that a check really could not read still says so.
   expect(view({ ...ready, tree: "unavailable" }, "win32").steps[2]?.state).toBe("unsupported");
   // macOS keeps its consent wording.

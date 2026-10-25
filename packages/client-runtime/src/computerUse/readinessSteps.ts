@@ -131,8 +131,9 @@ const LINUX_CAPTURE_UNPROVEN =
   "Screen capture is not proven yet. A Wayland desktop may be waiting for consent, or may not capture one window at all.";
 // Windows asks nobody for consent: pending there means no check has read a window since the
 // helper started, and the tree it reports unavailable meanwhile is unread, not refused (#1520).
-const WINDOWS_CAPTURE_UNCHECKED =
-  "Not checked yet. Turning computer use on here restarts the helper and proves a real window capture.";
+// Only GOAT's desktop app on that computer can run the check; a remote client only saves.
+const windowsCaptureUnchecked = (machine: string) =>
+  `Not checked yet. Turning computer use on in the GOAT desktop app on ${machine} restarts the helper and proves a real window capture.`;
 const WINDOWS_TREE_UNCHECKED = "The accessibility tree is read by the same check.";
 
 const blockerRemedies = {
@@ -242,7 +243,10 @@ export function computerUseReadinessSteps({
         linuxUnproven && readiness.capture === "pending"
           ? ({ state: "pending", detail: LINUX_CAPTURE_UNPROVEN } as const)
           : windowsUnchecked
-            ? ({ state: "pending", detail: WINDOWS_CAPTURE_UNCHECKED } as const)
+            ? ({
+                state: "pending",
+                detail: windowsCaptureUnchecked(machine ?? "this computer"),
+              } as const)
             : captureCopy[readiness.capture],
         unconfirmed && readiness.tree === "unavailable"
           ? ({
