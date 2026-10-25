@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - a no-follow directory handle has no Effect FileSystem equivalent.
 /**
  * A linked git worktree gets its own (gitignored) `.t3`: feature work in a
  * throwaway branch must not share a database with the real app, and an ambient
@@ -5,10 +6,14 @@
  * from `<base>/dev` to `<base>/userdata`, the live production database.
  */
 
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import { resolveGoatHome } from "./goatHome.ts";
@@ -90,6 +95,33 @@ export class DevStateDirectorySymlinkError extends Schema.TaggedError<DevStateDi
   }
 }
 
+export class DevStateDirectoryPermissionError extends Schema.TaggedError<DevStateDirectoryPermissionError>()(
+  "DevStateDirectoryPermissionError",
+  { directory: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Could not remove group and other write permission from ${this.directory}: ${this.cause instanceof Error ? this.cause.message : String(this.cause)}`;
+  }
+}
+
+// One no-follow handle for the check and the change, so a parent others can
+// write cannot swap in a link between them.
+const removeGroupAndOtherWrite = async (directory: string) => {
+  const handle = await NodeFSP.open(
+    directory,
+    NodeFS.constants.O_RDONLY | NodeFS.constants.O_DIRECTORY | NodeFS.constants.O_NOFOLLOW,
+  );
+  try {
+    const { mode } = await handle.stat();
+    if ((mode & 0o022) === 0) return undefined;
+    const privateMode = mode & 0o7755;
+    await handle.chmod(privateMode);
+    return { from: mode & 0o7777, to: privateMode };
+  } finally {
+    await handle.close();
+  }
+};
+
 /**
  * Creates a dev state directory without group or other access, or removes
  * group and other write from an existing one, and returns the mode change.
@@ -104,15 +136,22 @@ export const ensurePrivateDevDirectory = Effect.fn("devHome.ensurePrivateDevDire
   const fileSystem = yield* FileSystem.FileSystem;
   // A recursive mkdir applies the mode to every directory it creates.
   yield* fileSystem.makeDirectory(directory, { recursive: true, mode: 0o700 });
-  if (yield* Effect.isSuccess(fileSystem.readLink(directory))) {
-    return yield* new DevStateDirectorySymlinkError({ directory });
+  if ((yield* HostProcess.Platform) === "win32") {
+    // No POSIX modes to fix, but a junction must still not be followed.
+    if (yield* Effect.isSuccess(fileSystem.readLink(directory))) {
+      return yield* new DevStateDirectorySymlinkError({ directory });
+    }
+    return undefined;
   }
-  if ((yield* HostProcess.Platform) === "win32") return undefined;
-  const { mode } = yield* fileSystem.stat(directory);
-  if ((mode & 0o022) === 0) return undefined;
-  const privateMode = mode & 0o7755;
-  yield* fileSystem.chmod(directory, privateMode);
-  return { from: mode & 0o7777, to: privateMode };
+  return yield* Effect.tryPromise({
+    try: () => removeGroupAndOtherWrite(directory),
+    // After the mkdir above the path is a directory or a link to one, and a
+    // no-follow open of a link fails with ELOOP (Linux) or ENOTDIR (macOS).
+    catch: (cause) =>
+      Predicate.hasProperty(cause, "code") && (cause.code === "ELOOP" || cause.code === "ENOTDIR")
+        ? new DevStateDirectorySymlinkError({ directory })
+        : new DevStateDirectoryPermissionError({ directory, cause }),
+  });
 });
 
 export const describePrivateDevDirectoryChange = (

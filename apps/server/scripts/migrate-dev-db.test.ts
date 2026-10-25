@@ -168,6 +168,25 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         }
         assert.deepEqual(yield* fs.readDirectory(liveState), liveBefore);
 
+        // A live userdata that is itself a link, and a differently cased name
+        // where the filesystem ignores case, are the same directory.
+        const linkedHome = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-linked-" });
+        const realState = path.join(elsewhere, "real-userdata");
+        yield* fs.makeDirectory(realState);
+        yield* fs.symlink(realState, path.join(linkedHome, "userdata"));
+        const caseVariant = path.join(home, "USERDATA");
+        for (const baseDir of [
+          path.join(realState, "nested"),
+          ...((yield* fs.exists(caseVariant)) ? [path.join(caseVariant, "nested")] : []),
+        ]) {
+          const error = yield* runMigrateDevDb(
+            { baseDir, source, projects: 1, threadsPerProject: 1 },
+            { sourceHomes: [home, linkedHome] },
+          ).pipe(Effect.flip);
+          assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
+        }
+        assert.deepEqual(yield* fs.readDirectory(realState), []);
+
         yield* runMigrateDevDb(
           { baseDir: path.join(home, "dev"), source, projects: 1, threadsPerProject: 1 },
           { sourceHomes: [home] },

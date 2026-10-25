@@ -739,19 +739,16 @@ const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
   }
 });
 
-// The nearest existing ancestor resolved, plus the missing tail, so a --base-dir
-// that does not exist yet still resolves through a symlinked parent.
-const canonicalPath = Effect.fn("migrateDevDb.canonicalPath")(function* (target: string) {
+// Device and inode follow symlinks and ignore how a name is cased, so neither
+// can hide a live home or its userdata behind another path.
+const directoryIdentity = Effect.fn("migrateDevDb.directoryIdentity")(function* (target: string) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const tail: Array<string> = [];
-  let existing = target;
-  while (!(yield* fs.exists(existing)) && path.dirname(existing) !== existing) {
-    tail.unshift(path.basename(existing));
-    existing = path.dirname(existing);
-  }
-  const resolved = yield* fs.realPath(existing).pipe(Effect.orElseSucceed(() => existing));
-  return path.join(resolved, ...tail);
+  const info = yield* fs.stat(target).pipe(Effect.option);
+  if (Option.isNone(info)) return undefined;
+  return Option.match(info.value.ino, {
+    onNone: () => `path:${target}`,
+    onSome: (ino) => `${info.value.dev}:${ino}`,
+  });
 });
 
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
@@ -800,14 +797,21 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   if (!(yield* fs.exists(sourcePath))) {
     return yield* new MigrateDevDbSourceMissingError({ sourcePath });
   }
-  const canonicalBaseDir = yield* canonicalPath(baseDir);
+  const baseIdentity = yield* directoryIdentity(baseDir);
+  const baseAndAncestors = new Set<string>();
+  for (let directory = baseDir; ; directory = path.dirname(directory)) {
+    const identity = yield* directoryIdentity(directory);
+    if (identity !== undefined) baseAndAncestors.add(identity);
+    if (path.dirname(directory) === directory) break;
+  }
   for (const home of protectedHomes) {
-    const canonicalHome = yield* canonicalPath(home);
-    // A sibling of the live userdata, such as <home>/dev, is a dev home.
-    const liveState = path.relative(path.join(canonicalHome, "userdata"), canonicalBaseDir);
-    const insideLiveState =
-      liveState !== ".." && !liveState.startsWith(`..${path.sep}`) && !path.isAbsolute(liveState);
-    if (canonicalBaseDir === canonicalHome || insideLiveState) {
+    const homeIdentity = yield* directoryIdentity(home);
+    // Only the home itself and its live userdata: <home>/dev is a dev home.
+    const liveIdentity = yield* directoryIdentity(path.join(home, "userdata"));
+    if (
+      (homeIdentity !== undefined && homeIdentity === baseIdentity) ||
+      (liveIdentity !== undefined && baseAndAncestors.has(liveIdentity))
+    ) {
       return yield* new MigrateDevDbSharedHomeError();
     }
   }

@@ -9,7 +9,6 @@ import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -828,29 +827,18 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           }).pipe(Effect.scoped),
       );
 
-      it.effect.skipIf(isWindows)(
-        "stops when a writable worktree home cannot be made private (#1648)",
+      it.effect(
+        "stops before starting anything when the worktree home cannot be prepared (#1648)",
         () =>
           Effect.gen(function* () {
-            const { root, stateDir } = yield* seededWritableWorktree;
-            const fs = yield* FileSystem.FileSystem;
-            const denied = PlatformError.systemError({
-              _tag: "PermissionDenied",
-              module: "FileSystem",
-              method: "chmod",
-              pathOrDescriptor: stateDir,
-            });
+            const root = yield* makeWorktree;
+            const home = NodePath.join(root, ".goat");
+            NodeFS.writeFileSync(home, "not a directory");
 
-            const { exit, spawned } = yield* startDevServer(root, undefined).pipe(
-              Effect.provideService(FileSystem.FileSystem, {
-                ...fs,
-                chmod: (path, mode) =>
-                  path === stateDir ? Effect.fail(denied) : fs.chmod(path, mode),
-              }),
-            );
+            const { exit, spawned } = yield* startDevServer(root, undefined);
 
             assert.isTrue(Exit.isFailure(exit));
-            assert.include(String(exit), stateDir);
+            assert.include(String(exit), home);
             assert.deepStrictEqual(spawned, []);
           }).pipe(Effect.scoped),
       );
