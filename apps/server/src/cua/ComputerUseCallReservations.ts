@@ -14,6 +14,7 @@ const READS = new Set([
   "list_windows",
   "get_accessibility_tree",
   "get_window_state",
+  "wait_for_window_settle",
   "get_screen_size",
   "get_cursor_position",
   "verify_state",

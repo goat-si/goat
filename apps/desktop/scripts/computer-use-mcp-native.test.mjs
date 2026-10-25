@@ -126,7 +126,14 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     const swift = NodeFS.readdirSync(source)
       .filter((name) => name.endsWith(".swift"))
       .map((name) => NodePath.join(source, name));
-    NodeChildProcess.execFileSync("xcrun", ["swiftc", "-lbsm", "-o", executable, ...swift]);
+    NodeChildProcess.execFileSync("xcrun", [
+      "swiftc",
+      "-whole-module-optimization",
+      "-lbsm",
+      "-o",
+      executable,
+      ...swift,
+    ]);
     const driver = NodePath.join(resources, "cua-driver");
     NodeChildProcess.execFileSync("cc", [
       NodePath.join(source, "fixtures/mcp-echo.c"),
@@ -220,6 +227,27 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     expect(greeting.pid).toBeGreaterThan(1);
     expect(lines[1]).toBe(`driver-parent:${greeting.pid}`);
     expect(session.output()).toBe(ready);
+  });
+
+  it("discovers the native notification-settle contract through the production agent relay", async () => {
+    const session = await start();
+    session.collect();
+    session.child.stdin.end(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: "catalog",
+        method: "tools/list",
+        params: { "fixture/catalog": true },
+      }) + "\n",
+    );
+    expect((await session.closed).code).toBe(0);
+    const reply = JSON.parse(session.output().slice(ready.length));
+    const tool = reply.result.tools.find((entry) => entry.name === "wait_for_window_settle");
+    expect(tool).toBeDefined();
+    expect(tool.inputSchema.required).toEqual(["pid", "window_id"]);
+    expect(tool.inputSchema.additionalProperties).toBe(false);
+    expect(tool.annotations.readOnlyHint).toBe(true);
+    expect(reply.result.tools.filter((entry) => entry.name === "health_report")).toHaveLength(1);
   });
 
   it("refuses non-object, malformed and non-UTF8 frames before driver dispatch", async () => {

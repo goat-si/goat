@@ -14,7 +14,7 @@ enum McpFrameError: Error {
 /// numeric id spellings and schemas; application text remains data, including escaped newlines.
 func pumpMcpFrames(
   from source: FileHandle, to destination: FileHandle, acceptTail: Bool,
-  limit: Int = mcpFrameLimit
+  limit: Int = mcpFrameLimit, handle: ((Data) throws -> Void)? = nil
 ) throws {
   var frame = Data()
   func append(_ part: Data.SubSequence) throws {
@@ -27,8 +27,12 @@ func pumpMcpFrames(
       return
     }
     try validateMcpObjectSyntax(frame)
-    frame.append(0x0a)
-    try destination.write(contentsOf: frame)
+    if let handle {
+      try handle(frame)
+    } else {
+      frame.append(0x0a)
+      try destination.write(contentsOf: frame)
+    }
     frame.removeAll(keepingCapacity: false)
   }
   // A pipe read must return the currently available bytes; Foundation can fill its requested
