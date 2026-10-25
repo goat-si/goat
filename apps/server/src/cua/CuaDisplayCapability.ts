@@ -485,27 +485,34 @@ export const probeAccessibilityBuses = Effect.fnUntraced(function* (
 /**
  * The X displays to try. A server given a DISPLAY uses that display or none: trying the others
  * would hand computer use whichever desktop answers, such as the person signed in at the seat
- * when the server was meant for its own Xvfb (#1358). Only a server with no DISPLAY at all, such
- * as one started over SSH, looks for the local desktop.
+ * when the server was meant for its own Xvfb (#1358). A server given a Wayland session and no
+ * DISPLAY has no X display: any X socket it found belongs to another session, which the probe
+ * would then report as this session's XWayland (#1581). Only a server with neither, such as one
+ * started over SSH, looks for the local desktop.
  */
 export function linuxDisplayCandidates(
   display: string | undefined,
   sockets: ReadonlyArray<number>,
+  waylandDisplay?: string,
 ): ReadonlyArray<number> {
   if (display?.trim()) {
     const named = localDisplayNumber(display);
     return named === null ? [] : [named];
   }
+  if (waylandDisplay?.trim()) return [];
   return sockets.slice(0, MAX_DISPLAYS);
 }
 
-/** The session buses to try, on the same rule: a named bus or none, else this user's own. */
+/**
+ * The session buses to try, on the same rule: a named bus or none, else the bus in this
+ * session's runtime directory, which is the user's own when the server names none (#1581).
+ */
 export function linuxBusCandidates(
   address: string | undefined,
-  userRuntime: string | null,
+  runtimeDir: string | null,
 ): ReadonlyArray<string> {
   if (address?.trim()) return [address.trim()];
-  return userRuntime ? [`unix:path=${userRuntime}/bus`] : [];
+  return runtimeDir ? [`unix:path=${runtimeDir}/bus`] : [];
 }
 
 const probeLinux = Effect.fnUntraced(function* () {
@@ -522,7 +529,11 @@ const probeLinux = Effect.fnUntraced(function* () {
   const sockets = x11SocketDisplays(
     yield* fs.readDirectory("/tmp/.X11-unix").pipe(Effect.orElseSucceed(() => [])),
   );
-  const candidates = linuxDisplayCandidates(environment.DISPLAY, sockets);
+  const candidates = linuxDisplayCandidates(
+    environment.DISPLAY,
+    sockets,
+    environment.WAYLAND_DISPLAY,
+  );
 
   // Xvfb and display managers keep the cookie in a file named only on their command line.
   const serverAuth = new Map<number, string>();
@@ -567,7 +578,7 @@ const probeLinux = Effect.fnUntraced(function* () {
   const runtimeDir =
     environment.XDG_RUNTIME_DIR?.trim() ||
     (userRuntime && (yield* exists(userRuntime)) ? userRuntime : null);
-  const busCandidates = linuxBusCandidates(environment.DBUS_SESSION_BUS_ADDRESS, userRuntime);
+  const busCandidates = linuxBusCandidates(environment.DBUS_SESSION_BUS_ADDRESS, runtimeDir);
   const buses =
     uid === undefined
       ? { sessionBus: null, atSpi: false, issues: ["this user's id is unknown"] }

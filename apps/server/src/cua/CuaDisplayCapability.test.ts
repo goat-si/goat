@@ -97,6 +97,20 @@ describe("Linux display parsing", () => {
     ]);
   });
 
+  it("a server given a Wayland session and no DISPLAY never takes another session's X display (#1581)", () => {
+    // A headless GNOME session of its own, while a person is signed in on Xorg :1.
+    expect(linuxDisplayCandidates(undefined, [1], "gcu-wl-0")).toEqual([]);
+    expect(linuxDisplayCandidates(undefined, [1], "/run/gcu/wayland-0")).toEqual([]);
+    // Its session bus is the one in its own runtime directory, not the seat's.
+    expect(linuxBusCandidates(undefined, "/tmp/gcu-gnome/run")).toEqual([
+      "unix:path=/tmp/gcu-gnome/run/bus",
+    ]);
+    // With no X display found, the driver gets that Wayland session and no X display.
+    const result = classifyLinux(facts({ displays: [], wayland: liveWayland }));
+    expect(result.environment.map((variable) => variable.name)).not.toContain("DISPLAY");
+    expect(result.environment).toContainEqual({ name: "WAYLAND_DISPLAY", value: "wayland-0" });
+  });
+
   it("a named DISPLAY that does not answer is unavailable, even with a Wayland session beside it (#1358)", () => {
     // Started for its own Xvfb on :96 from a terminal inside a Wayland desktop.
     const failed = classifyLinux(
