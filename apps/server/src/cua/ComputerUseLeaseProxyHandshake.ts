@@ -182,12 +182,14 @@ export const makeLeaseProxyHandshake = <E, End>(options: {
     },
     /** Immediate setup answers avoid accumulating work while a predecessor is closing. */
     answerCached: (id: JsonRpcId, method: string) => {
-      const result = method === "ping" ? {} : answers.get(method);
-      if (result === undefined) return undefined;
-      if (method === "tools/list") served = true;
-      return Effect.suspend(() =>
-        Deferred.isDoneUnsafe(options.ended) ? whenEnded(id, method) : reply(id, result),
-      );
+      if (method !== "ping" && !answers.has(method)) return undefined;
+      // Answers are only ever replaced, never removed: read the newest one when this runs, so a
+      // refresh landing in between is never answered with the list it replaced.
+      return Effect.suspend(() => {
+        if (Deferred.isDoneUnsafe(options.ended)) return whenEnded(id, method);
+        if (method === "tools/list") served = true;
+        return reply(id, method === "ping" ? {} : answers.get(method));
+      });
     },
     pending: (key: string) => cancels.has(key),
     cancel: (key: string) => {

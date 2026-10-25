@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
+import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 
 const INITIALIZE = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
@@ -147,5 +147,27 @@ describe("handshake answers while computer use is paused (#1622)", () => {
         { jsonrpc: "2.0", id: 5, result: { tools: [{ name: "list 2" }] } },
       ]);
     }),
+  );
+
+  it.effect(
+    "a cached tools/list answer is the newest list when it runs, not when it was asked",
+    () =>
+      Effect.gen(function* () {
+        const { answerer, sent } = yield* setup();
+        const listed = (id: number, name: string) =>
+          parse(JSON.stringify({ jsonrpc: "2.0", id, result: { tools: [{ name }] } })) ??
+          assert.fail("a listing parses");
+        answerer.remember("tools/list", listed(2, "old"));
+        const answer = answerer.answerCached(3, "tools/list");
+        assert.isDefined(answer);
+        // A resumed child's newer list lands between the request and its answer.
+        answerer.remember("tools/list", listed(4, "new"));
+        yield* answer ?? Effect.void;
+        assert.deepEqual(sent.at(-1), {
+          jsonrpc: "2.0",
+          id: 3,
+          result: { tools: [{ name: "new" }] },
+        });
+      }),
   );
 });
