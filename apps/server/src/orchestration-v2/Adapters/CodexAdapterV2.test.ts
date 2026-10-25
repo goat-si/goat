@@ -1926,6 +1926,41 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             });
             entries.push({ ...withReplayRequestId(threadResult, id), ...(label ? { label } : {}) });
           };
+          // Codex ignores resume overrides on a held thread, so new authority reloads it once
+          // the conversation is quiet and has no active goal (#1569).
+          const reload = (
+            id: number,
+            attachment: McpProviderSession.McpProviderSessionConfig,
+            disabledTools: readonly string[] = [],
+          ) => {
+            entries.push(
+              {
+                type: "expect_outbound",
+                frame: { id, method: "thread/goal/get", params: { threadId: nativeThreadId } },
+              },
+              { type: "emit_inbound", frame: { id, result: { goal: null } } },
+              {
+                type: "expect_outbound",
+                frame: {
+                  id: id + 1,
+                  method: "thread/unsubscribe",
+                  params: { threadId: nativeThreadId },
+                },
+              },
+              { type: "emit_inbound", frame: { id: id + 1, result: { status: "unsubscribed" } } },
+            );
+            resume(id + 2, attachment, undefined, disabledTools);
+          };
+          const status = (type: "active" | "idle") => ({
+            type: "emit_inbound" as const,
+            frame: {
+              method: "thread/status/changed",
+              params: {
+                threadId: nativeThreadId,
+                status: type === "active" ? { type, activeFlags: [] } : { type },
+              },
+            },
+          });
           const turn = (id: number, ordinal: number) =>
             Effect.gen(function* () {
               const params = yield* CodexAdapterV2.buildCodexTurnStartParams({
@@ -1947,6 +1982,18 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                     },
                   },
                 },
+                status("active"),
+                {
+                  type: "emit_inbound",
+                  frame: {
+                    method: "turn/started",
+                    params: {
+                      threadId: nativeThreadId,
+                      turn: makeCodexReplayTurn({ id: `turn-${ordinal}`, status: "inProgress" }),
+                    },
+                  },
+                },
+                status("idle"),
                 {
                   type: "emit_inbound",
                   frame: {
@@ -1961,14 +2008,14 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             });
           if (mode === "availability") {
             yield* turn(3, 1);
-            resume(4, stale, undefined, GOAT_MEMORY_TOOLS);
-            yield* turn(5, 2);
-            resume(6, config);
-            yield* turn(7, 3);
+            reload(4, stale, GOAT_MEMORY_TOOLS);
+            yield* turn(7, 2);
+            reload(8, config);
+            yield* turn(11, 3);
           } else {
             resume(3, config, "delayed-resume");
-            resume(4, next);
-            yield* turn(5, 1);
+            reload(4, next);
+            yield* turn(7, 1);
           }
           const entered = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
