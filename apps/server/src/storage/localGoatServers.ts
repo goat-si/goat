@@ -49,11 +49,13 @@ export function looksLikeGoatServer(command: string): boolean {
 }
 
 const SERVER_ARGUMENTS = String.raw`(?:$|\s+(?:-|(?:serve|start)(?:\s|$)))`;
+// goat-rename: legacy-begin (older installs still run their server as t3)
 const SERVER_ENTRY = new RegExp(
   String.raw`(?:^\S*(?:^|[/\\])(?:goat|t3)(?:\.exe)?|[/\\](?:apps[/\\]server|node_modules[/\\](?:goat|t3))[/\\](?:dist|src)[/\\]bin\.(?:mjs|js|ts))` +
     SERVER_ARGUMENTS,
   "u",
 );
+// goat-rename: legacy-end
 
 /** `lsof -F pn` output: which database files each process holds open. */
 export function databasesByPid(lsofOutput: string): ReadonlyMap<number, ReadonlyArray<string>> {
