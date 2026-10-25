@@ -3,6 +3,7 @@ import type {
   ComputerUseForegroundGrant,
   ComputerUsePauseReason,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 
