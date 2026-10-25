@@ -8,6 +8,8 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -23,6 +25,7 @@ import {
 } from "./dev-runner.ts";
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
+const isWindows = HostProcess.Platform.defaultValue() === "win32";
 
 const netServiceLayer = Layer.succeed(NetService.NetService, {
   canListenOnHost: () => Effect.succeed(true),
@@ -729,7 +732,17 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
           assert.deepStrictEqual(yield* spawnedArgs(false), []);
           const [seedArgs] = yield* spawnedArgs(undefined);
-          assert.includeMembers([...(seedArgs ?? [])], ["--base-dir", path.join(root, ".goat")]);
+          assert.includeMembers(
+            [...(seedArgs ?? [])],
+            [
+              NodePath.join(
+                NodePath.dirname(import.meta.dirname),
+                "apps/server/scripts/migrate-dev-db.ts",
+              ),
+              "--base-dir",
+              path.join(root, ".goat"),
+            ],
+          );
 
           // Either database means the worktree already has data.
           for (const name of ["state.sqlite", "statev2.sqlite"]) {
@@ -740,6 +753,106 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
             NodeFS.rmSync(file);
           }
         }).pipe(Effect.scoped),
+      );
+
+      const startDevServer = (root: string, seed: boolean | undefined) =>
+        Effect.gen(function* () {
+          const spawned: Array<ReadonlyArray<string>> = [];
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              spawned.push((command as unknown as { readonly args: ReadonlyArray<string> }).args);
+              return Effect.succeed(mockProcess(0));
+            }),
+          );
+          const exit = yield* runDevRunnerWithInput({
+            ...devServerInput,
+            goatHome: undefined,
+            seed,
+          }).pipe(
+            Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
+            Effect.provideService(HostProcess.Platform, "linux"),
+            Effect.provideService(HostProcess.WorkingDirectory, root),
+            Effect.provideService(HostProcess.HomeDirectory, root),
+            Effect.provideService(HostProcess.Environment, {}),
+            Effect.exit,
+          );
+          return { exit, spawned };
+        });
+
+      const seededWritableWorktree = Effect.gen(function* () {
+        const root = yield* makeWorktree;
+        const stateDir = NodePath.join(root, ".goat", "userdata");
+        NodeFS.mkdirSync(stateDir, { recursive: true });
+        NodeFS.writeFileSync(NodePath.join(stateDir, "statev2.sqlite"), "");
+        NodeFS.chmodSync(NodePath.dirname(stateDir), 0o775);
+        NodeFS.chmodSync(stateDir, 0o775);
+        return { root, stateDir };
+      });
+
+      it.effect.skipIf(isWindows)(
+        "makes an existing writable worktree home private before the server starts, seeded or not (#1648)",
+        () =>
+          Effect.gen(function* () {
+            for (const seed of [undefined, false]) {
+              const { root, stateDir } = yield* seededWritableWorktree;
+              const { exit } = yield* startDevServer(root, seed);
+              assert.isTrue(Exit.isSuccess(exit));
+              for (const directory of [NodePath.dirname(stateDir), stateDir]) {
+                assert.equal(NodeFS.statSync(directory).mode & 0o777, 0o755, directory);
+              }
+            }
+          }).pipe(Effect.scoped),
+      );
+
+      it.effect.skipIf(isWindows)(
+        "refuses a symlinked worktree userdata and starts nothing (#1648)",
+        () =>
+          Effect.gen(function* () {
+            const root = yield* makeWorktree;
+            const target = NodePath.join(root, "elsewhere");
+            NodeFS.mkdirSync(target);
+            NodeFS.writeFileSync(NodePath.join(target, "statev2.sqlite"), "data");
+            NodeFS.mkdirSync(NodePath.join(root, ".goat"));
+            NodeFS.symlinkSync(target, NodePath.join(root, ".goat", "userdata"));
+
+            const { exit, spawned } = yield* startDevServer(root, undefined);
+
+            assert.isTrue(Exit.isFailure(exit));
+            assert.include(String(exit), "is a symlink");
+            assert.deepStrictEqual(spawned, []);
+            assert.equal(
+              NodeFS.readFileSync(NodePath.join(target, "statev2.sqlite"), "utf8"),
+              "data",
+            );
+          }).pipe(Effect.scoped),
+      );
+
+      it.effect.skipIf(isWindows)(
+        "stops when a writable worktree home cannot be made private (#1648)",
+        () =>
+          Effect.gen(function* () {
+            const { root, stateDir } = yield* seededWritableWorktree;
+            const fs = yield* FileSystem.FileSystem;
+            const denied = PlatformError.systemError({
+              _tag: "PermissionDenied",
+              module: "FileSystem",
+              method: "chmod",
+              pathOrDescriptor: stateDir,
+            });
+
+            const { exit, spawned } = yield* startDevServer(root, undefined).pipe(
+              Effect.provideService(FileSystem.FileSystem, {
+                ...fs,
+                chmod: (path, mode) =>
+                  path === stateDir ? Effect.fail(denied) : fs.chmod(path, mode),
+              }),
+            );
+
+            assert.isTrue(Exit.isFailure(exit));
+            assert.include(String(exit), stateDir);
+            assert.deepStrictEqual(spawned, []);
+          }).pipe(Effect.scoped),
       );
 
       it.effect("falls back to an ambient GOAT_HOME outside a worktree", () =>

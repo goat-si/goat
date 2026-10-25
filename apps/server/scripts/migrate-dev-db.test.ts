@@ -1,5 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - runs the CLI in a child process and checks real modes.
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -115,7 +120,61 @@ const createFixtureSource = Effect.fn("createMigrateDevDbFixtureSource")(functio
   return databasePath;
 });
 
+const isWindows = HostProcess.Platform.defaultValue() === "win32";
+const permissions = (file: string) => NodeFS.statSync(file).mode & 0o777;
+
+// The umask is set inside the child, so these runs never depend on the host's umask.
+const runCliUnderUmask002 = (home: string, args: ReadonlyArray<string>) =>
+  Effect.sync(() =>
+    NodeChildProcess.spawnSync(
+      process.execPath,
+      [
+        "--import=data:text/javascript,process.umask(0o002)",
+        NodePath.join(import.meta.dirname, "migrate-dev-db.ts"),
+        "--projects",
+        "1",
+        "--threads-per-project",
+        "1",
+        ...args,
+      ],
+      { encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home } },
+    ),
+  );
+
 it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
+  it.effect(
+    "refuses a base dir inside a live userdata tree, also through a symlink, and still accepts its dev home (#1648)",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const home = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-live-" });
+        const elsewhere = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-link-" });
+        const source = yield* createFixtureSource(home);
+        const liveState = path.dirname(source);
+        yield* fs.symlink(liveState, path.join(elsewhere, "link"));
+        const liveBefore = yield* fs.readDirectory(liveState);
+
+        for (const baseDir of [
+          liveState,
+          path.join(liveState, "nested"),
+          path.join(elsewhere, "link", "nested"),
+        ]) {
+          const error = yield* runMigrateDevDb(
+            { baseDir, source, projects: 1, threadsPerProject: 1 },
+            { sourceHomes: [home] },
+          ).pipe(Effect.flip);
+          assert.equal(error._tag, "MigrateDevDbSharedHomeError", baseDir);
+        }
+        assert.deepEqual(yield* fs.readDirectory(liveState), liveBefore);
+
+        yield* runMigrateDevDb(
+          { baseDir: path.join(home, "dev"), source, projects: 1, threadsPerProject: 1 },
+          { sourceHomes: [home] },
+        );
+      }),
+  );
+
   it.effect.each(["running", "completed"] as const)(
     "seeds a family only after its remote task is finished (%s)",
     (status) =>
@@ -758,3 +817,68 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
     }),
   );
 });
+
+// Child processes, so these run live, outside the shared layer.
+it.live.skipIf(isWindows)(
+  "creates a missing worktree home and userdata private under umask 002 and leaves the source alone (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-umask-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const sourceBefore = { bytes: NodeFS.readFileSync(source), mode: permissions(source) };
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(permissions(baseDir), 0o700);
+      assert.equal(permissions(NodePath.join(baseDir, "userdata")), 0o700);
+      assert.deepEqual(NodeFS.readFileSync(source), sourceBefore.bytes);
+      assert.equal(permissions(source), sourceBefore.mode);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(isWindows)(
+  "removes group and other write from an existing userdata and says so (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-writable-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+      const stateDir = NodePath.join(baseDir, "userdata");
+      NodeFS.mkdirSync(stateDir, { recursive: true });
+      NodeFS.chmodSync(baseDir, 0o775);
+      NodeFS.chmodSync(stateDir, 0o775);
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(permissions(stateDir), 0o755);
+      assert.include(child.stdout, `Removed group and other write permission from ${stateDir}`);
+      // Only the userdata it rebuilds: --base-dir may be any directory.
+      assert.equal(permissions(baseDir), 0o775);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(isWindows)(
+  "refuses a symlinked userdata before touching the database it points at (#1648)",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "migrate-dev-db-symlink-" });
+      const source = yield* createFixtureSource(NodePath.join(root, "source"));
+      const target = yield* createFixtureSource(NodePath.join(root, "elsewhere"));
+      const targetBefore = NodeFS.readFileSync(target);
+      const baseDir = NodePath.join(root, "worktree", ".goat");
+      NodeFS.mkdirSync(baseDir, { recursive: true });
+      NodeFS.symlinkSync(NodePath.dirname(target), NodePath.join(baseDir, "userdata"));
+
+      const child = yield* runCliUnderUmask002(root, ["--base-dir", baseDir, "--source", source]);
+
+      assert.notEqual(child.status, 0);
+      assert.include(child.stderr, "is a symlink");
+      assert.deepEqual(NodeFS.readFileSync(target), targetBefore);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
