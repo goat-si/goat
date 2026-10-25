@@ -101,17 +101,16 @@ const decodeList = Schema.decodeUnknownEffect(
     nextCursor: Schema.optional(Schema.NullOr(Schema.Number)),
   }),
 );
-const decodeProjects = Schema.decodeUnknownEffect(
-  Schema.Struct({
-    projects: Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        workspaceRoot: Schema.String,
-        repositoryIdentity: Schema.optional(Schema.Unknown),
-      }),
-    ),
-  }),
-);
+const ProjectEntry = Schema.Struct({
+  id: Schema.String,
+  workspaceRoot: Schema.String,
+  repositoryIdentity: Schema.optional(Schema.Unknown),
+});
+const ProjectPage = Schema.Struct({
+  projects: Schema.Array(ProjectEntry),
+  nextCursor: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+const decodeProjects = Schema.decodeUnknownEffect(ProjectPage);
 
 const canonicalKeyOf = (identity: unknown) => {
   if (typeof identity !== "object" || identity === null) return null;
@@ -334,11 +333,22 @@ export const makeRemoteWorkers = (deps: {
             canonicalKey: canonicalKeyOf(shell.value.repositoryIdentity),
           };
     }
-    const listed = yield* read(host, "goat_project_list", { limit: 100 }).pipe(
-      Effect.flatMap(decodeProjects),
-      Effect.option,
-    );
-    const found = Option.getOrUndefined(listed)?.projects.find((entry) => entry.id === projectId);
+    // Every GOAT answers goat_project_list; it pages, so the project may be on a later page.
+    let found: typeof ProjectEntry.Type | undefined;
+    let cursor: number | null = 0;
+    for (let page = 0; found === undefined && cursor !== null && page < 50; page += 1) {
+      const listed: Option.Option<typeof ProjectPage.Type> = yield* read(
+        host,
+        "goat_project_list",
+        {
+          limit: 100,
+          ...(cursor === 0 ? {} : { cursor }),
+        },
+      ).pipe(Effect.flatMap(decodeProjects), Effect.option);
+      if (Option.isNone(listed)) break;
+      found = listed.value.projects.find((entry) => entry.id === projectId);
+      cursor = listed.value.nextCursor ?? null;
+    }
     return found === undefined
       ? cwd === null
         ? null

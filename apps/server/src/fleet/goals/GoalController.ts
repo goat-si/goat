@@ -40,7 +40,7 @@ import {
 } from "./goalPlan.ts";
 import { makeGoalMoves } from "./GoalMoves.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
-import { followedUp, pendingMoves } from "./goalWorkers.ts";
+import { followedUp, launchSelector, pendingMoves } from "./goalWorkers.ts";
 import {
   type GoalRecord,
   GoalStore,
@@ -433,7 +433,7 @@ const make = Effect.gen(function* () {
                 owner,
                 modelSelection: worker.modelSelection,
                 fallbackChain: goal.spec.workers.fallbackChain,
-                hostSelector: goal.spec.workers.hostSelector,
+                hostSelector: launchSelector(goal),
                 project: goal.spec.project,
                 avoidHosts: [],
               });

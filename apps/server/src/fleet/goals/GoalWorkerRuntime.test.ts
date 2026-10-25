@@ -245,6 +245,19 @@ const layerFor = (seen: Seen) =>
                   ),
                   nextCursor: null,
                 };
+              if (call.tool === "goat_project_list") {
+                // 150 projects, served a page at a time like the destination's own list.
+                const start = Number(call.arguments.cursor ?? 0);
+                const end = start + Number(call.arguments.limit ?? 20);
+                const all = Array.from({ length: 150 }, (_, index) => ({
+                  id: "project:" + index,
+                  workspaceRoot: "/projects/" + index,
+                }));
+                return {
+                  projects: all.slice(start, end),
+                  nextCursor: end < all.length ? end : null,
+                };
+              }
               return yield* new SshRemoteDispatch.SshRemoteDispatchError({
                 reason: "remote_refused",
                 message: "unused",
@@ -637,6 +650,21 @@ describe("GoalWorkerRuntime", () => {
           expect(again.permissionProfileCeiling).toMatchObject({ id: "worker" });
         }).pipe(Effect.provide(layerFor(seen)));
       },
+    );
+
+    it.effect("finds a projectId-only goal's folder on a later page of its host's projects", () =>
+      Effect.gen(function* () {
+        const runtime = yield* GoalWorkerRuntime;
+        const onHost = testGoal("goal_paged", {
+          spec: testSpec({
+            project: { host: "mac-studio", projectId: "project:120" as never, cwd: null },
+          }),
+        });
+        expect(yield* runtime.project(onHost)).toEqual({
+          cwd: "/projects/120",
+          canonicalKey: null,
+        });
+      }).pipe(Effect.provide(layerFor(fullOwner()))),
     );
 
     it.effect("forwards the owner's goatclaw ceiling after syncing the destination", () => {

@@ -3,7 +3,7 @@
  * slot, attempt and run, so a repeated or restarted pass names the same action. repairWorkers
  * rebuilds slot records from the launch records, which outlive any status write.
  */
-import { type FleetGoal, type FleetGoalTarget, RunId } from "@goat/contracts";
+import { type FleetGoal, type FleetGoalTarget, type HostSelector, RunId } from "@goat/contracts";
 
 import type { RescheduleReason } from "../health/reschedulePolicy.ts";
 import { type LaunchClaim, NOT_SENT, type WorkerRecord } from "./GoalStore.ts";
@@ -113,6 +113,17 @@ export const interruptActionId = (
 
 export const branchFor = (goal: Pick<FleetGoal, "spec">, slot: number, attempt: number) =>
   goal.spec.workers.workspace.branchPrefix.replace(/\/+$/, "") + "/s" + slot + "-a" + attempt;
+
+/**
+ * Where a goal's own launches may go. A worker on this machine launches into a project here by
+ * id, so a goal without one never places a worker here, where every launch would fail.
+ */
+export const launchSelector = (goal: Pick<FleetGoal, "spec">): HostSelector => {
+  const { project, workers } = goal.spec;
+  return project.host === null && project.projectId !== null
+    ? workers.hostSelector
+    : { ...workers.hostSelector, exclude: [...(workers.hostSelector.exclude ?? []), null] };
+};
 
 /**
  * The branch a move gives worker's next attempt: the slot keeps the branch family it started

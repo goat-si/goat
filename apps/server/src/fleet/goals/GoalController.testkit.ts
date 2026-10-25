@@ -219,7 +219,8 @@ const placementFor = (placeRemote: boolean) =>
               modelSelection: request.modelSelection,
               reason: undefined,
             }
-          : (request.hostSelector.hosts ?? [null]).includes(null)
+          : (request.hostSelector.hosts ?? [null]).includes(null) &&
+              !(request.hostSelector.exclude ?? []).includes(null)
             ? {
                 _tag: "Placed" as const,
                 host: null,

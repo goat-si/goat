@@ -378,6 +378,27 @@ describe("GoalController", () => {
       }).pipe(Effect.provide(layerFor(fake, { placeRemote: true })));
     },
   );
+  it.effect(
+    "never places a worker on this machine for a goal whose folder lives on another host (#1451)",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const id = "goal_folder_far";
+        yield* insert(
+          testGoal(id, {
+            spec: testSpec({ project: { host: "mac-studio", projectId: null, cwd: "/repo" } }),
+          }),
+        );
+        for (let round = 0; round < 3; round += 1) {
+          yield* TestClock.adjust(60 * 60_000);
+          yield* pass(id);
+        }
+        // Placement finds no other host here, so nothing launches and no attempt is spent.
+        expect(fake.launches).toEqual([]);
+        expect((yield* record(id)).workers[0]).toMatchObject({ attempt: 1 });
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
 
   it.effect("keeps an unconfirmed launch's host from its claim (P1-2)", () => {
     const fake = makeFake();
