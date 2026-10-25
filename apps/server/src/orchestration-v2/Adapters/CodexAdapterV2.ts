@@ -1979,13 +1979,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         // Only successful native attachments enter this cache, including effective authority.
+        // The computer use part comes first so a changed driver can be told from other changes.
         const attachmentKey = (
           config: McpProviderSession.McpProviderSessionConfig,
           cuaDriver: CuaDriverMcpConfiguration | undefined,
         ) => {
           const { read, write, source } = McpProviderSession.memoryToolAvailability(config);
-          return `${config.providerSessionId}:${read}:${write}:${source}:${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`;
+          return JSON.stringify([
+            `${McpProviderSession.cuaDriverKey(cuaDriver)}:${config.cuaDriverBlocked === true}`,
+            `${config.providerSessionId}:${read}:${write}:${source}`,
+          ]);
         };
+        const cuaPartOf = (key: string | undefined) =>
+          key === undefined ? undefined : (JSON.parse(key) as ReadonlyArray<string>)[0];
         const credentialsByThread = new Map<string, string>();
         /**
          * The subagent limits each live native thread's Codex session was built with. Codex ignores
@@ -7182,35 +7188,36 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 managedCuaByThread.delete(threadId);
               }
             }
-            // Codex ignores resume overrides on a thread a client still holds, so changed MCP
-            // servers (a new computer use control after Stop, #1564) need a cold reload. A turn or
-            // background work still running keeps its subscription; the next idle turn reloads.
-            const turnRunning =
+            // Codex ignores resume overrides on a thread a client still holds, so a changed computer
+            // use driver (a new control after Stop, #1564) needs a cold reload. A thread with a turn
+            // or background work still running keeps its subscription; the next idle turn reloads.
+            const busy =
               Array.from((yield* Ref.get(activeTurns)).values()).some(
                 (active) => active.providerThread.id === turnInput.providerThread.id,
               ) || (yield* hasPendingBackgroundWorkForThread(turnInput.providerThread));
-            const reload = (params: Record<string, unknown>) =>
-              client.request("thread/unsubscribe", { threadId }).pipe(
+            const reconfigure = (reload: boolean, params: Record<string, unknown>) =>
+              (reload ? client.request("thread/unsubscribe", { threadId }) : Effect.void).pipe(
                 Effect.andThen(
-                  client.raw.request("thread/resume", {
-                    threadId,
-                    excludeTurns: true,
-                    ...params,
-                  }),
+                  client.raw.request("thread/resume", { threadId, excludeTurns: true, ...params }),
                 ),
               );
-            if (
-              mcpSession &&
-              !turnRunning &&
-              credentialsByThread.get(threadId) !== attachmentKey(mcpSession, runtime.cuaDriver)
-            ) {
-              yield* reload(runtime.params);
+            const applied = credentialsByThread.get(threadId);
+            const next = mcpSession ? attachmentKey(mcpSession, runtime.cuaDriver) : undefined;
+            const cuaChanged = applied !== undefined && cuaPartOf(applied) !== cuaPartOf(next);
+            if (mcpSession && applied !== next && !(cuaChanged && busy)) {
+              // Other authority changes keep the same native conversation; stale credentials are
+              // already denied by the registry.
+              yield* reconfigure(cuaChanged, runtime.params);
               credentialsByThread.set(threadId, attachmentKey(mcpSession, runtime.cuaDriver));
               rememberCuaDriver(threadId, runtime.cuaDriver);
             }
-            if (!mcpSession && !turnRunning && credentialsByThread.has(threadId)) {
-              const previousCuaDriver = managedCuaByThread.get(threadId);
-              yield* reload({
+            const previousCuaDriver = managedCuaByThread.get(threadId);
+            if (
+              !mcpSession &&
+              applied !== undefined &&
+              !(previousCuaDriver !== undefined && busy)
+            ) {
+              yield* reconfigure(previousCuaDriver !== undefined, {
                 config: {
                   ...CODEX_THREAD_CONFIG,
                   mcp_servers: {
