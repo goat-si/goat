@@ -526,11 +526,11 @@ function validateCloseOutsidePrsWorkflow(source, yaml) {
 }
 
 // marketing-pages.yml publishes the marketing preview to the gh-pages branch from dev. Its deploy job
-// holds contents: write, so the whole file is pinned like
+// holds contents: write and pages: write, so the whole file is pinned like
 // close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
 // this hash on purpose.
 const pinnedMarketingPagesSha256 =
-  "2f331eecbcc13ca4947b3612623f47fb1093bcb29ba35b9dbcf8d59908a175f3";
+  "465d3cce1955e187b160fa8474687484a730f7c4d815897e759e5ba44d2dae7d";
 
 function validateMarketingPagesWorkflow(source, yaml) {
   const fail = (reason) => refuse(reason, marketingPagesPath);

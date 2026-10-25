@@ -3,7 +3,7 @@ name: Marketing site preview
 # Builds apps/marketing for the review preview at https://goat-si.github.io/goat/ and publishes it
 # to the gh-pages branch, which GitHub Pages serves. The preview is noindex. The build job can only
 # read. The deploy job, the only one that can write, runs no repository code: it restores the built
-# site and commits exactly those files to gh-pages. .vite-hooks/goat-workflow-guard.mjs pins this
+# site, commits exactly those files to gh-pages, and asks Pages to rebuild. .vite-hooks/goat-workflow-guard.mjs pins this
 # whole file, so any change here needs a review and a new pinned hash.
 #
 # Nothing runs until the repository variable GOAT_MARKETING_PAGES is "true".
@@ -83,29 +83,48 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      pages: write
     steps:
       - name: Restore the built site
+        id: restore
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/marketing/dist
           key: marketing-pages-${{ github.run_id }}-${{ github.run_attempt }}
           fail-on-cache-miss: true
 
-      # A fresh repository holds only the built files, so nothing else can reach gh-pages. The new
-      # commit's parent is the current gh-pages tip, so the push never rewrites history; the branch
-      # starts as an orphan on the first deploy.
+      # The restored files are data from the build job. Git runs with a fresh repository outside
+      # them and with no hooks, so nothing in the site can configure or run code with the token.
+      # The commit's parent is the current gh-pages tip, so the push never rewrites history; the
+      # branch starts as an orphan on the first deploy.
       - name: Publish to gh-pages
+        id: publish
         working-directory: apps/marketing/dist
         env:
+          CACHE_HIT: ${{ steps.restore.outputs.cache-hit }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # restore can fall back to a prefix match; publish only this run's exact build.
+          if [ "$CACHE_HIT" != "true" ]; then
+            echo "The cache entry for this run was not restored exactly." >&2
+            exit 1
+          fi
           for file in index.html 404.html ko/index.html .nojekyll; do
             test -f "$file" || { echo "The restored build has no $file." >&2; exit 1; }
           done
+          if [ -e .gitattributes ] || [ -e .gitmodules ] || [ -n "$(find . -name .git -print -quit)" ]; then
+            echo "The restored build contains Git metadata; refusing to publish it." >&2
+            exit 1
+          fi
+          export GIT_DIR="$RUNNER_TEMP/gh-pages.git"
+          export GIT_WORK_TREE="$PWD"
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
           remote="https://github.com/${GITHUB_REPOSITORY}.git"
           auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
           git init -q -b gh-pages
+          git config core.hooksPath /dev/null
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -116,9 +135,18 @@ jobs:
             parent="$(git rev-parse FETCH_HEAD)"
             if [ "$(git rev-parse "${parent}^{tree}")" = "$tree" ]; then
               echo "gh-pages already has this build."
+              echo "pushed=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
           commit="$(git commit-tree "$tree" ${parent:+-p "$parent"} -m "Deploy apps/marketing from ${GITHUB_SHA}")"
           git -c http.extraheader="$auth" push -q "$remote" "${commit}:refs/heads/gh-pages"
           echo "Published ${commit} to gh-pages."
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # A push made with GITHUB_TOKEN does not start a Pages build, so ask for one.
+      - name: Request a Pages build
+        if: steps.publish.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method POST "repos/${GITHUB_REPOSITORY}/pages/builds" --jq .status

@@ -1231,6 +1231,18 @@ describe("goat pre-push marketing-pages workflow guard", () => {
       }),
     ],
     [
+      "pages: write on the build job",
+      patched((w) => {
+        w.jobs.build.permissions = { pages: "write" };
+      }),
+    ],
+    [
+      "a Pages build request when nothing was pushed",
+      patched((w) => {
+        delete w.jobs.deploy.steps[2].if;
+      }),
+    ],
+    [
       "contents: write",
       patched((w) => {
         w.permissions.contents = "write";
