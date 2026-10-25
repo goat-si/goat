@@ -392,11 +392,11 @@ function scheduledTaskWorkspaceStrategy(
  */
 const WEBHOOK_URL_UNAVAILABLE: Record<ScheduledTaskWebhookUrlUnavailableReason, string> = {
   relay_not_linked:
-    "This environment is not linked to T3 Connect. Ask the user to sign in to T3 Connect and turn on remote access for it.",
+    "This environment is not linked to GOAT Connect. Ask the user to sign in to GOAT Connect and turn on remote access for it.",
   managed_tunnel_not_configured:
-    "This environment is linked to T3 Connect but has no managed tunnel. Ask the user to turn on remote access for it in Settings → Connections.",
+    "This environment is linked to GOAT Connect but has no managed tunnel. Ask the user to turn on remote access for it in Settings → Connections.",
   managed_tunnel_unrecognized:
-    "This environment's managed tunnel is not one T3 Connect can route webhooks to. Ask the user to turn remote access off and on again in Settings → Connections.",
+    "This environment's managed tunnel is not one GOAT Connect can route webhooks to. Ask the user to turn remote access off and on again in Settings → Connections.",
 };
 
 /**
@@ -408,7 +408,7 @@ const WEBHOOK_DIRECT_URL_HINT =
 
 /** The link state could not be read, so the cause is unknown. */
 const WEBHOOK_URL_UNKNOWN =
-  "This environment could not read its T3 Connect state. Ask the user to check remote access in Settings → Connections.";
+  "This environment could not read its GOAT Connect state. Ask the user to check remote access in Settings → Connections.";
 
 /** Public webhook URLs come from the hosted tunnel, which is off until GOAT Connect ships. */
 const WEBHOOK_URL_CONNECT_OFF =

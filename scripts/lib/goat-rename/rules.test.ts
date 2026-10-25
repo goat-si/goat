@@ -683,7 +683,9 @@ describe("visible GOAT copy", () => {
     }
     const source =
       "T3 Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`";
-    expect(server(source)).toBe(source);
+    expect(server(source)).toBe(
+      "GOAT Connect: t3ConnectTroubleshootingUrl #the-host-runs-an-older-t3-code `npx t3 unknown`",
+    );
   });
 });
 

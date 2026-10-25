@@ -65,7 +65,7 @@ export function environmentTransportLabel(
         ? connectionRouteLabel(active)
         : `via ${connectionRouteLabel(active)}`;
   }
-  if (environment.relayManaged && isGoatConnectEnabled()) return "T3 Connect";
+  if (environment.relayManaged && isGoatConnectEnabled()) return "GOAT Connect";
   // Already reads "via <hub>".
   if (entry.target._tag === "HubProxyConnectionTarget" && routes[0] !== undefined)
     return connectionRouteLabel(routes[0]);

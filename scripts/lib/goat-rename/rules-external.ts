@@ -133,6 +133,52 @@ const exactLines = (...lines: readonly string[]) =>
     "g",
   );
 
+/**
+ * "T3 Connect" that stays while visible-connect-account-copy (rules-visible.ts) renames the rest: sentences that
+ * contrast the disabled T3 Connect stack with GOAT Connect, and sentences about upstream's hosted relay, its deployment
+ * workflow, trace export or account. Each pattern matches the phrase around the name rather than the whole line, so it
+ * holds on upstream's wording of the same sentence during a chase as well as on GOAT's.
+ */
+const connectServicePhrases: readonly (readonly [path: string, pattern: RegExp])[] = [
+  ["packages/shared/src/goatConnect.ts", /(?<=will replace )T3 Connect/g],
+  [
+    "docs/user/remote-access.md",
+    /(?<=coming soon\. )T3 Connect(?= sign-in)|(?<=only a )T3 Connect(?= route)/g,
+  ],
+  ["apps/mobile/README.md", /(?<=coming soon\. )T3 Connect(?= is disabled)/g],
+  ["docs/internals/t3-connect.md", /(?<=\*\*Status:\*\* )T3 Connect(?= is disabled)/g],
+  ["docs/operations/connect-setup.md", /(?<=\*\*Status:\*\* )T3 Connect(?= \(Clerk)/g],
+  [
+    "docs/operations/android-notifications.md",
+    /(?<=These steps need )T3 Connect(?=, which is disabled)|T3 Connect(?='s hosted infrastructure)/g,
+  ],
+  ["docs/operations/mobile-testflight.md", /(?<=\*\*)T3 Connect(?= sign-in\*\* is off)/g],
+  [
+    "docs/operations/release.md",
+    /(?<=DMG with )T3 Connect(?= (?:public configuration|enabled))|(?<=public )T3 Connect(?= identifiers)|(?<=^## )T3 Connect(?= relay deployment$)|(?<=\*\*Deploy )T3 Connect(?= relay\*\*)/g,
+  ],
+  ["docs/operations/relay-observability.md", /(?<=export to )T3 Connect/g],
+  ["docs/operations/observability.md", /T3 Connect(?= trace export)/g],
+  [
+    "docs/operations/mobile-app-store-screenshots.md",
+    /(?<=deterministic )T3 Connect(?= discovery rows)/g,
+  ],
+  [
+    "docs/user/telemetry.md",
+    /(?<=your )T3 Connect(?= account)|(?<=diagnose )T3 Connect(?= connectivity)/g,
+  ],
+  ["structure/overview.md", /^T3 Connect(?= relay from)/g],
+];
+
+const connectServiceKeeps: readonly KeepRule[] = connectServicePhrases.map(([path, pattern]) => ({
+  id: `connect-service-phrases:${path}`,
+  pattern,
+  scope: (candidate) => candidate === path,
+  holdsOnApply: true,
+  reason:
+    "Names the disabled T3 Connect stack or upstream's hosted relay, workflow, trace export or account.",
+}));
+
 // Match the existing upstream phrases before other keeps strip repository URLs or legacy tokens.
 const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
   [
@@ -550,6 +596,7 @@ const mobileNativePaths = new Set([
 ]);
 
 export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
+  ...connectServiceKeeps,
   ...upstreamProductPhrases.map(([path, pattern]) => ({
     id: `upstream-product-identity:${path}`,
     pattern,
@@ -580,7 +627,12 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   {
     id: "relay-service-copy",
     pattern: /T3 Connect|T3 [Aa]ccount/g,
-    scope: (path) => relayCopyPaths.has(path),
+    scope: (path) =>
+      relayCopyPaths.has(path) &&
+      (!/^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
+        path,
+      ) ||
+        path === "docs/user/t3-connect-troubleshooting.md"),
     reason: "The hosted relay/account belongs to upstream, not GOAT (R6/D12/D14).",
   },
   {

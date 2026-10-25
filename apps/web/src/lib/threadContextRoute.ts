@@ -10,7 +10,7 @@ import * as Option from "effect/Option";
  * knows are the ones on its saved SSH connections, which the desktop app resolved with the
  * SSH config of the machine it runs on. So a saved alias is meaningful to exactly one
  * server: the desktop app's own primary backend, which runs on that machine as the same user.
- * Anything else (a browser, a remote agent, a WSL or T3 Connect environment) has no alias
+ * Anything else (a browser, a remote agent, a WSL or GOAT Connect environment) has no alias
  * this client can vouch for, and the attachment is refused with the reason.
  */
 export type ThreadContextRoute =
@@ -21,7 +21,7 @@ export type ThreadContextRoute =
 export type ThreadContextUnreachableReason =
   /** The agent's server is not the desktop app's own backend, so it shares no SSH config. */
   | "agent-not-on-this-device"
-  /** The thread's environment is saved without an SSH connection (T3 Connect or a URL only). */
+  /** The thread's environment is saved without an SSH connection (GOAT Connect or a URL only). */
   | "no-ssh-connection"
   /** The thread's environment is not saved on this client anymore. */
   | "unknown-environment";

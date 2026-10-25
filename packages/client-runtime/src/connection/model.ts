@@ -94,7 +94,7 @@ export const ConnectionBlockedReason = Schema.Literals([
 ]);
 export type ConnectionBlockedReason = typeof ConnectionBlockedReason.Type;
 
-/** A part of the path to an environment: this device, T3 Connect, the host's tunnel, or GOAT on the host. */
+/** A part of the path to an environment: this device, GOAT Connect, the host's tunnel, or GOAT on the host. */
 export const ConnectionHop = Schema.Literals(["device", "relay", "tunnel", "server"]);
 export type ConnectionHop = typeof ConnectionHop.Type;
 

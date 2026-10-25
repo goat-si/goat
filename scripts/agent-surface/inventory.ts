@@ -652,7 +652,7 @@ export async function collectCli(): Promise<ReadonlyArray<CliEntry>> {
     for (const child of children)
       visit(child, [...path, child.name], parentUnlisted || command.unlisted);
   };
-  // Builds without T3 Connect config swap `connect` for a stub; inventory the real tree.
+  // Builds without GOAT Connect config swap `connect` for a stub; inventory the real tree.
   visit(makeCli({ cloudEnabled: true }), ["goat"], false);
   return out;
 }

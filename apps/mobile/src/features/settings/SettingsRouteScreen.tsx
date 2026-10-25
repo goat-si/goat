@@ -99,7 +99,7 @@ function ConfiguredSettingsRouteScreen() {
         <ConnectionsSection>
           <SettingsRow
             icon="person.crop.circle"
-            label="T3 Account"
+            label="GOAT Account"
             value={accountLabel}
             disabled={!isLoaded}
             onPress={() => navigation.navigate("SettingsSheet", { screen: "SettingsAuth" })}

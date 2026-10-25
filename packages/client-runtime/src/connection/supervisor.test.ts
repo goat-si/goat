@@ -1616,7 +1616,7 @@ describe("adaptive connection setup deadline", () => {
 });
 
 describe("EnvironmentSupervisor routes", () => {
-  it.effect("skips a silent LAN route and connects over T3 Connect", () =>
+  it.effect("skips a silent LAN route and connects over GOAT Connect", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         checkRoute: (route) =>
@@ -1675,7 +1675,7 @@ describe("EnvironmentSupervisor routes", () => {
         checkRoute: () => Effect.succeed("answered"),
         prepare: (_attempt, target) =>
           target._tag === "RelayConnectionTarget"
-            ? Effect.fail(blocked("Sign in to T3 Connect."))
+            ? Effect.fail(blocked("Sign in to GOAT Connect."))
             : Effect.fail(transient("LAN socket refused.")),
       });
       const supervisor = yield* EnvironmentSupervisor.make(LAN_THEN_RELAY_ENTRY, {
@@ -1768,7 +1768,7 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
-  it.effect("learns the LAN address over T3 Connect and moves to it", () =>
+  it.effect("learns the LAN address over GOAT Connect and moves to it", () =>
     Effect.gen(function* () {
       const relayEntry: ConnectionCatalogEntry = {
         target: RELAY_TARGET,
