@@ -262,7 +262,7 @@ export function computerUseReadinessSteps({
         ? ({
             state: "unknown",
             detail:
-              "The driver is running, but agents cannot use computer use until the helper is confirmed.",
+              "The driver is running. Whether agents can use computer use is not proven until the helper is confirmed.",
           } as const)
         : tools
           ? toolsCopy[tools]
