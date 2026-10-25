@@ -34,7 +34,10 @@ const endGrants = Effect.fn("ComputerUse.endGrants")(function* (
       ),
     ),
   );
-  for (const grant of grants.filter(which)) {
+  const picked = grants.filter(which);
+  // Released first, so they hold no app and admit no newer control even if ending them fails.
+  yield* leases.release(picked.map((grant) => grant.handoffId));
+  for (const grant of picked) {
     yield* handoffs
       .respond(
         { threadId: grant.threadId, handoffId: grant.handoffId, action: "cancelled" },

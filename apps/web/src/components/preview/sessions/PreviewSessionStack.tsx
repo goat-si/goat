@@ -118,14 +118,26 @@ export function PreviewSessionStack(props: {
     if (environmentId === null) return;
     const result = await control({ environmentId, input });
     // A failed call is reported by the command itself. A desktop Stop that could not end the
-    // thread's approval leaves its apps held from other threads (#1519); Stop all ends it. The
-    // toast offers it, since the header drops Stop all once no agent is active.
+    // thread's approval leaves its apps held from other threads (#1519), and one that found its
+    // session already replaced stopped nothing; Stop all covers both. The toast offers it,
+    // since the header drops Stop all once no agent is active.
     if (input.control !== "stop" || result._tag !== "Success" || result.value.applied) return;
-    if (result.value.reason !== "not_allowed") return;
+    const copy =
+      result.value.reason === "not_allowed"
+        ? {
+            title: "The agent stopped, but its apps are still reserved",
+            description: "Its computer use approval could not be ended. Stop all releases them.",
+          }
+        : result.value.reason === "not_found"
+          ? {
+              title: "This agent's session changed before Stop reached it",
+              description: "Nothing was stopped. Stop all stops every agent on this computer.",
+            }
+          : undefined;
+    if (copy === undefined) return;
     const id = toastManager.add({
       type: "error",
-      title: "The agent stopped, but its apps are still reserved",
-      description: "Its computer use approval could not be ended. Stop all releases them.",
+      ...copy,
       actionProps: {
         children: "Stop all",
         onClick: () => {

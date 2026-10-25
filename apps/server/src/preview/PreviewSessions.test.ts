@@ -187,6 +187,7 @@ describe("preview sessions", () => {
             stopAllAgents: Effect.sync(() => void stopped.push("browser")),
           }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             foregroundApprovalEpoch: Effect.die("unused"),
             stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
@@ -213,6 +214,7 @@ describe("preview sessions", () => {
         Layer.mergeAll(
           Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             stopAll: Effect.succeed([]),
             grants: Effect.succeed([
               {
@@ -249,6 +251,7 @@ describe("preview sessions", () => {
         Layer.mergeAll(
           Layer.mock(ServerBrowser.ServerBrowser)({}),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            release: () => Effect.void,
             sessions: Effect.succeed([{ control, state: active }]),
             stop: (thread) => Effect.sync(() => (stopped.push(thread), true)),
             grants: Effect.succeed([
