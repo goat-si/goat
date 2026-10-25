@@ -151,6 +151,34 @@ it.effect(
     ),
 );
 
+it.effect(
+  "refuses with the Windows desktop's own reason when the helper cannot use it (#1516)",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const block = {
+          reason: "desktopUnavailable",
+          blocker: "screenLocked",
+          detail:
+            "The screen is locked or showing a Windows security prompt. Unlock it, then try again.",
+        } as const;
+        const result = yield* yield* requestFrom(
+          orchestrator,
+          supported,
+          undefined,
+          Option.some(new CuaDriver.CuaDriverHostError({ operation: "desktop", block })),
+        );
+        assert.deepEqual(result, {
+          kind: "refused",
+          reason: "not_granted",
+          block,
+          message:
+            "Computer use cannot start: The screen is locked or showing a Windows security prompt. Unlock it, then try again.",
+        });
+      }),
+    ),
+);
+
 it.effect("a repeated request announces the pending handoff's original expiry", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
