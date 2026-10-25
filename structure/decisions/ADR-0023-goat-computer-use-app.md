@@ -22,8 +22,9 @@
   decision; until #1591 switches the pin, GOAT still downloads upstream's 0.37.0 archives.
 - Amended 2026-10-25, D16 (owner decision, Jun, 2026-10-25 18:15 KST, corrected 18:17; #1617,
   #1396): every run in full-access runtime mode uses apps without per-app approval, whoever or
-  whatever started it, even when the host setting `cuaFullAccessAutoAdmit` is off. This replaces
-  #1396's off-by-default behavior. The Readiness and approvals bullet below states the decision.
+  whatever started it, whatever `cuaFullAccessAutoAdmit` says. This replaces #1396's
+  off-by-default behavior. The Readiness and approvals bullet below states the decision; #1649
+  implements it.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -135,13 +136,16 @@
     action runs, and always-allowed apps can be removed in Settings.
     A run in full-access runtime mode needs no per-app approval, whether a person, an automation,
     a schedule, a webhook, Slack or another channel started it, because choosing full access for a
-    thread already gives that trust (D16). The host setting "Full access without approval"
-    (`cuaFullAccessAutoAdmit`) no longer decides anything for full-access runs. Everything else
-    still applies: unattended runs still need private-mode detection (D7), the password-manager
-    exclusions, pause, Stop and stop all, each call's scope, and the screen-sharing, reservation
-    and foreground checks; the physical kill switch is not implemented yet (#1505). Runs in other
-    runtime modes keep the approval flow. Owner decision (Jun, 2026-10-25), implemented in #1617;
-    it replaces #1396's off-by-default setting.
+    thread already gives that trust (D16). The "Full access without approval" switch is gone from
+    Settings and settings search on web and mobile; the `cuaFullAccessAutoAdmit` field stays in
+    the settings contract so older clients and settings files still decode, and the server ignores
+    it. What differs by origin stays: only a person's run takes the foreground without asking,
+    while unattended work asks for it, holds the screen one thread at a time and still needs
+    private-mode detection (D7). The password-manager exclusions, pause, Stop and stop all, each
+    call's scope, and the screen-sharing, reservation and foreground checks apply to every run;
+    the physical kill switch is not implemented yet (#1505). Runs in other runtime modes keep the
+    approval flow. Owner decision (Jun, 2026-10-25), implemented in #1649 after #1617; it replaces
+    #1396's off-by-default setting.
   - **One preview surface.** Native computer use and built-in browser use share one preview session
     contract (owner `agent`, `human` or `private`; status; target; lease; last frame) with the same
     controls (take over, hand back, request handoff, stop, stop all), status chips and private mode
