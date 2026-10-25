@@ -106,7 +106,6 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         threadId,
         request,
         current?.controlId === request.controlId && current.ended === undefined,
-        DateTime.toEpochMillis(yield* DateTime.now),
       );
     }
     return yield* admission.withPermits(1)(
@@ -153,7 +152,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         const decision: ComputerUseCallAdmission =
           request.action === "validate"
             ? { status: "admitted", reservationId: request.reservationId }
-            : reservations.reserve(threadId, call, now);
+            : reservations.reserve(threadId, call);
         if (decision.status === "admitted") appLeases.hold(threadId, call.controlId, need, now);
         return withCallPermissions(decision, state);
       }),

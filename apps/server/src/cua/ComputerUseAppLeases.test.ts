@@ -14,11 +14,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { APP_LEASE_IDLE_MS, makeAppLeases } from "./ComputerUseAppLeases.ts";
-import {
-  makeCallReservations,
-  MAX_CALL_MS,
-  ORPHAN_CALL_GRACE_MS,
-} from "./ComputerUseCallReservations.ts";
+import { makeCallReservations, ORPHAN_CALL_GRACE_MS } from "./ComputerUseCallReservations.ts";
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -481,7 +477,7 @@ describe("app leases between threads (D17)", () => {
       assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
     }).pipe(Effect.provide(layer)),
   );
-  it.effect("a call whose release was lost holds its app no longer than the longest call", () =>
+  it.effect("a lost release keeps the app until the holder's turn ends, then for the grace", () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -500,13 +496,17 @@ describe("app leases between threads (D17)", () => {
         app: TEXTEDIT,
       });
       assert.equal(lost.status, "admitted");
-      yield* TestClock.adjust(MAX_CALL_MS - 1);
+      // While A's turn is open the server cannot tell it from a long call, so it holds (H2).
+      yield* TestClock.adjust(600_000);
       assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
-      yield* TestClock.adjust(1);
+      // A's turn ends: the call can only be stopping now, for at most the grace (H3).
+      assert.isTrue(yield* leases.turnEnded(a.threadId));
+      assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
+      yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
       assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
   );
-  it.effect("a call queued behind another on one driver keeps its app for its own run", () =>
+  it.effect("a call queued behind another on one driver keeps its app however long it runs", () =>
     Effect.gen(function* () {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -526,9 +526,14 @@ describe("app leases between threads (D17)", () => {
         });
       // Two long calls sent at once; the driver runs them one after the other.
       const first = yield* typing("first");
-      assert.equal((yield* typing("second")).status, "admitted");
-      if (first.status !== "admitted" || first.reservationId === null)
-        return assert.fail("expected a ticket");
+      const queued = yield* typing("second");
+      if (
+        first.status !== "admitted" ||
+        first.reservationId === null ||
+        queued.status !== "admitted" ||
+        queued.reservationId === null
+      )
+        return assert.fail("expected tickets");
       yield* TestClock.adjust(100_000);
       // The first answers; the second starts now.
       yield* leases.callReservation(a.threadId, {
@@ -538,10 +543,17 @@ describe("app leases between threads (D17)", () => {
         reservationId: first.reservationId,
         completed: true,
       });
-      yield* TestClock.adjust(20_000);
+      // The second runs for as long as it runs, past the lease's idle window (H2).
+      yield* TestClock.adjust(200_000);
       assert.deepInclude(yield* click(b, TEXTEDIT, 8), busy(a.threadId, TEXTEDIT));
-      // Its own longest run, counted from when it could start, then the app is free.
-      yield* TestClock.adjust(MAX_CALL_MS - 20_000);
+      // It answers; with A's lease long idle, the app is free at once.
+      yield* leases.callReservation(a.threadId, {
+        action: "release",
+        controlId: a.control.controlId,
+        connectionId: `proxy:${a.threadId}`,
+        reservationId: queued.reservationId,
+        completed: true,
+      });
       assert.equal((yield* click(b, TEXTEDIT, 8)).status, "admitted");
     }).pipe(Effect.provide(layer)),
   );
@@ -727,36 +739,5 @@ describe("proxy releases (D17)", () => {
       assert.equal((yield* h.nextToProvider).id, 1);
       assert.deepInclude(yield* h.nextReservation, { action: "release", completed: true });
     }),
-  );
-  it.effect(
-    "a completed release the server never confirmed ends the proxy, so no later call runs unseen",
-    () =>
-      Effect.gen(function* () {
-        let tickets = 0;
-        const h = yield* harness({
-          reservation: (request) =>
-            Effect.succeed(
-              request.action === "reserve"
-                ? { status: "admitted" as const, reservationId: `ticket:${tickets++}` }
-                : request.action === "release"
-                  ? // The release POST is lost; the CLI reports it as unauthorized.
-                    { status: "refused" as const, detail: "unauthorized" as const }
-                  : { status: "released" as const },
-            ),
-        });
-        yield* h.push(active());
-        yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "first" }));
-        assert.equal((yield* h.nextToDriver).id, 1);
-        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
-        assert.equal((yield* h.nextToProvider).id, 1);
-        // The server never heard that the driver moved on, so nothing more may run unseen by it.
-        yield* h.send(call(2, "type_text", { pid: 42, window_id: 7, text: "second" }));
-        const first = yield* Effect.raceFirst(
-          h.nextToProvider.pipe(Effect.map((line) => ({ to: "provider", line }) as const)),
-          h.nextToDriver.pipe(Effect.map((line) => ({ to: "driver", line }) as const)),
-        );
-        assert.equal(first.to, "provider");
-        assert.isTrue(yield* h.isKilled);
-      }),
   );
 });

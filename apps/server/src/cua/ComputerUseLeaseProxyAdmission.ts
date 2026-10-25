@@ -58,22 +58,21 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
 });
 
 /**
- * Releases a call's ticket; completed when the driver answered it, which tells the server the
- * connection's next queued call has started (D17). False when a completed release was not
- * confirmed: the server cannot know that call started, so the proxy must stop its driver.
+ * Releases a call's ticket; completed when the driver answered it. A driver runs a connection's
+ * calls in order, so the server also ends that connection's earlier calls, whose own releases may
+ * have been lost (D17).
  */
 export const releaseProxyCall = Effect.fn("ComputerUseLeaseProxy.releaseCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">,
   request: { readonly reservationId?: string; readonly connectionId?: string },
   completed: true | undefined,
 ) {
-  if (request.reservationId === undefined || request.connectionId === undefined) return true;
-  const answer = yield* options.reservation({
+  if (request.reservationId === undefined || request.connectionId === undefined) return;
+  yield* options.reservation({
     action: "release",
     controlId: options.controlId,
     connectionId: request.connectionId,
     reservationId: request.reservationId,
     ...(completed && { completed }),
   });
-  return completed === undefined || answer.status === "released";
 });

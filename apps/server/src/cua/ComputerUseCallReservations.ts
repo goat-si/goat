@@ -99,17 +99,10 @@ export const callResource = (call: Pick<Call, "name" | "args">): Resource | "rea
  */
 export const ORPHAN_CALL_GRACE_MS = 10_000;
 
-/**
- * The longest any call holds its app, from its reservation: past the driver's longest call (100 s
- * for typed text in cua-driver 0.37.0), so an answer or release that never arrived frees it.
- */
-export const MAX_CALL_MS = 120_000;
-
 interface Ticket {
   readonly threadId: ThreadId;
   readonly call: Call;
   readonly resource: Resource;
-  readonly reservedAt: number;
   /** Reservation order within the lease service; a driver runs one connection's calls in it. */
   readonly seq: number;
   /** When this call's control was first seen unable to act, or its proxy's stream ended. */
@@ -125,8 +118,6 @@ const overlaps = (a: Resource, b: Resource) =>
 export const makeCallReservations = () => {
   const tickets = new Map<string, Ticket>();
   let seq = 0;
-  /** When each connection's driver last answered a call: the next queued call starts then. */
-  const completedAt = new Map<string, number>();
   // A delayed POST must never reopen a driver generation already cut off by its proxy.
   const closed = new Map<string, { readonly threadId: ThreadId; readonly controlId: string }>();
   return {
@@ -166,11 +157,6 @@ export const makeCallReservations = () => {
           ticket.call.app !== undefined &&
           call.app.toLowerCase() === ticket.call.app.toLowerCase();
         if (ticket.resource.pid !== resource.pid && !sameApp) continue;
-        const started = Math.max(
-          ticket.reservedAt,
-          completedAt.get(connectionKey(ticket.threadId, ticket.call)) ?? 0,
-        );
-        if (now - started >= MAX_CALL_MS) continue;
         // Marked per call, never per control: a later call of a reused control starts unmarked.
         if (ticket.stoppedAt === undefined && !canAct(ticket.threadId, ticket.call.controlId))
           ticket.stoppedAt = now;
@@ -188,7 +174,7 @@ export const makeCallReservations = () => {
         if (ticket.threadId === threadId && ticket.call.controlId === controlId)
           ticket.stoppedAt ??= now;
     },
-    reserve(threadId: ThreadId, call: Call, now: number): ComputerUseCallAdmission {
+    reserve(threadId: ThreadId, call: Call): ComputerUseCallAdmission {
       if (closed.has(connectionKey(threadId, call)))
         return { status: "refused", detail: "replaced" };
       const resource = callResource(call);
@@ -206,7 +192,7 @@ export const makeCallReservations = () => {
           return { status: "refused", detail: "target_busy", holderThreadId: ticket.threadId };
       }
       const reservationId = NodeCrypto.randomUUID();
-      tickets.set(reservationId, { threadId, call, resource, reservedAt: now, seq: seq++ });
+      tickets.set(reservationId, { threadId, call, resource, seq: seq++ });
       return { status: "admitted", reservationId };
     },
     lookup(
@@ -230,7 +216,6 @@ export const makeCallReservations = () => {
       threadId: ThreadId,
       call: Extract<ComputerUseCallReservation, { action: "release" | "close" }>,
       rememberClosed: boolean,
-      now: number,
     ): ComputerUseCallAdmission {
       const key = connectionKey(threadId, call);
       if (call.action === "close" && rememberClosed)
@@ -241,7 +226,6 @@ export const makeCallReservations = () => {
           : undefined;
       const answeredHere =
         answered !== undefined && connectionKey(answered.threadId, answered.call) === key;
-      if (answeredHere) completedAt.set(key, now);
       for (const [id, ticket] of tickets) {
         if (connectionKey(ticket.threadId, ticket.call) !== key) continue;
         // An answered call ends every earlier call of its connection, whose releases may be lost.
@@ -252,10 +236,6 @@ export const makeCallReservations = () => {
         )
           tickets.delete(id);
       }
-      if (
-        ![...tickets.values()].some((ticket) => connectionKey(ticket.threadId, ticket.call) === key)
-      )
-        completedAt.delete(key);
       return { status: "released" };
     },
   };

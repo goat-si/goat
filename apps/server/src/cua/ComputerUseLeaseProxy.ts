@@ -244,12 +244,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  // An answered call the server did not hear of ends the proxy (releaseProxyCall, D17).
+  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = (request: { reservationId?: string; connectionId?: string }, completed?: true) =>
-    releaseProxyCall(options, request, completed).pipe(
-      Effect.flatMap((heard) => (heard ? Effect.void : Effect.forkIn(end("lost"), scope))),
-      Effect.asVoid,
-    );
+    releaseProxyCall(options, request, completed);
 
   const readLines = (current: Running) =>
     current.driver.lines.pipe(

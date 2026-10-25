@@ -9,11 +9,13 @@
  * the call acted on. Two calls meet on either, so a full access thread whose proxy never needed
  * the app's id still meets a granted thread's lease on the same process.
  *
- * Nothing here runs on a timer. A lease is judged at each check against its holder's current
- * control, so Stop, Stop all, expiry, replacement, an idle turn, leaving full access, deleting
- * the thread and a narrowed grant that drops the app all end it, and so does APP_LEASE_IDLE_MS
- * without a mutating call on it. An ended lease is dropped when a check meets it; the proxy
- * closing its driver releases the control's leases at once.
+ * Nothing here runs on a timer. A lease (H1) is judged at each check against its holder's
+ * current control, so Stop, Stop all, expiry, replacement, an idle turn, leaving full access,
+ * deleting the thread and a narrowed grant that drops the app all end it, and so does
+ * APP_LEASE_IDLE_MS without a mutating call on it; the proxy closing its driver or losing its lease
+ * stream releases it at once. A call of another control still out in the app holds it too (H2, H3
+ * in ComputerUseCallReservations.appTicket). The PR that added D17 (#1679) states the invariants
+ * and their bounds.
  *
  * @module ComputerUseAppLeases
  */
