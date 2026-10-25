@@ -332,19 +332,49 @@ describe("GoalController", () => {
       ).toMatchObject({ reason: "BudgetExhausted" });
     }).pipe(Effect.provide(layerFor(fake)));
   });
+
   it.effect(
-    "never launches on another machine, even when placement offers one (P1-1, P1-2)",
+    "regression #1451: a claim already taken reads as a duplicate, not as a spent budget",
+    () => {
+      const fake = makeFake();
+      return Effect.gen(function* () {
+        const store = yield* GoalStore;
+        yield* insert(
+          testGoal("goal_last_turn", {
+            spec: testSpec({ limits: { ...testSpec().limits, maxTurns: 1 } }),
+          }),
+        );
+        const claim = (actionId: string) =>
+          store.claim({
+            goalId: FleetGoalId.make("goal_last_turn"),
+            generation: 1,
+            actionId,
+            kind: "launch",
+            host: "box",
+            slot: 0,
+            nowIso: "1970-01-01T00:00:00.000Z",
+          });
+        // The move took the last turn; asking again about it spends nothing and is not refused.
+        expect(yield* claim("goal:goal_last_turn:s0:a1:run:5:reschedule")).toBeNull();
+        expect(yield* claim("goal:goal_last_turn:s0:a1:run:5:reschedule")).toBe("already_claimed");
+        expect(yield* store.turns(FleetGoalId.make("goal_last_turn"))).toBe(1);
+        // New work stays refused.
+        expect(yield* claim("goal:goal_last_turn:s1:a1:launch")).toBe("budget");
+      }).pipe(Effect.provide(layerFor(fake)));
+    },
+  );
+  it.effect(
+    "launches on the host placement chose, recording that host before the launch (#1451)",
     () => {
       const fake = makeFake();
       return Effect.gen(function* () {
         const store = yield* GoalStore;
         yield* insert(testGoal("goal_far"));
         yield* pass("goal_far");
-        expect(fake.launches).toEqual([]);
-        expect(yield* store.launches(FleetGoalId.make("goal_far"))).toEqual([]);
-        expect(
-          (yield* record("goal_far")).goal.status.conditions.find((c) => c.type === "Blocked"),
-        ).toMatchObject({ status: "True", reason: "RemoteWorkersDisabled" });
+        expect(fake.launches.map((launch) => launch.host)).toEqual(["mac-studio"]);
+        expect(yield* store.launches(FleetGoalId.make("goal_far"))).toMatchObject([
+          { actionId: "goal:goal_far:s0:a1:launch", host: "mac-studio" },
+        ]);
       }).pipe(Effect.provide(layerFor(fake, { placeRemote: true })));
     },
   );

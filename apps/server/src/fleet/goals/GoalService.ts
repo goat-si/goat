@@ -37,7 +37,7 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import { initialStatus } from "./goalPlan.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
 import { GoalStore, type GoalStoreError } from "./GoalStore.ts";
-import { REMOTE_WORKERS_DISABLED } from "./GoalWorkerRuntime.ts";
+import { REMOTE_WORKERS_NEED_FULL_ACCESS } from "./GoalWorkerRuntime.ts";
 
 export class GoalService extends Context.Service<
   GoalService,
@@ -181,10 +181,26 @@ const make = Effect.gen(function* () {
           code: "invalid_request",
           message: "doneWhen on pull requests, checks or issues needs spec.repo (owner/name).",
         });
-      if (spec.project.host === null && spec.project.projectId === null)
+      const hosts = spec.workers.hostSelector.hosts;
+      const remote = spec.project.host !== null || (hosts ?? []).some((host) => host !== null);
+      // Workers here launch into the project by id; workers elsewhere need a folder or that id there.
+      const here = spec.project.host === null && (hosts === undefined || hosts.includes(null));
+      if (here && spec.project.projectId === null)
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "Set spec.project.projectId for workers on this machine.",
+        });
+      if (remote && spec.project.projectId === null && spec.project.cwd === null)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message:
+            "Set spec.project.cwd, or a projectId on spec.project.host, for workers on other hosts.",
+        });
+      // goat_ssh_thread_launch needs a full-access caller; the goal's ceiling must carry it.
+      if (remote && ceiling !== "full-access")
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: REMOTE_WORKERS_NEED_FULL_ACCESS,
         });
       if (spec.limits.maxTokens !== null)
         return yield* new OrchestratorMcpFailure({
@@ -195,16 +211,6 @@ const make = Effect.gen(function* () {
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "workers.perTarget needs at least one target.",
-        });
-      const remote =
-        spec.project.host !== null ||
-        (spec.workers.hostSelector.hosts ?? []).some((host) => host !== null);
-      if (remote)
-        return yield* new OrchestratorMcpFailure({
-          code: "invalid_request",
-          message:
-            REMOTE_WORKERS_DISABLED +
-            " Leave spec.project.host null and name only this machine (null) in workers.hostSelector.hosts.",
         });
     });
 

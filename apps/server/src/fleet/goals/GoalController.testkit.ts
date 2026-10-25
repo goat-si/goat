@@ -12,6 +12,7 @@ import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as FleetDefaults from "../defaults.ts";
 import { Health, type ThreadHealth } from "../health/Health.ts";
+import { RescheduleNotAllowed } from "../health/Rescheduler.ts";
 import { Fallback } from "../resources/Fallback.ts";
 import { Placement } from "../resources/Placement.ts";
 import { GoalController, layer as controllerLayer } from "./GoalController.ts";
@@ -27,7 +28,7 @@ import {
   type WorkerReading,
 } from "./GoalWorkerRuntime.ts";
 
-interface Fake {
+export interface Fake {
   readonly launches: Array<LaunchRequest & { readonly mode: string }>;
   readonly followUps: Array<{ readonly actionId: string; readonly message: string }>;
   readonly interrupts: Array<string>;
@@ -49,6 +50,8 @@ interface Fake {
   loseAfterCreate: boolean | "goalChanged";
   reading: (threadId: string) => WorkerReading;
   pullRequest: PullRequestObservation;
+  /** What runtime.project resolves the goal's project to. */
+  project: { readonly cwd: string; readonly canonicalKey: string | null } | null;
 }
 
 export const access = (runtimeMode: OwnerAccess["runtimeMode"] = "full-access"): OwnerAccess => ({
@@ -102,6 +105,7 @@ export const makeFake = (): Fake => {
     loseAfterCreate: false,
     reading: (threadId) => running(threadId, fake),
     pullRequest: { kind: "seen", state: "open", checks: "pending" },
+    project: { cwd: "/repo", canonicalKey: null },
   };
   return fake;
 };
@@ -114,7 +118,7 @@ const confirmLast = <E>(fake: Fake, confirm: Effect.Effect<void, E>) =>
     return Effect.andThen(before, confirm);
   });
 
-const runtimeFor = (fake: Fake) =>
+export const runtimeFor = (fake: Fake) =>
   Layer.succeed(GoalWorkerRuntime, {
     owner: () =>
       Effect.sync(
@@ -166,7 +170,7 @@ const runtimeFor = (fake: Fake) =>
             message: "lost reply",
           });
         }
-        return { host: null, threadId, runId: RunId.make("run:1") };
+        return { host: request.host, threadId, runId: RunId.make("run:1") };
       }),
     followUp: (_access, _goal, _worker, message, actionId, confirm) =>
       Effect.suspend(() => {
@@ -187,6 +191,16 @@ const runtimeFor = (fake: Fake) =>
           }),
         ),
       ),
+    project: () => Effect.succeed(fake.project),
+    moveAuthority: (current, _goal, confirm) =>
+      Effect.succeed({
+        runtimeMode: current.runtimeMode,
+        callerRuntimeMode: current.runtimeMode,
+        authorize: confirm.pipe(
+          Effect.as(current.runtimeMode),
+          Effect.mapError((lost) => new RescheduleNotAllowed({ message: lost.message })),
+        ),
+      }),
   });
 
 /** This machine only, like the design's first release; SSH hosts are refused. */
@@ -224,7 +238,7 @@ const placementFor = (placeRemote: boolean) =>
     statusOf: () => Effect.die("unused"),
   });
 
-const noFallback = Layer.succeed(Fallback, {
+export const noFallback = Layer.succeed(Fallback, {
   next: () => Effect.succeed({ _tag: "Exhausted" as const, reason: "No chain." }),
   reportFailure: () => Effect.void,
   cooldowns: Effect.succeed([]),
@@ -239,7 +253,7 @@ const healthy = Layer.succeed(Health, {
 });
 
 /** Later attempts start like first ones; GoalRecovery.test.ts covers resuming earlier work. */
-const freshStarts = Layer.succeed(GoalRecovery, {
+export const freshStarts = Layer.succeed(GoalRecovery, {
   capture: () => Effect.void,
   resume: () => Effect.succeed({ _tag: "Start" as const, workspace: null, note: null }),
   forget: () => Effect.void,

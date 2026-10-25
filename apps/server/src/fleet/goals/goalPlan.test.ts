@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { RunId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 import {
@@ -24,6 +24,7 @@ const observe = (overrides: Partial<GoalObservation> = {}): GoalObservation => (
   workers: new Map(),
   launchClaims: new Map(),
   unmovedReschedules: new Set(),
+  pendingMoves: new Map(),
   switchedFallbacks: new Set(),
   pullRequests: new Map(),
   issues: new Map(),
@@ -598,5 +599,110 @@ describe("planGoal", () => {
     // Once this controller records the recovery's outcome, the run is not recovered again.
     const settled = { ...followedUp, recoveredRunId: RunId.make("run:1") };
     expect(planGoal(goal, [settled], refused).actions).toEqual([]);
+  });
+});
+
+describe("moves to another host (#1451)", () => {
+  const goal = testGoal("goal_mv", {
+    spec: testSpec({ limits: { ...testSpec().limits, maxTurns: 2 } }),
+  });
+  const moveId = "goal:goal_mv:s0:a1:run:5:reschedule";
+  const move = (threadId: string | null, settledAt: string | null, host = "B") => ({
+    actionId: moveId,
+    slot: 0,
+    claimedAt: "2026-10-20T00:00:02.000Z",
+    settledAt,
+    outcome: settledAt === null ? null : "rescheduled",
+    host,
+    threadId,
+  });
+  const onA = running(goal, 0, { host: "A", threadId: ThreadId.make("thread:a") });
+  const pending = new Map([
+    [0, { actionId: moveId, attempt: 1, clientRequestId: "goal:goal_mv:s0:a2:launch" }],
+  ]);
+
+  it("never turns an unsettled move into an orphan, and restores a recorded successor after a lost write", () => {
+    // Unsettled: the slot keeps its attempt; the planner holds it.
+    expect(repairWorkers(goal, [onA], [move(null, null)])).toEqual([onA]);
+    // Settled with its thread, while the slot row still names attempt 1: the successor is the slot.
+    const rebuilt = repairWorkers(goal, [onA], [move("thread:b", "2026-10-20T00:00:03.000Z")]);
+    expect(
+      rebuilt.map((worker) => [worker.slot, worker.attempt, worker.host, worker.threadId]),
+    ).toEqual([
+      [0, 2, "B", "thread:b"],
+      [ORPHAN_SLOT_BASE, 1, "A", "thread:a"],
+    ]);
+    expect(rebuilt[0]).toMatchObject({
+      branch: "goal/test/s0-a2",
+      launchClientRequestId: "goal:goal_mv:s0:a2:launch",
+    });
+    // A successor found after the slot moved past it is stopped like any earlier attempt.
+    const third = {
+      ...newWorker(goal, 0, null, 3),
+      host: "C",
+      threadId: ThreadId.make("thread:c"),
+      state: "running" as const,
+    };
+    expect(
+      repairWorkers(goal, [third], [move("thread:b", "2026-10-20T00:00:03.000Z")]).map((worker) => [
+        worker.slot,
+        worker.threadId,
+      ]),
+    ).toEqual([
+      [0, "thread:c"],
+      [ORPHAN_SLOT_BASE, "thread:b"],
+    ]);
+  });
+
+  it("holds a slot whose move is unconfirmed: only resolve_move, kept when the budget is spent, done or deleting", () => {
+    const failed = observe({
+      workers: new Map([[0, seen({ runId: RunId.make("run:5"), runStatus: "failed" })]]),
+      pendingMoves: pending,
+    });
+    const resolve = {
+      type: "resolve_move",
+      slot: 0,
+      attempt: 1,
+      actionId: moveId,
+      clientRequestId: "goal:goal_mv:s0:a2:launch",
+    };
+    expect(planGoal(goal, [onA], failed).actions).toEqual([resolve]);
+    expect(planGoal(goal, [onA], { ...failed, turns: 2 }).actions).toEqual([resolve]);
+    expect(
+      planGoal({ ...goal, deletionRequestedAt: "2026-10-20T00:59:00.000Z" }, [onA], failed),
+    ).toMatchObject({
+      actions: [resolve],
+      status: { phase: "deleting" },
+    });
+    // Without the hold, a spent budget refuses the move itself.
+    expect(planGoal(goal, [onA], { ...failed, pendingMoves: new Map(), turns: 2 }).actions).toEqual(
+      [],
+    );
+  });
+
+  it("follows the model a remote thread reports, and asks a person when a remote run is held at its usage limit", () => {
+    const remote = running(goal, 0, { host: "B", followedUpRunId: RunId.make("run:5") });
+    const plan = planGoal(
+      goal,
+      [remote],
+      observe({
+        workers: new Map([
+          [
+            0,
+            seen({
+              runId: RunId.make("run:5"),
+              runStatus: "failed",
+              health: { _tag: "failed", failureClass: "usage_limit", runId: RunId.make("run:5") },
+              modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "opus" },
+            }),
+          ],
+        ]),
+      }),
+    );
+    expect(plan.actions).toEqual([]);
+    expect(plan.workers[0]).toMatchObject({
+      state: "needs_human",
+      modelSelection: { instanceId: "claude", model: "opus" },
+    });
   });
 });

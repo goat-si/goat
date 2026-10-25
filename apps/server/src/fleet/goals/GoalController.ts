@@ -11,6 +11,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import { HubDown, type PausedGoalWork } from "../../hub/HubDown.ts";
 import { type HubWork, UNAFFECTED } from "../../hub/hubDownPolicy.ts";
@@ -28,18 +29,18 @@ import {
   fallbackActionId,
   type GoalAction,
   type GoalObservation,
-  launchActionId,
   MAX_ACTIONS_PER_TICK,
   MAX_GOALS_PER_TICK,
   nextAttempt,
   nextDelayMs,
   planGoal,
   repairWorkers,
-  rescheduleActionId,
   type PullRequestObservation,
   type SlotObservation,
 } from "./goalPlan.ts";
+import { makeGoalMoves } from "./GoalMoves.ts";
 import { GoalRecovery } from "./GoalRecovery.ts";
+import { pendingMoves } from "./goalWorkers.ts";
 import {
   type GoalRecord,
   GoalStore,
@@ -50,14 +51,10 @@ import {
 } from "./GoalStore.ts";
 import { actionAuthority, isLost, OWNER_REFUSED, refusedBeforeCreate } from "./GoalAuthority.ts";
 import { renderPrompt } from "./goalPrompt.ts";
-import {
-  effectiveRuntimeMode,
-  GoalWorkerRuntime,
-  REMOTE_WORKERS_DISABLED,
-  workerTitle,
-} from "./GoalWorkerRuntime.ts";
+import { GoalWorkerRuntime, RemoteLaunchUnconfirmed, workerTitle } from "./GoalWorkerRuntime.ts";
 
 const SOON_MS = 5_000;
+const isUnconfirmed = Schema.is(RemoteLaunchUnconfirmed);
 const PULL_REQUESTS_PER_PASS = 60;
 
 const isoAt = (millis: number) => DateTime.formatIso(DateTime.makeUnsafe(millis));
@@ -97,13 +94,33 @@ const make = Effect.gen(function* () {
           record.workers.filter((worker) => worker.threadId !== null && worker.state !== "failed"),
           (worker) =>
             Effect.gen(function* () {
+              const threadId = worker.threadId;
+              if (threadId === null) return;
               const reading = yield* runtime.observeWorker(owner, goal, worker);
               yield* recovery.capture(goal, worker, reading);
+              if (reading.kind === "unknown" && worker.host !== null) {
+                // A host that stopped answering is judged by its health, so a Lost one moves.
+                const lost = yield* health.threadHealth({
+                  host: worker.host,
+                  threadId,
+                  watchId: worker.watchId,
+                });
+                if (lost._tag === "host_lost")
+                  return workers.set(worker.slot, {
+                    kind: "seen",
+                    terminal: false,
+                    runId: worker.lastRunId,
+                    runStatus: null,
+                    lastActivityAt: worker.lastActivityAt,
+                    result: null,
+                    health: lost,
+                  });
+              }
               if (reading.kind !== "seen") return workers.set(worker.slot, reading);
               if (reading.result?.pullRequest != null) reported.add(reading.result.pullRequest);
               const threadHealth = yield* health.threadHealth({
                 host: worker.host,
-                threadId: worker.threadId!,
+                threadId,
                 watchId: worker.watchId,
               });
               return workers.set(worker.slot, { ...reading, health: threadHealth });
@@ -160,6 +177,7 @@ const make = Effect.gen(function* () {
         workers,
         launchClaims,
         unmovedReschedules,
+        pendingMoves: pendingMoves(goal, launches),
         switchedFallbacks: new Set(yield* store.switchedFallbacks(goal.id)),
         pullRequests,
         issues,
@@ -273,6 +291,21 @@ const make = Effect.gen(function* () {
         goal,
         nowIso,
         block: (issue) => issues.push(issue),
+      });
+      const moves = makeGoalMoves({
+        store,
+        runtime,
+        rescheduler,
+        goal,
+        nowIso,
+        authority,
+        claim,
+        setWorker: (next) => void workers.set(next.slot, next),
+        note,
+        issue: (issue) => void issues.push(issue),
+        fail: () => {
+          failed = true;
+        },
       });
 
       /**
@@ -405,18 +438,12 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
-              if (placed.host !== null) {
-                // Remote goal workers are off until remote authority is carried end to end.
-                failed = true;
-                issues.push({
-                  condition: "Blocked",
-                  reason: "RemoteWorkersDisabled",
-                  message: placed.host + ": " + REMOTE_WORKERS_DISABLED,
-                });
-                return;
-              }
-              // A later attempt starts from the work the one before it left, once that stopped.
-              const resume = yield* recovery.resume(goal, worker.slot, worker.attempt);
+              // A later attempt here starts from the work the one before it left, once that
+              // stopped. Replicas and branches live on this machine, so another host starts fresh.
+              const resume =
+                placed.host === null
+                  ? yield* recovery.resume(goal, worker.slot, worker.attempt)
+                  : ({ _tag: "Start", workspace: null, note: null } as const);
               if (resume._tag !== "Start") {
                 failed = true;
                 if (resume._tag === "Refused")
@@ -498,10 +525,15 @@ const make = Effect.gen(function* () {
               // A refusal is recorded before the lookup that may fail (see OWNER_REFUSED).
               if (isLost(launched.failure))
                 yield* store.settle(action.actionId, OWNER_REFUSED, nowIso);
-              // The thread may exist even though the call failed after creating it.
-              const created = yield* runtime
-                .findLaunched(current, goal, action.actionId, placed.host)
-                .pipe(Effect.result);
+              // The thread may exist even though the call failed after creating it. Another host is
+              // never searched then: only a launch flagged as possibly started stays unclear there.
+              const failure = launched.failure;
+              const created = yield* Effect.gen(function* () {
+                if (placed.host === null)
+                  return yield* runtime.findLaunched(current, goal, action.actionId, placed.host);
+                if (isUnconfirmed(failure)) return yield* failure;
+                return null;
+              }).pipe(Effect.result);
               if (created._tag === "Failure") {
                 // Unclear: the claim stays open and the next pass resolves it.
                 workers.set(worker.slot, {
@@ -719,7 +751,7 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              const step = yield* fallback.next({
+              const offered = yield* fallback.next({
                 chain: goal.spec.workers.fallbackChain,
                 selection: worker.modelSelection,
                 failure: action.failureClass,
@@ -727,6 +759,11 @@ const make = Effect.gen(function* () {
                 host: worker.host,
                 threadId: worker.threadId,
               });
+              // goat_thread_send cannot switch a remote thread's model, so the worker moves instead.
+              const step =
+                offered._tag === "SwitchInThread" && worker.host !== null
+                  ? ({ _tag: "Relaunch", selection: offered.selection, hop: offered.hop } as const)
+                  : offered;
               if (step._tag === "SwitchInThread" && action.runId !== null) {
                 const id = fallbackActionId(
                   goal,
@@ -787,7 +824,6 @@ const make = Effect.gen(function* () {
                 });
                 return;
               }
-              const nextId = launchActionId(goal, worker.slot, worker.attempt + 1);
               const selection = step._tag === "Relaunch" ? step.selection : worker.modelSelection;
               if (worker.host === null) {
                 // Attempts on this machine restart here: the next attempt's launch resumes from this
@@ -809,76 +845,16 @@ const make = Effect.gen(function* () {
                 );
                 return;
               }
-              // One reschedule per run: the claim names the run; the next attempt's launch id is the
-              // receiver's dedupe key.
-              const rescheduleId = rescheduleActionId(
-                goal,
-                worker.slot,
-                worker.attempt,
-                action.runId ?? action.reason,
-              );
-              if ((yield* claim(rescheduleId, "launch", worker, worker.host)) !== null) return;
-              const rescheduleAuthority = yield* authority.afterClaim(rescheduleId, "launch");
-              if (rescheduleAuthority === null) return;
-              const branch = branchFor(goal, worker.slot, worker.attempt + 1);
-              const moved = yield* rescheduler.reschedule({
-                ref: { host: worker.host, threadId: worker.threadId, watchId: worker.watchId },
-                owner,
-                attempt: worker.attempt,
-                reason: step._tag === "Relaunch" ? "fallback_relaunch" : action.reason,
-                modelSelection: selection,
-                workspace: {
-                  baseRef: goal.spec.workers.workspace.baseRef,
-                  branch,
-                  startFromOrigin: goal.spec.workers.workspace.startFromOrigin,
-                },
-                previousBranch: worker.branch,
-                replica: null,
-                prompt: renderPrompt(goal, { ...worker, attempt: worker.attempt + 1 }, branch),
-                runtimeMode: effectiveRuntimeMode(rescheduleAuthority, goal),
-                clientRequestId: nextId,
-              });
-              if (moved._tag === "Rescheduled") {
-                yield* store.settle(rescheduleId, "rescheduled", nowIso);
-                workers.set(worker.slot, {
-                  ...nextAttempt(goal, worker, "Rescheduled after " + action.reason + "."),
-                  host: moved.host,
-                  threadId: moved.threadId,
-                  branch: moved.branch,
-                  modelSelection: selection,
-                  state: "running",
-                });
-                note(
-                  "Normal",
-                  "Rescheduled",
-                  "Slot " +
-                    worker.slot +
-                    " moved to attempt " +
-                    (worker.attempt + 1) +
-                    " on " +
-                    (moved.host ?? "this machine") +
-                    ".",
-                  worker,
-                  rescheduleId,
-                );
-                return;
-              }
-              yield* store.settle(rescheduleId, "refused", nowIso);
-              workers.set(worker.slot, { ...handled, note: moved.message });
-              issues.push({
-                condition: "Degraded",
-                reason: "RescheduleRefused",
-                message: "Slot " + worker.slot + ": " + moved.message,
-              });
-              note(
-                "Warning",
-                "RescheduleRefused",
-                "Slot " + worker.slot + " (" + action.reason + "): " + moved.message,
+              return yield* moves.move({
                 worker,
-                rescheduleId,
-              );
-              return;
+                handled,
+                reason: step._tag === "Relaunch" ? "fallback_relaunch" : action.reason,
+                runId: action.runId,
+                selection,
+              });
             }
+            case "resolve_move":
+              return yield* moves.resolve(worker, action);
             case "interrupt": {
               if ((yield* claim(action.actionId, "interrupt", worker, worker.host)) !== null)
                 return;
