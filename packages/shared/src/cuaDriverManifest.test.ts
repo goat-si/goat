@@ -464,7 +464,6 @@ describe("request-time listing on standalone servers, failure paths (#1561)", ()
             hostBundleIds: [],
           }),
         ).rejects.toThrow();
-      await new Promise((resolve) => setImmediate(resolve));
       expect(uncaught).toEqual([]);
     },
   );
