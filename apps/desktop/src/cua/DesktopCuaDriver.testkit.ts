@@ -430,8 +430,8 @@ export const fixture = Effect.fn(function* (
             socketPath: descriptor.socketPath,
             pid: 123,
             generation: String(starts),
-            driverVersion: "0.34.1",
-            contractVersion: "1",
+            driverVersion: CUA_DRIVER_VERSION,
+            contractVersion: "0.8.0",
             mcpProtocolVersion: "1",
             mcp: {
               command: descriptor.command,
