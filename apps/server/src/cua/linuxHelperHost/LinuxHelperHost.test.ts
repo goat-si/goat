@@ -28,6 +28,7 @@ const hostWith = (
 ) =>
   Effect.gen(function* () {
     const session = yield* Ref.make(Option.none<DriverSession>());
+    const check = yield* Ref.make(Option.none<DriverSession>());
     const report = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
     const requests = yield* Queue.unbounded<FakeRequest>();
     const spawned: Array<{
@@ -39,6 +40,7 @@ const hostWith = (
     const deadlines: Array<() => void> = [];
     const host = yield* makeLinuxHelperHost({
       session: Ref.get(session),
+      check: { wanted: Ref.get(check).pipe(Effect.map(Option.isSome)), session: Ref.get(check) },
       spawn: (env) => {
         const helper = fakeHelper({
           ...options,
@@ -81,7 +83,7 @@ const hostWith = (
     const expire = () => {
       for (const task of deadlines.splice(0)) task();
     };
-    return { host, session, report, spawned, safety, nextRequest, expire };
+    return { host, session, check, report, spawned, safety, nextRequest, expire };
   });
 
 /** The helper's initial state for each window of a watch it took: none of them secret. */
@@ -605,6 +607,62 @@ describe("LinuxHelperHost (#1223)", () => {
         yield* TestClock.adjust(TICK_MS);
         yield* t.nextRequest("listWindows");
         assert.include(yield* Queue.take(t.safety), { type: "cuaPrivateMode", active: false });
+      }).pipe(Effect.scoped),
+  );
+});
+
+describe("LinuxHelperHost before the first turn (#1542)", () => {
+  it.effect(
+    "checks the session once with a helper of its own, stops it, and keeps what it proved",
+    () =>
+      Effect.gen(function* () {
+        const t = yield* hostWith([]);
+        yield* Ref.set(t.check, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(t.spawned, 1);
+        const helper = t.spawned[0]?.helper;
+        // Only readiness is asked: nothing is watched or listed without an agent.
+        assert.deepEqual(
+          helper?.requests.map((request) => request.method),
+          ["permissions"],
+        );
+        assert.isTrue(helper?.stopped());
+        assert.include(t.spawned[0]?.env ?? {}, {
+          DISPLAY: ":7",
+          GOAT_COMPUTER_USE_DRIVER: SESSION.command,
+        });
+        assert.notProperty(t.spawned[0]?.env ?? {}, "GOAT_AUTH_TOKEN");
+        const report = yield* t.host.readiness;
+        assert.deepInclude(Option.getOrUndefined(report), {
+          type: "cuaReadiness",
+          readiness: READY,
+          signals: CAPABILITIES.signals,
+        });
+        // The same session is not checked again right away.
+        yield* TestClock.adjust(TICK_MS * 3);
+        assert.lengthOf(t.spawned, 1);
+        assert.deepEqual(yield* t.host.readiness, report);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a helper bound to another process proves nothing, and turning off clears a check",
+    () =>
+      Effect.gen(function* () {
+        const other = yield* hostWith([], { bindingPid: 9999 });
+        yield* Ref.set(other.check, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(other.spawned, 1);
+        assert.isTrue(other.spawned[0]?.helper.stopped());
+        assert.deepEqual(yield* other.host.readiness, Option.none());
+
+        const t = yield* hostWith([]);
+        yield* Ref.set(t.check, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.isTrue(Option.isSome(yield* t.host.readiness));
+        yield* Ref.set(t.check, Option.none());
+        yield* TestClock.adjust(TICK_MS);
+        assert.deepEqual(yield* t.host.readiness, Option.none());
       }).pipe(Effect.scoped),
   );
 });
