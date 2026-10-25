@@ -110,6 +110,48 @@ it.each(ComputerUseReadiness.fields.blockers.value.literals)(
   },
 );
 
+// #1538: a passing check stops its own helper, so the driver is idle until the next agent turn.
+// Every desktop platform says that the same neutral way; only a real failure needs attention.
+describe("tools after a passing check, on every platform", () => {
+  it.each(platforms)(
+    "%s: an idle driver starts with the next turn, a failure needs attention",
+    (platform) => {
+      const idle = computerUseReadinessSteps({ readiness: ready, platform, tools: "unavailable" });
+      expect(idle.steps[3]).toMatchObject({
+        state: "pending",
+        detail: ["Starts with the next agent turn. GOAT starts the driver when an agent needs it."],
+      });
+      expect(idle.ready).toBe(false);
+      expect(idle.startsWithNextTurn).toBe(true);
+
+      const failed = computerUseReadinessSteps({
+        readiness: ready,
+        platform,
+        tools: "unavailable",
+        failure: "The helper exited during start.",
+      });
+      expect(failed.steps[3]?.state).toBe("blocked");
+      expect(failed.steps[3]?.detail.join(" ")).toContain("The helper exited during start.");
+      expect(failed.startsWithNextTurn).toBe(false);
+
+      const running = computerUseReadinessSteps({ readiness: ready, platform, tools: "available" });
+      expect([running.steps[3]?.state, running.ready, running.startsWithNextTurn]).toEqual([
+        "ok",
+        true,
+        false,
+      ]);
+      // An unproven setup is not waiting for a turn.
+      expect(
+        computerUseReadinessSteps({
+          readiness: { ...ready, capture: "blank" },
+          platform,
+          tools: "unavailable",
+        }).startsWithNextTurn,
+      ).toBe(false);
+    },
+  );
+});
+
 it("keeps missing helper reports and older server tools unknown instead of inferring readiness", () => {
   const result = view(undefined);
   expect(result.report).toBe("notReported");
