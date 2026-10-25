@@ -2119,6 +2119,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             revokeProviderSession: () => Effect.void,
             revokeThread: () => Effect.void,
             revokeAll: Effect.void,
+            subscribeChanges: Effect.die("unused"),
             currentMemoryPolicy: () =>
               Effect.sync(() =>
                 valid ? { grant: "read_write" as const, policyEpoch: 1 } : undefined,
@@ -2299,6 +2300,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             revokeProviderSession: () => Effect.void,
             revokeThread: () => Effect.void,
             revokeAll: Effect.void,
+            subscribeChanges: Effect.die("unused"),
             currentMemoryPolicy: () => Effect.succeed(undefined),
           }),
         );
@@ -2589,6 +2591,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               revokeProviderSession: () => Effect.void,
               revokeThread: () => Effect.void,
               revokeAll: Effect.void,
+              subscribeChanges: Effect.die("unused"),
               currentMemoryPolicy: () => Effect.succeed({ grant: "read", policyEpoch: 1 }),
             }),
           );

@@ -12,6 +12,8 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -107,6 +109,7 @@ export interface McpSessionRegistryShape {
     options?: { readonly exceptProviderSessionId?: string },
   ) => Effect.Effect<void>;
   readonly revokeAll: Effect.Effect<void>;
+  readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
 }
 
 export class McpSessionRegistry extends Context.Service<
@@ -252,6 +255,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
   const environmentId = yield* environment.getEnvironmentId;
   const httpServer = yield* HttpServer.HttpServer;
   const state = yield* SynchronizedRef.make(registryState(new Map(), new Map()));
+  const changes = yield* PubSub.sliding<void>(1);
   const currentTimeMillis = options.now ? Effect.sync(options.now) : Clock.currentTimeMillis;
   const livenessWindowMs = options.livenessWindowMs ?? DEFAULT_LIVENESS_WINDOW_MS;
   const runTag = yield* crypto.randomBytes(6).pipe(Effect.map(tokenFromBytes), Effect.orDie);
@@ -588,33 +592,36 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
     },
   );
 
-  const revokeWhere = (predicate: (record: CredentialRecord) => boolean) =>
-    Effect.flatMap(currentTimeMillis, (timestamp) =>
-      SynchronizedRef.update(state, (current) => {
-        const revoked = [
-          ...Array.from(current.records).filter(([, record]) => predicate(record)),
-          // An idle-expired record must not be renewable once its session ends.
-          ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
-            tombstone.record && predicate(tombstone.record)
-              ? [[tokenHash, tombstone.record] as const]
-              : [],
-          ),
-        ];
-        if (revoked.length === 0) return current;
-        const records = new Map(current.records);
-        for (const [tokenHash] of revoked) records.delete(tokenHash);
-        return registryState(
-          records,
-          withTombstones(
-            current.tombstones,
-            revoked.map(([tokenHash, record]) => [
-              tokenHash,
-              tombstoneOf(record, "revoked", timestamp),
-            ]),
-          ),
-        );
-      }),
-    );
+  const revokeWhere = Effect.fn("McpSessionRegistry.revokeWhere")(function* (
+    predicate: (record: CredentialRecord) => boolean,
+  ) {
+    const timestamp = yield* currentTimeMillis;
+    yield* SynchronizedRef.update(state, (current) => {
+      const revoked = [
+        ...Array.from(current.records).filter(([, record]) => predicate(record)),
+        // An idle-expired record must not be renewable once its session ends.
+        ...Array.from(current.tombstones).flatMap(([tokenHash, tombstone]) =>
+          tombstone.record && predicate(tombstone.record)
+            ? [[tokenHash, tombstone.record] as const]
+            : [],
+        ),
+      ];
+      if (revoked.length === 0) return current;
+      const records = new Map(current.records);
+      for (const [tokenHash] of revoked) records.delete(tokenHash);
+      return registryState(
+        records,
+        withTombstones(
+          current.tombstones,
+          revoked.map(([tokenHash, record]) => [
+            tokenHash,
+            tombstoneOf(record, "revoked", timestamp),
+          ]),
+        ),
+      );
+    });
+    yield* PubSub.publish(changes, undefined);
+  }, Effect.uninterruptible);
 
   return McpSessionRegistry.of({
     issue,
@@ -649,6 +656,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
       );
     }),
     revokeAll: revokeWhere(() => true),
+    subscribeChanges: PubSub.subscribe(changes),
   });
 });
 

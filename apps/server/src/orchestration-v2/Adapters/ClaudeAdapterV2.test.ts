@@ -149,7 +149,6 @@ beforeEach(() => {
     sources: [],
   });
 });
-
 const layerAdapterTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
   IdAllocator.layer,
@@ -13860,6 +13859,7 @@ const liveClaudeQueryFixture = Effect.fn("claudeTest.liveQueryFixture")(function
       revokeProviderSession: () => Effect.void,
       revokeThread: () => Effect.void,
       revokeAll: Effect.void,
+      subscribeChanges: Effect.die("unused"),
       currentMemoryPolicy,
     }),
   );

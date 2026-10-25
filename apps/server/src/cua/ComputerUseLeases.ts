@@ -47,10 +47,11 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { markActed, nextTurn } from "./ComputerUseControl.ts";
+import { markActed, nextTurn, rememberScope } from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
+  ComputerUseControlSnapshot,
   Interruptions,
 } from "./ComputerUseControl.ts";
 import { withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
@@ -171,6 +172,10 @@ export class ComputerUseLeases extends Context.Service<
     readonly serializeAdmission: <A, E, R>(
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
+    /** Reads the current record without minting or reviving a control. */
+    readonly currentControl: (
+      threadId: ThreadId,
+    ) => Effect.Effect<Option.Option<ComputerUseControlSnapshot>>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
       threadId: ThreadId,
@@ -469,14 +474,6 @@ const make = Effect.gen(function* () {
     interruptions = { count: interruptions.count + 1, last };
   };
 
-  /** Remembers what an active control held, unless a newer control replaced it meanwhile. */
-  const scoped = (record: ControlRecord, apps: ReadonlyArray<string> | undefined) => {
-    const current = controls.get(record.threadId);
-    if (current?.controlId === record.controlId)
-      controls.set(record.threadId, { ...current, scope: { apps } });
-    return apps;
-  };
-
   const controlState = Effect.fn("ComputerUseLeases.controlState")(function* (
     threadId: ThreadId,
     controlId: string,
@@ -489,7 +486,7 @@ const make = Effect.gen(function* () {
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
     if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {
-      if (end(threadId, "revoked")) yield* changed;
+      if (end(threadId, "revoked", controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     const grants = yield* live(undefined, true);
@@ -497,7 +494,7 @@ const make = Effect.gen(function* () {
     // An approval that checked holder() before this claim can commit after it. A person's
     // approval wins: the screen is the approved thread's, and Handoffs signals on commit.
     if (record.everyApp === "unattended" && others.length > 0) {
-      if (end(threadId, "revoked")) yield* changed;
+      if (end(threadId, "revoked", controlId)) yield* changed;
       return { _tag: "ended", reason: "revoked" };
     }
     // A secret on screen outranks every other pause and lifts by itself when it loses focus.
@@ -519,7 +516,7 @@ const make = Effect.gen(function* () {
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
-        apps: scoped(record, apps),
+        apps: rememberScope(controls, record, apps),
         wakeAt: Math.min(
           wakeAt,
           focusWake,
@@ -551,9 +548,14 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const end = (threadId: ThreadId, reason: ComputerUseControlEnd) => {
-    foreground.revokeThread(threadId);
+  const end = (threadId: ThreadId, reason: ComputerUseControlEnd, expectedId?: string) => {
     const record = controls.get(threadId);
+    if (
+      expectedId !== undefined &&
+      (record?.controlId !== expectedId || record.ended !== undefined)
+    )
+      return false;
+    foreground.revokeThread(threadId);
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
@@ -702,7 +704,7 @@ const make = Effect.gen(function* () {
               (record.handoffId === undefined || grant.handoffId === record.handoffId),
           );
           for (const grant of held) expiries.push(DateTime.toEpochMillis(grant.expiresAt));
-          for (const app of scoped(record, appsOf(held)) ?? []) approved.add(app);
+          for (const app of rememberScope(controls, record, appsOf(held)) ?? []) approved.add(app);
         }
         const apps = Option.isSome(listed) ? [...approved].sort() : deliveredApps;
         const appsChanged =
@@ -772,6 +774,9 @@ const make = Effect.gen(function* () {
       });
     }),
     serializeAdmission: (effect) => admission.withPermits(1)(effect),
+    currentControl: Effect.fn("ComputerUseLeases.currentControl")((threadId) =>
+      Effect.sync(() => Option.fromNullishOr(controls.get(threadId))),
+    ),
     controlState,
     ...makeForegroundAuthority({
       foreground,
