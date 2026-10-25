@@ -1,3 +1,8 @@
+import {
+  probeAgentRoute,
+  type AgentRouteCommand,
+  type AgentRouteOutcome,
+} from "./agentRouteProbe.ts";
 import type { ComputerUseReadiness } from "@goat/contracts";
 import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
 import { listCuaDriverApplications, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
@@ -105,6 +110,8 @@ export interface DesktopCuaDriverDependencies {
    * off rather than run under another principal. note: something to log.
    */
   readonly helperBundlePath: typeof resolveHelperBundle;
+  /** Starts the helper as agents do, from GOAT's own Node runtime, and runs its MCP handshake. */
+  readonly agentRoute: (mcp: AgentRouteCommand) => Promise<AgentRouteOutcome>;
   readonly helperHost: (
     options: Omit<HelperHostOptions, "spawn" | "readMetadata"> & {
       readonly platform: NodeJS.Platform;
@@ -180,6 +187,7 @@ export const dependencies: DesktopCuaDriverDependencies = {
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
   helperBundlePath: resolveHelperBundle,
+  agentRoute: probeAgentRoute,
   helperHost: ({ platform, verify, ...options }) =>
     platform === "darwin" && verify
       ? makeMcpHelperHost(options)

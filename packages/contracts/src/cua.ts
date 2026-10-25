@@ -384,6 +384,8 @@ export type HostComputerUse = typeof HostComputerUse.Type;
 export const CuaVerificationStepId = Schema.Literals([
   "grants",
   "restart",
+  /** The helper answered an MCP handshake started from the parent agents give it. */
+  "agentRoute",
   "permissions",
   "identity",
   "capture",

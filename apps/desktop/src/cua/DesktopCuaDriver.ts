@@ -44,6 +44,7 @@ import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
 import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
+import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   describeDegraded,
   failedCall,
@@ -104,7 +105,7 @@ const settle = (promise: Promise<unknown>) =>
     () => undefined,
   );
 
-const VERIFICATION_STEPS = 6;
+const VERIFICATION_STEPS = 7;
 
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -557,6 +558,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return done();
     }
     record("restart", undefined);
+    // Agents start the macOS helper from GOAT's own Node runtime, not from this process; only a
+    // handshake under that parent proves its parent check admits them (#1548).
+    const agentRoute =
+      selected.kind === "helper" && environment.platform === "darwin"
+        ? agentRouteFailure(
+            yield* Effect.promise(() => native.agentRoute(connection.value.mcp)),
+            COMPUTER_USE_HELPER_NAME,
+          )
+        : undefined;
+    if (!record("agentRoute", agentRoute)) return done();
 
     const helperMcp = selected.kind === "helper" && environment.platform === "darwin";
     const client = yield* Effect.acquireRelease(
@@ -703,7 +714,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       const early = result.steps.find(
         (step) =>
           !step.ok &&
-          (step.id === "restart" || step.id === "permissions" || step.id === "identity"),
+          (step.id === "restart" ||
+            step.id === "agentRoute" ||
+            step.id === "permissions" ||
+            step.id === "identity"),
       );
       return early ? noteChecked((state) => withoutProof(state, early.detail)) : Effect.void;
     }),

@@ -27,6 +27,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
 import type { HelperEvent } from "./ComputerUseHelper.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
+import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
 
 // The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
 export const privacyEnvironment = [
@@ -115,6 +116,8 @@ export const fixture = Effect.fn(function* (
     helperAppsFail?: boolean;
     /** The app update puts a new helper generation beside the one already running. */
     updatedHelper?: boolean;
+    /** How the helper answers when started the way agents start it (macOS). */
+    agentRoute?: AgentRouteOutcome;
     publisher?: DesktopTelemetryPublisher["Service"];
     appListing?: () => Promise<ReadonlyArray<CuaDriverListedApp>>;
   } = {},
@@ -171,6 +174,8 @@ export const fixture = Effect.fn(function* (
   let clientsOpen = 0;
   let socketConnections = 0;
   const helperProbes: Array<{ bundleId: string; prompt: boolean }> = [];
+  /** The helper executables started the way agents start them. */
+  const agentRouteProbes: string[] = [];
   /** How each manifest got its app list: through the helper, or by running the driver here. */
   const manifestListings: Array<{ scope: string; through: "helper" | "driver"; apps: number }> = [];
   const helperAppListings: string[] = [];
@@ -221,6 +226,10 @@ export const fixture = Effect.fn(function* (
         ...(helperAnswer?.detail === undefined ? {} : { detail: helperAnswer.detail }),
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
+    },
+    agentRoute: async (mcp) => {
+      agentRouteProbes.push(mcp.command);
+      return options.agentRoute ?? { kind: "answered" };
     },
     helperBundlePath: async ({ busy }) =>
       options.helper === "unusable" || helperLost === "unusable"
@@ -588,6 +597,7 @@ export const fixture = Effect.fn(function* (
     constructors,
     launches,
     helperProbes,
+    agentRouteProbes,
     manifestListings,
     helperAppListings,
     helperLaunches,
@@ -609,6 +619,7 @@ export const fixture = Effect.fn(function* (
 export const VERIFICATION_IDS = [
   "grants",
   "restart",
+  "agentRoute",
   "permissions",
   "identity",
   "capture",
