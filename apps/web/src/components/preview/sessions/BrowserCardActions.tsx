@@ -54,7 +54,9 @@ function HeaderButton(props: {
  */
 export function BrowserCardActions(props: {
   readonly session: PreviewSession;
-  /** Set when this desktop draws the tab: its webview id and state. */
+  /** This desktop draws the tab in a webview, so it pops out natively, never as a stream. */
+  readonly drawnHere: boolean;
+  /** The drawn tab's webview id and state; null until this desktop hosts it. */
   readonly hosted: {
     readonly runtimeTabId: string;
     readonly overlay: DesktopPreviewOverlay | null;
@@ -77,7 +79,9 @@ export function BrowserCardActions(props: {
     tabId !== null &&
     threadId !== undefined &&
     session.status !== "stopped" &&
-    (hosted ? previewBridge !== null : streamPoppedOut || supportsServerPictureInPicture());
+    (props.drawnHere
+      ? hosted !== null && previewBridge !== null
+      : streamPoppedOut || supportsServerPictureInPicture());
 
   const togglePopOut = async () => {
     if (tabId === null || threadId === undefined) return;

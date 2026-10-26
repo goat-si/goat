@@ -222,7 +222,9 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const stackDocument = useContext(StackDocumentContext);
   // Popped out over other apps, the card lives in another window, where no webview can be shown.
   const floating = stackDocument !== null && stackDocument !== document;
-  const hosted = browser && props.drawnHere && !floating ? (props.hosted ?? null) : null;
+  // The tab's identity stays native wherever the card is; only the picture needs the main window.
+  const nativeTab = browser && props.drawnHere ? (props.hosted ?? null) : null;
+  const hosted = floating ? null : nativeTab;
 
   useEffect(() => {
     if (!revealed) return;
@@ -439,7 +441,8 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
             {browser ? (
               <BrowserCardActions
                 session={session}
-                hosted={hosted}
+                drawnHere={props.drawnHere === true}
+                hosted={nativeTab}
                 canvas={() => surface.current?.canvas() ?? null}
                 onOpenInPanel={
                   props.onOpenInPanel

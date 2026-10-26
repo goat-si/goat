@@ -121,6 +121,12 @@ export function NativeBrowserPicture(props: {
             <div
               data-agent-card-overlay
               className="group/card pointer-events-none fixed overflow-hidden"
+              // The layer sits outside the stack, so the wheel over its controls scrolls the stack.
+              onWheel={(event) =>
+                element
+                  ?.closest(`[${AGENT_CARDS_SCROLL_ATTRIBUTE}]`)
+                  ?.scrollBy({ left: event.deltaX, top: event.deltaY })
+              }
               style={{
                 left: rect.x,
                 top: rect.y,

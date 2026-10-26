@@ -44,6 +44,12 @@ vi.mock("../../../browser/serverPictureInPicture", () => ({
   openServerPictureInPicture: async () => undefined,
   closeServerPictureInPicture: () => undefined,
 }));
+// The desktop bridge that pops a drawn tab's webview into its own window.
+const pip = vi.hoisted(() => ({
+  open: vi.fn(async () => undefined),
+  close: vi.fn(async () => undefined),
+}));
+vi.mock("../previewBridge", () => ({ previewBridge: { pictureInPicture: pip } }));
 vi.mock("../../../state/previewStream", () => ({
   usePreviewStreamAccess: () => state.access,
   refreshPreviewStreamAccess: () => undefined,
@@ -59,6 +65,7 @@ import {
   useBrowserSurfaceStore,
 } from "../../../browser/browserSurfaceStore";
 import { AgentScreenCardView } from "./AgentScreenCard";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 const environmentId = "env-surface" as EnvironmentId;
 const tab: PreviewSession = {
@@ -332,4 +339,60 @@ it("a drawn tab the desktop does not host yet shows a placeholder and opens no s
   expect(screen.container.querySelector("canvas")).toBeNull();
   expect(screen.container.querySelector("[data-browser-surface-slot]")).toBeNull();
   expect(screen.container.querySelector('[aria-label="Take over"]')).toBeNull();
+});
+
+it("a drawn tab popped out natively stays native when the cards float out of GOAT", async () => {
+  setup();
+  pip.open.mockClear();
+  pip.close.mockClear();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  const poppedOut = {
+    runtimeTabId: RUNTIME_TAB,
+    overlay: { pictureInPicture: true, hasWebContents: true } as never,
+  };
+  const floatingDocument = document.implementation.createHTMLDocument("floating");
+  await using screen = await render(
+    <StackDocumentContext.Provider value={floatingDocument}>
+      {drawnCard(poppedOut)}
+    </StackDocumentContext.Provider>,
+  );
+  // No webview can show in the floating window; the pop-out still belongs to the native tab.
+  expect(screen.container.querySelector("[data-browser-surface-slot]")).toBeNull();
+  const close = screen.getByRole("button", { name: "Close separate window" });
+  await expect.element(close).toHaveAttribute("aria-pressed", "true");
+  await close.click({ force: true });
+  expect(pip.close).toHaveBeenCalledWith(RUNTIME_TAB);
+  expect(pip.open).not.toHaveBeenCalled();
+});
+
+it("the wheel over a drawn card's picture scrolls the stack, not nothing", async () => {
+  setup();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  await page.viewport(1400, 900);
+  await using screen = await render(
+    <div data-agent-cards-scroll="" style={{ height: 300, overflowY: "auto" }}>
+      <AgentScreenCardView
+        session={tab}
+        size="card"
+        width={240}
+        threadTitle="Thread"
+        live
+        canControl
+        canOperateBrowser
+        drawnHere
+        hosted={hosted}
+        focused={false}
+        focusRequest={0}
+        onExpand={() => undefined}
+        onControl={() => undefined}
+        onDismiss={() => undefined}
+      />
+      <div style={{ height: 1200 }} />
+    </div>,
+  );
+  await vi.waitFor(() => expect(overlay()).not.toBeNull());
+  const list = screen.container.querySelector<HTMLElement>("[data-agent-cards-scroll]")!;
+  const opener = overlay()!.querySelector<HTMLElement>('button[aria-label="Open GOAT (Dev)"]')!;
+  opener.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
+  await vi.waitFor(() => expect(list.scrollTop).toBeGreaterThan(0));
 });

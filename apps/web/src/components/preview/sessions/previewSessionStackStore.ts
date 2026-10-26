@@ -25,6 +25,11 @@ export const matchesFocus = (session: PreviewSession, focus: PreviewSessionStack
 export const sessionKey = (session: Pick<PreviewSession, "environmentId" | "id">) =>
   `${session.environmentId}|${session.id}`;
 
+/** What a closed card's session is, so a later request to show it can find it. */
+interface HiddenSession {
+  readonly session: PreviewSession;
+}
+
 /** sessionStorage belongs to one tab or Electron window and survives its reloads. */
 const HIDDEN_KEY = "goat:agent-screen-cards:hidden";
 
@@ -55,10 +60,10 @@ interface PreviewSessionStackState {
   /** Stopped sessions whose card the person closed, by sessionKey. */
   readonly dismissed: ReadonlySet<string>;
   /**
-   * Live sessions whose card the person closed while the agent works on, by sessionKey. Showing
-   * the cards again from the header brings them back.
+   * Sessions whose card the person closed while the agent worked on, by sessionKey. Showing the
+   * cards again from the header brings them back, and so does a request to show that session.
    */
-  readonly hiddenLive: ReadonlySet<string>;
+  readonly hiddenLive: ReadonlyMap<string, HiddenSession>;
   /** The session shown at the large size, until it is shrunk, closed or gone. */
   readonly expanded: (PreviewSessionStackFocus & { readonly environmentId?: EnvironmentId }) | null;
   readonly focus: PreviewSessionStackFocus | null;
@@ -76,7 +81,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
   narrow: false,
   revealedWhileNarrow: false,
   dismissed: new Set(),
-  hiddenLive: new Set(),
+  hiddenLive: new Map(),
   expanded: null,
   focus: null,
   focusRequest: 0,
@@ -88,7 +93,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     set({
       hidden: !shown,
       revealedWhileNarrow: shown && narrow,
-      ...(shown ? { hiddenLive: new Set<string>() } : {}),
+      ...(shown ? { hiddenLive: new Map<string, HiddenSession>() } : {}),
     });
   },
   setNarrow: (narrow) => {
@@ -98,7 +103,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     set((state) => ({
       ...(session.status === "stopped"
         ? { dismissed: new Set(state.dismissed).add(sessionKey(session)) }
-        : { hiddenLive: new Set(state.hiddenLive).add(sessionKey(session)) }),
+        : { hiddenLive: new Map(state.hiddenLive).set(sessionKey(session), { session }) }),
       expanded: state.expanded?.sessionId === session.id ? null : state.expanded,
     })),
   expand: (session) =>
@@ -110,6 +115,25 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
 
 export const selectAgentCardsShown = (state: PreviewSessionStackState) =>
   !state.hidden && (!state.narrow || state.revealedWhileNarrow);
+
+/** A person's request to show a session brings back its card if they had closed it. */
+function withoutRevealed(
+  hidden: ReadonlyMap<string, HiddenSession>,
+  input: { readonly environmentId?: EnvironmentId; readonly focus?: PreviewSessionStackFocus },
+): ReadonlyMap<string, HiddenSession> {
+  const { focus, environmentId } = input;
+  if (focus === undefined) return hidden;
+  const kept = new Map(
+    [...hidden].filter(
+      ([, { session }]) =>
+        !(
+          (environmentId === undefined || session.environmentId === environmentId) &&
+          matchesFocus(session, focus)
+        ),
+    ),
+  );
+  return kept.size === hidden.size ? hidden : kept;
+}
 
 /**
  * Brings one session's card into view, for example when an agent opens a browser tab, and can
@@ -125,6 +149,9 @@ export function openPreviewSessionStack(input?: {
   if (!input?.automatic) writeHidden(false);
   usePreviewSessionStack.setState((state) => ({
     ...(input?.automatic ? {} : { hidden: false, revealedWhileNarrow: state.narrow }),
+    ...(input?.focus && !input.automatic
+      ? { hiddenLive: withoutRevealed(state.hiddenLive, input) }
+      : {}),
     focus: input?.focus ?? null,
     focusRequest: state.focusRequest + 1,
     ...(input?.expand && input.focus

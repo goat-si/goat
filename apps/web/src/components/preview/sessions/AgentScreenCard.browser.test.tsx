@@ -35,13 +35,22 @@ const state = vi.hoisted(() => ({
       ) => void),
   surfaceCalls: [] as Array<string>,
   routeThread: null as string | null,
+  sessionListeners: new Set<() => void>(),
 }));
 
 vi.mock("../../../state/previewSessions", async () => {
   const { Atom } = await import("effect/reactivity");
   const { useSyncExternalStore } = await import("react");
   return {
-    usePreviewSessions: () => state.sessions,
+    // A subscription, like the real sessions atom: a new list re-renders its readers.
+    usePreviewSessions: () =>
+      useSyncExternalStore(
+        (listener) => {
+          state.sessionListeners.add(listener);
+          return () => state.sessionListeners.delete(listener);
+        },
+        () => state.sessions,
+      ),
     // A subscription, like the real frames atom: a new event re-renders its reader.
     useDesktopSessionFrame: (_environmentId: string, sessionId: string | null) => {
       state.frameRequests.push(sessionId);
@@ -117,7 +126,7 @@ import { AgentScreenCardView } from "./AgentScreenCard";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
-import { usePreviewSessionStack } from "./previewSessionStackStore";
+import { openPreviewSessionStack, usePreviewSessionStack } from "./previewSessionStackStore";
 import { usePreviewMiniPlayerStore } from "../../../previewMiniPlayerStore";
 
 const environmentId = "env-cards" as EnvironmentId;
@@ -194,7 +203,7 @@ function setup(sessions: ReadonlyArray<PreviewSession>) {
     narrow: false,
     revealedWhileNarrow: false,
     dismissed: new Set(),
-    hiddenLive: new Set(),
+    hiddenLive: new Map(),
     expanded: null,
     focus: null,
     focusRequest: 0,
@@ -807,7 +816,44 @@ it("keeps the list button to bring back the only card the person closed", async 
   await userEvent.hover(tab);
   await userEvent.click(tab.getByRole("button", { name: "Close" }));
   await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  // Its agent stops while the card is put away: the list button still brings it back.
+  state.sessions = [
+    browserTab({
+      status: "stopped",
+      capabilities: { controls: ["stopAll"], frames: true, privateMode: true, humanInput: true },
+    }),
+  ];
+  await act(() => {
+    for (const listener of state.sessionListeners) listener();
+  });
   await userEvent.click(screen.getByRole("button", { name: "Agents on screen" }));
+  await expect.element(screen.getByRole("article")).toBeVisible();
+});
+
+it("brings back a closed card when a person asks to show its tab", async () => {
+  setup([browserTab()]);
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const tab = screen.getByRole("article");
+  await userEvent.hover(tab);
+  await userEvent.click(tab.getByRole("button", { name: "Close" }));
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  // The agent showing its tab again on its own leaves the person's choice alone.
+  act(() =>
+    openPreviewSessionStack({
+      environmentId,
+      focus: { kind: "browser", threadId: "thread-1", tabId: "tab-1" },
+      automatic: true,
+    }),
+  );
+  await expect.element(screen.getByRole("article")).not.toBeInTheDocument();
+  act(() =>
+    openPreviewSessionStack({
+      environmentId,
+      focus: { kind: "browser", threadId: "thread-1", tabId: "tab-1" },
+    }),
+  );
   await expect.element(screen.getByRole("article")).toBeVisible();
 });
 

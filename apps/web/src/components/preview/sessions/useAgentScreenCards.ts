@@ -273,12 +273,10 @@ export function useAgentScreenSessions(
   );
 }
 
-/** Live sessions on the host whose card the person closed; the header can bring them back. */
+/** Sessions still listed on the host whose card the person closed; the header brings them back. */
 export function useHiddenLiveAgentSessions(environmentId: EnvironmentId | null) {
   const hiddenLive = usePreviewSessionStack((state) => state.hiddenLive);
-  return usePreviewSessions(environmentId).filter(
-    (session) => session.status !== "stopped" && hiddenLive.has(sessionKey(session)),
-  );
+  return usePreviewSessions(environmentId).filter((session) => hiddenLive.has(sessionKey(session)));
 }
 
 /**
