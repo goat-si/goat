@@ -1,3 +1,4 @@
+import { LEGACY_PACKAGED_RUNTIME_NAME } from "@goat/contracts/legacyT3Names";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -218,6 +219,7 @@ export const makeWith = (
   openStore: typeof platformSafeStorageKeyStore,
   platform: NodeJS.Platform,
   initialRuntimeName: string,
+  isPackaged = false,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -231,7 +233,12 @@ export const makeWith = (
       }) {
         const markerPath = path.join(input.userDataPath, MARKER_FILE_NAME);
         if (yield* fs.exists(markerPath).pipe(Effect.orElseSucceed(() => false))) return;
-        const legacyRuntimeNames = [initialRuntimeName, input.legacyRuntimeName];
+        const legacyRuntimeNames = [
+          initialRuntimeName,
+          // Packaged builds started under the pre-rename package name until it became `goat`.
+          ...(isPackaged ? [LEGACY_PACKAGED_RUNTIME_NAME] : []),
+          input.legacyRuntimeName,
+        ];
         const result = yield* Effect.tryPromise({
           try: async () => {
             const store = await openStore(platform);
@@ -279,6 +286,7 @@ export const layer = (input: { readonly initialRuntimeName: string }) =>
         (yield* bypassesOsKeyStore(environment)) ? async () => null : platformSafeStorageKeyStore,
         environment.platform,
         input.initialRuntimeName,
+        environment.isPackaged,
       );
     }),
   );

@@ -22,11 +22,12 @@
   <replaces>
     <id>com.t3tools.t3code</id>
   </replaces>
-  <!-- The desktop entry, icon and binary follow the Electron executable name (#110). -->
+  <!-- The desktop entry keeps its pre-rename name (ADR-0014); the icon and binary follow the
+       Electron executable name. -->
   <launchable type="desktop-id">t3code.desktop</launchable>
-  <icon type="stock">t3code</icon>
+  <icon type="stock">goat-desktop</icon>
   <provides>
-    <binary>t3code</binary>
+    <binary>goat-desktop</binary>
   </provides>
   <categories>
     <category>Development</category>

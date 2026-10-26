@@ -2293,6 +2293,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         },
       ]);
       assert.deepStrictEqual(linux.toolsets, { appimage: "1.0.3" });
+      const linuxConfig = linux.linux as Record<string, unknown>;
+      assert.strictEqual(linuxConfig.executableName, "goat-desktop");
+      assert.strictEqual(linuxConfig.syncDesktopName, true);
+      assert.match(String(linux.afterPack), /link-legacy-linux-executable\.ts$/);
+      const fpm = (linux.deb as { fpm: string[] }).fpm;
+      // electron-builder appends its positional file mappings after these, so options lead.
+      assert.deepStrictEqual(fpm.slice(0, 6), [
+        "--replaces",
+        "t3code",
+        "--conflicts",
+        "t3code",
+        "--provides",
+        "t3code",
+      ]);
+      assert.match(fpm.at(-1) ?? "", /=\/usr\/share\/doc\/goat\/copyright$/);
       assert.notProperty(mac, "toolsets");
       assert.notProperty(win, "toolsets");
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
