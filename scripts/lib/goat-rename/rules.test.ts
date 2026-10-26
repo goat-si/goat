@@ -58,9 +58,8 @@ describe("env names", () => {
     );
   });
 
-  it("keeps hosted web routing keys, runner shell names and unrelated words", () => {
-    const kept =
-      "T3CODE_WEB_ROUTER_URL VITE_T3CODE_WEB_LATEST_DOMAIN T3_ARCHIVE_VERSION T3_LOCK uint32_t";
+  it("keeps runner shell names and unrelated words", () => {
+    const kept = "T3_ARCHIVE_VERSION T3_LOCK uint32_t";
     expect(rename(kept)).toBe(kept);
     expect(rename("T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY")).toBe(
       "GOAT_RELAY_URL VITE_GOAT_RELAY_URL GOAT_CLERK_PUBLISHABLE_KEY",
@@ -420,7 +419,7 @@ describe("repository hygiene on an upstream checkout", () => {
       ".agents/skills/test-goat-mobile/scripts/pair-client.sh",
     );
     expect(applyPathRules("t3.json", PATH_RULES)).toBe("goat.json");
-    for (const path of ["apps/marketing/src/pages/schema/t3.json.ts", "apps/web/t3.json"]) {
+    for (const path of ["apps/marketing/src/pages/t3.json.ts", "apps/web/t3.json"]) {
       expect(applyPathRules(path, PATH_RULES)).toBe(path);
     }
   });
@@ -460,7 +459,7 @@ const keptVisibleCopy = [
   ],
   [
     "apps/server/scripts/acp-mock-agent.ts",
-    '              Content: { url: "https://t3.codes", content: "T3 Code page" },',
+    '              Content: { url: "https://exa.test", content: "T3 Code page" },',
   ],
   [
     "apps/server/scripts/acp-mock-agent.ts",

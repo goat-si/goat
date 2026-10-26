@@ -23,11 +23,10 @@ describe("legacy env names", () => {
     expect(legacyEnvName("PATH")).toBeUndefined();
   });
 
-  it("aliases relay keys and leaves the hosted web routing keys alone", () => {
+  it("aliases relay keys", () => {
     expect(goatEnvName("T3CODE_RELAY_URL")).toBe("GOAT_RELAY_URL");
     expect(goatEnvName("VITE_T3CODE_RELAY_URL")).toBe("VITE_GOAT_RELAY_URL");
     expect(goatEnvName("T3CODE_CLERK_PUBLISHABLE_KEY")).toBe("GOAT_CLERK_PUBLISHABLE_KEY");
-    expect(goatEnvName("T3CODE_WEB_ROUTER_URL")).toBeUndefined();
   });
 });
 
@@ -60,15 +59,10 @@ describe("normalizeLegacyEnv", () => {
   it("moves legacy values to GOAT names so deleting the GOAT name unsets the variable", () => {
     const env: Record<string, string | undefined> = {
       T3CODE_HOME: "/old",
-      T3CODE_WEB_ROUTER_URL: "https://router",
       PATH: "/bin",
     };
     normalizeLegacyEnv(env);
-    expect(env).toEqual({
-      GOAT_HOME: "/old",
-      T3CODE_WEB_ROUTER_URL: "https://router",
-      PATH: "/bin",
-    });
+    expect(env).toEqual({ GOAT_HOME: "/old", PATH: "/bin" });
     delete env.GOAT_HOME;
     expect(withLegacyEnvAliases(env).GOAT_HOME).toBeUndefined();
   });

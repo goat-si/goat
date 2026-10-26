@@ -11,6 +11,12 @@ const keep = (id: string, paths: readonly string[], pattern: RegExp, reason: str
 
 export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
   keep(
+    "marketing-design-attribution",
+    ["apps/marketing/DESIGN.md"],
+    /upstream T3 Tools Inc\. text|The store listings belong to T3 Code\./g,
+    "Marketing design notes say which text and store listings are upstream's, not GOAT's.",
+  ),
+  keep(
     "upstream-vendor-product-attribution",
     [
       "patches/@ff-labs__fff-node@0.11.0.patch",

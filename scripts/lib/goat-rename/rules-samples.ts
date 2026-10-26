@@ -19,7 +19,40 @@ const sample = (id: string, find: RegExp, replace: string): TextRule => ({
   scope: sampleScope,
 });
 
+// Same length as the hosts they replace: terminal tests assert cell offsets of a link.
+const exampleHostScope = (path: string): boolean =>
+  isTest(path) || path === "apps/server/scripts/acp-mock-agent.ts";
+
+const authReturnTests = new Set([
+  "apps/desktop/src/app/CodexAuthCallback.test.ts",
+  "apps/desktop/src/app/DesktopClerk.test.ts",
+  "apps/server/src/provider/CodexAuthCallback.test.ts",
+  "packages/shared/src/codexAuthHandoff.test.ts",
+]);
+
 export const SAMPLE_TEXT_RULES: readonly TextRule[] = [
+  {
+    // Upstream's hosted app is no longer an accepted Codex sign-in return; these tests return to the desktop.
+    id: "samples:auth-return-origin",
+    category: "samples",
+    find: /https:\/\/app\.t3\.codes(?=\/(?:welcome|settings))/g,
+    replace: "goat://app",
+    scope: (path) => authReturnTests.has(path),
+  },
+  {
+    id: "samples:example-subdomain-hosts",
+    category: "samples",
+    find: /\b(app|clerk|preview|latest\.app|nightly\.app)\.t3\.codes\b/g,
+    replace: "$1.exa.test",
+    scope: exampleHostScope,
+  },
+  {
+    id: "samples:example-host",
+    category: "samples",
+    find: /(?<![\w.-])t3\.codes\b/g,
+    replace: "exa.test",
+    scope: exampleHostScope,
+  },
   {
     id: "samples:deps-readme",
     category: "samples",

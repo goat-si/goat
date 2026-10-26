@@ -264,7 +264,7 @@ describe("buildHubPhoneQrPayload", () => {
 
 describe("buildClientPairingQrPayload", () => {
   it("unwraps hosted browser links to the direct server URL for phone QR codes", () => {
-    const hosted = new URL("https://app.t3.codes/pair");
+    const hosted = new URL("https://app.exa.test/pair");
     hosted.searchParams.set("host", "https://hub.tail.ts.net:8443/old?host=wrong.example");
     hosted.hash = new URLSearchParams({ token: "PHONE +&%/#?" }).toString();
     const browserLink = hosted.toString();

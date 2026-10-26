@@ -1,5 +1,4 @@
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import { HOSTED_APP_CHANNEL } from "~/branding";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
 import { STATIC_KEYBINDING_COMMANDS, type KeybindingCommand } from "@goat/contracts";
@@ -1327,7 +1326,7 @@ export function searchSettings(
     .flatMap((item, index) => {
       if (!isElectron && item.desktopOnly === true) return [];
       if (item.requiresDesktopWindowMaterial && !hasDesktopWindowMaterialApi()) return [];
-      if (item.releaseChannelOnly && !isElectron && HOSTED_APP_CHANNEL === null) return [];
+      if (item.releaseChannelOnly && !isElectron) return [];
       if (item.macOnly && !isMacPlatform(platform)) return [];
       if (item.windowsOnly && !isWindowsPlatform(platform)) return [];
 
