@@ -22,6 +22,7 @@ export interface ScreenTab {
 /** A change in who may drive a tab, reported so screen runs bound to it can stop. */
 export interface AuthorityChange {
   readonly kind: "stop" | "private" | "takeover" | "handBack";
+  readonly reason?: "tabClosed";
   readonly threadId: string;
   readonly tabId: string;
 }
@@ -56,6 +57,7 @@ export const authorityReporter = (
               : "handBack",
       threadId: tab.threadId,
       tabId: tab.tabId,
+      ...(tab.control.isClosed ? { reason: "tabClosed" as const } : {}),
     });
   };
 };

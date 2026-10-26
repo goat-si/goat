@@ -613,7 +613,7 @@ const make = Effect.gen(function* () {
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
-    screen.notify({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
+    screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
     tab.closing = true;
     tab.diagnostics.dispose();

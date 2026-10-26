@@ -38,9 +38,10 @@ const context = {
 // Mirrors ServerBrowser: the tab's real control and authority reporter fire when close() drops
 // the owner, then the dropped tab reports Stop, all before the close replies. A closed tab leaves
 // the live list, so an exact status for it finds no host.
-const temporaryTabFixture = () => {
+const temporaryTabFixture = (beforeClose?: (control: SessionControl) => void) => {
   const state = {
     open: false,
+    opens: 0,
     closes: 0,
     changed: undefined as AuthorityListener | undefined,
     control: undefined as SessionControl | undefined,
@@ -64,6 +65,7 @@ const temporaryTabFixture = () => {
       Effect.suspend(() => {
         if (request.operation === "open") {
           state.open = true;
+          state.opens++;
           const control = new SessionControl("agent");
           control.onChange(
             authorityReporter(
@@ -86,8 +88,14 @@ const temporaryTabFixture = () => {
           );
         if (request.operation === "close") {
           state.closes++;
+          if (state.closes === 1 && state.control) beforeClose?.(state.control);
           void state.control?.close();
-          state.changed?.({ kind: "stop", threadId: "thread", tabId: tab.tabId });
+          state.changed?.({
+            kind: "stop",
+            reason: "tabClosed",
+            threadId: "thread",
+            tabId: tab.tabId,
+          });
           state.open = false;
           return Effect.succeed({} as A);
         }
@@ -196,6 +204,56 @@ it.live("a person closing an agent tab counts as closed and posts no cleanup not
       yield* service.finishTurn({ ...fixture.request, reason: "test" });
       expect(fixture.state.closes).toBe(0);
       expect(fixture.notices()).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(fixture.layer(tabHost)));
+  });
+});
+
+it.live("a person's Stop during own-tab close cuts the cell before it opens another tab", () => {
+  const fixture = temporaryTabFixture((control) => control.stopAgents());
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(fixture.broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* fixture.service;
+      const result = yield* service
+        .runCell({
+          ...fixture.request,
+          source:
+            "const tab = await screen.openTab({url: 'https://example.test/'}); await tab.close(); const next = await screen.openTab({url: 'https://example.test/after-stop'}); await next.close(); return 'continued';",
+        })
+        .pipe(Effect.result);
+      expect(fixture.state.opens, JSON.stringify(result)).toBe(1);
+      expect(result._tag).toBe("Failure");
+    }).pipe(Effect.scoped, Effect.provide(fixture.layer(tabHost)));
+  });
+});
+
+it.live("a screen guest has no ambient filesystem or network APIs", () => {
+  const fixture = temporaryTabFixture();
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(fixture.broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* fixture.service;
+      const result = yield* service.runCell({
+        ...fixture.request,
+        source: `
+          const globals = [typeof process, typeof require, typeof fetch, typeof WebSocket,
+            typeof XMLHttpRequest, typeof Deno, typeof Bun, typeof std, typeof os];
+          const constructorProcess = ({}).constructor.constructor('return typeof process')();
+          const imports = [];
+          for (const name of ['node:fs', 'node:http']) {
+            try { await import(name); imports.push('loaded'); }
+            catch { imports.push('denied'); }
+          }
+          return {globals, constructorProcess, imports};
+        `,
+      });
+      expect(result.status).toBe("completed");
+      expect(result.value).toEqual({
+        globals: Array(9).fill("undefined"),
+        constructorProcess: "undefined",
+        imports: ["denied", "denied"],
+      });
+      expect(fixture.state.opens).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(fixture.layer(tabHost)));
   });
 });
