@@ -1,4 +1,4 @@
-import { DEFAULT_HOSTED_APP_URL } from "./connectAuth.ts";
+import { LEGACY_HOSTED_APP_ORIGIN } from "@goat/contracts/legacyT3Names";
 
 export const PROMPT_LINK_MAX_PROMPT_LENGTH = 8_000;
 
@@ -174,14 +174,17 @@ export function buildNewThreadLink(input: {
   readonly model?: string | null;
   readonly origin?: string;
 }): string {
-  const url = new URL("/new", input.origin ?? DEFAULT_HOSTED_APP_URL);
+  const url = new URL("/new", input.origin ?? "https://app.invalid");
   url.searchParams.set("prompt", input.prompt);
   if (input.repository) {
     url.searchParams.set("repo", `${input.repository.owner}/${input.repository.name}`);
   }
   if (input.provider) url.searchParams.set("provider", input.provider);
   if (input.provider && input.model) url.searchParams.set("model", input.model);
-  return url.toString();
+  // GOAT has no hosted web app, so without a configured origin the link opens the app directly.
+  return input.origin === undefined
+    ? promptLinkDeepLink(`/new${url.search}`, "goat")
+    : url.toString();
 }
 
 // `goat` is registered with the OS since the desktop renderer moved to goat://app (D13).
@@ -190,7 +193,7 @@ const THREAD_PATH = /^\/([^/]+)\/([^/]+)\/?$/;
 
 export function promptLinkAppPath(
   value: string,
-  hostedAppUrl: string = DEFAULT_HOSTED_APP_URL,
+  hostedAppUrl: string | null = null,
 ): string | null {
   if (!URL.canParse(value)) return null;
   const url = new URL(value);
@@ -201,7 +204,9 @@ export function promptLinkAppPath(
     const thread = url.host === "threads" ? THREAD_PATH.exec(url.pathname) : null;
     return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;
   }
-  if (!URL.canParse(hostedAppUrl) || url.origin !== new URL(hostedAppUrl).origin) return null;
+  const hostedOrigin =
+    hostedAppUrl !== null && URL.canParse(hostedAppUrl) ? new URL(hostedAppUrl).origin : null;
+  if (url.origin !== LEGACY_HOSTED_APP_ORIGIN && url.origin !== hostedOrigin) return null;
   if (url.pathname === "/new") return `/new${url.search}`;
   const thread = url.searchParams.has("prompt") ? THREAD_PATH.exec(url.pathname) : null;
   return thread ? `/${thread[1]}/${thread[2]}${url.search}` : null;

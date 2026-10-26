@@ -1,25 +1,16 @@
 import type { KeepRule } from "./engine.ts";
 
 const serviceEndpointPaths = new Set([
-  ".env.example",
   ".github/triage/PLAYBOOK.md",
   "AGENTS.md",
   "apps/desktop/gnome-extension/bundle.json",
   "apps/desktop/gnome-extension/metadata.json",
   "apps/mobile/src/features/settings/lib/legal-document-url.ts",
-  "apps/server/scripts/acp-mock-agent.ts",
   "apps/server/src/telemetry/AnalyticsService.ts",
   "apps/web/src/legalLinks.ts",
-  "apps/web/vercel.ts",
   "docs/internals/linux-snap-shot.md",
   "docs/internals/product-analytics.md",
-  "docs/operations/relay-observability.md",
-  "docs/operations/release.md",
   "docs/user/telemetry.md",
-  "goat.json",
-  "packages/contracts/src/goatProjectFile.ts",
-  "packages/shared/src/connectAuth.ts",
-  "packages/shared/src/providerAuthReturnUrl.ts",
   "scripts/build-desktop-artifact.ts",
   "structure/decisions/ADR-0014-desktop-runtime-identity.md",
 ]);
@@ -424,13 +415,6 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
         "apps/web/src/components/preview/browserAddress.ts",
       ].includes(path),
     reason: "Theme attribution and example URLs name the external T3 Chat service (D12).",
-  },
-  {
-    id: "relay-identities",
-    pattern: /__t3code\/channel|t3code_web_channel/g,
-    // Upstream's hosted-web channel route; wp4 removes the hosted app and these names with it.
-    scope: (path) => path === "apps/web/src/hostedPairing.ts" || path === "apps/web/vercel.ts",
-    reason: "Hosted web channel route of upstream's Vercel deployment (D12/D14).",
   },
   {
     id: "native-upstream-types",

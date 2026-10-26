@@ -7,9 +7,7 @@ export function providerAuthReturnUrl(value: string | undefined): string | undef
     // goat: is the desktop renderer origin; t3code: is the one builds before D13 used.
     const desktop =
       ["goat:", "goat-dev:", "t3code:", "t3code-dev:"].includes(url.protocol) && url.host === "app";
-    const web =
-      ["http:", "https:"].includes(url.protocol) &&
-      (isLoopbackHost(url.hostname) || url.origin === "https://app.t3.codes");
+    const web = ["http:", "https:"].includes(url.protocol) && isLoopbackHost(url.hostname);
     if (
       url.username ||
       url.password ||

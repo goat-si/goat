@@ -76,12 +76,12 @@ export const META_TEXT_RULES: readonly TextRule[] = [
     /https:\/\/github\.com\/pingdotgg\/t3code\/discussions\/categories\/ideas/g,
     GOAT_IDEAS,
   ),
-  // The header of .env.example: the values are upstream's public identifiers, and GOAT keeps Connect off.
+  // The header of .env.example: GOAT ships placeholders only, and GOAT keeps Connect off.
   rule(
     "env-example-header",
     at(".env.example"),
-    /^# Optional: (?:T3|GOAT) Connect source builds$/g,
-    "# Optional: public Connect identifiers from upstream's production deployment.",
+    /^# Optional: T3 Connect source builds$/g,
+    "# Optional: GOAT Connect source builds",
   ),
   rule(
     "env-example-enable",
