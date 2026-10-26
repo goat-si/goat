@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - The child must verify the exact staged WASM file with Node APIs.
 import * as NodeCrypto from "node:crypto";
-import * as NodeFs from "node:fs/promises";
+import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeModule from "node:module";
 import * as Effect from "effect/Effect";
@@ -20,10 +20,10 @@ const screenAssetError = (): ScreenRunError => ({
 export async function checkedScreenWasm(path: string, expected?: string) {
   if (!NodePath.isAbsolute(path) || /^\\\\|^\/\//.test(path))
     throw new Error("WASM path is not local and absolute");
-  const stat = await NodeFs.stat(path);
+  const stat = await NodeFSP.stat(path);
   if (!stat.isFile() || stat.size < 1 || stat.size > MAX_WASM_BYTES)
     throw new Error("Invalid WASM size");
-  const bytes = await NodeFs.readFile(path);
+  const bytes = await NodeFSP.readFile(path);
   const sha256 = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
   if (expected !== undefined && sha256 !== expected) throw new Error("WASM digest mismatch");
   return { path, sha256, bytes };

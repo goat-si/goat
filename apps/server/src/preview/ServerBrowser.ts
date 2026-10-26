@@ -91,6 +91,7 @@ import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { answerBy, answerCall, queueCaptureBy, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import type {
   EncoderWindow,
   Recording,
@@ -256,13 +257,7 @@ export class ServerBrowser extends Context.Service<
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
     /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
     readonly sessionChanges: Stream.Stream<void>;
-    readonly onAuthorityChange?: (
-      listener: (change: {
-        readonly kind: "stop" | "private" | "takeover" | "handBack";
-        readonly threadId: string;
-        readonly tabId: string;
-      }) => void,
-    ) => () => void;
+    readonly onAuthorityChange?: (listener: ServerBrowserScreen.AuthorityListener) => () => void;
     /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
     readonly stopAllAgents: Effect.Effect<void>;
     /** A person's stop or hand back of agent control on one tab; false when it is gone. */
@@ -331,18 +326,8 @@ const make = Effect.gen(function* () {
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
 
   const tabs = new Map<string, ServerTab>();
-  const authorityListeners = new Set<
-    (change: {
-      kind: "stop" | "private" | "takeover" | "handBack";
-      threadId: string;
-      tabId: string;
-    }) => void
-  >();
-  const notifyAuthority = (change: {
-    kind: "stop" | "private" | "takeover" | "handBack";
-    threadId: string;
-    tabId: string;
-  }) => {
+  const authorityListeners = new Set<ServerBrowserScreen.AuthorityListener>();
+  const notifyAuthority: ServerBrowserScreen.AuthorityListener = (change) => {
     for (const listener of authorityListeners) listener(change);
   };
   const sessionChanges = yield* PubSub.sliding<void>(1);
@@ -751,25 +736,8 @@ const make = Effect.gen(function* () {
     page.on("close", () => dropTab(tab, true));
     page.on("crash", () => dropTab(tab, true));
     tabs.set(key, tab);
-    let observedGeneration = tab.control.generation;
-    tab.control.onChange(() => {
-      if (tab.control.generation !== observedGeneration) {
-        observedGeneration = tab.control.generation;
-        notifyAuthority({
-          kind: tab.control.isPrivate
-            ? "private"
-            : tab.control.isAgentStopped
-              ? "stop"
-              : tab.control.controller !== null
-                ? "takeover"
-                : "handBack",
-          threadId: tab.threadId,
-          tabId: tab.tabId,
-        });
-      }
-      broadcastControl(tab);
-      reportLiveTabs();
-    });
+    const reportAuthority = ServerBrowserScreen.authorityReporter(tab, notifyAuthority);
+    tab.control.onChange(() => (reportAuthority(), broadcastControl(tab), reportLiveTabs()));
     void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     reportLiveTabs();
     // Existing desktop and popup PDFs can start loading before interception attaches.
@@ -1518,31 +1486,10 @@ const make = Effect.gen(function* () {
     });
 
   let pointerSequence = 0;
+  const cursorByTab = new WeakMap<ServerTab, AgentCursorSnapshot>();
   /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
-  const gateFor = (tab: ServerTab, expectedGeneration?: number): ServerBrowserPage.DispatchGate =>
-    tab.control.dispatchGate(expectedGeneration);
-
-  const originOf = (url: string): string | null => {
-    try {
-      const parsed = new URL(url);
-      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
-    } catch {
-      return null;
-    }
-  };
-  const assertScreenExpectation = (tab: ServerTab, request: PreviewAutomationRequest) => {
-    const expected = request.screenExpectation;
-    if (!expected) return;
-    if (
-      !request.tabIdExplicit ||
-      request.tabId !== tab.tabId ||
-      expected.browserInstanceId !== SERVER_HOST_CLIENT_ID
-    )
-      throw new BrowserControlInterrupted("Exact browser tab changed.");
-    tab.control.assertObservedGeneration(expected.controlGeneration);
-    if (originOf(tab.page.url()) !== expected.origin)
-      throw new BrowserControlInterrupted("Page origin changed; bind and observe again.");
-  };
+  const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
+  const { assertScreenExpectation } = ServerBrowserScreen;
 
   const pointerFor =
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>
@@ -1553,13 +1500,15 @@ const make = Effect.gen(function* () {
         return tab.control.assertAgentMayDispatch();
       const show = (next: "move" | "click") => {
         const sequence = ++pointerSequence;
+        const currentCursor = cursorByTab.get(tab);
+        const cursor = currentCursor?.phase === "hidden" || currentCursor?.phase === "yielded" ? undefined : currentCursor;
         for (const viewer of tab.viewers)
-          viewer.push({ _tag: "pointer", phase: next, x, y, sequence });
+          viewer.push({ _tag: "pointer", phase: next, x, y, sequence, ...(cursor ? { cursor } : {}) });
         if (tab.desktop)
           runFork(
             desktopChannel.pointer(
               { threadId: tab.threadId, tabId: tab.tabId },
-              { phase: next, x, y },
+              { phase: next, x, y, ...(cursor ? { cursor } : {}) },
             ),
           );
         void encoder
@@ -1873,16 +1822,7 @@ const make = Effect.gen(function* () {
   ) => {
     const input = request.input;
     assertScreenExpectation(tab, request);
-    const actionGate = (): ServerBrowserPage.DispatchGate => {
-      const base = gateFor(tab, request.screenExpectation?.controlGeneration);
-      return Object.assign(
-        () => {
-          assertScreenExpectation(tab, request);
-          base();
-        },
-        base.linger ? { linger: base.linger } : {},
-      );
-    };
+    const actionGate = () => ServerBrowserScreen.screenActionGate(tab, request);
     switch (request.operation) {
       case "back":
       case "forward":
@@ -2054,12 +1994,7 @@ const make = Effect.gen(function* () {
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
       try: () => {
-        if (
-          request.screenExpectation &&
-          (request.screenExpectation.connectionId !== connectionId ||
-            request.screenExpectation.browserInstanceId !== SERVER_HOST_CLIENT_ID)
-        )
-          throw new BrowserControlInterrupted("Exact browser connection changed.");
+        ServerBrowserScreen.assertScreenConnection(request, connectionId);
         return answerCall(request.timeoutMs, (deadlineMs) =>
           runOperation(request, deadlineMs).finally(() => markUsed(request)),
         );
@@ -2581,22 +2516,12 @@ const make = Effect.gen(function* () {
       Effect.sync(() => {
         const tab = tabs.get(tabKey(input.threadId, input.tabId));
         if (!tab) return false;
-        const terminal = input.cursor.phase === "hidden" || input.cursor.phase === "yielded";
-        if (
-          !terminal &&
-          (tab.control.agentId === null || tab.control.isPrivate || tab.control.controller !== null)
-        )
-          return false;
-        for (const viewer of tab.viewers)
-          viewer.push({ _tag: "cursor-state", cursor: input.cursor });
-        if (tab.desktop)
-          runFork(
-            desktopChannel.cursorState?.(
-              { threadId: tab.threadId, tabId: tab.tabId },
-              input.cursor,
-            ) ?? Effect.void,
-          );
-        return true;
+        const key = { threadId: tab.threadId, tabId: tab.tabId };
+        const sent = ServerBrowserScreen.pushCursorState(tab, input.cursor, (cursor) =>
+          runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
+        );
+        if (sent) cursorByTab.set(tab, input.cursor);
+        return sent;
       }),
   });
 });

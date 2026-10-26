@@ -515,8 +515,7 @@ describe("agent surface access", () => {
       for (const entry of entries) {
         // Memory access is a per-task grant its handlers check; toolkits/memory tests own it.
         if (entry.resource === "memory") continue;
-        // This inert catalog has no screen runner; screen/handlers.test.ts covers its live
-        // direct, goat_call and outside-client admission through one authenticated registration.
+        // No screen runner in this inert catalog; screen/handlers.test.ts covers its admission.
         if (entry.path === "surface.screen_run") continue;
         const args = yield* argumentsFor(entry);
         const [legacy] = entry.legacyNames;

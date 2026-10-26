@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off - Archive smoke invokes the exact extracted executable with a bounded pipe fixture.
-import * as NodeChild from "node:child_process";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Duration from "effect/Duration";
@@ -159,7 +159,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
     ]
       .map((frame) => JSON.stringify(frame))
       .join("\n") + "\n";
-  const childSmoke = NodeChild.spawnSync(executable, ["__screen-run-child"], {
+  const childSmoke = NodeChildProcess.spawnSync(executable, ["__screen-run-child"], {
     cwd: contentDir,
     input: childInput,
     encoding: "utf8",

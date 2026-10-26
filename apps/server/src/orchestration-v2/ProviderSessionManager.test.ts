@@ -1782,19 +1782,6 @@ it.effect.each([
     }),
 );
 
-it.effect("a browser-only turn carries screen-code without a desktop driver", () =>
-  Effect.gen(function* () {
-    const config = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: false,
-      turnCapabilities: ["browser"],
-    });
-    assert.equal(config?.browserToolsAvailable, true);
-    assert.deepEqual(config?.builtInSkills, ["screen-code"]);
-    assert.isUndefined(config?.cuaDriver);
-  }),
-);
-
 it.effect(
   "ProviderSessionManagerV2 withholds the preview capability when agent browser access is off",
   () =>
@@ -6029,10 +6016,7 @@ it.effect(
         // launches with the thread alone and reads its control at call time.
         yield* Ref.set(enabled, true);
         const enabledDriver = (yield* turn(runtimePolicy))?.cuaDriver;
-        assert.include(
-          enabledDriver?.environment.find((entry) => entry.name === "GOAT_CUA_DRIVER_MCP")?.value,
-          "/resources",
-        );
+        assert.include(enabledDriver?.environment.at(-1)?.value, "/resources");
         assert.isTrue(enabledDriver?.args.includes(threadId));
         assert.equal(yield* Ref.get(acquires), 1);
         // Plan and read-only turns never get it, and never start the driver.

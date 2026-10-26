@@ -334,8 +334,8 @@ function leaseProxyDescriptor(
       { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       { name: LEASE_PROXY_ENV.url, value: new URL(leaseRoute, config.endpoint).toString() },
       { name: LEASE_PROXY_ENV.authorization, value: config.authorizationHeader },
-      { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
       { name: LEASE_PROXY_ENV.proxyChannelToken, value: attachment.proxyChannelToken },
+      { name: LEASE_PROXY_ENV.driver, value: JSON.stringify(attachment.mcp) },
       ...(attachment.skillPath === undefined
         ? []
         : [{ name: LEASE_PROXY_ENV.skill, value: attachment.skillPath }]),
