@@ -39,7 +39,7 @@ Agents also reach the same server over MCP. The HTTP MCP server is named `GOAT` 
 
 GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.
 New checkpoint refs use `refs/goat/`, with legacy `refs/t3/` readers. Tracing sent to the
-T3 Connect relay from `apps/server/src/cloud/relayTracing.ts` retains relay-owned names.
+GOAT Connect relay from `apps/server/src/cloud/relayTracing.ts` retains relay-owned names.
 Local state defaults to `~/.goat`, with a legacy `~/.t3` fallback. Where each process writes
 is the [state roots](settings-and-storage.md#state-roots) contract.
 

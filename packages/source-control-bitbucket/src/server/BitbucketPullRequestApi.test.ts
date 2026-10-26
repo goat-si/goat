@@ -387,7 +387,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
                 {
                   id: 11,
                   content: { raw: "done" },
-                  user: { nickname: "julius" },
+                  user: { nickname: "alex" },
                   created_on: "2026-06-16T06:04:32+00:00",
                   parent: { id: 10 },
                 },

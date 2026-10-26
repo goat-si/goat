@@ -21,12 +21,12 @@ const isCopySurface = (path: string): boolean =>
   path !== "packages/shared/src/goatHome.ts";
 
 /**
- * GOAT Connect replaces T3 Connect (packages/shared/src/goatConnect.ts), so its copy follows GOAT everywhere GOAT
- * writes it, tests included. The troubleshooting guide mirrors the upstream page the help URL opens, and lines that
- * name upstream's hosted service hold through connectServiceKeeps (rules-external.ts).
+ * The Connect stack and its relay are GOAT Connect, so their copy follows GOAT everywhere GOAT writes it, tests and
+ * infra/relay included. The troubleshooting guide mirrors the upstream page the help URLs open, and sentences that
+ * contrast the old stack with GOAT Connect are rewritten first by CONNECT_CONTRAST_RULES (rules-relay.ts).
  */
 const isConnectCopySurface = (path: string): boolean =>
-  /^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
+  /^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/|infra\/relay\/|scripts\/agent-surface\/|\.env\.example$|apps\/mobile\/README\.md$)/.test(
     path,
   ) && path !== "docs/user/t3-connect-troubleshooting.md";
 

@@ -1,106 +1,5 @@
 import type { KeepRule } from "./engine.ts";
 
-const relayCopyPaths = new Set([
-  ".env.example",
-  "AGENTS.md",
-  "apps/mobile/README.md",
-  "apps/mobile/src/Stack.tsx",
-  "apps/mobile/src/connection/cloud-session.ts",
-  "apps/mobile/src/features/cloud/ConnectOnboardingRouteScreen.tsx",
-  "apps/mobile/src/features/cloud/T3ConnectProfilePage.tsx",
-  "apps/mobile/src/features/connection/CloudEnvironmentRows.tsx",
-  "apps/mobile/src/features/connection/ConnectionEnvironmentRow.tsx",
-  "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
-  "apps/mobile/src/features/connection/GitHubRoutingSettings.tsx",
-  "apps/mobile/src/features/settings/SettingsAuthRouteScreen.tsx",
-  "apps/mobile/src/features/settings/SettingsNotificationsRouteScreen.tsx",
-  "apps/mobile/src/features/settings/SettingsRouteScreen.tsx",
-  "apps/mobile/src/state/use-remote-environment-registry.ts",
-  "apps/server/src/auth/EnvironmentAuth.ts",
-  "apps/server/src/auth/McpOAuth.ts",
-  "apps/server/src/binCli.ts",
-  "apps/server/src/cli/connect.ts",
-  "apps/server/src/cli/service.ts",
-  "apps/server/src/cloud/CliTokenManager.ts",
-  "apps/server/src/cloud/CloudLink.ts",
-  "apps/server/src/cloud/ConnectReachability.ts",
-  "apps/server/src/cloud/DesiredLinkReconcile.ts",
-  "apps/server/src/cloud/cliAuthHtml.ts",
-  "apps/server/src/cloud/relayResponse.ts",
-  "apps/server/src/cloud/traceRelayRequest.ts",
-  "apps/server/src/device/DeviceHubProxy.ts",
-  "apps/server/src/linkedHosts/LinkedHosts.ts",
-  "apps/server/src/mcp/OrchestratorMcpService.ts",
-  "apps/server/src/relay/AgentAwarenessRelay.ts",
-  "apps/server/src/relay/HeldHooksWaker.ts",
-  "apps/server/src/scheduledTasks/webhookRoute.ts",
-  "apps/server/src/telemetry/Identify.ts",
-  "apps/server/src/ws.ts",
-  "apps/web/src/cloud/primaryCloudLinkState.ts",
-  "apps/web/src/cloud/useCloudLinkController.ts",
-  "apps/web/src/components/Sidebar.tsx",
-  "apps/web/src/components/clerk/RemoveT3ConnectEnvironmentDialog.tsx",
-  "apps/web/src/components/clerk/T3ConnectAccountPages.tsx",
-  "apps/web/src/components/clerk/T3ConnectSidebarSignIn.tsx",
-  "apps/web/src/components/clerk/T3ConnectUserProfilePage.tsx",
-  "apps/web/src/components/cloud/CloudEnvironmentConnectList.tsx",
-  "apps/web/src/components/cloud/ConnectCliAuthSurface.tsx",
-  "apps/web/src/components/cloud/ConnectOnboardingDialog.tsx",
-  "apps/web/src/components/cloud/RelayClientInstallDialog.tsx",
-  "apps/web/src/components/onboarding/WelcomeWizard.tsx",
-  "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx",
-  "apps/web/src/components/settings/ConnectionsSettings.tsx",
-  "apps/web/src/components/settings/EnvironmentRow.logic.ts",
-  "apps/web/src/components/settings/ProviderSettingsPanel.tsx",
-  "apps/web/src/components/settings/SavedEnvironmentRows.tsx",
-  "apps/web/src/components/settings/settingsSearch.ts",
-  "apps/web/src/connection/platform.ts",
-  "apps/web/src/lib/threadContextRoute.ts",
-  "docs/README.md",
-  "docs/internals/agent-surface-audit.md",
-  "docs/internals/devices.md",
-  "docs/internals/environment-auth.md",
-  "docs/internals/product-analytics.md",
-  "docs/internals/remote-updates.md",
-  "docs/internals/remote.md",
-  "docs/internals/t3-connect.md",
-  "docs/operations/android-notifications.md",
-  "docs/operations/connect-setup.md",
-  "docs/operations/mobile-app-store-screenshots.md",
-  "docs/operations/mobile-testflight.md",
-  "docs/operations/observability.md",
-  "docs/operations/relay-observability.md",
-  "docs/operations/release.md",
-  "docs/user/remote-access.md",
-  "docs/user/t3-connect-troubleshooting.md",
-  "docs/user/telemetry.md",
-  "packages/client-runtime/src/authorization/remote.ts",
-  "packages/client-runtime/src/authorization/service.ts",
-  "packages/client-runtime/src/connection/catalogHost.ts",
-  "packages/client-runtime/src/connection/diagnosis.ts",
-  "packages/client-runtime/src/connection/errors.ts",
-  "packages/client-runtime/src/connection/model.ts",
-  "packages/client-runtime/src/connection/routes.ts",
-  "packages/client-runtime/src/connection/supervisor.ts",
-  "packages/client-runtime/src/errors/network.ts",
-  "packages/client-runtime/src/relay/errorPresentation.ts",
-  "packages/client-runtime/src/relay/managedRelayState.ts",
-  "packages/client-runtime/src/rpc/session.ts",
-  "packages/client-runtime/src/state/environmentHttpAuth.ts",
-  "packages/client-runtime/src/webhookAddress.ts",
-  "packages/contracts/src/agentSurface/entries/host_link.ts",
-  "packages/contracts/src/agentSurface/registry.ts",
-  "packages/contracts/src/environmentHttp.ts",
-  "packages/contracts/src/orchestratorMcp.ts",
-  "packages/contracts/src/relay.ts",
-  "packages/contracts/src/scheduledTask.ts",
-  "packages/shared/src/goatConnect.ts",
-  "packages/shared/src/relayTracing.ts",
-  "scripts/agent-surface/audit.ts",
-  "scripts/agent-surface/inventory.ts",
-  "structure/overview.md",
-]);
-
 const serviceEndpointPaths = new Set([
   ".env.example",
   ".github/triage/PLAYBOOK.md",
@@ -130,52 +29,6 @@ const exactLines = (...lines: readonly string[]) =>
     lines.map((line) => `^${line.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`).join("|"),
     "g",
   );
-
-/**
- * "T3 Connect" that stays while visible-connect-account-copy (rules-visible.ts) renames the rest: sentences that
- * contrast the disabled T3 Connect stack with GOAT Connect, and sentences about upstream's hosted relay, its deployment
- * workflow, trace export or account. Each pattern matches the phrase around the name rather than the whole line, so it
- * holds on upstream's wording of the same sentence during a chase as well as on GOAT's.
- */
-const connectServicePhrases: readonly (readonly [path: string, pattern: RegExp])[] = [
-  ["packages/shared/src/goatConnect.ts", /(?<=will replace )T3 Connect/g],
-  [
-    "docs/user/remote-access.md",
-    /(?<=coming soon\. )T3 Connect(?= sign-in)|(?<=only a )T3 Connect(?= route)/g,
-  ],
-  ["apps/mobile/README.md", /(?<=coming soon\. )T3 Connect(?= is disabled)/g],
-  ["docs/internals/t3-connect.md", /(?<=\*\*Status:\*\* )T3 Connect(?= is disabled)/g],
-  ["docs/operations/connect-setup.md", /(?<=\*\*Status:\*\* )T3 Connect(?= \(Clerk)/g],
-  [
-    "docs/operations/android-notifications.md",
-    /(?<=These steps need )T3 Connect(?=, which is disabled)|T3 Connect(?='s hosted infrastructure)/g,
-  ],
-  ["docs/operations/mobile-testflight.md", /(?<=\*\*)T3 Connect(?= sign-in\*\* is off)/g],
-  [
-    "docs/operations/release.md",
-    /(?<=DMG with )T3 Connect(?= (?:public configuration|enabled))|(?<=public )T3 Connect(?= identifiers)|(?<=^## )T3 Connect(?= relay deployment$)|(?<=\*\*Deploy )T3 Connect(?= relay\*\*)/g,
-  ],
-  ["docs/operations/relay-observability.md", /(?<=export to )T3 Connect/g],
-  ["docs/operations/observability.md", /T3 Connect(?= trace export)/g],
-  [
-    "docs/operations/mobile-app-store-screenshots.md",
-    /(?<=deterministic )T3 Connect(?= discovery rows)/g,
-  ],
-  [
-    "docs/user/telemetry.md",
-    /(?<=your )T3 Connect(?= account)|(?<=diagnose )T3 Connect(?= connectivity)/g,
-  ],
-  ["structure/overview.md", /^T3 Connect(?= relay from)/g],
-];
-
-const connectServiceKeeps: readonly KeepRule[] = connectServicePhrases.map(([path, pattern]) => ({
-  id: `connect-service-phrases:${path}`,
-  pattern,
-  scope: (candidate) => candidate === path,
-  holdsOnApply: true,
-  reason:
-    "Names the disabled T3 Connect stack or upstream's hosted relay, workflow, trace export or account.",
-}));
 
 // Match the existing upstream phrases before other keeps strip repository URLs or legacy tokens.
 const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
@@ -313,45 +166,6 @@ const upstreamProductPhrases: readonly (readonly [string, RegExp])[] = [
     ),
   ],
 ];
-
-const relayIdentityPaths = new Set([
-  ".env.example",
-  "apps/mobile/deps/README.md",
-  "apps/mobile/src/features/cloud/T3ConnectProfilePage.tsx",
-  "apps/mobile/src/features/cloud/managedRelayState.ts",
-  "apps/mobile/src/features/cloud/managedRelayTokenStore.ts",
-  "apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx",
-  "apps/mobile/src/features/settings/SettingsAuthRouteScreen.tsx",
-  "apps/server/src/cloud/CloudLink.ts",
-  "apps/server/src/cloud/http.ts",
-  "apps/server/src/relay/AgentAwarenessRelay.ts",
-  "apps/server/src/scheduledTasks/RelayDeliveryProof.ts",
-  "apps/server/src/scheduledTasks/webhookRoute.ts",
-  "apps/server/src/scheduledTasks/webhookTemplate.ts",
-  "apps/web/src/cloud/managedRelayState.ts",
-  "apps/web/src/components/HostedEmptyState.tsx",
-  "apps/web/src/components/clerk/RemoveT3ConnectEnvironmentDialog.tsx",
-  "apps/web/src/components/clerk/T3ConnectAccountPages.tsx",
-  "apps/web/src/components/clerk/T3ConnectSidebarSignIn.tsx",
-  "apps/web/src/components/clerk/T3ConnectUserProfilePage.tsx",
-  "apps/web/src/components/clerk/useT3ConnectAuthPrompt.tsx",
-  "apps/web/src/components/onboarding/WelcomeWizard.tsx",
-  "apps/web/src/components/settings/ConnectionEnvironmentsSection.tsx",
-  "apps/web/src/components/settings/SettingsSidebarNav.tsx",
-  "apps/web/src/hostedPairing.ts",
-  "apps/web/vercel.ts",
-  "docs/internals/t3-connect.md",
-  "docs/operations/connect-setup.md",
-  "docs/operations/observability.md",
-  "docs/operations/relay-observability.md",
-  "docs/operations/release.md",
-  "packages/client-runtime/src/connection/diagnosis.ts",
-  "packages/contracts/src/environmentHttp.ts",
-  "packages/contracts/src/relay.ts",
-  "packages/shared/src/relayJwt.ts",
-  "packages/shared/src/relayTracing.ts",
-  "scripts/mobile-showcase.ts",
-]);
 
 const nativeTypePaths = new Set([
   "apps/mobile/deps/README.md",
@@ -553,7 +367,6 @@ const mobileNativePaths = new Set([
 ]);
 
 export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
-  ...connectServiceKeeps,
   ...upstreamProductPhrases.map(([path, pattern]) => ({
     id: `upstream-product-identity:${path}`,
     pattern,
@@ -585,12 +398,9 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
     id: "relay-service-copy",
     pattern: /T3 Connect|T3 [Aa]ccount/g,
     scope: (path) =>
-      relayCopyPaths.has(path) &&
-      (!/^(?:apps\/(?:web|mobile|desktop|server)\/src\/|packages\/(?:client-runtime|shared|contracts)\/src\/|docs\/(?:user|operations|internals)\/|structure\/)/.test(
-        path,
-      ) ||
-        path === "docs/user/t3-connect-troubleshooting.md"),
-    reason: "The hosted relay/account belongs to upstream, not GOAT (R6/D12/D14).",
+      // The mirror of upstream's guide keeps its wording so its heading anchors match the help URLs (W11).
+      path === "docs/user/t3-connect-troubleshooting.md",
+    reason: "Byte-stable mirror of the upstream troubleshooting page the help URLs open (W11).",
   },
   {
     id: "upstream-service-endpoints",
@@ -617,12 +427,10 @@ export const EXTERNAL_KEEP_RULES: readonly KeepRule[] = [
   },
   {
     id: "relay-identities",
-    pattern:
-      /t3-(?:env|relay|mobile|web)(?:[-:][A-Za-z0-9_-]+)?|t3-cloud-(?:mint|health)\+jwt|t3\.client\.surface|t3MintCredential|__t3code\/channel|t3code_web_channel/g,
-    // Files that move to GoatConnect* keep their relay values under either name.
-    scope: (path) => relayIdentityPaths.has(path.replaceAll("GoatConnect", "T3Connect")),
-    reason:
-      "T3 Connect account names, public client ids, JWT and hosted routing contracts belong to the upstream relay (D12/D14).",
+    pattern: /__t3code\/channel|t3code_web_channel/g,
+    // Upstream's hosted-web channel route; wp4 removes the hosted app and these names with it.
+    scope: (path) => path === "apps/web/src/hostedPairing.ts" || path === "apps/web/vercel.ts",
+    reason: "Hosted web channel route of upstream's Vercel deployment (D12/D14).",
   },
   {
     id: "native-upstream-types",

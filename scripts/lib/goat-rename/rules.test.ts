@@ -58,10 +58,13 @@ describe("env names", () => {
     );
   });
 
-  it("keeps relay keys, runner shell names and unrelated words", () => {
+  it("keeps hosted web routing keys, runner shell names and unrelated words", () => {
     const kept =
-      "T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY T3_ARCHIVE_VERSION T3_LOCK uint32_t";
+      "T3CODE_WEB_ROUTER_URL VITE_T3CODE_WEB_LATEST_DOMAIN T3_ARCHIVE_VERSION T3_LOCK uint32_t";
     expect(rename(kept)).toBe(kept);
+    expect(rename("T3CODE_RELAY_URL VITE_T3CODE_RELAY_URL T3CODE_CLERK_PUBLISHABLE_KEY")).toBe(
+      "GOAT_RELAY_URL VITE_GOAT_RELAY_URL GOAT_CLERK_PUBLISHABLE_KEY",
+    );
   });
 
   it("renames upstream SSH auth while protecting the legacy runtime handoff line", () => {
@@ -234,7 +237,8 @@ describe("wp9 compatibility scopes", () => {
       "apps/server/replay/a.ndjson",
       "pnpm-lock.yaml",
       "apps/marketing/a.ts",
-      "infra/relay/a.ts",
+      "infra/ingest/a.ts",
+      "infra/relay/migrations/0001_init.sql",
       "assets/icon.svg",
     ]) {
       expect(isExempt(path)).toBe(true);
@@ -259,13 +263,7 @@ describe("wp9 compatibility scopes", () => {
         KEEP_RULES,
       ),
     ).toEqual([]);
-    expect(
-      findResidue(
-        "apps/server/src/cloud/relayTracing.ts",
-        't3code-server "service.namespace": "t3code"',
-        KEEP_RULES,
-      ),
-    ).toEqual([]);
+    expect(isExempt("infra/relay/src/worker.ts")).toBe(false);
     expect(
       findResidue("apps/desktop/a.ts", "t3-resource-monitor t3code-desktop", KEEP_RULES),
     ).toHaveLength(1);

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Owns Playwright resources outside the Effect runtime.
+import * as HostProcess from "@goat/shared/HostProcess";
 import { INCOGNITO_BROWSER_PROFILE_ID } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeFSP from "node:fs/promises";
@@ -19,6 +20,7 @@ interface Options {
   readonly executable: () => Promise<string>;
   readonly diagnose?: (executable: string, cause: unknown) => Promise<unknown>;
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
   readonly onContextClose?: (context: BrowserContext) => void;
 }
 
@@ -28,17 +30,54 @@ const UA_PLATFORMS: Partial<Record<NodeJS.Platform, string>> = {
   win32: "Windows",
 };
 
+const CHROME_VERSION = /(?:Headless)?Chrome\/((\d+)[\d.]*)/;
+
+const hostPlatformVersion = (platform: NodeJS.Platform, release: string) => {
+  switch (platform) {
+    case "darwin": {
+      const darwinMajor = Number(/^(\d+)/.exec(release)?.[1]);
+      if (!Number.isFinite(darwinMajor)) return "10.15.7";
+      if (darwinMajor >= 26) return `${darwinMajor}.0.0`;
+      if (darwinMajor === 25) return "26.0.0";
+      if (darwinMajor >= 20) return `${darwinMajor - 9}.0.0`;
+      return "10.15.7";
+    }
+    case "win32": {
+      const build = Number(/^\d+\.\d+\.(\d+)/.exec(release)?.[1]);
+      return Number.isFinite(build) && build >= 22_000 ? "15.0.0" : "10.0.0";
+    }
+    case "linux":
+      return /^\d+\.\d+\.\d+/.exec(release)?.[0] ?? "";
+    default:
+      return "";
+  }
+};
+
+const gpuLaunchEnabled = (
+  platform: NodeJS.Platform,
+  env: Readonly<Record<string, string | undefined>>,
+) => {
+  const explicit = env.GOAT_SERVER_BROWSER_GPU?.trim();
+  if (explicit === "1") return true;
+  if (explicit === "0") return false;
+  return platform === "darwin" || platform === "win32";
+};
+
 /**
  * Sites block a user agent that disagrees with `Sec-CH-UA`, so both change together.
  */
 const chromeIdentity = (
   headlessUserAgent: string,
   host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release: string },
+  product?: string,
 ) => {
-  const version = /HeadlessChrome\/((\d+)[\d.]*)/.exec(headlessUserAgent);
-  const fullVersion = version?.[1];
+  const version = CHROME_VERSION.exec(headlessUserAgent);
   const major = version?.[2];
-  if (!version || !fullVersion || !major) return null;
+  if (!version || !major) return null;
+  const productVersion = product ? CHROME_VERSION.exec(product) : null;
+  const fullVersion =
+    productVersion?.[2] === major && productVersion[1] ? productVersion[1] : version[1];
+  if (!fullVersion) return null;
   const brands = (names: (version: string) => string) => [
     { brand: "Chromium", version: names(major) },
     { brand: "Google Chrome", version: names(major) },
@@ -50,7 +89,7 @@ const chromeIdentity = (
       brands: brands((value) => value),
       fullVersionList: brands((value) => (value === major ? fullVersion : `${value}.0.0.0`)),
       platform: UA_PLATFORMS[host.platform] ?? "Unknown",
-      platformVersion: host.platform === "linux" ? host.release : "",
+      platformVersion: hostPlatformVersion(host.platform, host.release),
       architecture: host.arch.startsWith("arm") ? "arm" : "x86",
       bitness: host.arch.endsWith("64") ? "64" : "32",
       model: "",
@@ -62,10 +101,14 @@ const chromeIdentity = (
 
 export const presentAsChrome = async (
   cdp: CDPSession,
-  host: { readonly platform: NodeJS.Platform; readonly arch: string },
+  host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release?: string },
 ) => {
-  const { userAgent } = await cdp.send("Browser.getVersion");
-  const identity = chromeIdentity(userAgent, { ...host, release: NodeOS.release() });
+  const { userAgent, product } = await cdp.send("Browser.getVersion");
+  const identity = chromeIdentity(
+    userAgent,
+    { platform: host.platform, arch: host.arch, release: host.release ?? NodeOS.release() },
+    product,
+  );
   if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
 };
 
@@ -83,15 +126,22 @@ export class ServerBrowserContexts {
   private async launchOptions() {
     const executablePath = await this.options.executable();
     const env = this.options.env ?? process.env;
+    const platform = this.options.platform ?? HostProcess.Platform.defaultValue();
+    const useGpu = gpuLaunchEnabled(platform, env);
     return {
       executablePath,
       env,
       args: [
-        "--disable-gpu",
+        "--headless=new",
+        ...(useGpu ? [] : ["--disable-gpu"]),
         "--force-device-scale-factor=2",
         "--disable-blink-features=AutomationControlled",
       ],
-      ignoreDefaultArgs: ["--enable-automation"],
+      ignoreDefaultArgs: [
+        "--enable-automation",
+        "--headless",
+        ...(useGpu ? ["--enable-unsafe-swiftshader"] : []),
+      ],
       headless: true,
       // Only an explicit operator opt-out disables sandboxing. Launch errors never do.
       chromiumSandbox: !sandboxDisabled(env),

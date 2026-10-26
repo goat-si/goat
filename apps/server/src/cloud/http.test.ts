@@ -177,7 +177,7 @@ describe("link proof over a non-loopback desktop transport", () => {
         {
           algorithms: ["EdDSA"],
           typ: RELAY_LINK_PROOF_TYP,
-          issuer: "t3-env:wsl-environment",
+          issuer: "goat-env:wsl-environment",
           audience: proofRequest.relayIssuer,
         },
       );
@@ -303,7 +303,7 @@ it("refuses cloud health requests while GOAT Connect is disabled", async () => {
   const { handler, dispose } = HttpRouter.toWebHandler(layerRoutes, { disableLogger: true });
   try {
     const response = await handler(
-      new Request("http://127.0.0.1/api/t3-connect/health", {
+      new Request("http://127.0.0.1/api/goat-connect/health", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ proof: "proof" }),

@@ -52,7 +52,7 @@ it.effect(
         Effect.gen(function* () {
           const args = commandArgs(command);
           if (args.includes("-G"))
-            return makeSuccessfulProcess("hostname devbox.example.com\nuser julius\nport 2222\n");
+            return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
           if (args.includes("-N")) {
             if (forwards++ > 0) relay = yield* makeStallRelay(upstreamPort, firstRelay.port);
             const ownedRelay = relay;

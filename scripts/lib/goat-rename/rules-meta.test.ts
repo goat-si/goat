@@ -88,7 +88,7 @@ describe("GOAT meta", () => {
     const renamed = apply(".env.example", upstream);
     expect(renamed).toBe(
       [
-        "# Optional: public T3 Connect configuration from upstream's production deployment.",
+        "# Optional: public Connect identifiers from upstream's production deployment.",
         "# GOAT Connect is off in every build, so copying this file to .env enables nothing yet.",
         "# These public identifiers are not secrets. They remain for upstream compatibility;",
         "# GOAT does not use them to enable cloud features.",

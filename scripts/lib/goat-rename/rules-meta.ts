@@ -80,13 +80,13 @@ export const META_TEXT_RULES: readonly TextRule[] = [
   rule(
     "env-example-header",
     at(".env.example"),
-    /^# Optional: T3 Connect source builds$/g,
-    "# Optional: public T3 Connect configuration from upstream's production deployment.",
+    /^# Optional: (?:T3|GOAT) Connect source builds$/g,
+    "# Optional: public Connect identifiers from upstream's production deployment.",
   ),
   rule(
     "env-example-enable",
     at(".env.example"),
-    /^# `cp \.env\.example \.env` enables T3 Connect against the production deployment\.$/g,
+    /^# `cp \.env\.example \.env` enables (?:T3|GOAT) Connect against the production deployment\.$/g,
     "# GOAT Connect is off in every build, so copying this file to .env enables nothing yet.",
   ),
   rule(

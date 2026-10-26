@@ -17,7 +17,7 @@ See [the disabled upstream release workflow](../../.github/workflows/release.yml
 
 ## Pull request macOS previews
 
-Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with T3 Connect public configuration
+Labeling a PR `preview:mac` publishes a signed, notarized Apple Silicon DMG with GOAT Connect public configuration
 (the feature itself stays off until GOAT Connect ships) to the rolling `desktop-preview` prerelease, and works for fork PRs. The label is a one-shot request
 for the commit it is applied to: the trusted workflow removes it once the build is in hand, and later
 pushes do not build until a maintainer applies it again. Every signed preview is therefore a
@@ -32,7 +32,7 @@ split so the Developer ID certificate never shares a job with PR code:
   bot, a collaborator, or listed in `.github/VOUCHED.td` (read from the default branch, so a PR cannot vouch
   for itself). It then packages and signs the bundle through `release-desktop.yml` checked out at
   `main`, so packaging, native helpers, and the Electron/desktop dependencies come from `main`, not
-  the PR. Only the version and the public T3 Connect identifiers in `.env.example` are read from the
+  the PR. Only the version and the public GOAT Connect identifiers in `.env.example` are read from the
   PR commit, as data, so the signed app's passkey entitlement matches the bundle. A PR that changes
   packaging must use the `channel=preview` release train above instead.
 
@@ -56,7 +56,7 @@ The finalize job uses them to commit and push aligned package versions to `main`
 GitHub Release publication uses the repository-scoped workflow token so it has a rate-limit quota
 independent from the shared Release App installation.
 
-## T3 Connect relay deployment
+## GOAT Connect relay deployment
 
 The relay is a shared control plane versioned separately from client releases. Stable and nightly
 client builds must point at the same relay so users see the same linked environments when switching
@@ -105,7 +105,7 @@ Required `production` environment secrets:
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
 
-After changing a variable or secret, run the **Deploy T3 Connect relay** workflow manually from
+After changing a variable or secret, run the **Deploy GOAT Connect relay** workflow manually from
 `main` with **force** unchecked. Alchemy compares the values the Worker reads and redeploys it when
 one changed. Check **force** only to redeploy resources with no detected change: a forced run also
 replaces the Postgres runtime role and its password
@@ -121,7 +121,7 @@ Personal stages reference the production-owned zones.
 Developers deploy personal stages locally rather than through pull-request automation:
 
 ```sh
-vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
+vp run --filter goat-relay deploy -- --stage "$USER" --env-file .env.local
 ```
 
 ### Managed tunnel cleanup rollout
@@ -169,7 +169,7 @@ Ship the web and mobile builds that show the offline reason before enabling lega
 user whose host is affected sees what to do. The relay adds the `tunnel_released_at` allocation
 column in its first deploy with this change; the legacy switch stays `off` until you set it.
 
-1. Run `vp run --filter t3code-relay tunnels:census` with a read-only Cloudflare token. It counts
+1. Run `vp run --filter goat-relay tunnels:census` with a read-only Cloudflare token. It counts
    tunnels in every relay stage. The reaper only sees its own stage's tunnels, so clean up the rest
    by hand.
 2. Set the legacy mode to `dry-run`, deploy, and read `wouldDeleteLegacy`, `legacyOver30Days`,

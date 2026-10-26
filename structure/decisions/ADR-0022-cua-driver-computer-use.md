@@ -17,8 +17,8 @@
   pinned, and keep from reporting usage to a third party.
 - **Before.**
   - GOAT had no computer use. Agents could drive the collaborative browser preview only.
-  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697, by
-    Julius Marminge, rebuilt from his #16527) adds verified distribution, an opt-in server
+  - Upstream T3 Code had two open, unmerged Cua Driver stacks. The newer one (#21694-#21697,
+    rebuilt from #16527) adds verified distribution, an opt-in server
     lifecycle, an Electron-owned host and packaging, and attaches nothing to agents. It pins Cua
     Driver 0.34.1.
   - The Cua Driver SDK and executable speak a private protocol and must share a version.
