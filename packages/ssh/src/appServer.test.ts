@@ -209,6 +209,9 @@ describe("GOAT app server attachment", () => {
         }),
       );
       expect((yield* probe("managed")).kind).toBe("unusable");
+      // A clean shutdown removes the record but keeps the identity and database.
+      yield* fs.remove(`${managedHome}/server-runtime.json`);
+      expect((yield* probe("managed")).kind).toBe("unusable");
       expect(
         parseExistingServerProbe(
           `GOAT_EXISTING=live ${managed.port} ${managedId}\n${JSON.stringify({

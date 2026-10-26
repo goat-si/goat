@@ -66,7 +66,12 @@ case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n';
 home="$HOME/.goat/${kind === "app" ? "desktop/userdata" : "userdata"}"
 record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
 fail() { printf 'GOAT_EXISTING=%s\n' "$1"; exit 0; }
-[ -f "$record" ] || fail absent
+# A clean shutdown removes the record but keeps the identity and database, which may own a
+# legacy watch; only a home with neither has no other server.
+if [ ! -f "$record" ]; then
+  if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then fail unusable; fi
+  fail absent
+fi
 [ ! -L "$record" ] && [ -f "$identity" ] && [ ! -L "$identity" ] || fail unusable
 [ -f "$token" ] && [ ! -L "$token" ] && [ -s "$token" ] || fail unusable
 line="$(tr '\n' ' ' <"$record")"
