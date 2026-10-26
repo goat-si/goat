@@ -62,6 +62,8 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "forward",
   "reload",
   "logs",
+  "fetch",
+  "scrollCollect",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
