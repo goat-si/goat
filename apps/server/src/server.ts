@@ -57,9 +57,7 @@ import * as StorageCleanup from "./storageCleanup.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
-import * as ScreenRunService from "./screenCode/ScreenRunService.ts";
-import * as ScreenRunTurnEnd from "./screenCode/ScreenRunTurnEnd.ts";
-import * as ScreenCursorPublisher from "./cua/ScreenCursorPublisher.ts";
+import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
 
@@ -105,7 +103,6 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
-import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
@@ -176,7 +173,6 @@ import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
 import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
 import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
 import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
-import * as ComputerUsePrimitiveChannel from "./cua/ComputerUsePrimitiveChannel.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
@@ -1119,21 +1115,12 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.
   Layer.provide(
-    ScreenRunTurnEnd.layer.pipe(
-      Layer.provideMerge(ScreenRunService.layerWithTabHost()),
-      Layer.provideMerge(
-        ScreenCursorPublisher.layer.pipe(
-          Layer.provideMerge(
-            ServerBrowser.layer.pipe(
-              Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
-              Layer.provideMerge(PreviewBrowser.layer),
-            ),
-          ),
-        ),
-      ),
+    ServerBrowser.layer.pipe(
+      Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+      ScreenCodeLayers.withScreenCode,
     ),
   ),
-  Layer.provide(Layer.mergeAll(PreviewAutomationBroker.layer, ComputerUsePrimitiveChannel.layer)),
+  Layer.provide(Layer.mergeAll(PreviewAutomationBroker.layer, ScreenCodeLayers.primitives)),
   Layer.provide(ConnectionCatalogBroker.layer),
   Layer.provide(
     ServerSelfUpdate.layer.pipe(

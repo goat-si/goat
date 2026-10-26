@@ -195,3 +195,48 @@ export const makeSurface = <Tab extends ScreenTab>(
     });
   return { notify, nextPointer, service: { onAuthorityChange, cursorState } };
 };
+
+type Size = { readonly width: number; readonly height: number };
+
+/** Where a full-page capture sits in the document, so screen code can map its pixels back. */
+export const documentPlacement = (width: number, height: number, imageWidth: number) => ({
+  region: { kind: "document" as const, x: 0, y: 0, width, height },
+  scale: imageWidth / width,
+});
+
+/** A viewport capture's size with its placement; points map to viewport coordinates. */
+export const viewportPlacement = (viewport: Size, image: Size) => ({
+  ...image,
+  region: {
+    kind: "viewport" as const,
+    x: 0,
+    y: 0,
+    width: viewport.width,
+    height: viewport.height,
+  },
+  scale: image.width / viewport.width,
+});
+
+/**
+ * Cuts the masked tree and namespaces its refs. Screen code learns whether the cut or a frame the
+ * tree could not read left part of the page out.
+ */
+export const screenTree = (
+  text: string,
+  input: {
+    readonly limit: number;
+    readonly unread: ReadonlyArray<unknown>;
+    readonly generation: string;
+    readonly refs: Map<string, string>;
+  },
+) => ({
+  accessibilityTree: text
+    .slice(0, input.limit)
+    .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
+      const ref = `t3-${input.generation}-${nativeRef}`;
+      input.refs.set(ref, nativeRef);
+      return `[ref=${ref}]`;
+    }),
+  treeComplete: text.length <= input.limit && input.unread.length === 0,
+  refGeneration: String(input.generation),
+});

@@ -16,13 +16,13 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
-import {
-  ComputerUseAgentCursor,
-  AgentCursorEvent,
-  AgentCursorReport,
-} from "./computerUseOverlay.ts";
+import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
-import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
+import {
+  AgentCursorLeaseUpdate,
+  ComputerUsePrimitiveCancel,
+  ComputerUsePrimitiveRequest,
+} from "./cuaPrimitives.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -531,106 +531,6 @@ export const ComputerUseForegroundGrant = Schema.Struct({
 });
 export type ComputerUseForegroundGrant = typeof ComputerUseForegroundGrant.Type;
 
-const primitiveId = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
-const primitiveJson = Schema.Json.check(
-  Schema.makeFilter(
-    (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 64 * 1024,
-  ),
-);
-const strictPrimitive = <S extends Schema.Constraint>(schema: S) =>
-  Schema.declareConstructor<S["Type"], S["Encoded"]>()(
-    [schema],
-    ([codec]) => {
-      const decode = SchemaParser.decodeUnknownEffect(codec);
-      return (input, _ast, options) => decode(input, { ...options, onExcessProperty: "error" });
-    },
-    {
-      toCodec: ([codec]) => new SchemaAST.Link(codec.ast, SchemaTransformation.passthrough()),
-      toCodecJson: () => undefined,
-    },
-  );
-const primitiveCallIdentity = {
-  requestId: primitiveId,
-  registrationId: primitiveId,
-  controlId: primitiveId,
-  connectionGeneration: primitiveId,
-  runId: primitiveId,
-  turnId: primitiveId,
-  callId: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
-};
-
-export const ComputerUsePrimitiveRequest = Schema.Struct({
-  state: Schema.Literal("primitive-request"),
-  ...primitiveCallIdentity,
-  deadlineMillis: Schema.Int.check(
-    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  ),
-  tool: primitiveId,
-  args: primitiveJson,
-});
-export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
-
-/** Cancels a request already delivered to the proxy while admission is still pending. */
-export const ComputerUsePrimitiveCancel = Schema.Struct({
-  state: Schema.Literal("primitive-cancel"),
-  requestId: primitiveId,
-});
-export type ComputerUsePrimitiveCancel = typeof ComputerUsePrimitiveCancel.Type;
-
-/** Host-origin cursor state on the authenticated proxy stream; never forwarded to the driver. */
-export const AgentCursorLeaseUpdate = Schema.Struct({
-  state: Schema.Literal("cursor-state"),
-  controlId: TrimmedNonEmptyString,
-  connectionGeneration: TrimmedNonEmptyString,
-  event: AgentCursorEvent,
-});
-export type AgentCursorLeaseUpdate = typeof AgentCursorLeaseUpdate.Type;
-
-export const ComputerUsePrimitiveReply = strictPrimitive(
-  Schema.Struct({
-    ...primitiveCallIdentity,
-    status: Schema.Literals(["not_started", "settled", "unknown_outcome"]),
-    result: Schema.optionalKey(primitiveJson),
-    error: Schema.optionalKey(primitiveJson),
-    image: Schema.optionalKey(
-      Schema.Struct({
-        mimeType: Schema.Literals(["image/png", "image/jpeg"]),
-        bytes: Schema.String.check(
-          Schema.isMaxLength(Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4),
-          Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
-          Schema.makeFilter(
-            (value) =>
-              (value.length / 4) * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <=
-              DEFAULT_SCREEN_RUN_LIMITS.imageBytes,
-          ),
-        ),
-        width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
-        height: Schema.Int.check(
-          Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
-        ),
-      }),
-    ),
-  }),
-);
-export type ComputerUsePrimitiveReply = typeof ComputerUsePrimitiveReply.Type;
-
-const primitiveControlReport = {
-  registrationId: primitiveId,
-  controlId: primitiveId,
-  connectionId: primitiveId,
-  driverGeneration: Schema.Int.check(
-    Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-  ),
-};
-export const ComputerUsePrimitiveControlReady = strictPrimitive(
-  Schema.Struct(primitiveControlReport),
-);
-export type ComputerUsePrimitiveControlReady = typeof ComputerUsePrimitiveControlReady.Type;
-export const ComputerUsePrimitiveControlCutoff = strictPrimitive(
-  Schema.Struct(primitiveControlReport),
-);
-export type ComputerUsePrimitiveControlCutoff = typeof ComputerUsePrimitiveControlCutoff.Type;
-
 /**
  * What the computer use proxy hears from its own server about the control it was started for,
  * one JSON object per line. "active" carries the apps the thread may control, absent when every
@@ -1009,3 +909,4 @@ export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "opencode",
   "pi",
 ]);
+export * from "./cuaPrimitives.ts";

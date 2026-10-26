@@ -55,6 +55,18 @@ export async function verifyScreenWasmFile(path: string) {
 export const stageScreenWasmAsset = (input: { repoRoot: string; destination: string }) =>
   Effect.promise(() => copyScreenWasmAsset(input.repoRoot, input.destination));
 
+/** Why a Windows payload's screen WASM is unusable, or undefined when it verifies. */
+export const windowsScreenWasmProblem = (resourcesDir: string) =>
+  Effect.promise(() =>
+    verifyScreenWasmFile(NodePath.join(resourcesDir, "screen-code", "quickjs.wasm")),
+  ).pipe(
+    Effect.map(() => undefined),
+    Effect.orElseSucceed(() => ({
+      reason: "sidecar-invalid" as const,
+      missingFiles: ["screen-code/quickjs.wasm"],
+    })),
+  );
+
 export async function verifyScreenWasmArchiveMember(
   archivePath: string,
   memberSuffix = "screen-code/quickjs.wasm",

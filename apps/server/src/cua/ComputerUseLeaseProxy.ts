@@ -78,6 +78,7 @@ import {
   type LeaseProxyOptions,
 } from "./ComputerUseLeaseProxyOptions.ts";
 import { windowArgument } from "./ComputerUseLinuxScreenshots.ts";
+import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
@@ -654,12 +655,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     );
     if (expectedConnection !== undefined && lifecycle.current?.connectionId !== expectedConnection)
       return yield* sink.answer(
-        refusal(
-          parse(line)?.id ?? "",
-          "tools/call",
-          "invalid_target",
-          "The driver generation changed before dispatch.",
-        ),
+        staleGeneration(parse(line)?.id ?? "", "tools/call"),
         "not_started",
       );
     const message = parse(line);
@@ -710,15 +706,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "invalid_target",
-            "The driver generation changed before dispatch.",
-          ),
-          "not_started",
-        );
+        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
       // The child this call was admitted under. A pause, takeover or narrowed approval while it
       // waits replaces the child, and the call belongs to what was cut off, never to the next one.
       // Only the manifest refresh may replace it for the call.
@@ -732,15 +720,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "invalid_target",
-            "The driver generation changed before dispatch.",
-          ),
-          "not_started",
-        );
+        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !DISPLAY_PROOF_FREE.has(tool));
