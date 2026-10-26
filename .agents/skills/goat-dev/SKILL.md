@@ -16,6 +16,9 @@ hold the rules. This skill puts them in order.
    search) and cite the sources in the plan or pull request.
 4. Implement in small working steps and commit each locally. A logic, data, state, or protocol bug
    gets a failing test first, then the fix.
+   Native Rust, C or C++ builds run through kache after `kache doctor` passes
+   ([Build cache](../../../docs/operations/development.md#build-cache)); remove the `target/`
+   folders and other large outputs you created before finishing.
 5. Verify at the class floor. C0 needs a read-back; C1 one focused check. From C2 up, run
    `vp test run <files>` for the changed behavior, then `vp run check:changed`. A visible change
    gets one pass in a real client through [test-goat-app](../test-goat-app/SKILL.md) or

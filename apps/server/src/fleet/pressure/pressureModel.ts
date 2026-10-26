@@ -9,6 +9,7 @@ import {
   DEFAULT_HOST_PRESSURE_SETTINGS,
   FLEET_LOCAL_HOST_KEY,
   type HostCapacitySnapshot,
+  type HostDiskUsage,
   type HostPlacementCandidate,
   type HostPlacementRanking,
   type HostPlacementRequirements,
@@ -21,6 +22,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
 import {
   busiestWindow,
@@ -72,6 +74,12 @@ export interface PressureSample {
   readonly cpuUtilization: number | null;
   readonly memoryFreeRatio: number | null;
   readonly diskAvailableBytes: number | null;
+  /** Size of the volume diskAvailableBytes was read from. */
+  readonly diskTotalBytes: number | null;
+  /** A path on that volume. */
+  readonly diskPath?: string | undefined;
+  /** Filesystem device when it can be read; paths identify volumes otherwise. */
+  readonly diskDeviceId?: number | undefined;
   /** The longest GOAT server event-loop stall since the previous sample. */
   readonly eventLoopDelayMs: number | null;
 }
@@ -89,8 +97,74 @@ export function sampleFromCapacity(
     memoryFreeRatio:
       metrics.totalMemoryBytes > 0 ? metrics.availableMemoryBytes / metrics.totalMemoryBytes : null,
     diskAvailableBytes: metrics.disk?.availableBytes ?? null,
+    diskTotalBytes: metrics.disk?.totalBytes ?? null,
+    diskPath: metrics.disk?.path,
     eventLoopDelayMs,
   };
+}
+
+/** The same reading with every signal but the disk removed, for the disk's own level. */
+export const diskOnlySample = (sample: PressureSample): PressureSample => ({
+  loadPerCore: null,
+  cpuUtilization: null,
+  memoryFreeRatio: null,
+  diskAvailableBytes: sample.diskAvailableBytes,
+  diskTotalBytes: sample.diskTotalBytes,
+  diskPath: sample.diskPath,
+  eventLoopDelayMs: null,
+});
+
+/** Keep CPU, memory, load, and stalls on the host when the selected disk changes. */
+export const nonDiskSample = (sample: PressureSample): PressureSample => ({
+  ...sample,
+  diskAvailableBytes: null,
+  diskTotalBytes: null,
+  diskPath: undefined,
+  diskDeviceId: undefined,
+});
+
+/**
+ * Of the volumes GOAT fills (its home, and worktree folders a person moved to another drive), the
+ * one the disk level comes from: the highest level on these thresholds, then the highest on the
+ * loosened ones a level is left at, so a volume still inside its recovery band keeps its level
+ * held rather than handing over to a roomier one; the first one on a tie.
+ */
+export function mostPressedDisk(
+  disks: ReadonlyArray<HostDiskUsage>,
+  settings: ResolvedPressureSettings,
+): HostDiskUsage | null {
+  let chosen: HostDiskUsage | null = null;
+  let rank = -1;
+  for (const disk of disks) {
+    const sample: PressureSample = {
+      loadPerCore: null,
+      cpuUtilization: null,
+      memoryFreeRatio: null,
+      diskAvailableBytes: disk.availableBytes,
+      diskTotalBytes: disk.totalBytes,
+      diskPath: disk.path,
+      eventLoopDelayMs: null,
+    };
+    const score =
+      RANK[classify(sample, settings).level] * 3 +
+      RANK[classify(sample, settings, EXIT_RATIO).level];
+    if (score > rank) {
+      chosen = disk;
+      rank = score;
+    }
+  }
+  return chosen;
+}
+
+/**
+ * Free bytes at or below which a disk is at a level: under both the GiB limit and the share of
+ * the volume, so the smaller of the two. A volume of unknown size has only the GiB limit.
+ */
+function diskThresholdBytes(totalBytes: number | null, gib: number, percent: number) {
+  const absolute = gib * GIB;
+  return totalBytes === null || totalBytes <= 0
+    ? absolute
+    : Math.min(absolute, (totalBytes * percent) / 100);
 }
 
 export function sampleFromEntry(entry: HostStatusEntry): PressureSample | null {
@@ -164,13 +238,34 @@ export function classify(
     settings.criticalMemoryFreePercent,
     (value, threshold) => "memory " + Math.round(value) + "% free (threshold " + threshold + "%)",
   );
-  below(
-    "disk",
-    sample.diskAvailableBytes === null ? null : sample.diskAvailableBytes / GIB,
-    settings.elevatedDiskFreeGiB,
-    settings.criticalDiskFreeGiB,
-    (value, threshold) => "disk " + round1(value) + " GiB free (threshold " + threshold + " GiB)",
-  );
+  const free = sample.diskAvailableBytes;
+  if (free !== null) {
+    const total =
+      sample.diskTotalBytes !== null && sample.diskTotalBytes > 0 ? sample.diskTotalBytes : null;
+    const reached = (gib: number, percent: number) =>
+      free <= diskThresholdBytes(total, gib, percent) / scale;
+    const describe = (gib: number, percent: number) =>
+      "disk " +
+      round1(free / GIB) +
+      " GiB free" +
+      (total === null ? "" : " (" + Math.round((free / total) * 100) + "%)") +
+      ", under " +
+      gib +
+      " GiB" +
+      (total === null ? "" : " and " + percent + "%");
+    if (reached(settings.criticalDiskFreeGiB, settings.criticalDiskFreePercent))
+      reasons.push({
+        signal: "disk",
+        level: "critical",
+        message: describe(settings.criticalDiskFreeGiB, settings.criticalDiskFreePercent),
+      });
+    else if (reached(settings.elevatedDiskFreeGiB, settings.elevatedDiskFreePercent))
+      reasons.push({
+        signal: "disk",
+        level: "elevated",
+        message: describe(settings.elevatedDiskFreeGiB, settings.elevatedDiskFreePercent),
+      });
+  }
   const level = reasons.reduce<HostPressureLevel>((top, reason) => higher(top, reason.level), "ok");
   return { level, reasons };
 }
@@ -326,6 +421,22 @@ export const toHostPressure = (state: PressureState): HostPressure => {
     loadPerCore: state.loadPerCore === null ? null : Math.round(state.loadPerCore * 100) / 100,
     eventLoopDelayMs: longest > 0 ? Math.round(longest) : null,
   };
+};
+
+export const combineHostPressure = (nonDisk: PressureState, disk: PressureState): HostPressure => {
+  const level = higher(nonDisk.level, disk.level);
+  const since =
+    nonDisk.level === disk.level
+      ? Math.min(nonDisk.since, disk.since)
+      : level === nonDisk.level
+        ? nonDisk.since
+        : disk.since;
+  return toHostPressure({
+    ...nonDisk,
+    level,
+    since,
+    reasons: [...nonDisk.reasons, ...disk.reasons],
+  });
 };
 
 /**
@@ -508,6 +619,24 @@ function entryLevel(
 }
 
 const hostLabel = (host: string | null) => host ?? "this machine";
+const prefixed = (text: string | null) => (text === null ? "" : " " + text);
+const nonNull = (text: string | null): ReadonlyArray<string> => (text === null ? [] : [text]);
+
+/**
+ * What to do about a full disk, added wherever pressure is announced: lanes cannot free space by
+ * moving, so they are told where GOAT's own space goes on that host.
+ */
+function diskPressureHint(host: string | null, pressure: HostPressure): string | null {
+  if (!pressure.reasons.some((reason) => reason.signal === "disk")) return null;
+  return (
+    "Its disk is low: do not install dependencies or build there, and remove target/ and node_modules folders your lanes created. " +
+    goatCallText(
+      "storage.usage",
+      host === null ? undefined : "{host:" + JSON.stringify(host) + "}",
+    ) +
+    " lists what GOAT's folders hold there; deleting needs a person's approval."
+  );
+}
 const ELEVATED_PENALTY = 200;
 
 /**
@@ -666,7 +795,8 @@ export function launchAdvice(input: {
       " resource pressure" +
       (why.length === 0 ? "" : " (" + why + ")") +
       ". Keep heavy work (installs, browser test suites, typechecks) off it." +
-      elsewhere,
+      elsewhere +
+      prefixed(diskPressureHint(input.host, input.pressure)),
     alternatives: input.alternatives.slice(0, 3).map((candidate) => candidate.host),
   };
 }
@@ -732,6 +862,7 @@ function pressureDetails(input: PressureTextInput): ReadonlyArray<string> {
       : ["", "Hosts with room:", ...room]),
     "",
     "Suggested: " + action + " Rank hosts with goat_host_status {placement:{}} before launching.",
+    ...nonNull(diskPressureHint(input.host, input.pressure)),
   ];
 }
 
@@ -802,6 +933,7 @@ export function pressureNudgeText(input: PressureTextInput): {
           : "Avoid starting more heavy lanes there. ") +
         next,
       'goat_call {path: "host.status", args: {placement: {}}} ranks hosts; goat_call {path: "thread.watch_list"} lists the threads this thread started.',
+      ...nonNull(diskPressureHint(input.host, input.pressure)),
     ].join("\n"),
   };
 }

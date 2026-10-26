@@ -14,6 +14,7 @@ import { useContext, useState } from "react";
 
 import { environmentCatalog } from "~/connection/catalog";
 import { useNowWhile } from "~/hooks/useNowWhile";
+import { useEnvironment } from "~/state/environments";
 import { hostStatusAtom } from "~/state/hostStatus";
 import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -28,6 +29,7 @@ const LABEL: Record<FleetAlertActionKind, string> = {
   compact: "Compact",
   clean_up: "Clean up",
   memory_settings: "Memory settings",
+  storage: "Free up space",
 };
 
 const failureText = (failure: unknown) =>
@@ -63,7 +65,24 @@ export function FleetAlertAction(props: {
     );
   }
   if (props.kind === "retry") return <RetryAction {...props} />;
+  if (props.kind === "storage") return <StorageAction {...props} />;
   return <MaintenanceAction {...props} kind={props.kind} />;
+}
+
+function StorageAction(props: { readonly environmentId: EnvironmentId; readonly label: string }) {
+  const environment = useEnvironment(props.environmentId);
+  // Settings > Storage shows nothing for a server that predates the storage scan.
+  if (environment?.serverConfig?.environment.capabilities.storageUsage !== true) return null;
+  return (
+    <Button
+      size="micro"
+      variant="ghost-muted"
+      aria-label={"Free up space on " + props.label}
+      render={<Link to="/settings/storage" search={{ machine: props.environmentId }} />}
+    >
+      {LABEL.storage}
+    </Button>
+  );
 }
 
 function RetryAction(props: { readonly environmentId: EnvironmentId; readonly label: string }) {

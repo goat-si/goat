@@ -51,6 +51,7 @@ import {
 import type { RpcSession } from "../rpc/session.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { createOpenCodexSyncAtoms } from "./opencodexSync.ts";
+import { createStorageEnvironmentAtoms } from "./storage.ts";
 import {
   applyServerConfigProjection,
   type ServerConfigProjection,
@@ -1093,6 +1094,7 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverCleanUpStrayProcesses,
       concurrency: { mode: "singleFlight", key: ({ environmentId }) => environmentId },
     }),
+    ...createStorageEnvironmentAtoms(runtime),
     databaseStorage,
     databaseCompactionRecommendations,
     storageCleanupReport: createEnvironmentRpcSubscriptionAtomFamily(runtime, {

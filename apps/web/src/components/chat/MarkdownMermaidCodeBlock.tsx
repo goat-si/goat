@@ -1,5 +1,5 @@
 import { CodeIcon, WorkflowIcon } from "~/components/solar";
-import { Suspense, use, useState, type ReactNode } from "react";
+import { Suspense, use, useRef, useState, type ReactNode } from "react";
 
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
@@ -24,6 +24,13 @@ export function MarkdownMermaidCodeBlock({
   children: ReactNode;
 }) {
   const [showCode, setShowCode] = useState(false);
+  // Switching views remounts the toolbar, so the toggle hands focus to its replacement.
+  const refocusToggle = useRef(false);
+  const focusReplacementToggle = (button: HTMLButtonElement | null) => {
+    if (!button || !refocusToggle.current) return;
+    refocusToggle.current = false;
+    button.focus();
+  };
   const searching = use(MarkdownFindContext);
   const revealSource = () => setShowCode(true);
   const sourceRevealRef = findRevealRef(revealSource);
@@ -44,10 +51,14 @@ export function MarkdownMermaidCodeBlock({
             <TooltipTrigger
               render={
                 <Button
+                  ref={focusReplacementToggle}
                   type="button"
                   variant="ghost-muted"
                   size="icon-xs"
-                  onClick={() => setShowCode((value) => !value)}
+                  onClick={() => {
+                    refocusToggle.current = true;
+                    setShowCode((value) => !value);
+                  }}
                   aria-label={toggleLabel}
                 />
               }
