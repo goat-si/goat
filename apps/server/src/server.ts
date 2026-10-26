@@ -257,7 +257,7 @@ import * as ServerActivation from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
 
-export { MemorySourceReadBinding } from "./memory/MemoryApplicationLayers.ts";
+export { MemorySourceReadBinding, provideScreenPrimitives } from "./ServerPublicApi.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
@@ -864,7 +864,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       Layer.provideMerge(RuntimeIdentity.layer),
     ),
   ),
-  Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
+  ScreenCodeLayers.provideScreenPrimitivesAfter(RuntimeLayer.layerEventInfrastructure),
   // pipe takes at most 20 steps, so the Cua Driver and cloud auto setup join this merge.
   Layer.provideMerge(
     Layer.mergeAll(
@@ -1120,7 +1120,7 @@ const layerMakeRoutes = Layer.mergeAll(
       ScreenCodeLayers.withScreenCode,
     ),
   ),
-  Layer.provide(Layer.mergeAll(PreviewAutomationBroker.layer, ScreenCodeLayers.primitives)),
+  Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ConnectionCatalogBroker.layer),
   Layer.provide(
     ServerSelfUpdate.layer.pipe(
