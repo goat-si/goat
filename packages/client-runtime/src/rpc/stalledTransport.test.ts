@@ -92,7 +92,8 @@ it.effect("leaves connected after a half-open carrier exceeds the RPC silence bu
     const target = new PrimaryConnectionTarget({
       environmentId,
       label: "Stalled environment",
-      httpBaseUrl: `http://127.0.0.1:${relay.port}/`,
+      // The relay stands in for a remote host; only the socket goes through it.
+      httpBaseUrl: "https://stalled.example.test/",
       wsBaseUrl: `ws://127.0.0.1:${relay.port}/`,
     });
     const prepared: PreparedConnection = {

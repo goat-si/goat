@@ -318,6 +318,12 @@ describe("retryDelayMs", () => {
     expect(EnvironmentSupervisor.retryDelayMs(0, Number.POSITIVE_INFINITY)).toBe(2_000);
     expect(EnvironmentSupervisor.retryDelayMs(0, Number.NEGATIVE_INFINITY)).toBe(1_000);
   });
+
+  it("retries a loopback server within seconds however many attempts failed", () => {
+    expect(EnvironmentSupervisor.retryDelayMs(0, 1, true)).toBe(2_000);
+    expect(EnvironmentSupervisor.retryDelayMs(100, 1, true)).toBe(5_000);
+    expect(EnvironmentSupervisor.retryDelayMs(100, 1, false)).toBe(300_000);
+  });
 });
 
 describe("EnvironmentSupervisor", () => {

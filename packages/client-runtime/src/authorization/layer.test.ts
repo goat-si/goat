@@ -48,7 +48,7 @@ const BOOTSTRAP: RelayEnvironmentConnectResponse = {
   expiresAt: "2026-06-06T01:00:00.000Z",
 };
 
-type RecordedResponse = Response | ((init: RequestInit) => Response);
+type RecordedResponse = Response | ((init: RequestInit) => Response | Promise<Response>);
 
 function recordedFetch(responses: ReadonlyArray<RecordedResponse>) {
   const calls: Array<readonly [RequestInfo | URL, RequestInit]> = [];
@@ -233,6 +233,33 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
 });
 
 describe("RemoteEnvironmentAuthorization", () => {
+  // A desktop's own server mid maintenance pass answered after 18 s; 10 s called it offline.
+  it.effect.each([
+    ["direct", 60_000],
+    ["ssh", 10_000],
+  ] as const)("gives a %s loopback descriptor read a %i ms budget", ([connectionMethod, budget]) =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ responses: [() => new Promise<Response>(() => {})] });
+      const failure = yield* Effect.gen(function* () {
+        const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
+        const attempt = yield* remote
+          .authorizeBearer({
+            expectedEnvironmentId: ENVIRONMENT_ID,
+            httpBaseUrl: "http://127.0.0.1:3773",
+            wsBaseUrl: "ws://127.0.0.1:3773",
+            bearerToken: "local-token",
+            connectionMethod,
+          })
+          .pipe(Effect.flip, Effect.forkChild);
+        yield* TestClock.adjust(budget - 1);
+        expect(attempt.pollUnsafe()).toBeUndefined();
+        yield* TestClock.adjust(1);
+        return yield* Fiber.join(attempt);
+      }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+      expect(failure).toMatchObject({ reason: "timeout" });
+    }),
+  );
+
   it.effect("revalidates the SSH attachment before a ticket and reuses that fresh descriptor", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
