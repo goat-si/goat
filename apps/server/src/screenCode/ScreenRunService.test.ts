@@ -3,8 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeUrl from "node:url";
-import type { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { PreviewTabId, type EnvironmentId, type ProviderInstanceId, type ThreadId } from "@goat/contracts";
+import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
+import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
+import type { ComputerUseCursorEvent } from "@goat/contracts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const invocation = {
@@ -19,6 +24,47 @@ const invocation = {
     providerInstanceId: "p" as ProviderInstanceId,
   },
 };
+
+it.live("a live cell host call publishes thinking for its bound target and hidden at finishTurn", () => {
+  const events: ComputerUseCursorEvent[] = [];
+  const targetRef = {
+    id: "target",
+    kind: "tab" as const,
+    environmentId: "env",
+    runId: "run",
+    turnId: "turn",
+    generation: 0,
+  };
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "run", turnId: "turn", threadId: "thread", environmentId: "env",
+      invocation: { ...invocation, capabilities: new Set(["preview" as const]), reauthorize: () => Effect.void },
+      source: "const tab = await screen.tab({tabId: 'tab'}); await tab.observe(); return true;",
+    });
+    expect(result.value).toBe(true);
+    yield* service.finishTurn({ runId: "run", turnId: "turn", threadId: "thread", environmentId: "env", reason: "test" });
+    expect(events.map((event) => `${event.identity.targetId}:${event.phase}`)).toEqual([
+      "target:thinking", "target:idle", "target:hidden",
+    ]);
+  }).pipe(Effect.provide(
+    ScreenRunService.layerWithRuntime({
+      invocation: { command: process.execPath, entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      dispatcher: {
+        availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+        dispatch: (call) => Effect.succeed(call.method === "bind_tab"
+          ? { value: { targetRef, tab: { tabId: "tab", title: "Page", url: "https://example.test/" } }, category: "confirmed" as const }
+          : { value: { indexedText: "Page" }, category: "confirmed" as const }),
+      },
+    }).pipe(
+      Layer.provide(NodeServices.layer),
+      Layer.provide(Layer.succeed(ScreenCursorPublisher, ScreenCursorPublisher.of({
+        publish: (event) => Effect.sync(() => { events.push(event); }),
+      }))),
+    ),
+  ));
+});
 
 it.effect(
   "the service layer starts without WASM and the first cell fails runtime_unavailable",
@@ -148,4 +194,57 @@ it.live("asset failure is retried and a successful load is cached", () => {
       }).pipe(Layer.provide(NodeServices.layer)),
     ),
   );
+});
+
+it.live("one cell reads a tab and an app through one Target API", () => {
+  const tab = { environmentId: "env", browserInstanceId: "server-browser", connectionId: "connection",
+    threadId: "thread", tabId: PreviewTabId.make("tab"), title: "Page", url: "https://example.test/",
+    owner: "unclaimed" as const, ownedByCaller: false, controlGeneration: 0 };
+  const calls: string[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.sync(() => { calls.push("list_tabs"); return [tab]; }),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      Effect.sync(() => {
+        calls.push(request.operation);
+        return (request.operation === "status"
+          ? { tabId: tab.tabId, url: tab.url, control: { owner: tab.owner, ownedByCaller: false, generation: 0 } }
+          : { url: tab.url, title: "Page", loading: false, visibleText: "Tab text",
+              interactiveElements: [], accessibilityTree: "- heading Page", consoleEntries: [],
+              networkEntries: [], actionTimeline: [], treeComplete: true, refGeneration: "1" }) as A;
+      }),
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    const appHost = {
+      availability: () => Effect.succeed([{ kind: "app" as const, available: true }]),
+      dispatch: (call: { method: string }) => Effect.sync(() => {
+        calls.push(call.method);
+        if (call.method === "bind_app") return { value: { targetRef: {
+          id: "app", kind: "app", environmentId: "env", runId: "r", turnId: "t", generation: 0,
+        } }, category: "confirmed" as const, evidence: ["App bound"] };
+        return { value: { text: "App text" }, category: "confirmed" as const, evidence: ["App observed"] };
+      }),
+    };
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+      runId: "r", turnId: "t", threadId: "thread", environmentId: "env",
+      invocation: { ...invocation, capabilities: new Set(["preview" as const]), reauthorize: () => Effect.void },
+      bindingHints: { browserRequested: true, computerRequested: true, appIds: ["app"],
+        tabs: [{ mentionId: "mention", environmentId: "env", browserInstanceId: "server-browser",
+          tabId: "tab", titleAtMention: "Page", urlAtMention: "https://example.test/" }] },
+      source: "const tab = await screen.tab({mentionId: 'mention'}); const app = await screen.app({appId: 'app'}); const web = await tab.observe(); const desktop = await app.observe(); return [web.indexedText, desktop.text];",
+    });
+    expect(result.value).toEqual(["- heading Page", "App text"]);
+    expect(calls.slice(0, 5)).toEqual(["list_tabs", "bind_app", "status", "snapshot", "get_accessibility_tree"]);
+    expect(result.journal.map((entry) => entry.receipt.method)).toEqual([
+      "bind_tab", "bind_app", "observe", "get_accessibility_tree",
+    ]);
+      yield* service.finishTurn({ runId: "r", turnId: "t", threadId: "thread", environmentId: "env", reason: "test" });
+    }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
+      dispatcher: createScreenDispatchRouter({ app: appHost, tab: tabHost }), tabHost,
+      invocation: { command: process.execPath, entrypoint: NodeUrl.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+      assetResolver: () => resolveScreenRuntimeAsset("dev"),
+    }).pipe(Layer.provide(NodeServices.layer))));
+  });
 });

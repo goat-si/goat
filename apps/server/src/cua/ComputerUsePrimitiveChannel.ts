@@ -4,6 +4,8 @@ import * as NodeCrypto from "node:crypto";
 import type {
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
+  ComputerUseCursorLeaseUpdate,
+  ComputerUseCursorEvent,
   ScreenRunError,
   ThreadId,
 } from "@goat/contracts";
@@ -45,7 +47,7 @@ interface Registration {
   readonly instanceId: string;
   readonly kind: "control" | "thread";
   readonly controlId?: string;
-  readonly queue: Queue.Queue<ComputerUsePrimitiveRequest>;
+  readonly queue: Queue.Queue<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>;
   readonly controls: Map<string, Control>;
 }
 
@@ -72,6 +74,7 @@ interface Report extends Authority {
 
 export interface PrimitiveChannelRequest {
   readonly threadId: ThreadId;
+  readonly expectedConnectionGeneration?: string;
   readonly runId: string;
   readonly turnId: string;
   readonly callId: number;
@@ -106,7 +109,7 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
       | {
           readonly status: "registered";
           readonly registrationId: string;
-          readonly requests: Stream.Stream<ComputerUsePrimitiveRequest>;
+          readonly requests: Stream.Stream<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>;
         }
     >;
     readonly closeStream: (input: {
@@ -125,6 +128,10 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
       },
     ) => Effect.Effect<boolean>;
     readonly cancel: (runId: string, cellId: string) => Effect.Effect<void>;
+    readonly cursor: (input: {
+      readonly threadId: ThreadId;
+      readonly event: ComputerUseCursorEvent;
+    }) => Effect.Effect<boolean>;
   }
 >()("goat/cua/ComputerUsePrimitiveChannel") {}
 
@@ -264,7 +271,7 @@ export const make = Effect.gen(function* () {
       )
         return { status: "conflict" as const };
       const now = yield* Clock.currentTimeMillis;
-      const queue = yield* Queue.dropping<ComputerUsePrimitiveRequest>(16);
+      const queue = yield* Queue.dropping<ComputerUsePrimitiveRequest | ComputerUseCursorLeaseUpdate>(16);
       const value = attachment(input, now);
       if (value === undefined) return { status: "unauthorized" as const };
       if (value.registration !== undefined) return { status: "conflict" as const };
@@ -280,6 +287,9 @@ export const make = Effect.gen(function* () {
       value.registration = registered;
       const requests = Stream.fromQueue(queue).pipe(
         Stream.filter((request) => {
+          if (request.state === "cursor-state")
+            return registered.controls.get(request.controlId)?.binding?.connectionId ===
+              request.connectionGeneration;
           const pending = registered.controls
             .get(request.controlId)
             ?.pending.get(request.requestId);
@@ -298,6 +308,24 @@ export const make = Effect.gen(function* () {
     closeStream: Effect.fn("ComputerUsePrimitiveChannel.closeStream")(function* (input) {
       const value = attachments.get(input.threadId);
       if (value?.registration?.id === input.registrationId) yield* close(value) ?? Effect.void;
+    }),
+    cursor: Effect.fn("ComputerUsePrimitiveChannel.cursor")(function* (input) {
+      const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+      if (current === undefined || !(yield* active(input.threadId, current.controlId))) return false;
+      const attachment = attachments.get(input.threadId);
+      const registered = attachment?.registration;
+      const binding = registered?.controls.get(current.controlId)?.binding;
+      if (!registered || !binding) return false;
+      const offered = yield* Queue.offer(registered.queue, {
+        state: "cursor-state",
+        controlId: current.controlId,
+        connectionGeneration: binding.connectionId,
+        event: input.event,
+      });
+      // A dropped terminal marker would leave the helper showing an old owner. Closing the
+      // stream cuts off that proxy and removes its helper overlay instead.
+      if (!offered && attachment) yield* close(attachment) ?? Effect.void;
+      return offered;
     }),
     reportControlReady: Effect.fn("ComputerUsePrimitiveChannel.reportControlReady")(
       function* (input) {
@@ -362,6 +390,15 @@ export const make = Effect.gen(function* () {
         binding === undefined
       )
         return yield* Effect.fail(desktopNotReady());
+      if (
+        input.expectedConnectionGeneration !== undefined &&
+        input.expectedConnectionGeneration !== binding.connectionId
+      )
+        return yield* Effect.fail({
+          code: "stale_reference" as const,
+          effectStarted: false,
+          nextStep: "Bind the desktop app again after the driver reconnects.",
+        });
       const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
       const request: ComputerUsePrimitiveRequest = {
         state: "primitive-request",

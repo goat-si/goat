@@ -47,7 +47,13 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { type Cursor, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
+import {
+  type CursorTargetReport,
+  nextTurn,
+  rememberScope,
+  staleCursorReport,
+  targeted,
+} from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
@@ -197,6 +203,10 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       purpose: string,
     ) => Effect.Effect<boolean, ComputerUseLeaseError>;
+    readonly releaseForeground?: (input: {
+      readonly threadId: ThreadId;
+      readonly controlId: string;
+    }) => Effect.Effect<boolean>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -206,7 +216,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly setTarget: (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+      target: CursorTargetReport,
     ) => Effect.Effect<boolean>;
     /**
      * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
@@ -817,10 +827,11 @@ const make = Effect.gen(function* () {
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
+      target: CursorTargetReport,
     ) {
       const record = yield* liveControl(threadId, controlId);
       if (record === undefined) return false;
+      if ("report" in target && staleCursorReport(record, target.report)) return false;
       const next = targeted(record, target);
       if (next === undefined) return true;
       controls.set(threadId, next);

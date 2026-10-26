@@ -13,8 +13,11 @@ import {
   type ScreenJournalEntry,
   type ScreenRunError,
   type ScreenRunLimits,
+  type ScreenTargetRef,
+  type ScreenBindingHints,
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
+import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 
 export interface ScreenHostContext {
   readonly runId: string;
@@ -24,6 +27,7 @@ export interface ScreenHostContext {
   readonly threadId: string;
   readonly invocation: McpThreadInvocationScope;
   readonly limits: ScreenRunLimits;
+  readonly bindingHints?: ScreenBindingHints;
 }
 
 export interface ScreenHostDispatchResult {
@@ -78,10 +82,17 @@ export class ScreenHostBridge {
   private readonly cells = new Map<string, CellState>();
   private readonly invalidTargets = new Map<string, Set<string>>();
   private readonly turnTargets = new Map<string, Set<string>>();
+  private readonly targetRefs = new Map<string, ScreenTargetRef>();
+  private readonly cellTargets = new Map<string, Set<string>>();
   private readonly closedCells = new Map<string, Set<string>>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
+  private readonly cursorPhases: ScreenCursorPhases | undefined;
+
+  constructor(cursorPhases?: ScreenCursorPhases) {
+    this.cursorPhases = cursorPhases;
+  }
 
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
     this.dispatcher = dispatcher;
@@ -177,7 +188,7 @@ export class ScreenHostBridge {
       return deny(failure("resource_exhausted", call.callId));
     if (state.pending >= context.limits.pendingCalls)
       return deny(failure("resource_exhausted", call.callId));
-    if (!call.targetRef && !["list_apps", "list_windows", "bind_app"].includes(call.method))
+    if (!call.targetRef && !["list_apps", "list_windows", "bind_app", "list_tabs", "bind_tab", "open_tab"].includes(call.method))
       return deny(failure("target_missing", call.callId));
     if (call.targetRef) {
       let touched = this.turnTargets.get(turn);
@@ -190,6 +201,11 @@ export class ScreenHostBridge {
         return deny(failure("resource_exhausted", call.callId));
       }
       touched.add(call.targetRef.id);
+      this.targetRefs.set(call.targetRef.id, call.targetRef);
+      const cellId = key(context.runId, context.turnId, context.cellId);
+      let cellTargets = this.cellTargets.get(cellId);
+      if (!cellTargets) this.cellTargets.set(cellId, (cellTargets = new Set()));
+      cellTargets.add(call.targetRef.id);
     }
     if (
       call.targetRef &&
@@ -242,6 +258,7 @@ export class ScreenHostBridge {
         this.targetGates.set(call.targetRef.id, gate);
       }
       effect = gate.withPermits(1)(dispatch);
+      if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
     }
     state.pending++;
     const result = yield* effect.pipe(
@@ -297,7 +314,19 @@ export class ScreenHostBridge {
         state.retainedBytes += size;
         state.metadata.push(metadata);
       }
-      value = metadata;
+      const stripImage = (item: unknown): unknown => {
+        if (Array.isArray(item)) return item.map(stripImage);
+        if (item && typeof item === "object") {
+          const record = item as Record<string, unknown>;
+          if (record.bytes === image.bytes) {
+            const { bytes: _bytes, ...rest } = record;
+            return { ...rest, ...metadata };
+          }
+          return Object.fromEntries(Object.entries(record).map(([name, part]) => [name, stripImage(part)]));
+        }
+        return item;
+      };
+      value = value === undefined ? metadata : stripImage(value);
     }
     const json = JSON.stringify(value);
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
@@ -347,6 +376,7 @@ export class ScreenHostBridge {
   ) {
     const state = this.cells.get(key(runId, turnId, cellId));
     if (state) state.closed = true;
+    this.endCellTargets(runId, turnId, cellId);
   });
 
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
@@ -363,6 +393,7 @@ export class ScreenHostBridge {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
     if (state) state.closed = true;
+    this.endCellTargets(runId, turnId, cellId);
     this.cells.delete(id);
     const turn = `${runId}\u0000${turnId}`;
     let closed = this.closedCells.get(turn);
@@ -409,6 +440,8 @@ export class ScreenHostBridge {
     }
     if (invalid.size >= 4096) this.fencedTurns.add(turn);
     else invalid.add(targetId);
+    const ref = this.targetRefs.get(targetId);
+    if (ref) this.cursorPhases?.ended(ref);
   });
 
   finishTurn = Effect.fn("ScreenHostBridge.finishTurn")(function* (
@@ -417,6 +450,13 @@ export class ScreenHostBridge {
     turnId: string,
   ) {
     const turn = `${runId}\u0000${turnId}`;
+    for (const targetId of this.turnTargets.get(turn) ?? []) {
+      const ref = this.targetRefs.get(targetId);
+      if (ref) this.cursorPhases?.ended(ref);
+      this.targetRefs.delete(targetId);
+    }
+    for (const cellId of this.cellTargets.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
     this.fencedTurns.delete(turn);
@@ -425,4 +465,13 @@ export class ScreenHostBridge {
     for (const cellId of this.cells.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cells.delete(cellId);
   });
+
+  private endCellTargets(runId: string, turnId: string, cellId: string): void {
+    const id = key(runId, turnId, cellId);
+    for (const targetId of this.cellTargets.get(id) ?? []) {
+      const ref = this.targetRefs.get(targetId);
+      if (ref) this.cursorPhases?.ended(ref);
+    }
+    this.cellTargets.delete(id);
+  }
 }

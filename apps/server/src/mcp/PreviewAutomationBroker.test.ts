@@ -86,6 +86,33 @@ it.effect("atomically registers a connected host and correlates its response", (
   ),
 );
 
+it.effect("an exact bound tab never reroutes after host replacement", () => Effect.scoped(
+  Effect.gen(function* () {
+    const broker = yield* makeBroker;
+    const host = makeHost({ clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID });
+    const firstConnected = yield* Deferred.make<string>();
+    const first = yield* broker.connect(host);
+    yield* Stream.runForEach(first, (event) => event.type === "connected"
+      ? Deferred.succeed(firstConnected, event.connectionId).pipe(Effect.asVoid) : Effect.void).pipe(Effect.forkScoped);
+    const oldConnection = yield* Deferred.await(firstConnected);
+    yield* broker.focusHost({ clientId: host.clientId, environmentId: scope.environmentId,
+      connectionId: oldConnection, focused: true,
+      liveTabs: [{ threadId: scope.thread.threadId, tabId: PreviewTabId.make("tab-1") }] });
+    const secondConnected = yield* Deferred.make<string>();
+    const second = yield* broker.connect(host);
+    yield* Stream.runForEach(second, (event) => event.type === "connected"
+      ? Deferred.succeed(secondConnected, event.connectionId).pipe(Effect.asVoid) : Effect.void).pipe(Effect.forkScoped);
+    const newConnection = yield* Deferred.await(secondConnected);
+    yield* broker.focusHost({ clientId: host.clientId, environmentId: scope.environmentId,
+      connectionId: newConnection, focused: true,
+      liveTabs: [{ threadId: scope.thread.threadId, tabId: PreviewTabId.make("tab-1") }] });
+    const result = yield* broker.invoke({ scope, operation: "click", input: { x: 1, y: 1 },
+      exact: { browserInstanceId: host.clientId, connectionId: oldConnection,
+        tabId: PreviewTabId.make("tab-1"), controlGeneration: 0, origin: null } }).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+  }),
+));
+
 it.effect("targets multiple tabs explicitly while retaining a default tab", () =>
   Effect.scoped(
     Effect.gen(function* () {

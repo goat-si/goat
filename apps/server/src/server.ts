@@ -58,6 +58,7 @@ import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenRunService from "./screenCode/ScreenRunService.ts";
+import * as ScreenCursorPublisher from "./cua/ScreenCursorPublisher.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
 
@@ -1024,7 +1025,6 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.mergeAll(
     McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
     ComputerUseLeaseRoute.layer,
-    ScreenRunService.ScreenRunService.layer,
     layerMemoryToolkits,
     McpHttpServer.layerProviderToolkit.pipe(Layer.provide(PermissionProfiles.layer)),
     HandoffExpiry.layer,
@@ -1118,11 +1118,19 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.
   Layer.provide(
-    ServerBrowser.layer.pipe(
-      Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+    ScreenRunService.layerWithTabHost().pipe(
+      Layer.provideMerge(
+        ScreenCursorPublisher.layer.pipe(
+          Layer.provideMerge(
+            ServerBrowser.layer.pipe(
+              Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+              Layer.provideMerge(PreviewBrowser.layer),
+            ),
+          ),
+        ),
+      ),
     ),
   ),
-  Layer.provide(PreviewBrowser.layer),
   Layer.provide(Layer.mergeAll(PreviewAutomationBroker.layer, ComputerUsePrimitiveChannel.layer)),
   Layer.provide(ConnectionCatalogBroker.layer),
   Layer.provide(

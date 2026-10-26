@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -50,10 +50,45 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
       tool: "click",
       args: { pid: 123, window_id: 4 },
     });
-  return { channel, registered, report, request };
+  return { channel, rawRegistered: registered, registered: {
+    ...registered,
+    requests: registered.requests.pipe(Stream.filter((item): item is ComputerUsePrimitiveRequest =>
+      item.state === "primitive-request")),
+  }, report, request };
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("routes a scoped cursor state to the live proxy without a driver call", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      const event = { op: "show" as const, phase: "thinking" as const, identity: {
+        environmentId: EnvironmentId.make("environment"), runId: "run", turnId: "turn",
+        targetId: "target", generation: 1, sequence: 1,
+      } };
+      assert.isTrue(yield* f.channel.cursor({ threadId, event }));
+      assert.deepEqual(Option.getOrThrow(yield* Stream.runHead(f.rawRegistered.requests)), {
+        state: "cursor-state", controlId, connectionGeneration: "driver:1", event,
+      });
+    }),
+  );
+  it.effect("stale connection generation refuses before enqueue", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      const result = yield* f.channel.request({
+        threadId, runId: "run:one", turnId: "cell:one", callId: 2,
+        deadlineMillis: 30_000, tool: "click", args: {},
+        expectedConnectionGeneration: "driver:0",
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "stale_reference");
+        assert.isFalse(result.failure.effectStarted);
+      }
+      yield* f.channel.closeStream({ threadId, registrationId: f.registered.registrationId });
+    }),
+  );
   it.effect("turn end revokes the channel token and quarantines in-flight server input", () =>
     Effect.gen(function* () {
       const signals = yield* PubSub.unbounded<void>();

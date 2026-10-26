@@ -49,6 +49,20 @@ export const ScreenMethod = Schema.Literals([
   "bring_to_front",
   "launch_app",
   "release_foreground",
+  "list_tabs",
+  "bind_tab",
+  "open_tab",
+  "claim_tab",
+  "keep_tab",
+  "navigate_tab",
+  "reload_tab",
+  "back_tab",
+  "forward_tab",
+  "close_tab",
+  "observe",
+  "select",
+  "select_text",
+  "wait_for",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;
 

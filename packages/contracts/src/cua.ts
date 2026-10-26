@@ -16,8 +16,9 @@ import {
   type ComputerUseRefusalReason,
 } from "./computerUseProtocol.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
-import { ComputerUseAgentCursor } from "./computerUseOverlay.ts";
+import { ComputerUseAgentCursor, ComputerUseCursorEvent, ComputerUseCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
+import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
 
 /** Native host descriptor, confined to the desktop/server control pipe. */
 export const CuaDriverMcpConfiguration = Schema.Struct({
@@ -218,10 +219,10 @@ export type ComputerUseLeaseAgentInput = typeof ComputerUseLeaseAgentInput.Type;
  * Proxy -> server: where the agent's cursor is now, what the helper overlay draws, or null when
  * the overlay hides it. The preview draws it over the window's live picture.
  */
-export const ComputerUseLeaseCursor = Schema.Struct({
-  controlId: TrimmedNonEmptyString,
-  cursor: Schema.NullOr(ComputerUseAgentCursor),
-});
+export const ComputerUseLeaseCursor = Schema.Union([
+  Schema.Struct({ controlId: TrimmedNonEmptyString, report: ComputerUseCursorReport }),
+  Schema.Struct({ controlId: TrimmedNonEmptyString, cursor: Schema.NullOr(ComputerUseAgentCursor) }),
+]);
 export type ComputerUseLeaseCursor = typeof ComputerUseLeaseCursor.Type;
 
 /**
@@ -562,12 +563,33 @@ export const ComputerUsePrimitiveRequest = Schema.Struct({
 });
 export type ComputerUsePrimitiveRequest = typeof ComputerUsePrimitiveRequest.Type;
 
+/** Host-origin cursor state on the authenticated proxy stream; never forwarded to the driver. */
+export const ComputerUseCursorLeaseUpdate = Schema.Struct({
+  state: Schema.Literal("cursor-state"),
+  controlId: TrimmedNonEmptyString,
+  connectionGeneration: TrimmedNonEmptyString,
+  event: ComputerUseCursorEvent,
+});
+export type ComputerUseCursorLeaseUpdate = typeof ComputerUseCursorLeaseUpdate.Type;
+
 export const ComputerUsePrimitiveReply = strictPrimitive(
   Schema.Struct({
     ...primitiveCallIdentity,
     status: Schema.Literals(["not_started", "settled", "unknown_outcome"]),
     result: Schema.optionalKey(primitiveJson),
     error: Schema.optionalKey(primitiveJson),
+    image: Schema.optionalKey(Schema.Struct({
+      mimeType: Schema.Literals(["image/png", "image/jpeg"]),
+      bytes: Schema.String.check(
+        Schema.isMaxLength(Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4),
+        Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+        Schema.makeFilter((value) =>
+          (value.length / 4) * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <=
+          DEFAULT_SCREEN_RUN_LIMITS.imageBytes),
+      ),
+      width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+      height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+    })),
   }),
 );
 export type ComputerUsePrimitiveReply = typeof ComputerUsePrimitiveReply.Type;
@@ -630,6 +652,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
   }),
   Schema.Struct({ state: Schema.Literal("ended"), reason: ComputerUseControlEnd }),
   ComputerUsePrimitiveRequest,
+  ComputerUseCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseUpdate = typeof ComputerUseLeaseUpdate.Type;
 
@@ -655,6 +678,7 @@ export const ComputerUseLeaseThreadUpdate = Schema.Union([
     reason: ComputerUseControlEnd,
   }),
   ComputerUsePrimitiveRequest,
+  ComputerUseCursorLeaseUpdate,
 ]);
 export type ComputerUseLeaseThreadUpdate = typeof ComputerUseLeaseThreadUpdate.Type;
 
@@ -700,6 +724,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "token_first",
   /** It would move the person's hardware pointer, which this host keeps still (cuaMovePointer). */
   "pointer_locked",
+  /** The helper may still draw over a capture because its hide was not acknowledged. */
+  "capture_hide_unconfirmed",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

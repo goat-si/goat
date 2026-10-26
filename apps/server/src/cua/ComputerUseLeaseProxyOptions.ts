@@ -14,7 +14,10 @@ import type {
   ComputerUseOverlayCommand,
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveRequest,
+  ComputerUseCursorLeaseUpdate,
+  ComputerUseCursorReport,
 } from "@goat/contracts";
+import { DEFAULT_SCREEN_RUN_LIMITS } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
@@ -36,12 +39,44 @@ export interface ReplySink {
   ) => Effect.Effect<unknown>;
 }
 
-const primitiveReplySink = (
+export const primitiveReplySink = (
   request: ComputerUsePrimitiveRequest,
   reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
 ): ReplySink => ({
   answer: (line, status = "not_started") => {
     const envelope = parse(line);
+    const rawResult = envelope?.result;
+    const record = (value: unknown): Record<string, unknown> | undefined =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown> : undefined;
+    const resultObject = record(rawResult);
+    const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
+    const imagePart = content.map(record).find((part) => part?.type === "image");
+    const state = record(resultObject?.structuredContent);
+    const width = state?.screenshot_width;
+    const height = state?.screenshot_height;
+    const bytes = imagePart?.data;
+    const imageSize = typeof bytes === "string" &&
+      bytes.length <= Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(bytes)
+      ? Buffer.from(bytes, "base64").byteLength : Infinity;
+    const validImage = imagePart !== undefined &&
+      (imagePart.mimeType === "image/png" || imagePart.mimeType === "image/jpeg") &&
+      typeof bytes === "string" && bytes.length % 4 === 0 &&
+      imageSize <= DEFAULT_SCREEN_RUN_LIMITS.imageBytes &&
+      Number.isSafeInteger(width) && (width as number) > 0 &&
+      Number.isSafeInteger(height) && (height as number) > 0;
+    const image = validImage ? {
+      mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
+      bytes: bytes as string,
+      width: width as number,
+      height: height as number,
+    } : undefined;
+    const imageError = imagePart !== undefined && !validImage;
+    const strippedResult = imagePart === undefined ? rawResult : {
+      ...resultObject,
+      content: content.filter((part) => record(part)?.type !== "image"),
+    };
     const bounded = (value: unknown) => {
       if (value === undefined) return undefined;
       const encoded = JSON.stringify(value);
@@ -49,8 +84,10 @@ const primitiveReplySink = (
         ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
         : { message: "Driver reply exceeded the primitive channel limit." };
     };
-    const result = bounded(envelope?.result);
-    const error = bounded(envelope?.error);
+    const result = imageError ? undefined : bounded(strippedResult);
+    const error = bounded(imageError
+      ? { message: "Driver image exceeded the primitive image limit or was invalid." }
+      : envelope?.error);
     return (
       reply?.({
         requestId: request.requestId,
@@ -63,6 +100,7 @@ const primitiveReplySink = (
         status,
         ...(result === undefined ? {} : { result }),
         ...(error === undefined ? {} : { error }),
+        ...(image === undefined ? {} : { image }),
       }) ?? Effect.void
     );
   },
@@ -130,6 +168,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly input: Stream.Stream<string>;
   /** Server-origin calls share the driver's admission path but answer on a separate channel. */
   readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
+  readonly cursorEvents?: Stream.Stream<ComputerUseCursorLeaseUpdate>;
   readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
   readonly onDriverStarted?: (current: {
     readonly connectionId: string;
@@ -184,6 +223,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
+  readonly onCursorReport?: (report: ComputerUseCursorReport) => Effect.Effect<boolean>;
   /**
    * Tells the server of keyboard and pointer events the helper saw, every one waiting since the
    * last report, in time order; the server drops each event another agent's input covers, and

@@ -139,6 +139,31 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
+  it.effect("does not forward a capture when the visible overlay's hide ack is missing", () =>
+    Effect.gen(function* () {
+      let visible = false;
+      const overlay = Object.assign(
+        (command: { readonly op: "show" | "hide" }) =>
+          Effect.sync(() => {
+            if (command.op === "show") visible = true;
+          }),
+        { captureHideConfirmed: () => !visible },
+      );
+      const h = yield* harness({ overlay });
+      yield* h.push(active());
+      const window = { pid: 4, window_id: 9 };
+      yield* h.send(call(1, "click", window));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "get_window_state", window));
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.id, 2);
+      assert.include(JSON.stringify(answer), '"detail":"capture_hide_unconfirmed"');
+      assert.notInclude(h.log, "send get_window_state");
+    }),
+  );
+
   it.effect("refuses a call whose draw a pause interrupted, and never forwards it", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();

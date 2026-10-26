@@ -53,7 +53,7 @@ import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
-import { replyImageSize } from "./ComputerUseOverlay.ts";
+import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
 import {
   type Envelope,
   namedWindows,
@@ -157,8 +157,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const overlay = yield* makeOverlayDrawer(
     options.onCursor,
     () => lifecycle.current?.driver.overlay,
+    options.onCursorReport,
   );
   const drawOverlay = overlay.draw;
+  if (options.cursorEvents)
+    yield* options.cursorEvents.pipe(
+      Stream.runForEach((update) => {
+        const current = lifecycle.current;
+        if (update.controlId !== options.controlId || current === undefined ||
+            current.connectionId !== update.connectionGeneration ||
+            finished !== undefined || paused !== undefined || idle)
+          return Effect.void;
+        return drawOverlay({ type: "cursor", event: update.event });
+      }),
+      Effect.forkScoped,
+    );
   const providerSink: ReplySink = {
     answer: (line, _status, context) => options.output(line, context),
   };
@@ -836,10 +849,30 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         id: JSON.stringify(id),
         name: typeof message.params?.name === "string" ? message.params.name : "",
         args: message.params?.arguments,
+        codeMode: typeof id === "string" && id.startsWith(PRIMITIVE_ID),
       });
       // A pause or end that came while drawing: refuse, whether or not it has stopped the
       // driver yet. This call never ran.
       if (!stillCurrent()) return yield* sink.answer(notSent(id));
+      const overlayChannel = current.driver.overlay;
+      if (
+        overlayCallCaptures(
+          typeof message.params?.name === "string" ? message.params.name : "",
+          message.params?.arguments,
+        ) &&
+        overlayChannel !== undefined &&
+        "captureHideConfirmed" in overlayChannel &&
+        typeof overlayChannel.captureHideConfirmed === "function" &&
+        !overlayChannel.captureHideConfirmed()
+      )
+        return yield* sink.answer(
+          refusal(
+            id,
+            message.method,
+            "capture_hide_unconfirmed",
+            "GOAT could not confirm that its cursor overlay was hidden. This capture did not run; wait for the helper and observe again.",
+          ),
+        );
       if (options.onTarget !== undefined) {
         const target = targetOf(message.params?.arguments);
         if (

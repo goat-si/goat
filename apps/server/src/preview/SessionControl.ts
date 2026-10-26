@@ -136,10 +136,12 @@ export class SessionControl {
    * The gate for one agent action, taken when it starts. Any change of control since then shuts it
    * for good: an input cancelled by a secret field or a takeover stays cancelled after it ends.
    */
-  dispatchGate() {
+  dispatchGate(expectedGeneration?: number) {
     const epoch = this.epoch;
     const gate = () => {
       this.assertAgentMayDispatch();
+      if (expectedGeneration !== undefined && this.epoch !== expectedGeneration)
+        throw new BrowserControlInterrupted("Browser control changed; refresh the tab snapshot.");
       if (this.epoch !== epoch) throw new BrowserControlInterrupted();
       this.activeAgentDispatching = true;
     };
@@ -149,6 +151,12 @@ export class SessionControl {
       work.then(done, done);
     };
     return Object.assign(gate, { linger });
+  }
+
+  assertObservedGeneration(expectedGeneration: number) {
+    this.assertOpen();
+    if (this.privateMode || this.epoch !== expectedGeneration)
+      throw new BrowserControlInterrupted("Browser observation changed; refresh the tab snapshot.");
   }
 
   private agentBlocked() {

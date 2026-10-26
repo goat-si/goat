@@ -47,7 +47,7 @@ export function makeLeaseFences(controlId: string) {
       appliedForeground: ReadonlyArray<ComputerUseForegroundGrant>,
     ): Stopping | undefined => {
       // Server-originated primitive requests share the lease stream but never change lease state.
-      if (update.state === "primitive-request") return undefined;
+      if (update.state === "primitive-request" || update.state === "cursor-state") return undefined;
       if (update.state !== "ended" && update.controlId !== controlId) return raise({ end: "lost" });
       if (update.state === "paused") return raise({ pause: update.reason });
       if (update.state === "ended")

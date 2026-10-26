@@ -20,7 +20,9 @@ import {
   ComputerUsePrimitiveReply,
   ComputerUsePrimitiveControlReady,
   ComputerUsePrimitiveControlCutoff,
+  DEFAULT_SCREEN_RUN_LIMITS,
 } from "@goat/contracts";
+import * as ByteSize from "effect/ByteSize";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -30,7 +32,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
+import { HttpIncomingMessage, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -49,6 +51,7 @@ const decodeReservation = Schema.decodeUnknownEffect(
 const decodePrimitiveReply = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveReply),
 );
+const PRIMITIVE_REPLY_BODY_BYTES = Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 + 128 * 1024;
 const decodeControlReady = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ComputerUsePrimitiveControlReady),
 );
@@ -373,7 +376,11 @@ const primitiveReplyLayer = HttpRouter.add(
     const proxyChannelToken = request.headers["x-goat-proxy-channel"] ?? "";
     const attachmentGeneration = yield* channel.authenticate({ threadId, proxyChannelToken });
     if (attachmentGeneration === undefined) return HttpServerResponse.empty({ status: 401 });
-    const body = yield* request.text.pipe(Effect.flatMap(decodePrimitiveReply), Effect.option);
+    const body = yield* request.text.pipe(
+      Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(PRIMITIVE_REPLY_BODY_BYTES)),
+      Effect.flatMap(decodePrimitiveReply),
+      Effect.option,
+    );
     if (Option.isNone(body)) return HttpServerResponse.empty({ status: 400 });
     const accepted = yield* channel.reply({
       threadId,

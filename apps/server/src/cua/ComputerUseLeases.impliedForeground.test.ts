@@ -61,6 +61,20 @@ const personRun = Effect.fn("impliedForeground.personRun")(function* (name: stri
 const foregroundIds = (state: ComputerUseLeases.ComputerUseControlState) =>
   state._tag === "active" ? (state.foreground ?? []).map((grant) => grant.handoffId) : [];
 
+it.effect("release_foreground ends the bound control's grant and notifies proxies", () =>
+  Effect.gen(function* () {
+    const { leases, threadId, control, signals, drain } = yield* personRun("explicit-release");
+    yield* drain;
+    if (!leases.releaseForeground) return assert.fail("releaseForeground is required");
+    assert.isFalse(yield* leases.releaseForeground({ threadId, controlId: "other-control" }));
+    assert.isTrue(yield* leases.releaseForeground({ threadId, controlId: control.controlId }));
+    assert.isAbove(yield* PubSub.remaining(signals), 0);
+    assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build"));
+    assert.deepEqual(foregroundIds(yield* leases.controlState(threadId, control.controlId)), []);
+    yield* leases.stopAll;
+  }).pipe(Effect.scoped, Effect.provide(layer)),
+);
+
 it.effect(
   "a run end whose ended-run read fails still revokes the implied foreground and tells proxies",
   () =>

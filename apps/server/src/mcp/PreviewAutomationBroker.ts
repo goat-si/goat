@@ -25,6 +25,7 @@ import {
   type PreviewAutomationHost,
   type PreviewAutomationHostFocus,
   type PreviewAutomationResponse,
+  type PreviewAutomationStatus,
   type PreviewAutomationStreamEvent,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -48,10 +49,32 @@ export interface PreviewAutomationInvokeInput {
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
   readonly tabId?: PreviewTabId;
+  readonly exact?: {
+    readonly browserInstanceId: string;
+    readonly connectionId: string;
+    readonly tabId: PreviewTabId;
+    readonly controlGeneration?: number;
+    readonly origin?: string | null;
+  };
+  /** Code-mode new-tab creation cannot select an older host without the exact expectation gate. */
+  readonly serverHostOnly?: boolean;
   readonly timeoutMs?: number;
   /** Background metadata reads must not change the agent's current tab. */
   readonly updateCurrentTab?: boolean;
   readonly onTargetTab?: (tabId: PreviewTabId | undefined) => void;
+}
+
+export interface BoundPreviewTab {
+  readonly environmentId: string;
+  readonly browserInstanceId: string;
+  readonly connectionId: string;
+  readonly threadId: string;
+  readonly tabId: PreviewTabId;
+  readonly title: string | null;
+  readonly url: string | null;
+  readonly owner: NonNullable<PreviewAutomationStatus["control"]>["owner"];
+  readonly ownedByCaller: boolean;
+  readonly controlGeneration: number;
 }
 
 export interface PreviewAutomationConnectOptions {
@@ -72,6 +95,9 @@ export class PreviewAutomationBroker extends Context.Service<
     readonly invoke: <A = unknown>(
       request: PreviewAutomationInvokeInput,
     ) => Effect.Effect<A, PreviewAutomationError>;
+    readonly listBoundTabs: (
+      scope: McpInvocationContext.McpThreadInvocationScope,
+    ) => Effect.Effect<readonly BoundPreviewTab[]>;
   }
 >()("goat/mcp/PreviewAutomationBroker") {}
 
@@ -527,8 +553,22 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             (!visibleOnly || tab.visible === true) &&
             (input.tabId === undefined || tab.tabId === input.tabId),
         );
-      const connection =
-        hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
+      const exact = input.exact;
+      const exactConnection = exact ? current.clients.get(exact.browserInstanceId) : undefined;
+      const serverConnection = input.serverHostOnly
+        ? current.clients.get(SERVER_BROWSER_AUTOMATION_CLIENT_ID) : undefined;
+      const connection = exact
+        ? exactConnection?.connectionId === exact.connectionId &&
+          exactConnection.environmentId === input.scope.environmentId &&
+          exactConnection.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID &&
+          supportsOperation(exactConnection, input.operation) &&
+          exactConnection.liveTabs.some((tab) =>
+            tab.threadId === input.scope.thread.threadId && tab.tabId === exact.tabId)
+          ? exactConnection : undefined
+        : input.serverHostOnly
+          ? serverConnection?.environmentId === input.scope.environmentId &&
+            supportsOperation(serverConnection, input.operation) ? serverConnection : undefined
+        : hasLiveAssignment && supportsOperation(assignedConnection, input.operation)
           ? assignedConnection
           : hasLiveAssignment
             ? undefined
@@ -559,7 +599,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         assigned !== undefined &&
         assigned.connectionId === connection.connectionId &&
         assigned.queue === connection.queue;
-      assignments.set(assignmentKey, {
+      if (input.updateCurrentTab !== false) assignments.set(assignmentKey, {
         clientId: connection.clientId,
         connectionId: connection.connectionId,
         queue: connection.queue,
@@ -571,7 +611,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
 
       const requestSequence = current.requestSequence;
       const requestId = `preview-${requestSequence}`;
-      const tabId = input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
+      const tabId = exact?.tabId ?? input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
       const selectorDiagnostics = selectorDiagnosticsFromInput(input.input);
       const context: PreviewAutomationRequestErrorContext = {
         operation: input.operation,
@@ -627,7 +667,14 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             requestId,
             threadId: input.scope.thread.threadId,
             tabId: requestContext.tabId,
-            tabIdExplicit: input.tabId !== undefined,
+            tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
+            ...(input.exact?.controlGeneration === undefined || input.exact.origin === undefined
+              ? {} : { screenExpectation: {
+                  browserInstanceId: input.exact.browserInstanceId,
+                  connectionId: input.exact.connectionId,
+                  controlGeneration: input.exact.controlGeneration,
+                  origin: input.exact.origin,
+                } }),
             agentSessionId: hostAssignmentKey(input.scope),
             operation: input.operation,
             input: input.input,
@@ -690,7 +737,48 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     return result;
   });
 
-  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke });
+  const listBoundTabs: PreviewAutomationBroker["Service"]["listBoundTabs"] = Effect.fn(
+    "PreviewAutomationBroker.listBoundTabs",
+  )(function* (scope) {
+    const snapshot = yield* SynchronizedRef.get(state);
+    const candidates = [...snapshot.clients.values()].flatMap((host) =>
+      host.environmentId === scope.environmentId &&
+      host.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID &&
+      supportsOperation(host, "status")
+        ? host.liveTabs.filter((tab) => tab.threadId === scope.thread.threadId).map((tab) => ({
+            browserInstanceId: host.clientId,
+            connectionId: host.connectionId,
+            tabId: tab.tabId,
+          })) : [],
+    );
+    const found: BoundPreviewTab[] = [];
+    for (const candidate of candidates) {
+      const result = yield* invoke<PreviewAutomationStatus>({
+        scope, operation: "status", input: {}, exact: candidate, updateCurrentTab: false,
+      }).pipe(Effect.option);
+      if (Option.isNone(result)) continue;
+      const status = result.value;
+      if (status.tabId !== candidate.tabId || !status.control) continue;
+      const live = yield* SynchronizedRef.get(state);
+      if (live.clients.get(candidate.browserInstanceId)?.connectionId !== candidate.connectionId)
+        continue;
+      found.push({
+        environmentId: scope.environmentId,
+        browserInstanceId: candidate.browserInstanceId,
+        connectionId: candidate.connectionId,
+        threadId: scope.thread.threadId,
+        tabId: candidate.tabId,
+        title: status.title,
+        url: status.url,
+        owner: status.control.owner,
+        ownedByCaller: status.control.ownedByCaller,
+        controlGeneration: status.control.generation,
+      });
+    }
+    return found;
+  });
+
+  return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke, listBoundTabs });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
 export const layer = Layer.effect(PreviewAutomationBroker, make);

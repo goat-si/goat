@@ -294,6 +294,8 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
     expect(result.screenshot).toBeUndefined();
+    expect(result.treeComplete).toBe(true);
+    expect(result.refGeneration).toBeDefined();
     expect(String(result.accessibilityTree)).toContain("Compose");
   });
 
@@ -314,6 +316,8 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       timeoutMs: 15_000,
     });
     expect(result.screenshot).toMatchObject({ width: 800, height: 3000, clipped: false });
+    expect(result.screenshot?.region).toEqual({ kind: "document", x: 0, y: 0, width: 800, height: 3000 });
+    expect(result.screenshot?.scale).toBe(1);
     const bottomPixel = await page.evaluate(`(async () => {
       const image = new Image();
       image.src = "data:image/png;base64,${result.screenshot!.data}";
@@ -331,6 +335,8 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     ).toEqual({ x: 0, y: 450, width: 800, height: 600 });
     const viewport = await takeSnapshot();
     expect(viewport.screenshot).toMatchObject({ width: 800, height: 600 });
+    expect(viewport.screenshot?.region).toMatchObject({ kind: "viewport", width: 800, height: 600 });
+    expect(viewport.screenshot?.scale).toBe(1);
   });
 
   it("captures CSS pixels from a real Retina document", async () => {

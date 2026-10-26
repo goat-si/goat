@@ -306,6 +306,21 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
   quality: 70,
 });
 
+it.effect("a queued input cannot dispatch after its expected control generation changes", () =>
+  Effect.scoped(Effect.gen(function* () {
+    const { broker, tabId } = yield* ready;
+    const bound = (yield* broker.listBoundTabs(scope)).find((tab) => tab.tabId === tabId);
+    expect(bound).toBeDefined();
+    if (!bound) return;
+    const result = yield* broker.invoke({ scope, operation: "click",
+      input: { locator: "aria-ref=stale" },
+      exact: { browserInstanceId: bound.browserInstanceId, connectionId: bound.connectionId,
+        tabId, controlGeneration: bound.controlGeneration + 1, origin: null } }).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    expect(contexts[0]?.page.locator).not.toHaveBeenCalled();
+  })).pipe(Effect.provide(layer)),
+);
+
 beforeEach(() => {
   contexts.length = 0;
   encoderStreams.length = 0;

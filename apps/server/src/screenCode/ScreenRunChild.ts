@@ -34,6 +34,9 @@ const methods = [
   "bring_to_front",
   "launch_app",
   "release_foreground",
+  "list_tabs", "bind_tab", "open_tab", "claim_tab", "keep_tab",
+  "navigate_tab", "reload_tab", "back_tab", "forward_tab", "close_tab",
+  "observe", "select", "select_text", "wait_for",
 ] as const;
 
 type ChildResult = Pick<
@@ -151,7 +154,55 @@ export async function runScreenChild(
           return true;
         }
       });
-      globalThis.screen = Object.freeze({ values: __values, ${methods
+      const __call = async (method, arg) => JSON.parse(await __host(method, JSON.stringify([arg])));
+      const __target = (binding) => {
+        const ref = binding.targetRef;
+        const call = (method, arg = {}) => __call(method, { ...arg, targetRef: ref });
+        const common = {
+          targetRef: ref,
+          observe: (arg = {}) => call(ref.kind === 'tab' ? 'observe' : 'get_accessibility_tree', arg),
+          click: (arg = {}) => call('click', arg),
+          rightClick: (arg = {}) => call('right_click', arg),
+          drag: (arg = {}) => call('drag', arg),
+          scroll: (arg = {}) => call('scroll', arg),
+          selectText: (arg = {}) => call('select_text', arg),
+          setValue: (arg = {}) => call('set_value', arg),
+          pressKey: (arg = {}) => call('press_key', arg),
+          typeText: (arg = {}) => call('type_text', arg),
+          waitFor: (arg = {}) => call('wait_for', arg),
+        };
+        return Object.freeze(ref.kind === 'tab' ? {
+          ...common,
+          claim: () => call('claim_tab'),
+          keep: (reason = 'deliverable') => call('keep_tab', { reason }),
+          navigate: (url) => call('navigate_tab', { url }),
+          reload: () => call('reload_tab'),
+          back: () => call('back_tab'),
+          forward: () => call('forward_tab'),
+          close: () => call('close_tab'),
+          select: (arg = {}) => call('select', arg),
+        } : {
+          ...common,
+          getWindowState: () => call('get_window_state'),
+          verifyState: (arg = {}) => call('verify_state', arg),
+          screenshot: (arg = {}) => call('screenshot', arg),
+          bringToFront: () => call('bring_to_front'),
+          releaseForeground: () => call('release_foreground'),
+        });
+      };
+      globalThis.screen = Object.freeze({ values: __values,
+        discover: async () => {
+          const result = { apps: [], windows: [], tabs: [], unavailable: {} };
+          try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }
+          catch (error) { result.unavailable.desktop = String(error); }
+          try { result.tabs = await __call('list_tabs', {}); }
+          catch (error) { result.unavailable.browser = String(error); }
+          return result;
+        },
+        app: async (query = {}) => __target(await __call('bind_app', query)),
+        tab: async (query = {}) => __target(await __call('bind_tab', query)),
+        openTab: async (arg = {}) => __target(await __call('open_tab', arg)),
+        ${methods
         .map(
           (method) =>
             `${method}: async (...args) => JSON.parse(await __host(${JSON.stringify(method)}, JSON.stringify(args)))`,

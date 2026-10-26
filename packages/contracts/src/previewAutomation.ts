@@ -646,8 +646,18 @@ export const PreviewAutomationSnapshot = Schema.Struct({
       fullPage: Schema.optional(Schema.Boolean),
       clipped: Schema.optional(Schema.Boolean),
       byteLength: Schema.optional(Schema.Int),
+      region: Schema.optional(Schema.Struct({
+        kind: Schema.Literals(["viewport", "document"]),
+        x: Schema.Finite,
+        y: Schema.Finite,
+        width: Schema.Finite,
+        height: Schema.Finite,
+      })),
+      scale: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
     }),
   ),
+  treeComplete: Schema.optional(Schema.Boolean),
+  refGeneration: Schema.optional(Schema.String),
 });
 export type PreviewAutomationSnapshot = typeof PreviewAutomationSnapshot.Type;
 
@@ -709,6 +719,12 @@ export const PreviewAutomationRequest = Schema.Struct({
   threadId: ThreadId,
   tabId: Schema.optional(PreviewTabId),
   tabIdExplicit: Schema.optional(Schema.Boolean),
+  screenExpectation: Schema.optional(Schema.Struct({
+    browserInstanceId: PreviewAutomationClientId,
+    connectionId: PreviewAutomationConnectionId,
+    controlGeneration: Schema.Number,
+    origin: Schema.NullOr(Schema.String),
+  })),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
   operation: PreviewAutomationOperation,

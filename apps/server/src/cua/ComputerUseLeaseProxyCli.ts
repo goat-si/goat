@@ -20,6 +20,7 @@ import {
   ComputerUseLeaseUpdate,
   ComputerUseLeaseThreadUpdate,
   type ComputerUsePrimitiveRequest,
+  type ComputerUseCursorLeaseUpdate,
   type ComputerUsePrimitiveReply,
   COMPUTER_USE_PRIMITIVE_REPLY_ROUTE,
   COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE,
@@ -411,6 +412,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ),
     onCursor: (cursor: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursor"]>>[0]) =>
       Effect.promise(() => report(url, authorization, { controlId, cursor })),
+    onCursorReport: (cursorReport: Parameters<NonNullable<LeaseProxyOptions<never, never>["onCursorReport"]>>[0]) =>
+      Effect.promise(() => report(url, authorization, { controlId, report: cursorReport })),
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
@@ -438,6 +441,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done>();
     const threadUpdates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate, Cause.Done>();
     const primitiveRequests = yield* Queue.dropping<ComputerUsePrimitiveRequest, Cause.Done>(16);
+    const cursorEvents = yield* Queue.bounded<ComputerUseCursorLeaseUpdate, Cause.Done>(64);
     const decodeControl = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseLeaseUpdate));
     const decodeThread = Schema.decodeUnknownOption(
       Schema.fromJsonString(ComputerUseLeaseThreadUpdate),
@@ -505,11 +509,13 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
             const decoded = decodeControl(line);
             if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
             if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+            else if (decoded.value.state === "cursor-state") yield* Queue.offer(cursorEvents, decoded.value);
             else yield* Queue.offer(updates, decoded.value);
           } else {
             const decoded = decodeThread(line);
             if (Option.isNone(decoded)) return yield* Effect.die(new Error("Invalid lease stream"));
             if (decoded.value.state === "primitive-request") yield* offerPrimitive(decoded.value);
+            else if (decoded.value.state === "cursor-state") yield* Queue.offer(cursorEvents, decoded.value);
             else yield* Queue.offer(threadUpdates, decoded.value);
           }
         }),
@@ -520,12 +526,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           yield* Queue.end(updates);
           yield* Queue.end(threadUpdates);
           yield* Queue.end(primitiveRequests);
+          yield* Queue.end(cursorEvents);
           if (!(yield* Deferred.isDone(registration))) yield* Deferred.succeed(registration, "");
         }),
       ),
       Effect.forkScoped,
     );
     const common = {
+      cursorEvents: Stream.fromQueue(cursorEvents),
       connectionId: proxyInstanceId,
       ...(reporter === undefined
         ? {}

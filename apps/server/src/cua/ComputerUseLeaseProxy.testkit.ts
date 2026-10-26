@@ -309,15 +309,22 @@ export const harness = Effect.fn(function* (
         ),
         ...(options.overlay
           ? {
-              overlay: (command: ComputerUseOverlayCommand) =>
-                (typeof options.overlay === "function"
-                  ? options.overlay(command)
-                  : Effect.void
-                ).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
+              overlay: Object.assign(
+                (command: ComputerUseOverlayCommand) =>
+                  (typeof options.overlay === "function"
+                    ? options.overlay(command)
+                    : Effect.void
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
+                    ),
                   ),
-                ),
+                typeof options.overlay === "function" &&
+                  "captureHideConfirmed" in options.overlay &&
+                  typeof options.overlay.captureHideConfirmed === "function"
+                  ? { captureHideConfirmed: options.overlay.captureHideConfirmed }
+                  : {},
+              ),
             }
           : {}),
       };

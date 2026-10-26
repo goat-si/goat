@@ -17,6 +17,7 @@ import {
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   ThreadId,
   type BrowserProfile,
+  type ComputerUseCursorState,
   type PreviewAppearancePreference,
   type PreviewAutomationActionEvent,
   type PreviewAutomationClickInput,
@@ -187,7 +188,9 @@ export type ServerBrowserViewerOutput =
       readonly x: number;
       readonly y: number;
       readonly sequence: number;
+      readonly cursor?: ComputerUseCursorState;
     }
+  | { readonly _tag: "cursor-state"; readonly cursor: ComputerUseCursorState }
   | {
       readonly _tag: "fileChooser";
       readonly id: string;
@@ -257,6 +260,12 @@ export class ServerBrowser extends Context.Service<
       readonly threadId: string;
       readonly tabId: string;
       readonly control: "stop" | "handBack";
+    }) => Effect.Effect<boolean>;
+    /** The trusted screen host supplies the exact tab after claim admission. */
+    readonly cursorState?: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly cursor: ComputerUseCursorState;
     }) => Effect.Effect<boolean>;
   }
 >()("goat/preview/ServerBrowser") {}
@@ -1558,7 +1567,27 @@ const make = Effect.gen(function* () {
 
   let pointerSequence = 0;
   /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
-  const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
+  const gateFor = (tab: ServerTab, expectedGeneration?: number): ServerBrowserPage.DispatchGate =>
+    tab.control.dispatchGate(expectedGeneration);
+
+  const originOf = (url: string): string | null => {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
+    } catch {
+      return null;
+    }
+  };
+  const assertScreenExpectation = (tab: ServerTab, request: PreviewAutomationRequest) => {
+    const expected = request.screenExpectation;
+    if (!expected) return;
+    if (!request.tabIdExplicit || request.tabId !== tab.tabId ||
+        expected.browserInstanceId !== SERVER_HOST_CLIENT_ID)
+      throw new BrowserControlInterrupted("Exact browser tab changed.");
+    tab.control.assertObservedGeneration(expected.controlGeneration);
+    if (originOf(tab.page.url()) !== expected.origin)
+      throw new BrowserControlInterrupted("Page origin changed; bind and observe again.");
+  };
 
   const pointerFor =
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>
@@ -1642,6 +1671,7 @@ const make = Effect.gen(function* () {
         'No server preview tab is open for this thread. Call goat_call {path:"preview.open"} first.',
       );
     }
+    assertScreenExpectation(tab, request);
     if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
       throw new BrowserControlInterrupted(
         "This tab belongs to another agent session. You can read it, but open your own tab to act.",
@@ -1667,13 +1697,15 @@ const make = Effect.gen(function* () {
   ): Promise<unknown> => {
     const input = request.input;
     switch (request.operation) {
-      case "status":
-        return statusWithTitle(
-          request.tabId === undefined
-            ? latestThreadTab(request.threadId, request.agentSessionId)
-            : tabs.get(tabKey(request.threadId, request.tabId)),
-          request.agentSessionId,
-        );
+      case "status": {
+        const tab = request.tabId === undefined
+          ? latestThreadTab(request.threadId, request.agentSessionId)
+          : tabs.get(tabKey(request.threadId, request.tabId));
+        if (tab) assertScreenExpectation(tab, request);
+        const status = await statusWithTitle(tab, request.agentSessionId);
+        if (tab) assertScreenExpectation(tab, request);
+        return status;
+      }
       case "open": {
         if (!request.agentSessionId)
           throw new BrowserControlInterrupted(
@@ -1884,6 +1916,12 @@ const make = Effect.gen(function* () {
     signal?: AbortSignal,
   ) => {
     const input = request.input;
+    assertScreenExpectation(tab, request);
+    const actionGate = (): ServerBrowserPage.DispatchGate => {
+      const base = gateFor(tab, request.screenExpectation?.controlGeneration);
+      return Object.assign(() => { assertScreenExpectation(tab, request); base(); },
+        base.linger ? { linger: base.linger } : {});
+    };
     switch (request.operation) {
       case "back":
       case "forward":
@@ -1952,7 +1990,7 @@ const make = Effect.gen(function* () {
         return { tabId: tab.tabId, colorScheme };
       }
       case "snapshot": {
-        return withScreencastsPaused(
+        const result = await withScreencastsPaused(
           tab,
           () =>
             ServerBrowserPage.snapshot({
@@ -1964,6 +2002,8 @@ const make = Effect.gen(function* () {
             }),
           deadlineMs,
         );
+        assertScreenExpectation(tab, request);
+        return result;
       }
       case "logs":
         return tab.diagnostics.read(decodeLogsInput(input));
@@ -1986,7 +2026,7 @@ const make = Effect.gen(function* () {
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
         await recordAction(tab, "click", () =>
-          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gateFor(tab)),
+          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
         );
         return undefined;
       }
@@ -1996,12 +2036,12 @@ const make = Effect.gen(function* () {
             tab.page,
             input as PreviewAutomationHoverInput,
             pointerFor(tab),
-            gateFor(tab),
+            actionGate(),
           ),
         );
       case "select":
         return recordAction(tab, "select", () =>
-          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, gateFor(tab)),
+          ServerBrowserPage.select(tab.page, input as PreviewAutomationSelectInput, actionGate()),
         );
       case "drag":
         return recordAction(tab, "drag", () =>
@@ -2009,7 +2049,7 @@ const make = Effect.gen(function* () {
             tab.page,
             input as PreviewAutomationDragInput,
             pointerFor(tab),
-            gateFor(tab),
+            actionGate(),
           ),
         );
       case "upload":
@@ -2018,15 +2058,15 @@ const make = Effect.gen(function* () {
         );
       case "type":
         return recordAction(tab, "type", () =>
-          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, gateFor(tab)),
+          ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput, actionGate()),
         );
       case "press":
         return recordAction(tab, "press", () =>
-          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, gateFor(tab)),
+          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
         );
       case "scroll":
         return recordAction(tab, "scroll", () =>
-          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, gateFor(tab)),
+          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, actionGate()),
         );
       case "evaluate":
         return ServerBrowserPage.evaluate(
@@ -2034,12 +2074,15 @@ const make = Effect.gen(function* () {
           input as PreviewAutomationEvaluateInput,
           request.timeoutMs,
         );
-      case "waitFor":
-        return ServerBrowserPage.waitFor(
+      case "waitFor": {
+        const result = await ServerBrowserPage.waitFor(
           tab.page,
           { ...(input as PreviewAutomationWaitForInput), timeoutMs: request.timeoutMs },
           signal,
         );
+        assertScreenExpectation(tab, request);
+        return result;
+      }
       case "recordingStart": {
         const recording = await startRecording(tab, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
@@ -2049,10 +2092,15 @@ const make = Effect.gen(function* () {
 
   const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
     Effect.tryPromise({
-      try: () =>
-        answerCall(request.timeoutMs, (deadlineMs) =>
+      try: () => {
+        if (request.screenExpectation &&
+            (request.screenExpectation.connectionId !== connectionId ||
+             request.screenExpectation.browserInstanceId !== SERVER_HOST_CLIENT_ID))
+          throw new BrowserControlInterrupted("Exact browser connection changed.");
+        return answerCall(request.timeoutMs, (deadlineMs) =>
           runOperation(request, deadlineMs).finally(() => markUsed(request)),
-        ),
+        );
+      },
       catch: ServerBrowserPage.toOperationError,
     }).pipe(
       Effect.match({
@@ -2562,6 +2610,17 @@ const make = Effect.gen(function* () {
         else tab.control.resumeAgents();
         return true;
       }),
+    cursorState: (input) => Effect.sync(() => {
+      const tab = tabs.get(tabKey(input.threadId, input.tabId));
+      if (!tab) return false;
+      const terminal = input.cursor.phase === "hidden" || input.cursor.phase === "yielded";
+      if (!terminal && (tab.control.agentId === null || tab.control.isPrivate || tab.control.controller !== null))
+        return false;
+      for (const viewer of tab.viewers) viewer.push({ _tag: "cursor-state", cursor: input.cursor });
+      if (tab.desktop)
+        runFork(desktopChannel.cursorState?.({ threadId: tab.threadId, tabId: tab.tabId }, input.cursor) ?? Effect.void);
+      return true;
+    }),
   });
 });
 

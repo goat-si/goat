@@ -9,6 +9,7 @@ import type {
   ScreenImage,
 } from "@goat/contracts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
+import { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { screenRunLimits } from "./ScreenRunLimits.ts";
 
 const context = (reauthorize?: () => Effect.Effect<void>) => ({
@@ -105,6 +106,7 @@ it.effect("the host retains bounded images and guest replies contain metadata on
         };
         const image: ScreenImage = { ...metadata, bytes: Buffer.from("1234").toString("base64") };
         return Effect.succeed({
+          value: { observationId: "o", tree: "button Save", image },
           image,
           imageMetadata: metadata,
           category: "unverifiable" as const,
@@ -122,6 +124,7 @@ it.effect("the host retains bounded images and guest replies contain metadata on
     const collected = yield* bridge.takeCellImages("r", "t", "c");
     expect(JSON.stringify(one)).not.toContain("MTIzNA");
     expect(JSON.stringify(two)).not.toContain("MTIzNA");
+    expect(one?.value).toMatchObject({ observationId: "o", tree: "button Save", image: { imageRef: "i1" } });
     expect(collected.images.map((image) => image.imageRef)).toEqual(["i2"]);
     expect(collected.imageMetadata[0]?.omitted).toBe(true);
   }),
@@ -177,5 +180,18 @@ it.effect("discard and finishTurn release cell and target state", () =>
     yield* bridge.finishTurn("r", "t");
     const after = yield* bridge.handle(call(1), context());
     expect(after && "error" in after ? after.error?.code : undefined).not.toBe("stale_reference");
+  }),
+);
+
+it.effect("trusted host call phases end when the cell is cut", () =>
+  Effect.gen(function* () {
+    const events: string[] = [];
+    const bridge = new ScreenHostBridge(new ScreenCursorPhases((event) => events.push(event.phase)));
+    bridge.setDispatcher({ availability: () => Effect.succeed([]),
+      dispatch: () => Effect.succeed({ value: true, category: "confirmed", evidence: ["done"] }) });
+    const reply = yield* bridge.handle(call(1), context(() => Effect.void));
+    expect(reply?.outcome).toBe("ok");
+    yield* bridge.cutCell("r", "t", "c", "stopped");
+    expect(events).toEqual(["thinking", "idle", "hidden"]);
   }),
 );
