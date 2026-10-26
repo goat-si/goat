@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   closeTab: vi.fn<DesktopPreviewBridge["closeTab"]>(),
   registerWebview: vi.fn<DesktopPreviewBridge["registerWebview"]>(),
   getPreviewConfig: vi.fn<DesktopPreviewBridge["getPreviewConfig"]>(),
-  threadRunStatus: "idle" as "idle" | "running",
+  threadRunStatus: "idle" as "idle" | "running" | "subagents",
 }));
 
 vi.mock(import("~/env"), async (original) => ({ ...(await original()), isElectron: true }));
@@ -68,9 +68,18 @@ vi.mock(import("~/state/entities"), async (original) => {
   };
 });
 const runListeners = new Set<() => void>();
+const shell = (status: string, pendingBackgroundTasks: ReadonlyArray<unknown> = []) => ({
+  runtime: { status, activeRunId: null },
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  pendingSubagentRequest: null,
+  pendingBackgroundTasks,
+});
 const runtimeShells = {
-  idle: { runtime: { status: "idle" } },
-  running: { runtime: { status: "running" } },
+  idle: shell("idle"),
+  running: shell("running"),
+  // The turn ended, but its subagents work on with the thread's credential.
+  subagents: shell("idle", [{ kind: "subagent", id: "child-1" }]),
 };
 
 // This desktop's own environment, whose server tabs it draws in webviews.
@@ -194,7 +203,7 @@ describe("ElectronBrowserHost", () => {
     expect(after.every((node, index) => node.isSameNode(before[index]!))).toBe(true);
   });
 
-  it("keeps a tab an agent drives painting only while its thread runs a turn, so its actions get frames", async () => {
+  it("keeps a tab an agent drives painting only while its thread has work going, so its actions get frames", async () => {
     using _state = setup();
     mocks.threadRunStatus = "running";
     useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
@@ -214,7 +223,13 @@ describe("ElectronBrowserHost", () => {
     const personTab = previewRuntimeTabId(threadRef, "server-a", "tab_person");
     await vi.waitFor(() => expect(held()[agentTab]).toBe(1));
     expect(held()[personTab]).toBeUndefined();
-    // The turn ends: a page the agent left open parks like any tab no view shows.
+    // The turn ends while subagents it started still work: they may still drive the tab.
+    await act(() => {
+      mocks.threadRunStatus = "subagents";
+      for (const listener of runListeners) listener();
+    });
+    expect(held()[agentTab]).toBe(1);
+    // Nothing left running: a page the agent left open parks like any tab no view shows.
     await act(() => {
       mocks.threadRunStatus = "idle";
       for (const listener of runListeners) listener();

@@ -1,5 +1,5 @@
 import { parseScopedThreadKey } from "@goat/client-runtime/environment";
-import { threadRuntimeIsActive } from "@goat/client-runtime/state/models";
+import { isActiveThreadWork } from "@goat/client-runtime/state/thread-inbox";
 import {
   AuthPreviewOperateScope,
   type DesktopPreviewOpenLinkEvent,
@@ -255,14 +255,16 @@ export function ElectronBrowserHost() {
 /**
  * An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
  * parked outside the window composites no frames: the agent's clicks would wait for a frame and
- * time out. While the tab's thread runs a turn, it keeps painting behind the app; an idle or
- * finished thread lets it park, so a page left open costs nothing.
+ * time out. While the tab's thread has work going (a turn, or background subagents that keep
+ * its credential after the turn ends), it keeps painting behind the app; a thread with nothing
+ * left running lets it park, so a page left open costs nothing.
  */
 function AgentTabPainting(props: {
   readonly threadRef: ScopedThreadRef;
   readonly runtimeTabId: string;
 }) {
-  const working = threadRuntimeIsActive(useThreadShell(props.threadRef)?.runtime);
+  const shell = useThreadShell(props.threadRef);
+  const working = shell !== null && isActiveThreadWork(shell);
   const { runtimeTabId } = props;
   useEffect(() => {
     if (!working) return;
