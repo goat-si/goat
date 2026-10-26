@@ -260,4 +260,72 @@ describe("local GOAT server discovery", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
+
+  it.live("counts a database a server holds open after it was renamed as unchecked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(yield* fs.makeTempDirectoryScoped({ prefix: "goat-homes-" }));
+      const own = path.join(home, ".goat", "desktop", "userdata", "statev2.sqlite");
+      // A server started through a wrapper whose command line names no GOAT entry point. Its
+      // database was renamed while it runs; its write-ahead log keeps the name it opened.
+      const database = path.join(home, "custom", "userdata", "statev2.sqlite");
+      const renamed = database + ".bak";
+      const wal = database + "-wal";
+      const output = (stdout: string): ProcessRunner.ProcessRunOutput => ({
+        stdout,
+        stderr: "",
+        code: ChildProcessSpawner.ExitCode(0),
+        timedOut: false,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        stdoutInvalidUtf8: false,
+        stderrInvalidUtf8: false,
+      });
+      const runner = Layer.mock(ProcessRunner.ProcessRunner)({
+        run: (input) =>
+          Effect.succeed(
+            input.command === "ps"
+              ? output("  4242     1   501 Sat Oct 25 10:00:00 2026 node wrapper.js\n")
+              : output("p4242\nf7\ni1\nn" + renamed + "\nf8\ni2\nn" + wal + "\n"),
+          ),
+      });
+      const folder = yield* fs.stat(home);
+      const linuxProc: FileSystem.FileSystem = {
+        ...fs,
+        readDirectory: (target, options) =>
+          target === "/proc"
+            ? Effect.succeed(["4242"])
+            : target === "/proc/4242/fd"
+              ? Effect.succeed(["7", "8"])
+              : fs.readDirectory(target, options),
+        stat: (target) =>
+          target === "/proc/4242"
+            ? Effect.succeed({ ...folder, uid: Option.some(501) })
+            : fs.stat(target),
+        readLink: (target) =>
+          target === "/proc/4242/fd/7"
+            ? Effect.succeed(renamed)
+            : target === "/proc/4242/fd/8"
+              ? Effect.succeed(wal)
+              : fs.readLink(target),
+      };
+      for (const platform of ["darwin", "linux"] as const) {
+        const found = yield* Effect.gen(function* () {
+          return yield* (yield* LocalGoatServers.LocalGoatServers).otherServers(own);
+        }).pipe(
+          Effect.provide(LocalGoatServers.layer.pipe(Layer.provide(runner))),
+          Effect.provideService(HostProcess.HomeDirectory, home),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(HostProcess.UserId, 501),
+          Effect.provideService(HostProcess.Environment, {}),
+          Effect.provideService(FileSystem.FileSystem, platform === "linux" ? linuxProc : fs),
+        );
+        expect(
+          found.unverified.some((reason) => reason.includes(database)),
+          platform,
+        ).toBe(true);
+      }
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

@@ -71,7 +71,7 @@ export interface HeldDatabase {
 export function databasesByPid(
   lsofOutput: string,
 ): ReadonlyMap<number, ReadonlyArray<HeldDatabase>> {
-  const result = new Map<number, Array<HeldDatabase>>();
+  const open = new Map<number, Array<HeldDatabase>>();
   let pid: number | null = null;
   let inode: string | null = null;
   for (const line of lsofOutput.split("\n")) {
@@ -79,10 +79,37 @@ export function databasesByPid(
     // Each file's fields start with its descriptor; its inode comes before its name.
     else if (line.startsWith("f")) inode = null;
     else if (line.startsWith("i")) inode = line.slice(1);
-    else if (line.startsWith("n") && pid !== null && line.endsWith("statev2.sqlite"))
-      result.set(pid, [...(result.get(pid) ?? []), { path: line.slice(1), inode, deleted: false }]);
+    else if (line.startsWith("n") && pid !== null)
+      open.set(pid, [...(open.get(pid) ?? []), { path: line.slice(1), inode, deleted: false }]);
+  }
+  const result = new Map<number, ReadonlyArray<HeldDatabase>>();
+  for (const [held, files] of open) {
+    const databases = heldDatabases(files);
+    if (databases.length > 0) result.set(held, databases);
   }
   return result;
+}
+
+const DATABASE = "statev2.sqlite";
+const DATABASE_COMPANIONS = ["-wal", "-shm"];
+
+/**
+ * The GOAT databases among the files one process holds open. SQLite keeps a database's
+ * write-ahead log and shared-memory files open under the names it opened them by, while a moved
+ * database shows under its new name. A log held without its database beside it means the database
+ * was moved or deleted while held: whatever is at that path now is not what the process reads.
+ */
+function heldDatabases(files: ReadonlyArray<HeldDatabase>): ReadonlyArray<HeldDatabase> {
+  const databases = files.filter((file) => file.path.endsWith(DATABASE));
+  const moved = new Map<string, HeldDatabase>();
+  for (const file of files) {
+    const companion = DATABASE_COMPANIONS.find((suffix) => file.path.endsWith(DATABASE + suffix));
+    if (companion === undefined) continue;
+    const database = file.path.slice(0, -companion.length);
+    if (!databases.some((held) => held.path === database))
+      moved.set(database, { path: database, inode: null, deleted: true });
+  }
+  return [...databases, ...moved.values()];
 }
 
 const LINUX_DELETED = " (deleted)";
@@ -214,7 +241,9 @@ const readOtherServerBindings = Effect.fn("localGoatServers.readOtherServerBindi
     for (const candidate of candidates) {
       const held = heldOpen.get(candidate) ?? [];
       if (held.some((file) => file.deleted)) {
-        unverified.push("the GOAT database " + candidate + " was deleted while a process holds it");
+        unverified.push(
+          "the GOAT database " + candidate + " was moved or deleted while a process holds it",
+        );
         continue;
       }
       const { found, inode } = yield* Effect.promise(() => presence(candidate));
@@ -289,9 +318,10 @@ const databasesOpenBy = Effect.fn("localGoatServers.databasesOpenBy")(function* 
       // The kernel names a file unlinked while held "<path> (deleted)".
       const deleted = target.endsWith(LINUX_DELETED);
       const held = deleted ? target.slice(0, -LINUX_DELETED.length) : target;
-      if (held.endsWith("statev2.sqlite")) files.push({ path: held, inode: null, deleted });
+      files.push({ path: held, inode: null, deleted });
     }
-    if (files.length > 0) result.set(Number(pid), files);
+    const databases = heldDatabases(files);
+    if (databases.length > 0) result.set(Number(pid), databases);
   }
   return result;
 });
