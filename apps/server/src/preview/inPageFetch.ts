@@ -256,11 +256,12 @@ export const resolveFetchUrl = (raw: string, pageUrl: string) => {
   return url.href;
 };
 
-/** Trims lines and blank runs; leaves code fences exactly as the page had them. */
+/** Redacts credential-like query parameters, such as a token in a redirect target. */
 const redactQuery = (raw: string) => {
   try {
     const url = new URL(raw);
-    for (const key of [...url.searchParams.keys()])
+    // A copy: setting a key while iterating the live list could skip entries.
+    for (const key of Array.from(url.searchParams.keys()))
       if (SECRET_NAME.test(key)) url.searchParams.set(key, "redacted");
     return url.href;
   } catch {
@@ -268,6 +269,7 @@ const redactQuery = (raw: string) => {
   }
 };
 
+/** Trims lines and blank runs; leaves code fences exactly as the page had them. */
 export const normalizeText = (text: string) => {
   let fenced = false;
   const lines: Array<string> = [];

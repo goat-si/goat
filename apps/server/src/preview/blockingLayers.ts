@@ -35,7 +35,7 @@ export interface LayersReport {
   readonly viewport: { readonly width: number; readonly height: number };
 }
 
-export const BLOCKING_COVERAGE = 0.6;
+const BLOCKING_COVERAGE = 0.6;
 const DEFAULT_GRID = 5;
 const MAX_GRID = 10;
 const MAX_NAME_LENGTH = 80;

@@ -153,7 +153,7 @@ const collect = async (
   // An abandoned body keeps its slot until it settles, so outstanding reads never pass the cap.
   const drain = async () => {
     if (pending.size > 0)
-      await Promise.race([Promise.allSettled([...pending]), page.waitForTimeout(bodyTimeoutMs)]);
+      await Promise.race([Promise.allSettled(pending), page.waitForTimeout(bodyTimeoutMs)]);
     for (const json of parsed.splice(0)) {
       for (const item of extract(json)) {
         if (items.length >= maxItems) return;
