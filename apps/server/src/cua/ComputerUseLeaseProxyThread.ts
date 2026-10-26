@@ -85,7 +85,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       refusal(id, method, reason, terminal === undefined ? WAITING : LEASE_END_MESSAGES[reason]),
     );
 
-  const output = (context: Context, line: string) =>
+  const output = (context: Context, line: string, reply?: { readonly tool?: string | undefined }) =>
     Effect.suspend(() => {
       const message = parse(line);
       const cancelled = cancelledRequestKey(line);
@@ -123,7 +123,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         if (owner.cancelled) return Effect.void;
         setup.remember(owner.method, message);
       }
-      return options.output(line);
+      return options.output(line, reply);
     });
 
   const receive = (context: Context, update: ComputerUseLeaseUpdate | undefined) => {
@@ -204,7 +204,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         controlId: context.controlId,
         expiresAt: expiresAt.value,
         input: Stream.fromQueue(context.input),
-        output: (line) => output(context, line),
+        output: (line, reply) => output(context, line, reply),
         leaseUpdates: Stream.never,
         onLeaseUpdateReceiver: (take) => {
           context.receive = take;

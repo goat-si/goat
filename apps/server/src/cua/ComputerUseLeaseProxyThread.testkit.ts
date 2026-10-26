@@ -35,6 +35,8 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     readonly targetGate?: Deferred.Deferred<void>;
     readonly agentGate?: Deferred.Deferred<void>;
     readonly toolsAt?: (index: number) => typeof tools;
+    /** Decorates each line for the provider, as the CLI's app guide does. */
+    readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -96,7 +98,8 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     connectionId: "thread-proxy:test",
     bundleIds: true,
     input: Stream.fromQueue(input),
-    output: (line) => Queue.offer(output, line).pipe(Effect.asVoid),
+    output: (line, reply) =>
+      Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     leaseUpdates: Stream.fromQueue(updates),
     onThreadUpdate: (u) => Queue.offer(taken, u).pipe(Effect.asVoid),
     onLeaseUpdateApplied: (u) => Queue.offer(applied, u).pipe(Effect.asVoid),
