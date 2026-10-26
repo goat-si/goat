@@ -606,7 +606,29 @@ const make = Effect.gen(function* () {
       limit: 1,
       runLimit: 1,
     });
-    const replicaGrant = yield* replicaAuthorization(scope);
+    const { limits: replicaGrant, readFallback } = yield* replicaAuthorization(scope).pipe(
+      Effect.map((limits) => ({ limits, readFallback: false as const })),
+      Effect.catchIf(
+        (error) =>
+          error.code === "capability_denied" &&
+          input.checkpointReplication !== "on" &&
+          scope.readOnly !== true &&
+          scope.client?.access !== "read-only",
+        () =>
+          readCaller().pipe(
+            Effect.tap(assertLiveCaller),
+            Effect.tap(
+              () =>
+                scope
+                  .reauthorize?.(["orchestration:read"])
+                  .pipe(Effect.mapError(reauthorizationFailure)) ?? Effect.void,
+            ),
+            Effect.map((caller) => ({ limits: caller.limits, readFallback: true as const })),
+            Effect.provideService(McpInvocationContext, scope),
+            Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+          ),
+      ),
+    );
     if (
       input.checkpointReplication === "on" &&
       (input.host === undefined ||
@@ -619,9 +641,12 @@ const make = Effect.gen(function* () {
       );
     const watch = yield* launchWatches
       .register({
-        ...(input.checkpointReplication === undefined
-          ? {}
-          : { checkpointReplication: input.checkpointReplication }),
+        // A read-scoped watch must not inherit a host setting that enables checkpoint capture.
+        ...(readFallback
+          ? { checkpointReplication: "off" as const }
+          : input.checkpointReplication === undefined
+            ? {}
+            : { checkpointReplication: input.checkpointReplication }),
         replicaCeiling: replicaGrant.runtimeMode,
         launcherThreadId,
         host: input.host,
