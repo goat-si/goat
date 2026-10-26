@@ -809,6 +809,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "goat-discipline-skill",
+    title: "Development discipline",
+    to: "/settings/integrations",
+    scope: "project-defaults",
+    searchTerms: ["goat discipline skill built in code changes guidance inherit on off"],
+  },
+  {
     id: "device-hosts",
     title: "Device hosts",
     to: "/settings/integrations",
