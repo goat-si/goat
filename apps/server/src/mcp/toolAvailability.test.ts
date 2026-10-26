@@ -40,7 +40,18 @@ it("withholds goat_screen_run from an outside client before reporting surface av
     now: false,
     reason: "Needs an agent running inside a GOAT thread.",
   });
-  expect(availability(entry, callers.thread, true)).toEqual({ now: true });
+  expect(availability(entry, callers.thread, true)).toEqual({
+    now: false,
+    reason: "Needs the built-in browser or computer use attached to this turn.",
+  });
+  const attached = {
+    ...callers.thread,
+    capabilities: new Set([...callers.thread.capabilities, "screen" as const]),
+  };
+  expect(availability(entry, attached, true)).toEqual({ now: true });
+  expect(availability(agentSurfaceRegistry["surface.describe"], callers.thread, true)).toEqual({
+    now: true,
+  });
 });
 
 const callers: Readonly<Record<"thread" | "outside", McpInvocationScope>> = {

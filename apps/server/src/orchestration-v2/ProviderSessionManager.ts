@@ -75,7 +75,11 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
-import { resolveAttachedScreenSkills, sameScreenBindingHints } from "./ScreenSkills.ts";
+import {
+  resolveAttachedScreenSkills,
+  sameScreenBindingHints,
+  screenSurfaceAttached,
+} from "./ScreenSkills.ts";
 import { installScreenCodeSkill } from "./ScreenCodeSkillInstall.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -729,10 +733,19 @@ export const layerWithOptions = (
                   Effect.map((thread) => thread.lineage.relationshipToParent === "subagent"),
                   Effect.orElseSucceed(() => false),
                 );
+                const computerUseAttached = computerUse._tag === "proxied";
+                if (
+                  screenSurfaceAttached({
+                    browserToolsAvailable,
+                    usableThread,
+                    computerUseAttached,
+                  })
+                )
+                  capabilities.add("screen");
                 const activeSkills = yield* resolveAttachedScreenSkills({
                   browserToolsAvailable,
                   usableThread,
-                  computerUseAttached: computerUse._tag === "proxied",
+                  computerUseAttached,
                   serverSettings,
                   projectId: usableThread ? thread.value.projectId : undefined,
                   requested: preparedInput.turnCapabilities,
@@ -765,6 +778,7 @@ export const layerWithOptions = (
                     resolved.thread.providerInstanceId === providerInstanceId &&
                     resolved.capabilities.has("preview") === browserToolsAvailable &&
                     resolved.capabilities.has("device") === deviceToolsAvailable &&
+                    resolved.capabilities.has("screen") === capabilities.has("screen") &&
                     resolved.readOnly === readOnly &&
                     resolved.grantedScopes?.join(",") === grantedScopes.join(",") &&
                     resolved.memoryPolicy?.grant === grant &&
