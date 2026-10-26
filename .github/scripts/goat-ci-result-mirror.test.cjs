@@ -77,30 +77,34 @@ describe("goat-ci-result for an ignored event", () => {
       GITHUB_REPOSITORY: "goat-si/goat",
       GITHUB_TOKEN: "t",
     };
-    // A fake API whose governing run finishes after the given number of listings.
-    const api = ({
-      pendingListings = 0,
-      runs = [run(1, "2026-10-25T10:00:00Z")],
-      jobs = [job("success")],
-      status = 200,
-      total,
-    } = {}) => {
-      let listings = 0;
-      const urls = [];
+    const MINUTE = 60_000;
+    // This ignored run, created when the fake clock reads 0.
+    const own = run(99, new Date(0).toISOString(), { title: "Fix it (#7, ignored event)" });
+    const real = (id, created, { status = "completed", attempt = 1, result = "success" } = {}) => ({
+      ...run(id, created, { status }),
+      run_attempt: attempt,
+      jobs: status === "completed" ? [job(result)] : [job(null)],
+    });
+    // A fake API: listing n (from 1) shows listings[n - 1], or the last entry once they run out. The
+    // jobs of a run are those of its entry in the latest listing, as filter=latest returns.
+    const api = (listings, { status = 200, total } = {}) => {
+      let shown = listings[0];
+      let count = 0;
       const fetch = async (url) => {
-        urls.push(url);
         let body;
         if (url.includes("/actions/workflows/goat-ci.yml/runs?event=pull_request&head_sha=abc&")) {
-          listings += 1;
-          const done = listings > pendingListings;
-          const listed = runs.map((r) => ({ ...r, status: done ? r.status : "in_progress" }));
-          body = { total_count: total ?? listed.length, workflow_runs: listed };
-        } else if (url.includes("/actions/runs/1/jobs?filter=latest&")) {
-          body = { total_count: jobs.length, jobs };
-        } else throw new Error("unexpected " + url);
+          count += 1;
+          shown = listings[Math.min(count, listings.length) - 1];
+          body = { total_count: total ?? shown.length, workflow_runs: shown };
+        } else {
+          const id = url.match(/\/actions\/runs\/(\d+)\/jobs\?filter=latest&/)?.[1];
+          const listed = shown.find((r) => String(r.id) === id);
+          if (listed === undefined) throw new Error("unexpected " + url);
+          body = { total_count: listed.jobs.length, jobs: listed.jobs };
+        }
         return { ok: status === 200, status, json: async () => body };
       };
-      return { fetch, urls };
+      return { fetch, listings: () => count };
     };
     const io = (fake, clock = { t: 0 }) => ({
       fetch: fake.fetch,
@@ -110,19 +114,54 @@ describe("goat-ci-result for an ignored event", () => {
       now: () => clock.t,
       log: () => {},
     });
+    const R1 = "2026-10-25T10:00:00Z";
+    const R2 = "2026-10-25T11:00:00Z";
 
     it("waits for the governing run to finish, then repeats its result", async () => {
-      assert.equal(await main(env, io(api({ pendingListings: 3 }))), 0);
-      assert.equal(await main(env, io(api({ pendingListings: 3, jobs: [job("failure")] }))), 1);
+      const pending = [real(1, R1, { status: "in_progress" }), own];
+      for (const result of ["success", "failure"]) {
+        const done = [real(1, R1, { result }), own];
+        const code = await main(env, io(api([pending, pending, pending, done])));
+        assert.equal(code, result === "success" ? 0 : 1, result);
+      }
+    });
+
+    it("does not repeat an older green while a real run started just before the edit is not listed yet", async () => {
+      // A ci:* label or retarget started R2 a moment before the edit; the first listing lags behind.
+      const lagging = [real(1, R1), own];
+      const listed = [real(1, R1), real(2, R2, { status: "in_progress" }), own];
+      const failed = [real(1, R1), real(2, R2, { result: "failure" }), own];
+      assert.equal(await main(env, io(api([lagging, listed, listed, failed]))), 1);
+    });
+
+    it("waits again when the confirming listing shows a newer run or a newer attempt", async () => {
+      const settled = () => ({ t: 10 * MINUTE });
+      const green = [real(1, R1), own];
+      const newer = [real(1, R1), real(2, R2, { status: "in_progress" }), own];
+      const newerFailed = [real(1, R1), real(2, R2, { result: "failure" }), own];
+      assert.equal(await main(env, io(api([green, newer, newer, newerFailed]), settled())), 1);
+      // The run was re-run and its second attempt failed between the two listings.
+      const rerunFailed = [real(1, R1, { attempt: 2, result: "failure" }), own];
+      assert.equal(await main(env, io(api([green, rerunFailed]), settled())), 1);
+    });
+
+    it("decides at once on a re-run of an ignored run created long ago", async () => {
+      const fake = api([[real(1, R1), own]]);
+      assert.equal(await main(env, io(fake, { t: 10 * MINUTE })), 0);
+      assert.equal(fake.listings(), 2);
     });
 
     it("fails when no real run of the pull request appears on the head", async () => {
-      assert.equal(await main(env, io(api({ runs: [] }))), 1);
+      assert.equal(await main(env, io(api([[own]]))), 1);
+    });
+
+    it("fails when this run never appears in the listing", async () => {
+      assert.equal(await main(env, io(api([[real(1, R1)]]))), 1);
     });
 
     it("fails when GitHub refuses or lists the runs incompletely", async () => {
-      await assert.rejects(main(env, io(api({ status: 403 }))), /returned 403/);
-      await assert.rejects(main(env, io(api({ total: 500 }))), /listed \d+ of 500/);
+      await assert.rejects(main(env, io(api([[own]], { status: 403 }))), /returned 403/);
+      await assert.rejects(main(env, io(api([[own]], { total: 500 }))), /listed \d+ of 500/);
     });
   });
 });
