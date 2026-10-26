@@ -44,19 +44,26 @@ export function ToolCallCard(props: {
 
 export function ShellCommandLine({ command }: { readonly command: string }) {
   const [expanded, setExpanded] = useState(false);
-  const toggle = () => {
-    // Selecting part of the command must not collapse it.
-    if (window.getSelection()?.toString()) return;
-    setExpanded((value) => !value);
-  };
+  const toggle = () => setExpanded((value) => !value);
   return (
     <div
       role="button"
       tabIndex={0}
       aria-expanded={expanded}
-      onClick={toggle}
+      onClick={(event) => {
+        // A click that ends a text selection inside the command must not toggle it.
+        const selection = window.getSelection();
+        if (
+          selection !== null &&
+          !selection.isCollapsed &&
+          event.currentTarget.contains(selection.anchorNode)
+        ) {
+          return;
+        }
+        toggle();
+      }}
       onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
+        if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
         event.preventDefault();
         toggle();
       }}
