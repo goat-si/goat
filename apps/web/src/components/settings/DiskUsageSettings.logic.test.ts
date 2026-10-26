@@ -22,6 +22,8 @@ const item = (overrides: Partial<StorageItem> & Pick<StorageItem, "id" | "kind">
   ...overrides,
 });
 
+const decodeCleanItems = Schema.decodeUnknownExit(StorageCleanItems);
+
 describe("storage cleanup selection", () => {
   const items = [
     item({ id: "a", kind: "worktree", bytes: 3 * 1024 }),
@@ -46,8 +48,7 @@ describe("storage cleanup selection", () => {
     );
     const batches = cleanupBatches(many);
     expect(batches.map((batch) => batch.length)).toEqual([200, 1]);
-    for (const batch of batches)
-      expect(Schema.decodeUnknownExit(StorageCleanItems)(batch)._tag).toBe("Success");
+    for (const batch of batches) expect(decodeCleanItems(batch)._tag).toBe("Success");
     expect(batches.flat()).toEqual(many.map(({ id, token }) => ({ id, token })));
 
     const outcome = (id: string): StorageCleanOutcome => ({
