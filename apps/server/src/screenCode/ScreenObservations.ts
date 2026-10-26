@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Opaque observation IDs are minted in this host-owned index.
-import { randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import type {
   ScreenElementRef,
   ScreenObservation,
@@ -33,7 +33,18 @@ export class ObservationIndex {
       surfaceGeneration: number;
       tokens: Map<string, string>;
       editable: Set<string>;
-      regions: Map<string, { x: number; y: number; width: number; height: number; pixelWidth: number; pixelHeight: number; scale: number }>;
+      regions: Map<
+        string,
+        {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+          pixelWidth: number;
+          pixelHeight: number;
+          scale: number;
+        }
+      >;
     }
   >();
 
@@ -44,7 +55,13 @@ export class ObservationIndex {
     tokens: Map<string, string>,
     editable: Set<string>,
   ): void {
-    this.byTarget.set(targetId, { observationId, surfaceGeneration, tokens, editable, regions: new Map() });
+    this.byTarget.set(targetId, {
+      observationId,
+      surfaceGeneration,
+      tokens,
+      editable,
+      regions: new Map(),
+    });
   }
 
   resolveElement(ref: ScreenElementRef): string | undefined {
@@ -59,15 +76,26 @@ export class ObservationIndex {
   }
   isEditable(ref: ScreenElementRef): boolean {
     const entry = this.byTarget.get(ref.targetId);
-    return entry?.observationId === ref.observationId &&
-      entry.surfaceGeneration === ref.surfaceGeneration && entry.editable.has(ref.id);
+    return (
+      entry?.observationId === ref.observationId &&
+      entry.surfaceGeneration === ref.surfaceGeneration &&
+      entry.editable.has(ref.id)
+    );
   }
 
   putRegion(
     targetId: string,
     observationId: string,
     regionId: string,
-    bounds: { x: number; y: number; width: number; height: number; pixelWidth?: number; pixelHeight?: number; scale?: number },
+    bounds: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      pixelWidth?: number;
+      pixelHeight?: number;
+      scale?: number;
+    },
   ): boolean {
     const entry = this.byTarget.get(targetId);
     if (
@@ -111,7 +139,15 @@ export class ObservationIndex {
 
 export class ScreenObservations {
   readonly index = new ObservationIndex();
-  private readonly previous = new Map<string, { observation: ScreenObservation; draft: ScreenObservationDraft }>();
+  private readonly previous = new Map<
+    string,
+    { observation: ScreenObservation; draft: ScreenObservationDraft }
+  >();
+
+  evictTarget(targetId: string): void {
+    this.index.invalidateTarget(targetId);
+    this.previous.delete(targetId);
+  }
 
   normalizeAppTree(input: ScreenObservationDraft): ScreenObservationDraft {
     return input;
@@ -164,53 +200,90 @@ export class ScreenObservations {
     const currentLines = draft.indexedText.split("\n");
     let selected = draft.elements;
     let renderedText = draft.indexedText;
+    let queryTruncated = false;
     if (mode === "query") {
       const query = input.query;
-      selected = draft.elements.filter((element) =>
-        (query?.role === undefined || element.role.includes(query.role)) &&
-        (query?.name === undefined || element.name.includes(query.name)) &&
-        (query?.text === undefined || (element.text ?? element.name).includes(query.text)));
+      const lines = currentLines.slice(0, 4096);
+      queryTruncated = lines.length < currentLines.length;
       const included = new Set<number>();
-      for (let index = 0; index < currentLines.length; index++) {
-        const line = currentLines[index] ?? "";
-        if (!selected.some((element) => line.includes(`[ref=${element.driverToken.slice(9)}]`))) continue;
+      const matchingRefs = new Set<string>();
+      const includeWithAncestors = (index: number) => {
         included.add(index);
+        const line = lines[index] ?? "";
         let depth = line.length - line.trimStart().length;
         for (let ancestor = index - 1; ancestor >= 0 && depth > 0; ancestor--) {
-          const parent = currentLines[ancestor] ?? "";
+          const parent = lines[ancestor] ?? "";
           const parentDepth = parent.length - parent.trimStart().length;
-          if (parent.trim() && parentDepth < depth) { included.add(ancestor); depth = parentDepth; }
+          if (parent.trim() && parentDepth < depth) {
+            included.add(ancestor);
+            depth = parentDepth;
+          }
+        }
+      };
+      for (let index = 0; index < lines.length; index++) {
+        const line = lines[index] ?? "";
+        const content = line.trim().replace(/^-\s*/, "");
+        const role = content.match(/^([\w-]+)/)?.[1] ?? "";
+        const name = content
+          .slice(role.length)
+          .replace(/\[(?:ref=[^\]]+|active|focused)\]/g, "")
+          .trim();
+        const matches =
+          (query?.role === undefined || role.includes(query.role)) &&
+          (query?.name === undefined || name.includes(query.name)) &&
+          (query?.text === undefined || name.includes(query.text));
+        if (matches || /\[(?:active|focused)\]/.test(line)) includeWithAncestors(index);
+        if (matches) {
+          const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
+          if (ref) matchingRefs.add(`aria-ref=${ref}`);
         }
       }
-      renderedText = currentLines.filter((_, index) => included.has(index)).join("\n");
+      selected = draft.elements.filter((element) => matchingRefs.has(element.driverToken));
+      renderedText = lines.filter((_, index) => included.has(index)).join("\n");
     }
     if (mode === "diff") {
-      const valid = old && old.observation.observationId === input.baseObservationId &&
-        old.observation.complete && !old.observation.truncated && draft.complete && !draft.truncated &&
-        old.draft.lineage === draft.lineage && old.draft.targetGeneration === draft.targetGeneration;
+      const valid =
+        old &&
+        old.observation.observationId === input.baseObservationId &&
+        old.observation.complete &&
+        !old.observation.truncated &&
+        draft.complete &&
+        !draft.truncated &&
+        old.draft.lineage === draft.lineage &&
+        old.draft.targetGeneration === draft.targetGeneration;
       if (valid) {
         const previousLines = old.draft.indexedText.split("\n");
         const key = (line: string) => line.replace(/\[ref=[^\]]+\]/g, "[ref]");
         const oldKeys = previousLines.map(key);
         const newKeys = currentLines.map(key);
-        const unique = new Set(oldKeys).size === oldKeys.length && new Set(newKeys).size === newKeys.length;
+        const unique =
+          new Set(oldKeys).size === oldKeys.length && new Set(newKeys).size === newKeys.length;
         const removed = previousLines.filter((line) => !newKeys.includes(key(line)));
         const added = currentLines.filter((line) => !oldKeys.includes(key(line)));
         const stableOld = oldKeys.filter((line) => newKeys.includes(line));
         const stableNow = newKeys.filter((line) => oldKeys.includes(line));
-        const compact = [...removed.map((line) => `- ${line}`), ...added.map((line) => `+ ${line}`)].join("\n");
-        if (unique && stableOld.join("\n") === stableNow.join("\n") && compact.length < renderedText.length) {
+        const compact = [
+          ...removed.map((line) => `- ${line}`),
+          ...added.map((line) => `+ ${line}`),
+        ].join("\n");
+        if (
+          unique &&
+          stableOld.join("\n") === stableNow.join("\n") &&
+          compact.length < renderedText.length
+        ) {
           renderedText = compact;
-          selected = draft.elements.filter((element) => added.some((line) => line.includes(`[ref=${element.driverToken.slice(9)}]`)));
+          selected = draft.elements.filter((element) =>
+            added.some((line) => line.includes(`[ref=${element.driverToken.slice(9)}]`)),
+          );
         } else resetReason = "reordered_or_longer_diff";
       } else resetReason = "lineage_or_completeness_changed";
       if (resetReason) mode = "full";
     }
-    const observationId = randomUUID();
+    const observationId = NodeCrypto.randomUUID();
     const tokens = new Map<string, string>();
     const editable = new Set<string>();
     const elements = selected.slice(0, 4096).map((element, index) => {
-      const id = randomUUID();
+      const id = NodeCrypto.randomUUID();
       tokens.set(id, element.driverToken);
       if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
       return {
@@ -231,6 +304,7 @@ export class ScreenObservations {
       .toString("utf8");
     let truncated =
       draft.truncated ||
+      queryTruncated ||
       text.length !== renderedText.length ||
       elements.length !== selected.length;
     const build = (): ScreenObservation => ({
@@ -239,7 +313,9 @@ export class ScreenObservations {
       targetGeneration: draft.targetGeneration,
       surfaceGeneration: draft.surfaceGeneration,
       mode,
-      ...(mode === "diff" && input.baseObservationId ? { baseObservationId: input.baseObservationId } : {}),
+      ...(mode === "diff" && input.baseObservationId
+        ? { baseObservationId: input.baseObservationId }
+        : {}),
       ...(resetReason ? { resetReason } : {}),
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,

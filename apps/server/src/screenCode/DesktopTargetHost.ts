@@ -199,7 +199,7 @@ export const createDesktopTargetHost = (deps: {
           previous.ref.runId === context.runId &&
           previous.ref.turnId === context.turnId
         ) {
-          observations.index.invalidateTarget(id);
+          observations.evictTarget(id);
           targets.delete(id);
         }
       const ref: ScreenTargetRef = {
@@ -249,7 +249,7 @@ export const createDesktopTargetHost = (deps: {
       );
       const state = object(driverValue(reply));
       if (!state || state.pid !== bound.pid || state.window_id !== bound.windowId) {
-        observations.index.invalidateTarget(bound.ref.id);
+        observations.evictTarget(bound.ref.id);
         targets.delete(bound.ref.id);
         return yield* Effect.fail(fail("stale_reference"));
       }
@@ -452,7 +452,7 @@ export const createDesktopTargetHost = (deps: {
     observe,
     invoke,
     invalidateTarget: (targetId) => {
-      observations.index.invalidateTarget(targetId);
+      observations.evictTarget(targetId);
       targets.delete(targetId);
     },
     matchesControl: (targetId, controlId, windowId) => {
@@ -465,7 +465,7 @@ export const createDesktopTargetHost = (deps: {
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {
-          observations.index.invalidateTarget(targetId);
+          observations.evictTarget(targetId);
           targets.delete(targetId);
         }
     },

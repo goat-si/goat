@@ -176,18 +176,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     operation: Parameters<typeof broker.invoke>[0]["operation"],
     input: unknown,
   ) =>
-    broker
-      .invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) })
-      .pipe(
-        Effect.mapError(() =>
-          operation === "snapshot"
-            ? fail("downstream_failure", "Refresh the tab status before retrying.")
-            : {
-                ...fail("unknown_outcome", "Inspect the tab before any later action."),
-                effectStarted: true,
-              },
-        ),
-      );
+    broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
+      Effect.mapError(() =>
+        operation === "snapshot"
+          ? fail("downstream_failure", "Refresh the tab status before retrying.")
+          : {
+              ...fail("unknown_outcome", "Inspect the tab before any later action."),
+              effectStarted: true,
+            },
+      ),
+    );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
       yield* authorize(context);
@@ -272,14 +270,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ...fail("unknown_outcome", "Reconcile the new tab."),
             effectStarted: true,
           });
-        yield* claims
-          .recordOpened(identity(openedBound, context))
-          .pipe(
-            Effect.mapError(() => ({
-              ...fail("unknown_outcome", "The new tab could not be claimed."),
-              effectStarted: true,
-            })),
-          );
+        yield* claims.recordOpened(identity(openedBound, context)).pipe(
+          Effect.mapError(() => ({
+            ...fail("unknown_outcome", "The new tab could not be claimed."),
+            effectStarted: true,
+          })),
+        );
         return {
           value: { targetRef: ref, tab },
           category: "confirmed",
@@ -563,7 +559,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       const result = yield* invoke(bound, context, operation, input);
-      observations.index.invalidateTarget(bound.ref.id);
+      observations.evictTarget(bound.ref.id);
       if (call.method === "close_tab") {
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
@@ -593,8 +589,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     tabScopes.delete(`${input.runId}\u0000${input.turnId}`);
     bindingHints.delete(turnKey(input));
     for (const [id, target] of targets)
-      if (target.ref.runId === input.runId && target.ref.turnId === input.turnId)
+      if (target.ref.runId === input.runId && target.ref.turnId === input.turnId) {
+        observations.evictTarget(id);
         targets.delete(id);
+      }
     return outcomes;
   });
   const releaseControl = Effect.fn("PreviewTargetHost.releaseControl")(function* (
@@ -612,5 +610,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   ) => {
     bindingHints.set(turnKey(identity), hints);
   };
-  return { availability, dispatch, finishTurn, releaseControl, setBindingHints };
+  const invalidateTarget = (targetId: string) => {
+    observations.evictTarget(targetId);
+    targets.delete(targetId);
+  };
+  return { availability, dispatch, finishTurn, releaseControl, setBindingHints, invalidateTarget };
 });
