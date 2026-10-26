@@ -27,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
@@ -605,6 +606,175 @@ describe("OrchestratorMcpService delegate child work", () => {
           const next = yield* f.delegate("following remote task", true);
           assert.equal(next.code, "orchestration_error");
           assert.equal(yield* Ref.get(f.remoteLaunches), 1);
+        }),
+      ),
+  );
+
+  it.effect(
+    "unblocks a waiting delegate_task when a steered user_message arrives on the parent thread, ignoring non-steered messages and running subagent updates",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const dispatchedCommands: Array<string> = [];
+          let parentReads = 0;
+          const delegatedTaskId = NodeId.make("subagent:wait-steer");
+          const childThreadId = ThreadId.make("thread:oms-cw-child");
+          const childRunId = RunId.make("run:oms-cw-child");
+          const parentWithSubagent = {
+            ...parentProjection,
+            subagents: [
+              {
+                id: delegatedTaskId,
+                threadId: callerThreadId,
+                origin: "app_owned",
+                status: "running",
+                childThreadId,
+                providerInstanceId: codexInstanceId,
+                model: "gpt-6.1-sol",
+                result: null,
+              },
+            ],
+          } as unknown as OrchestrationV2ThreadProjection;
+          const runningChild = {
+            ...childProjection,
+            runs: [
+              {
+                id: childRunId,
+                ordinal: 1,
+                status: "running",
+                delegatedTaskId,
+                providerInstanceId: codexInstanceId,
+                modelSelection,
+              },
+            ],
+          } as unknown as OrchestrationV2ThreadProjection;
+
+          const serviceLayer = OrchestratorMcpService.layer.pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                NodeServices.layer,
+                Layer.mock(ThreadManagementService.ThreadManagementService)({
+                  hasReceipt: () => Effect.succeed(false),
+                  getThreadShell: () =>
+                    Effect.succeed(liveThreadShell(callerThreadId, { activeRunId: parentRunId })),
+                  getThreadEventSequence: () => Effect.succeed(10),
+                  getThreadRecords: (threadId) =>
+                    Effect.sync(() => {
+                      if (threadId === callerThreadId) {
+                        parentReads += 1;
+                        return parentWithSubagent;
+                      }
+                      return runningChild;
+                    }),
+                  isProviderInstanceEnabledForProject: () => Effect.succeed(true),
+                  assertProviderInstanceEnabled: () => Effect.void,
+                  dispatch: (command) =>
+                    Effect.sync(() => {
+                      dispatchedCommands.push(command.type);
+                      if (command.type === "delegated_task.request") {
+                        return {
+                          sequence: 11,
+                          storedEvents: [
+                            {
+                              sequence: 11,
+                              event: {
+                                type: "subagent.updated",
+                                threadId: callerThreadId,
+                                payload: {
+                                  id: delegatedTaskId,
+                                  origin: "app_owned",
+                                  childThreadId,
+                                },
+                              },
+                            },
+                          ],
+                        } as never;
+                      }
+                      return { sequence: 12, storedEvents: [] } as never;
+                    }),
+                  streamStoredEventsFrom: ({ threadId, eventType }) => {
+                    if (threadId === callerThreadId && eventType === "subagent.updated") {
+                      return Stream.fromIterable([
+                        {
+                          sequence: 12,
+                          event: {
+                            type: "subagent.updated",
+                            threadId: callerThreadId,
+                            payload: { id: delegatedTaskId, status: "running" },
+                          },
+                        } as never,
+                      ]);
+                    }
+                    if (threadId === callerThreadId && eventType === "turn-item.updated") {
+                      return Stream.fromIterable([
+                        {
+                          sequence: 13,
+                          event: {
+                            type: "turn-item.updated",
+                            threadId: callerThreadId,
+                            payload: { type: "user_message", inputIntent: "queued_turn" },
+                          },
+                        } as never,
+                        {
+                          sequence: 14,
+                          event: {
+                            type: "turn-item.updated",
+                            threadId: callerThreadId,
+                            payload: { type: "user_message", inputIntent: "steer" },
+                          },
+                        } as never,
+                      ]);
+                    }
+                    return Stream.empty;
+                  },
+                }),
+                Layer.mock(ProviderRegistry.ProviderRegistry)({
+                  getProviders: Effect.succeed([providerSnapshot]),
+                  refreshInstance: () => Effect.succeed([providerSnapshot]),
+                }),
+                Layer.succeed(
+                  ProviderAdapterRegistry.ProviderAdapterRegistryV2,
+                  ProviderAdapterRegistry.ProviderAdapterRegistryV2.of({
+                    list: () => Effect.succeed([codexInstanceId]),
+                    get: () =>
+                      Effect.succeed({
+                        instanceId: codexInstanceId,
+                        getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+                      } as unknown as ProviderAdapter.ProviderAdapterV2["Service"]),
+                  }),
+                ),
+                Layer.mock(ProjectService.ProjectService)({}),
+                Layer.mock(SecretRequests.SecretRequests)({}),
+                Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
+                Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
+                Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+                Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({}),
+                Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({}),
+                Layer.mock(FleetSync.GoatclawFleetSync)({}),
+                SqlitePersistence.layerMemory,
+                ServerSettings.layerTest({}),
+              ),
+            ),
+          );
+
+          const service = yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
+            Effect.provide(serviceLayer),
+          );
+          const result = yield* service.delegateTask(scope, {
+            task: "Investigate while user may send a follow-up",
+            mode: "wait",
+            timeoutMs: 60_000,
+          });
+          assert.equal(result.taskId, delegatedTaskId);
+          assert.equal(result.status, "running");
+          assert.equal(result.waitTimedOut, false);
+          assert.deepEqual(dispatchedCommands, [
+            "delegated_task.request",
+            "delegated_task.wake-policy",
+          ]);
+          // Initial parent read (1) + initial readTask (2) + subagent.updated readTask (3, kept waiting)
+          // + steered user_message readTask (4, unblocked); queued_turn was filtered out.
+          assert.equal(parentReads, 4);
         }),
       ),
   );

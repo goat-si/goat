@@ -165,6 +165,7 @@ const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
 const TASK_WAKE_EVENTS = [
   { thread: "parent", eventType: "subagent.updated" },
+  { thread: "parent", eventType: "turn-item.updated" },
   { thread: "child", eventType: "run.updated" },
   { thread: "child", eventType: "subagent.updated" },
   { thread: "child", eventType: "provider-thread.updated" },
@@ -1941,6 +1942,8 @@ const make = Effect.gen(function* () {
         return Option.some(initial);
       }
       // Keep event types narrow, then skip non-question transcript items.
+      // A steered user_message on the parent thread wakes the wait early so the parent turn
+      // can answer the follow-up while finishTaskWait promotes completionWake to "always".
       return yield* Stream.mergeAll(
         TASK_WAKE_EVENTS.flatMap(({ thread, eventType }) => {
           if (thread === "child" && (initial.host !== undefined || initial.childThreadId === null))
@@ -1948,19 +1951,38 @@ const make = Effect.gen(function* () {
           const threadId = thread === "parent" ? scope.thread.threadId : initial.childThreadId;
           return threadId === null
             ? []
-            : [threadManagement.streamStoredEventsFrom({ threadId, afterSequence, eventType })];
+            : [
+                threadManagement
+                  .streamStoredEventsFrom({ threadId, afterSequence, eventType })
+                  .pipe(Stream.map((stored) => ({ thread, stored }))),
+              ];
         }),
         { concurrency: "unbounded" },
       ).pipe(
         Stream.mapError(streamError),
         // The item can commit after its request; other transcript items need no read.
-        Stream.filter(
-          (stored) =>
-            stored.event.type !== "turn-item.updated" ||
-            stored.event.payload.type === "user_input_request",
-        ),
-        Stream.mapEffect(() => readTask(scope, taskId, false, true)),
-        Stream.filter(endsTaskWait),
+        Stream.filter(({ thread, stored }) => {
+          if (stored.event.type !== "turn-item.updated") return true;
+          if (thread === "parent") {
+            return (
+              stored.event.payload.type === "user_message" &&
+              stored.event.payload.inputIntent === "steer"
+            );
+          }
+          return stored.event.payload.type === "user_input_request";
+        }),
+        Stream.mapEffect(({ thread, stored }) => {
+          const isParentSteer =
+            thread === "parent" &&
+            stored.event.type === "turn-item.updated" &&
+            stored.event.payload.type === "user_message" &&
+            stored.event.payload.inputIntent === "steer";
+          return readTask(scope, taskId, false, true).pipe(
+            Effect.map((task) => ({ isParentSteer, task })),
+          );
+        }),
+        Stream.filter(({ isParentSteer, task }) => isParentSteer || endsTaskWait(task)),
+        Stream.map(({ task }) => task),
 
         Stream.runHead,
       );
