@@ -17,6 +17,12 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     "D12/D18: shared native artifact credentials and digest/build headers belong to the upstream task cache.",
   ),
   keep(
+    "upstream-task-cache-endpoint",
+    [".task-cache.json"],
+    /https:\/\/t3-task-cache\.pinglabs\.workers\.dev\/projects\/t3code/g,
+    "D12/D18: upstream's remote task cache; it applies only with upstream-issued credentials, and its infra tests read this file.",
+  ),
+  keep(
     "palette-search-digit-samples",
     ["packages/shared/src/paletteSearch.ts", "packages/shared/src/paletteSearch.test.ts"],
     /(?<=["'])t3(?:code|coed|co|c)(?=["' ]|\/["'])|T3 Code vs Gemini/g,
