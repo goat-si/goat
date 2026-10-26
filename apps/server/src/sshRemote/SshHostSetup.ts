@@ -72,6 +72,12 @@ import {
   type SshHostCaller,
 } from "./SshHostAuthorization.ts";
 import * as Dispatch from "./SshRemoteDispatch.ts";
+import { errorResult, setupFailure } from "./sshHostResults.ts";
+import {
+  managedAliasRevision,
+  type SshAliasListener,
+  type SshAliasRevision,
+} from "./SshAliasEvents.ts";
 export type { SshHostCaller } from "./SshHostAuthorization.ts";
 
 type Failure = EnvironmentAuthorizationError | HandoffError;
@@ -122,22 +128,13 @@ export class SshHostSetup extends Context.Service<
       caller: { readonly kind: "client"; readonly sessionId: AuthSessionId },
     ) => Effect.Effect<SshHandoffProgressResult, Failure>;
     readonly resumeContinuations: Effect.Effect<void, HandoffError>;
+    readonly aliasRevision: SshAliasRevision;
+    /** Bumped when a Forget begins; process-local, so pair it with aliasRevision. */
+    readonly aliasGeneration: (host: string) => Effect.Effect<number>;
+    readonly onAlias: (listener: SshAliasListener) => Effect.Effect<void>;
   }
 >()("goat/sshRemote/SshHostSetup") {}
 
-const errorResult = (
-  message: string,
-  code:
-    | "operation_failed"
-    | "invalid_request"
-    | "alias_conflict"
-    | "cancelled" = "operation_failed",
-): SshHostResult => ({
-  kind: "error",
-  code,
-  message: message.slice(0, 2000),
-  fix: { actor: "agent", instruction: "Try again" },
-});
 const dispatchFailure = (error: Dispatch.SshRemoteDispatchError): SshHostResult => ({
   kind: "error",
   code:
@@ -283,16 +280,8 @@ export const make = (
             error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
         }),
       );
-    const aliasRevision = (host: string) =>
-      Effect.gen(function* () {
-        const conf = yield* readOptional(path.join(directory, `${host}.conf`));
-        if (conf === null) return undefined;
-        const pin = yield* readOptional(path.join(directory, `${host}.known_hosts`));
-        const metadata = yield* fs.stat(path.join(directory, `${host}.conf`));
-        return NodeCrypto.createHash("sha256")
-          .update(`${conf}\0${pin ?? ""}\0${Option.getOrNull(metadata.mtime)?.getTime() ?? ""}`)
-          .digest("hex");
-      });
+    const aliasRevision = managedAliasRevision(fs, path, directory);
+    const aliasListeners: SshAliasListener[] = [];
     const probeFailure = (input: SshHostAddInput, reason: SshHostProbeError["reason"]) =>
       new SshHostProbeError({
         host: input.alias ?? input.address,
@@ -987,6 +976,8 @@ export const make = (
               ),
             };
             yield* dispatch.publishProviderDiagnosis(host, { ...operation, providers });
+            for (const listener of aliasListeners)
+              yield* listener(host, "ready").pipe(Effect.ignore({ log: true }));
           } else if (!update && result.status?.state === "auth_failed") {
             const origin = yield* environment.getDescriptor;
             const context = yield* managedContext(host);
@@ -1087,53 +1078,6 @@ export const make = (
             }),
         }),
       );
-    const setupFailure = (host: string, error: HandoffError): SshHostResult => {
-      if (isProbeError(error.cause))
-        return {
-          kind: "error",
-          code:
-            error.cause.reason === "unreachable" || error.cause.reason === "connection_refused"
-              ? "host_unreachable"
-              : "operation_failed",
-          message: error.cause.message,
-          fix: { actor: "agent", instruction: "Check the SSH host and try again." },
-        };
-      const changed =
-        error.cause !== null &&
-        typeof error.cause === "object" &&
-        "reason" in error.cause &&
-        error.cause.reason === "host_key_changed";
-      if (changed)
-        return {
-          kind: "error",
-          code: "operation_failed",
-          message: `The SSH host key for ${host} changed.`,
-          status: {
-            host,
-            state: "failed",
-            runtimeVersion: null,
-            requestedVersion: "",
-            failure: {
-              reason: "host_key_changed",
-              fix: {
-                actor: "human",
-                instruction: "Forget the host, then add it again to review its new fingerprint.",
-                path: "ssh.host_forget",
-              },
-            },
-          },
-        };
-      return errorResult(
-        `${host}: ${error.message}`,
-        error.reason === "invalid_request"
-          ? "invalid_request"
-          : error.reason === "conflict"
-            ? "alias_conflict"
-            : error.reason === "expired"
-              ? "cancelled"
-              : "operation_failed",
-      );
-    };
     const prepare: SshHostSetup["Service"]["prepare"] = (input, caller) =>
       Effect.gen(function* () {
         const authorizeCaller = authorizePrepare(caller, input.host);
@@ -1255,6 +1199,11 @@ export const make = (
       Effect.gen(function* () {
         yield* authorize(caller, "settings:write");
         aliasGenerations.set(input.host, (aliasGenerations.get(input.host) ?? 0) + 1);
+        const fenced = yield* Effect.forEach(aliasListeners, (listener) =>
+          listener(input.host, "forgotten"),
+        ).pipe(Effect.result);
+        if (fenced._tag === "Failure")
+          return errorResult("Could not clear what GOAT keeps for this host. Try again.");
         for (const [id, entry] of challenges)
           if (entry.challenge.host === input.host) challenges.delete(id);
         const job = jobs.get(input.host);
@@ -1622,6 +1571,9 @@ export const make = (
       respondHandoff,
       handoffProgress,
       resumeContinuations,
+      aliasRevision,
+      aliasGeneration: (host) => Effect.sync(() => aliasGenerations.get(host) ?? 0),
+      onAlias: (listener) => Effect.sync(() => void aliasListeners.push(listener)),
     });
   });
 export const layer = Layer.effect(SshHostSetup, make());

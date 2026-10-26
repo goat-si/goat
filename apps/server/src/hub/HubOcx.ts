@@ -74,6 +74,15 @@ export class HubOcx extends Context.Service<
       args: ReadonlyArray<string>,
       timeoutMs: number,
     ) => Effect.Effect<OcxOutput, HubOcxError>;
+    /**
+     * `home` for a join nobody is asked about: `admit` is read after every other wait, right
+     * before ocx starts. False starts nothing and answers undefined.
+     */
+    readonly homeAdmitted: (
+      args: ReadonlyArray<string>,
+      timeoutMs: number,
+      admit: Effect.Effect<boolean>,
+    ) => Effect.Effect<OcxOutput | undefined, HubOcxError>;
     readonly device: (
       alias: string,
       args: ReadonlyArray<string>,
@@ -237,25 +246,52 @@ const make = Effect.gen(function* () {
   const environment = yield* HostProcess.Environment;
   const cwd = yield* HostProcess.WorkingDirectory;
 
-  const run = (command: string, args: ReadonlyArray<string>, timeoutMs: number) =>
+  const run = (
+    command: string,
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    workingDirectory: string | null = cwd,
+  ) =>
     runner.run({
       command,
       args,
       env: environment,
-      cwd,
+      cwd: workingDirectory ?? undefined,
       timeout: timeoutMs,
       maxOutputBytes: MAX_BYTES,
       timeoutBehavior: "timedOutResult",
     });
 
-  const home = Effect.fn("HubOcx.home")(function* (args: ReadonlyArray<string>, timeoutMs: number) {
+  const homeBinary = Effect.fn("HubOcx.homeBinary")(function* () {
     const binary = (yield* inventory.read).binaries[0]?.path;
     if (binary === undefined)
       return yield* new HubOcxError({
         reason: "ocx_missing",
         message: "OpenCodex is not installed on this hub.",
       });
-    const output = yield* run(binary, args, timeoutMs).pipe(
+    return binary;
+  });
+  const home = Effect.fn("HubOcx.home")(function* (args: ReadonlyArray<string>, timeoutMs: number) {
+    return yield* runHome(yield* homeBinary(), args, timeoutMs);
+  });
+  const homeAdmitted = Effect.fn("HubOcx.homeAdmitted")(function* (
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    admit: Effect.Effect<boolean>,
+  ) {
+    const binary = yield* homeBinary();
+    if (!(yield* admit)) return undefined;
+    // No working directory: the spawner awaits a check of one before it starts the process, and
+    // nothing may wait between the permission read and the start. The binary path is absolute.
+    return yield* runHome(binary, args, timeoutMs, null);
+  });
+  const runHome = Effect.fn("HubOcx.runHome")(function* (
+    binary: string,
+    args: ReadonlyArray<string>,
+    timeoutMs: number,
+    workingDirectory: string | null = cwd,
+  ) {
+    const output = yield* run(binary, args, timeoutMs, workingDirectory).pipe(
       Effect.mapError(
         () => new HubOcxError({ reason: "unreachable", message: "ocx could not be run here." }),
       ),
@@ -298,6 +334,7 @@ const make = Effect.gen(function* () {
 
   return HubOcx.of({
     home,
+    homeAdmitted,
     device: (alias, args, timeoutMs) => runDevice(alias, deviceScript(args), timeoutMs),
     prepareDevice: (alias, version, timeoutMs) =>
       runDevice(alias, prepareScript(version), timeoutMs),

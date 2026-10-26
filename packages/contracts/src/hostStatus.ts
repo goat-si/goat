@@ -255,6 +255,11 @@ export const HostStatusEntry = Schema.Struct({
   opencodexUpdate: ForwardCompatibleOptional(OpenCodexUpdateStatus),
   /** This Home's progress joining a cloud machine it created as its Child. Set by the Home. */
   opencodexChild: ForwardCompatibleOptional(OpenCodexChildBootstrapStatus),
+  /**
+   * Whether this hub joins the SSH host as its OpenCodex Child after each successful setup. Set by
+   * the hub for SSH hosts GOAT manages while it is a hub; older hubs omit it.
+   */
+  opencodexChildOptIn: Schema.optional(Schema.Boolean),
   /** Resource pressure that machine reports for itself. Older hosts omit it. */
   pressure: Schema.optional(HostPressure),
   /** Whether this machine's goatclaw policy has reached the host. Set by the machine that fanned out. */

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { SettingsTarget } from "./settings-environment-filter";
 import {
   planMobileBuiltInSkillToggle,
+  planMobileBuiltInSkillProjectPatch,
   planMobileScopedSettingsClear,
   planMobileScopedSettingsPatch,
   resolveMobileSettingsTargets,
@@ -171,6 +172,93 @@ describe("mobile project settings scope", () => {
 });
 
 describe("mobile built-in skill switch across environments", () => {
+  it("writes and clears each project's skill override without replacing sibling settings", () => {
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      projectSettingsOverrides: {
+        [firstProject]: {
+          defaultAutoPull: true,
+          responseStreamingMode: "turn",
+          builtInSkills: { other: { enabled: false }, "goat-discipline": { enabled: false } },
+        },
+        [secondProject]: { builtInSkills: { "goat-discipline": { enabled: true } } },
+      },
+    };
+    const env = environment(firstId, settings);
+    const supported = {
+      ...env,
+      serverConfig: {
+        ...env.serverConfig,
+        environment: {
+          ...env.serverConfig.environment,
+          capabilities: { ...env.serverConfig.environment.capabilities, devDisciplineSkill: true },
+        },
+      },
+    };
+    const targets = resolveMobileSettingsTargets(
+      [supported],
+      [
+        { environmentId: firstId, id: firstProject },
+        { environmentId: firstId, id: secondProject },
+      ],
+    );
+    expect(planMobileBuiltInSkillProjectPatch(targets, "goat-discipline", true)).toEqual([
+      {
+        environmentId: firstId,
+        patch: {
+          projectSettingsOverrides: {
+            [firstProject]: {
+              defaultAutoPull: true,
+              responseStreamingMode: "turn",
+              builtInSkills: { other: { enabled: false }, "goat-discipline": { enabled: true } },
+            },
+            [secondProject]: { builtInSkills: { "goat-discipline": { enabled: true } } },
+          },
+        },
+      },
+    ]);
+    expect(planMobileBuiltInSkillProjectPatch(targets, "goat-discipline", undefined)).toEqual([
+      {
+        environmentId: firstId,
+        patch: {
+          projectSettingsOverrides: {
+            [firstProject]: {
+              defaultAutoPull: true,
+              responseStreamingMode: "turn",
+              builtInSkills: { other: { enabled: false } },
+            },
+            [secondProject]: { builtInSkills: {} },
+          },
+        },
+      },
+    ]);
+    expect(
+      planMobileScopedSettingsClear(targets, ["responseStreamingMode"], ["goat-discipline"]),
+    ).toEqual([
+      {
+        environmentId: firstId,
+        patch: {
+          projectSettingsOverrides: {
+            [firstProject]: { defaultAutoPull: true, builtInSkills: { other: { enabled: false } } },
+            [secondProject]: { builtInSkills: {} },
+          },
+        },
+      },
+    ]);
+    expect(
+      settings.projectSettingsOverrides[firstProject]?.builtInSkills?.["goat-discipline"]?.enabled,
+    ).toBe(false);
+  });
+
+  it("does not write discipline switches to servers without the capability", () => {
+    const targets = resolveMobileSettingsTargets(
+      [environment(firstId, DEFAULT_SERVER_SETTINGS)],
+      [{ environmentId: firstId, id: firstProject }],
+    );
+    expect(planMobileBuiltInSkillProjectPatch(targets, "goat-discipline", false)).toEqual([]);
+    expect(planMobileBuiltInSkillToggle(targets, "goat-discipline", false)).toEqual([]);
+  });
+
   it("changes only the toggled skill in each environment's own switched-off list", () => {
     const targets = resolveMobileSettingsTargets(
       [

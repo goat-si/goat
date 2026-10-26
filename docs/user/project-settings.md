@@ -35,6 +35,11 @@ follow-ups from delegated tasks. A turn already running when the switch flips fi
 task's result still lands in its parent thread, which sees it on its next turn. Reset returns the project to the
 machine's setting. Every other provider setting stays per machine.
 
+The **Development discipline** built-in skill works the same way: with a project selected, set it
+to On, Off or Inherit in **Settings → Integrations → Agent tools**. Off keeps it out of that
+project's `$` menu and turns, while other projects keep the environment's value. Inherit
+follows the environment again. Environments running an older GOAT do not offer the control.
+
 On mobile, open **Settings** and use the filter in its header to choose connected environments
 and a project. The filter stays available in server-setting pages. With **All projects** selected,
 the **Server settings** categories and auto-settle controls in **Thread behavior** edit the

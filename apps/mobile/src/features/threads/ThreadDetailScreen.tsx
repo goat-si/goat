@@ -1135,6 +1135,7 @@ export const ThreadDetailScreen = function ThreadDetailScreen(props: ThreadDetai
     props.serverConfig,
     selectedInstanceId,
     props.threadCwd ?? props.projectWorkspaceRoot,
+    props.selectedThread.projectId,
   );
 
   useLayoutEffect(() => {

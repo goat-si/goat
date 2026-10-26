@@ -748,7 +748,9 @@ export const layerWithOptions = (
                     Effect.orElseSucceed(() => undefined),
                   ),
                   interactionMode: preparedInput.interactionMode,
-                  ...(usableThread ? { runtimeMode: thread.value.runtimeMode } : {}),
+                  ...(usableThread
+                    ? { runtimeMode: thread.value.runtimeMode, projectId: thread.value.projectId }
+                    : {}),
                   runId: preparedInput.runId,
                   personStarted:
                     preparedInput.runId !== undefined &&

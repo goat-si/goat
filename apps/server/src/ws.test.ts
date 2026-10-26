@@ -11,6 +11,7 @@ import * as HostStatusMcpService from "./mcp/HostStatusMcpService.ts";
 import * as HubParity from "./hub/HubParity.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
 import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
+import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubNodes from "./hubNodes/HubNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
@@ -501,6 +502,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(HubParity.HubParity)({}),
   Layer.mock(HubMembership.HubMembership)({}),
   Layer.mock(OpenCodexSync.OpenCodexSync)({}),
+  Layer.mock(ChildBootstrap.OpenCodexChildBootstrap)({}),
   Layer.mock(HubNodes.HubNodes)({}),
   Layer.mock(HubProxySessions.HubProxySessions)({}),
   Layer.mock(MemorySyncService.MemorySyncService)({}),

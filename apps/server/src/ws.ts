@@ -201,6 +201,7 @@ import * as HubParity from "./hub/HubParity.ts";
 import * as OpenCodexManagedUpdate from "./hub/OpenCodexManagedUpdate.ts";
 import { makeOpenCodexRpcHandlers } from "./hub/opencodexRpc.ts";
 import * as OpenCodexSync from "./hub/OpenCodexSync.ts";
+import * as ChildBootstrap from "./opencodex/OpenCodexChildBootstrap.ts";
 import * as HubMembership from "./hub/HubMembership.ts";
 import type { McpInvocationScope } from "./mcp/McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -1624,7 +1625,10 @@ export const layerWsRpc = (
             client: { sessionId: currentSessionId, label: "GOAT client", access },
           } satisfies McpInvocationScope;
         });
-      const opencodexRpc = yield* makeOpenCodexRpcHandlers(hubScope("full-access"));
+      const opencodexRpc = yield* makeOpenCodexRpcHandlers(
+        hubScope("full-access"),
+        currentSessionId,
+      );
       // settings:write is the decision inbox's owner rule; anyone else takes H3's agent path.
       const hubPerson = currentSession.scopes.includes(AuthSettingsWriteScope)
         ? { sessionId: currentSessionId, scopes: currentSession.scopes }
@@ -3688,6 +3692,7 @@ export const layer = Layer.unwrap(
       OpenCodexManagedUpdate.OpenCodexManagedUpdate,
     );
     const opencodexSync = yield* OpenCodexSync.OpenCodexSync;
+    const childBootstrap = yield* ChildBootstrap.OpenCodexChildBootstrap;
     const remoteLaunches = yield* RemoteLaunchCatalog.RemoteLaunchCatalog;
     const launchWatches = yield* LaunchWatchService.LaunchWatchService;
     const sql = yield* SqlClient.SqlClient;
@@ -3800,6 +3805,7 @@ export const layer = Layer.unwrap(
                 Layer.mergeAll(
                   Layer.succeed(HubMembership.HubMembership, hubMembershipService),
                   Layer.succeed(OpenCodexSync.OpenCodexSync, opencodexSync),
+                  Layer.succeed(ChildBootstrap.OpenCodexChildBootstrap, childBootstrap),
                   Option.match(opencodexUpdateService, {
                     onNone: () => Layer.empty,
                     onSome: (service) =>

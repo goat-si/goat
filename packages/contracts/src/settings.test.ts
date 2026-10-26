@@ -72,6 +72,14 @@ describe("storage cleanup settings", () => {
     });
   });
 
+  it("keeps cloud machines joining a hub whose settings predate the switch", () => {
+    expect(decodeServerSettings({ hub: { enabled: true } }).hub.autoJoinCloudMachines).toBe(true);
+    expect(
+      decodeServerSettings({ hub: { enabled: true, autoJoinCloudMachines: false } }).hub
+        .autoJoinCloudMachines,
+    ).toBe(false);
+  });
+
   it("accepts partial custom patches but requires complete stored project rules", () => {
     expect(
       decodeServerSettingsPatch({

@@ -20,6 +20,16 @@ export const HubDeviceOperationInput = Schema.Struct({
 });
 export type HubDeviceOperationInput = typeof HubDeviceOperationInput.Type;
 
+/**
+ * A person's standing consent for an SSH host GOAT set up to join this hub's OpenCodex as a Child
+ * after each successful setup. Turning it off never removes a link.
+ */
+export const HubDeviceChildOptIn = Schema.Struct({
+  deviceAlias: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  enabled: Schema.Boolean,
+});
+export type HubDeviceChildOptIn = typeof HubDeviceChildOptIn.Type;
+
 export const HubDeviceStep = Schema.Struct({
   step: Schema.Literals([
     "preflight",

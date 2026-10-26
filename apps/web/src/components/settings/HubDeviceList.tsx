@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   hubDeviceList,
+  type ChildOptIn,
   type ChildSetup,
   type HubDeviceRow,
 } from "@goat/client-runtime/hub-devices";
@@ -264,6 +265,13 @@ function HubDeviceListRow({
         </p>
       )}
       {row.childSetup === null ? null : <ChildSetupLine setup={row.childSetup} />}
+      {row.childOptIn === null ? null : (
+        <ChildOptInSwitch
+          environmentId={environmentId}
+          optIn={row.childOptIn}
+          onSaved={onVerified}
+        />
+      )}
       {failing.length === 0 ? null : (
         <ul className="space-y-0.5 text-xs">
           {failing.map((check) => (
@@ -303,6 +311,63 @@ function ChildSetupLine({ setup }: { readonly setup: ChildSetup }) {
         <span className="block text-muted-foreground">{setup.detail}</span>
       )}
     </p>
+  );
+}
+
+/**
+ * A person's standing consent for an SSH host GOAT set up: after each successful setup, the hub
+ * installs its OpenCodex there and links it as a Child. Only a session with settings:write may
+ * change it, and the hub checks that session again before each join.
+ */
+function ChildOptInSwitch({
+  environmentId,
+  optIn,
+  onSaved,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly optIn: ChildOptIn;
+  readonly onSaved: () => void;
+}) {
+  const allowed = useAtomValue(
+    serverEnvironment.setHubDeviceChildOptIn.permissionAtom(environmentId),
+  );
+  const save = useAtomCommand(serverEnvironment.setHubDeviceChildOptIn, { reportFailure: false });
+  const [pending, setPending] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const id = `hub-child-opt-in-${optIn.host}`;
+  const change = async (enabled: boolean) => {
+    setPending(enabled);
+    setError(null);
+    const result = await save({ environmentId, input: { deviceAlias: optIn.host, enabled } });
+    setPending(null);
+    if (result._tag === "Failure") {
+      const failure = squashAtomCommandFailure(result);
+      setError(failure instanceof Error ? failure.message : "Could not save. Try again.");
+      return;
+    }
+    onSaved();
+  };
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <label htmlFor={id} className="min-w-0 text-xs">
+        Join as OpenCodex Child after each SSH setup
+        <span className="block text-muted-foreground">
+          GOAT installs this hub's OpenCodex there and links it with the host key it pinned. Turning
+          this off keeps an existing link.
+        </span>
+        {error === null ? null : (
+          <span role="alert" className="block text-destructive">
+            {error}
+          </span>
+        )}
+      </label>
+      <Switch
+        id={id}
+        checked={pending ?? optIn.enabled}
+        disabled={pending !== null || !allowed}
+        onCheckedChange={(checked) => void change(checked)}
+      />
+    </div>
   );
 }
 
