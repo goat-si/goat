@@ -467,6 +467,38 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
     return visible;
   });
 
+  const advanceOccurrence = Effect.fn("ScheduledTaskRuns.advanceOccurrence")(function* (
+    row: Row,
+    at: string,
+  ) {
+    if (row.dispatch_bookkept_at === null) {
+      const tasks = yield* sql<{
+        readonly schedule_json: string;
+        readonly enabled: number;
+      }>`SELECT schedule_json,enabled FROM scheduled_tasks WHERE task_id=${row.task_id} AND created_at=${row.task_created_at}`;
+      if (tasks[0]) {
+        const schedule = yield* decodeSchedule(tasks[0].schedule_json);
+        const from = yield* DateTime.withCurrentZoneLocal(
+          DateTime.setZoneCurrent(DateTime.makeUnsafe(at)),
+        );
+        let next: string | null = null;
+        if (tasks[0].enabled === 1) {
+          try {
+            const value = nextScheduledRunAt(schedule, from);
+            if (value !== null && Number.isFinite(DateTime.toEpochMillis(value)))
+              next = DateTime.formatIso(DateTime.toUtc(value));
+          } catch {
+            next = null;
+          }
+        }
+        yield* sql`UPDATE scheduled_tasks SET next_run_at=${next} WHERE task_id=${row.task_id} AND created_at=${row.task_created_at}
+            AND last_firing_id=${row.firing_id} AND next_run_at IS ${row.admitted_next_run_at}
+            AND schedule_json=${row.admitted_schedule_digest} AND enabled=${row.admitted_enabled}`;
+      }
+      yield* sql`UPDATE scheduled_task_runs SET dispatch_bookkept_at=${at} WHERE firing_id=${row.firing_id} AND task_created_at=${row.task_created_at} AND dispatch_bookkept_at IS NULL`;
+    }
+  });
+
   const finishDispatch: ScheduledTaskRuns["Service"]["finishDispatch"] = Effect.fn(
     "ScheduledTaskRuns.finishDispatch",
   )(
@@ -483,32 +515,7 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
               evidence: resolved.hasMessage ? "unresolved" : input.dispatchEvidence,
             },
           ]);
-          if (row.dispatch_bookkept_at === null) {
-            const tasks = yield* sql<{
-              readonly schedule_json: string;
-              readonly enabled: number;
-            }>`SELECT schedule_json,enabled FROM scheduled_tasks WHERE task_id=${row.task_id} AND created_at=${row.task_created_at}`;
-            if (tasks[0]) {
-              const schedule = yield* decodeSchedule(tasks[0].schedule_json);
-              const from = yield* DateTime.withCurrentZoneLocal(
-                DateTime.setZoneCurrent(DateTime.makeUnsafe(input.at)),
-              );
-              let next: string | null = null;
-              if (tasks[0].enabled === 1) {
-                try {
-                  const value = nextScheduledRunAt(schedule, from);
-                  if (value !== null && Number.isFinite(DateTime.toEpochMillis(value)))
-                    next = DateTime.formatIso(DateTime.toUtc(value));
-                } catch {
-                  next = null;
-                }
-              }
-              yield* sql`UPDATE scheduled_tasks SET next_run_at=${next} WHERE task_id=${row.task_id} AND created_at=${row.task_created_at}
-            AND last_firing_id=${row.firing_id} AND next_run_at IS ${row.admitted_next_run_at}
-            AND schedule_json=${row.admitted_schedule_digest} AND enabled=${row.admitted_enabled}`;
-            }
-            yield* sql`UPDATE scheduled_task_runs SET dispatch_bookkept_at=${input.at} WHERE firing_id=${row.firing_id} AND task_created_at=${row.task_created_at} AND dispatch_bookkept_at IS NULL`;
-          }
+          yield* advanceOccurrence(row, input.at);
           const snapshot = yield* readSnapshot(yield* readRow(input.firingId));
           yield* prune(row);
           return snapshot;

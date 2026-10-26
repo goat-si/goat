@@ -462,7 +462,33 @@ export const layer = Layer.effect(
 
     const selectAllRows = () =>
       sql<ScheduledTaskRow>`
-      SELECT t.*,r.snapshot_json AS last_run_json FROM scheduled_tasks t
+      SELECT
+        t.task_id,
+        t.title,
+        t.prompt,
+        t.enabled,
+        t.schedule_json,
+        t.project_id,
+        t.thread_id,
+        t.workspace_strategy_json,
+        t.model_selection_json,
+        t.memory_grant_ceiling,
+        t.runtime_mode,
+        t.interaction_mode,
+        t.created_by,
+        t.creation_source,
+        t.created_at,
+        t.updated_at,
+        t.next_run_at,
+        t.last_run_at,
+        t.last_run_status,
+        t.last_run_error,
+        t.run_count,
+        t.webhook_token,
+        t.webhook_secret,
+        t.webhook_secret_ref,
+        r.snapshot_json AS last_run_json
+      FROM scheduled_tasks t
       LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
       ORDER BY t.created_at DESC,t.task_id ASC
     `.pipe(NodeSqliteClient.readOnly);
@@ -475,7 +501,33 @@ export const layer = Layer.effect(
 
     const getRows = (id: ScheduledTaskId) =>
       sql<ScheduledTaskRow>`
-      SELECT t.*,r.snapshot_json AS last_run_json FROM scheduled_tasks t
+      SELECT
+        t.task_id,
+        t.title,
+        t.prompt,
+        t.enabled,
+        t.schedule_json,
+        t.project_id,
+        t.thread_id,
+        t.workspace_strategy_json,
+        t.model_selection_json,
+        t.memory_grant_ceiling,
+        t.runtime_mode,
+        t.interaction_mode,
+        t.created_by,
+        t.creation_source,
+        t.created_at,
+        t.updated_at,
+        t.next_run_at,
+        t.last_run_at,
+        t.last_run_status,
+        t.last_run_error,
+        t.run_count,
+        t.webhook_token,
+        t.webhook_secret,
+        t.webhook_secret_ref,
+        r.snapshot_json AS last_run_json
+      FROM scheduled_tasks t
       LEFT JOIN scheduled_task_runs r ON r.firing_id=t.last_firing_id AND r.task_id=t.task_id AND r.task_created_at=t.created_at
       WHERE t.task_id = ${id}
     `.pipe(NodeSqliteClient.readOnly);
