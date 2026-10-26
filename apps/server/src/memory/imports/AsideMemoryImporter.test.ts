@@ -51,8 +51,8 @@ describe("Aside semantic page parser", () => {
       const [intro, git] = candidates(rows);
       assert.equal(intro!.title, "Synthetic tools");
       assert.equal(intro!.payload.text, "Synthetic tools\n\nPrefer small commits.");
-      assert.equal(git!.title, "Synthetic tools — Git");
-      assert.equal(git!.payload.text, "Synthetic tools — Git\n\nRebase before pushing.");
+      assert.equal(git!.title, "Synthetic tools: Git");
+      assert.equal(git!.payload.text, "Synthetic tools: Git\n\nRebase before pushing.");
       assert.deepEqual(git!.payload.evidence, []);
       assert.isUndefined(git!.requiresProject);
       assert.notInclude(JSON.stringify(rows), "old observation");

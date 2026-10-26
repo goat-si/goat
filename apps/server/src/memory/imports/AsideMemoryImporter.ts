@@ -93,17 +93,12 @@ const page = (text: string): Page | undefined => {
   let previous = "";
   for (const line of lines.slice(end + 1)) {
     if (fence) {
-      const close = FENCE.exec(line);
-      if (
-        close &&
-        close[1]![0] === fence.char &&
-        close[1]!.length >= fence.length &&
-        line.trim() === close[1]
-      )
+      const close = FENCE.exec(line)?.[1];
+      if (close && close[0] === fence.char && close.length >= fence.length && line.trim() === close)
         fence = null;
     } else {
-      const open = FENCE.exec(line);
-      if (open) fence = { char: open[1]![0]!, length: open[1]!.length };
+      const open = FENCE.exec(line)?.[1];
+      if (open) fence = { char: open.charAt(0), length: open.length };
       else {
         // Setext headings and an H1 inside Current would hide a section boundary; refuse them
         // rather than let later text (such as History) leak into the imported section.
@@ -139,16 +134,16 @@ const page = (text: string): Page | undefined => {
     if (text) sections.push({ heading, body: text });
   };
   for (const line of current) {
-    const marker = FENCE.exec(line);
+    const marker = FENCE.exec(line)?.[1];
     if (inner) {
       if (
         marker &&
-        marker[1]![0] === inner.char &&
-        marker[1]!.length >= inner.length &&
-        line.trim() === marker[1]
+        marker[0] === inner.char &&
+        marker.length >= inner.length &&
+        line.trim() === marker
       )
         inner = null;
-    } else if (marker) inner = { char: marker[1]![0]!, length: marker[1]!.length };
+    } else if (marker) inner = { char: marker.charAt(0), length: marker.length };
     else {
       const h3 = H3.exec(line);
       if (h3) {
@@ -192,7 +187,7 @@ export const parseAsideMemory: MemoryImportParser = Effect.fn("AsideMemoryImport
         !file.selector.endsWith(".md") ||
         file.selector !== file.selector.trim() ||
         /[/\\]/.test(file.selector) ||
-        Array.from(file.selector).some((c) => c.codePointAt(0)! < 32 || c.codePointAt(0) === 127) ||
+        Array.from(file.selector).some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) ||
         seen.has(file.selector)
       )
         return yield* new M.MemoryImportRpcError({ issue: "path_rejected" });
@@ -246,7 +241,7 @@ export const parseAsideMemory: MemoryImportParser = Effect.fn("AsideMemoryImport
       }
       const pageTitle = parsed.title ?? file.selector.slice(0, -3);
       for (const section of keyed) {
-        const label = section.heading === null ? pageTitle : `${pageTitle} — ${section.heading}`;
+        const label = section.heading === null ? pageTitle : `${pageTitle}: ${section.heading}`;
         const text = `${label}\n\n${section.body}`;
         const payload = { text, evidence: [], derivedFromMemoryRevisions: [] };
         if (bytes(text) > M.MEMORY_BODY_MAX_UTF8_BYTES || !validPayload(payload)) {

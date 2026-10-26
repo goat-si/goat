@@ -869,7 +869,7 @@ it.effect(
         Effect.void,
       );
       if (item.status !== "active") return assert.fail("active memory");
-      assert.equal(item.payload.text, "Synthetic tools — Git\n\nRebase before pushing.");
+      assert.equal(item.payload.text, "Synthetic tools: Git\n\nRebase before pushing.");
       // Hub protocol v1 peers decode provenance formats strictly; the profile names the source.
       assert.deepInclude(item.revision.provenance.importSource, {
         format: "omo",

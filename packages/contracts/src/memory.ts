@@ -271,25 +271,15 @@ export const MemoryProviderCapabilities = struct({
 });
 export type MemoryProviderCapabilities = typeof MemoryProviderCapabilities.Type;
 
-/**
- * Formats recorded in revision provenance. Hub protocol v1 peers and older clients decode this
- * literal strictly, so it cannot grow without a protocol bump.
- */
 export const MemoryImportFormat = Schema.Literals(["codex", "claude", "omo"]);
 export type MemoryImportFormat = typeof MemoryImportFormat.Type;
-/**
- * Formats a server can discover and register. These stay local to the import RPC and the
- * importing server; servers without `capabilities.memory.asideImport` reject `aside`.
- */
 export const MemoryImportSourceFormat = Schema.Literals(["codex", "claude", "omo", "aside"]);
 export type MemoryImportSourceFormat = typeof MemoryImportSourceFormat.Type;
 
 /**
  * The import format named in revision provenance. Decoders accept any format token
- * so a revision from a newer import source never blocks sync or reads. Writers still
- * record only `MemoryImportFormat` values until every peer of a space decodes this
- * (the next hub protocol version); `parserVersion` and `sourceLocator` name the
- * real source meanwhile. A known value encodes byte-for-byte as before.
+ * so a newer source never blocks sync or reads. Writers record `MemoryImportFormat`
+ * values until the next hub protocol version; `parserVersion` and `sourceLocator` name the
  */
 export const MemoryProvenanceImportFormat = Schema.String.check(
   Schema.makeFilter((s) => /^[a-z][a-z0-9-]{0,31}$/.test(s)),
