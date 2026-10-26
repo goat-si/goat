@@ -396,3 +396,41 @@ it("the wheel over a drawn card's picture scrolls the stack, not nothing", async
   opener.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true }));
   await vi.waitFor(() => expect(list.scrollTop).toBeGreaterThan(0));
 });
+
+it("a drawn tab's card hides the page while a secret field is focused or a person drives it", async () => {
+  setup();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  await page.viewport(1400, 900);
+  const small = (owner: PreviewSession["owner"]) => (
+    <AgentScreenCardView
+      session={{ ...tab, owner }}
+      size="card"
+      width={240}
+      threadTitle="Thread"
+      live
+      canControl
+      canOperateBrowser
+      drawnHere
+      hosted={hosted}
+      focused={false}
+      focusRequest={0}
+      onExpand={() => undefined}
+      onControl={() => undefined}
+      onDismiss={() => undefined}
+    />
+  );
+  await using screen = await render(small("agent"));
+  await vi.waitFor(() => expect(overlay()).not.toBeNull());
+  await screen.rerender(small("private"));
+  await expect.element(screen.getByText("Private")).toBeVisible();
+  // The webview is let go, not just covered: nothing presents it from this card.
+  await vi.waitFor(() => expect(overlay()).toBeNull());
+  expect(surfaceOf()?.visible).toBe(false);
+  expect(surfaceOf()?.owner).toBeNull();
+  await screen.rerender(small("human"));
+  await expect.element(screen.getByText("A person is in control")).toBeVisible();
+  expect(overlay()).toBeNull();
+  // The large card is the person's own view: a secret they type there stays on screen for them.
+  await screen.rerender(drawnCard(hosted));
+  await vi.waitFor(() => expect(overlay()).not.toBeNull());
+});

@@ -144,6 +144,23 @@ export function ElectronBrowserHost() {
     }
   }, [hostedTabIds]);
 
+  // An agent's server tab may be shown nowhere (the cards hidden, the panel closed), and a guest
+  // parked outside the window composites no frames: the agent's clicks would wait for a frame and
+  // time out. Keep every tab an agent drives painting, behind the app, while it is not on screen.
+  const agentTabIds = sessions
+    .filter(
+      ({ snapshot }) => snapshot.runtime === "server" && snapshot.automationOwner !== undefined,
+    )
+    .map((session) => session.runtimeTabId)
+    .join("\n");
+  useEffect(() => {
+    if (agentTabIds === "") return;
+    const releases = agentTabIds.split("\n").map(acquireBrowserSurfaceActivity);
+    return () => {
+      for (const release of releases) release();
+    };
+  }, [agentTabIds]);
+
   useEffect(() => {
     const preview = window.desktopBridge?.preview;
     if (!preview) return;

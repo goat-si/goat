@@ -51,13 +51,24 @@ vi.mock(import("~/components/preview/usePreviewBridge"), async (original) => ({
   usePreviewBridge: () => undefined,
 }));
 
+// This desktop's own environment, whose server tabs it draws in webviews.
+vi.mock(import("~/state/primaryEnvironment"), async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  return {
+    ...(await original()),
+    primaryEnvironmentIdAtom: Atom.make("host-webview-order") as never,
+  };
+});
+
 import {
   __resetClientSettingsPersistenceForTests,
   ensureClientSettingsHydrated,
 } from "~/hooks/useSettings";
 import { reconcilePreviewServerSessions, resetPreviewStateForTests } from "~/previewStateStore";
 import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
+import { useBrowserSurfaceStore } from "./browserSurfaceStore";
 import { ElectronBrowserHost } from "./ElectronBrowserHost";
+import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 const threadRef = scopeThreadRef(
   EnvironmentId.make("host-webview-order"),
@@ -159,5 +170,35 @@ describe("ElectronBrowserHost", () => {
     const after = webviews();
     expect(after).toHaveLength(2);
     expect(after.every((node, index) => node.isSameNode(before[index]!))).toBe(true);
+  });
+
+  it("keeps a tab an agent drives painting while no view shows it, so its actions get frames", async () => {
+    using _state = setup();
+    useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+    const serverTab = (tabId: string, automationOwner?: string): PreviewSessionSnapshot => ({
+      ...snapshot(tabId, "2026-01-01T00:00:01.000Z"),
+      runtime: "server",
+      ...(automationOwner === undefined ? {} : { automationOwner }),
+    });
+    reconcilePreviewServerSessions(threadRef, {
+      sessions: [serverTab("tab_agent", "agent-session"), serverTab("tab_person")],
+      serverEpoch: "server-a",
+      revision: 1,
+    });
+    await using _screen = await renderHost();
+    const held = () => useBrowserSurfaceStore.getState().activityByTabId;
+    const agentTab = previewRuntimeTabId(threadRef, "server-a", "tab_agent");
+    const personTab = previewRuntimeTabId(threadRef, "server-a", "tab_person");
+    await vi.waitFor(() => expect(held()[agentTab]).toBe(1));
+    expect(held()[personTab]).toBeUndefined();
+    // The agent lets go of the tab: it parks again like any tab no view shows.
+    await act(async () => {
+      reconcilePreviewServerSessions(threadRef, {
+        sessions: [serverTab("tab_agent"), serverTab("tab_person")],
+        serverEpoch: "server-a",
+        revision: 2,
+      });
+    });
+    await vi.waitFor(() => expect(held()[agentTab]).toBeUndefined());
   });
 });

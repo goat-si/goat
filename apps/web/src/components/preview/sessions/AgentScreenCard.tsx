@@ -224,7 +224,11 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const floating = stackDocument !== null && stackDocument !== document;
   // The tab's identity stays native wherever the card is; only the picture needs the main window.
   const nativeTab = browser && props.drawnHere ? (props.hosted ?? null) : null;
-  const hosted = floating ? null : nativeTab;
+  // A card is a passive view and never shows a page someone is typing a secret into or a person
+  // drives (PreviewSessionThumbnail says which); the large card is the person's own view, as the
+  // stream's is, so it keeps showing the page they work in.
+  const masked = !large && (session.owner === "private" || session.owner === "human");
+  const hosted = floating || masked ? null : nativeTab;
 
   useEffect(() => {
     if (!revealed) return;
