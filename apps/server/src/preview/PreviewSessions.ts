@@ -44,6 +44,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as DesktopFrames from "./DesktopFrames.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import type { ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
 
 export class PreviewSessions extends Context.Service<
@@ -230,6 +231,7 @@ export const desktopSession = (
 const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
   const desktopFrames = yield* DesktopFrames.DesktopFrames;
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const handoffs = yield* Handoffs.Handoffs;
@@ -283,6 +285,7 @@ const make = Effect.gen(function* () {
     sessionId: AuthSessionId,
   ) {
     if (input.control === "stopAll") {
+      if (Option.isSome(screen)) yield* screen.value.controlChanged({ kind: "stopAll" });
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
       const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
@@ -298,6 +301,8 @@ const make = Effect.gen(function* () {
     if (tab !== undefined) {
       if (Option.isNone(browser)) return { applied: false, reason: "not_found" } as const;
       if (input.control === "takeover") return { applied: false, reason: "unsupported" } as const;
+      if (input.control === "stop" && Option.isSome(screen))
+        yield* screen.value.controlChanged({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
       const applied = yield* browser.value.controlSession({
         ...tab,
         control: input.control === "stop" ? "stop" : "handBack",
@@ -311,6 +316,9 @@ const make = Effect.gen(function* () {
       ({ control }) => control.controlId === controlId,
     );
     if (live === undefined) return { applied: false, reason: "not_found" } as const;
+    if (Option.isSome(screen) && (input.control === "takeover" || input.control === "stop"))
+      yield* screen.value.controlChanged({ kind: input.control, threadId: live.control.threadId,
+        controlId: live.control.controlId });
     // The pause is the host's: a person on the desktop holds every agent there.
     if (input.control === "takeover") yield* leases.value.pause("takeover");
     else if (input.control === "handBack") yield* leases.value.resume;

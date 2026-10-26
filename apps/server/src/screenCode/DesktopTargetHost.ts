@@ -53,6 +53,8 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly observe: (call: ScreenHostCall, context: ScreenHostContext) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
   readonly invoke: (call: ScreenHostCall, context: ScreenHostContext) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
   readonly invalidateTarget: (targetId: string) => void;
+  readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
+  readonly controlIdForTarget: (targetId: string) => string | undefined;
   readonly finishTurn: (runId: string, turnId: string) => void;
 }
 
@@ -76,7 +78,11 @@ export const createDesktopTargetHost = (deps: {
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
     });
     const error = driverError(reply);
-    if (error) return yield* Effect.fail(error);
+    if (error) {
+      const readOnly = tool === "list_apps" || tool === "list_windows" || tool === "get_window_state";
+      return yield* Effect.fail(error.code === "downstream_failure" && !readOnly
+        ? { ...fail("unknown_outcome"), effectStarted: true } : error);
+    }
     return reply;
   });
   const resolve = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -162,7 +168,7 @@ export const createDesktopTargetHost = (deps: {
             driverToken: token,
           }];
         });
-      const observation = observations.renderObservation({
+      const observation = yield* Effect.try({ try: () => observations.renderObservation({
         draft: observations.normalizeAppTree({
           targetRef: bound.ref, targetGeneration: bound.epoch,
           surfaceGeneration: bound.epoch,
@@ -172,7 +178,8 @@ export const createDesktopTargetHost = (deps: {
           loading: false, elements,
         }),
         mode: "full", limits: { treeBytes: context.limits.treeBytes },
-      });
+      }), catch: (cause) => fail(cause instanceof Error && cause.message === "Screen observation metadata exceeds tree budget"
+        ? "tree_limit" : "downstream_failure") });
       bound.observationId = observation.observationId;
       if (!capture) return { value: observation, category: "unverifiable" };
       const imagePart = reply.image;
@@ -263,6 +270,11 @@ export const createDesktopTargetHost = (deps: {
       observations.index.invalidateTarget(targetId);
       targets.delete(targetId);
     },
+    matchesControl: (targetId, controlId, windowId) => {
+      const target = targets.get(targetId);
+      return target?.controlId === controlId && (windowId === undefined || target.windowId === windowId);
+    },
+    controlIdForTarget: (targetId) => targets.get(targetId)?.controlId,
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {

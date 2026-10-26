@@ -50,6 +50,8 @@ export interface ScreenHostDispatcher {
 
 interface CellState {
   closed: boolean;
+  cutoffReason?: ScreenRunError["code"];
+  readonly cutoff: AbortController;
   calls: number;
   pending: number;
   lastCallId: number;
@@ -116,6 +118,7 @@ export class ScreenHostBridge {
     if (!state) {
       state = {
         closed: false,
+        cutoff: new AbortController(),
         calls: 0,
         pending: 0,
         lastCallId: 0,
@@ -172,8 +175,9 @@ export class ScreenHostBridge {
       return index;
     };
     const deny = (error: ScreenRunError) => {
+      const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       record("refused", "settled", false);
-      return refused(call, error);
+      return refused(call, { ...error, receipts });
     };
     if (
       state.closed ||
@@ -185,9 +189,19 @@ export class ScreenHostBridge {
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (++state.calls > context.limits.callsPerCell)
-      return deny(failure("resource_exhausted", call.callId));
+      return deny({ ...failure("call_limit", call.callId),
+        limit: { name: "callsPerCell", maximum: context.limits.callsPerCell } });
     if (state.pending >= context.limits.pendingCalls)
-      return deny(failure("resource_exhausted", call.callId));
+      return deny({ ...failure("pending_limit", call.callId),
+        limit: { name: "pendingCalls", maximum: context.limits.pendingCalls } });
+    if (call.method === "type_text" || call.method === "set_value") {
+      const first = Array.isArray(call.args) ? call.args[0] : undefined;
+      const text = first && typeof first === "object" && !Array.isArray(first) && "text" in first
+        ? first.text : undefined;
+      if (typeof text === "string" && Buffer.byteLength(text, "utf8") > context.limits.argBytes)
+        return deny({ ...failure("text_limit", call.callId),
+          limit: { name: "argBytes", maximum: context.limits.argBytes } });
+    }
     if (!call.targetRef && !["list_apps", "list_windows", "bind_app", "list_tabs", "bind_tab", "open_tab"].includes(call.method))
       return deny(failure("target_missing", call.callId));
     if (call.targetRef) {
@@ -198,7 +212,7 @@ export class ScreenHostBridge {
       }
       if (!touched.has(call.targetRef.id) && touched.size >= 4096) {
         this.fencedTurns.add(turn);
-        return deny(failure("resource_exhausted", call.callId));
+        return deny(failure("output_limit", call.callId));
       }
       touched.add(call.targetRef.id);
       this.targetRefs.set(call.targetRef.id, call.targetRef);
@@ -238,14 +252,21 @@ export class ScreenHostBridge {
     };
     const bridge = this;
     const dispatch = Effect.gen(function* () {
+      if (state.closed || state.cutoff.signal.aborted)
+        return yield* Effect.fail(failure("stopped", call.callId));
       if (call.targetRef?.kind === "tab") {
-        if (!context.invocation.reauthorize)
+        if (!context.invocation.reauthorize) {
+          bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
           return yield* Effect.fail(failure("permission_denied", call.callId));
+        }
         const check = yield* context.invocation.reauthorize([]).pipe(Effect.result);
-        if (check._tag === "Failure" || !context.invocation.capabilities.has("preview"))
+        if (check._tag === "Failure" || !context.invocation.capabilities.has("preview")) {
+          bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
           return yield* Effect.fail(failure("permission_denied", call.callId));
+        }
       }
-      if (state.closed) return yield* Effect.fail(failure("stopped", call.callId));
+      if (state.closed || state.cutoff.signal.aborted)
+        return yield* Effect.fail(failure("stopped", call.callId));
       if (!bridge.dispatcher) return yield* Effect.fail(failure("unavailable", call.callId));
       settle("unknown_outcome", "dispatched", true);
       return yield* bridge.dispatcher.dispatch(call, context);
@@ -261,7 +282,13 @@ export class ScreenHostBridge {
       if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
     }
     state.pending++;
-    const result = yield* effect.pipe(
+    const cutoff = Effect.callback<never, ScreenRunError>((resume) => {
+      const onAbort = () => resume(Effect.fail(failure("stopped", call.callId)));
+      if (state.cutoff.signal.aborted) onAbort();
+      else state.cutoff.signal.addEventListener("abort", onAbort, { once: true });
+      return Effect.sync(() => state.cutoff.signal.removeEventListener("abort", onAbort));
+    });
+    const result = yield* Effect.raceFirst(effect, cutoff).pipe(
       Effect.result,
       Effect.ensuring(
         Effect.sync(() => {
@@ -270,13 +297,15 @@ export class ScreenHostBridge {
       ),
     );
     if (state.closed) {
-      settle("unknown_outcome", "unknown");
-      return refused(call, { ...failure("unknown_outcome", call.callId), effectStarted: true });
+      const dispatched = admittedIndex !== undefined && state.journal[admittedIndex]?.receipt.dispatched === true;
+      settle(dispatched ? "unknown_outcome" : "refused", dispatched ? "unknown" : "settled");
+      return refused(call, { ...failure(dispatched ? "unknown_outcome" : state.cutoffReason ?? "stopped", call.callId), effectStarted: dispatched });
     }
     if (result._tag === "Failure") {
       settle(
         result.failure.effectStarted ? "unknown_outcome" : "refused",
         result.failure.effectStarted ? "unknown" : "settled",
+        result.failure.effectStarted,
       );
       return refused(call, { ...result.failure, callId: call.callId });
     }
@@ -332,7 +361,8 @@ export class ScreenHostBridge {
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
       state.truncated.push("return");
       settle("unverifiable");
-      return refused(call, failure("resource_exhausted", call.callId));
+      return refused(call, { ...failure("output_limit", call.callId),
+        limit: { name: "returnBytes", maximum: context.limits.returnBytes } });
     }
     const evidence = result.success.evidence ?? [];
     const category =
@@ -374,10 +404,19 @@ export class ScreenHostBridge {
     cellId: string,
     _reason: string,
   ) {
-    const state = this.cells.get(key(runId, turnId, cellId));
-    if (state) state.closed = true;
-    this.endCellTargets(runId, turnId, cellId);
+    this.cutCellNow(runId, turnId, cellId);
   });
+
+  cutCellNow(runId: string, turnId: string, cellId: string,
+    reason?: ScreenRunError["code"]): void {
+    const state = this.cells.get(key(runId, turnId, cellId));
+    if (state) {
+      state.closed = true;
+      if (reason) state.cutoffReason = reason;
+      state.cutoff.abort();
+    }
+    this.endCellTargets(runId, turnId, cellId);
+  }
 
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
     this: ScreenHostBridge,
@@ -392,7 +431,10 @@ export class ScreenHostBridge {
   discardCellNow(runId: string, turnId: string, cellId: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
-    if (state) state.closed = true;
+    if (state) {
+      state.closed = true;
+      state.cutoff.abort();
+    }
     this.endCellTargets(runId, turnId, cellId);
     this.cells.delete(id);
     const turn = `${runId}\u0000${turnId}`;

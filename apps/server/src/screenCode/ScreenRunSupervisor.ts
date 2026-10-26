@@ -25,6 +25,10 @@ const SupervisorCode = Schema.Literals([
   "runtime_unavailable",
   "stopped",
   "invalid_argument",
+  "live_children_limit",
+  "pending_limit",
+  "output_limit",
+  "wall_limit",
 ]);
 export class ScreenSupervisorFailure extends Schema.TaggedError<ScreenSupervisorFailure>()(
   "ScreenSupervisorFailure",
@@ -59,7 +63,7 @@ export function createScreenRunSupervisor(deps: {
 }) {
   const sessions = new Map<string, Session>();
   const spawnSession = (runId: string, turnId: string, limits: ScreenRunLimits) => {
-    if (sessions.size >= deps.limits.activeChildren) throw failure("resource_exhausted");
+    if (sessions.size >= deps.limits.activeChildren) throw failure("live_children_limit");
     const { command, args } = screenChildInvocation(deps.invocation);
     const isElectron =
       process.versions.electron !== undefined ||
@@ -126,7 +130,7 @@ export function createScreenRunSupervisor(deps: {
         catch: (cause) =>
           Schema.is(ScreenSupervisorFailure)(cause) ? cause : failure("runtime_unavailable"),
       });
-      if (session.closed || session.active) return yield* failure("resource_exhausted");
+      if (session.closed || session.active) return yield* failure("pending_limit");
       const cellId = identity.context.cellId;
       session.active = cellId;
       return yield* Effect.tryPromise({
@@ -156,7 +160,7 @@ export function createScreenRunSupervisor(deps: {
             const onExit = () => failRun("runtime_unavailable");
             const onError = () => failRun("runtime_unavailable");
             const onLine = (line: string) => {
-              if (Buffer.byteLength(line) > MAX_FRAME_BYTES) return failRun("resource_exhausted");
+              if (Buffer.byteLength(line) > MAX_FRAME_BYTES) return failRun("output_limit");
               let frame: unknown;
               try {
                 frame = JSON.parse(line);
@@ -255,7 +259,7 @@ export function createScreenRunSupervisor(deps: {
               );
             };
             const timer = setTimeout(
-              () => failRun("deadline"),
+              () => failRun("wall_limit"),
               identity.context.limits.cellWallMs + 250,
             );
             session.abortActive = failRun;

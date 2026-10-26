@@ -109,7 +109,9 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
     const invoke = (bound: BoundTarget, context: ScreenHostContext,
       operation: Parameters<typeof broker.invoke>[0]["operation"], input: unknown) =>
       broker.invoke({ scope: context.invocation, operation, input, exact: exact(bound.tab) }).pipe(
-        Effect.mapError(() => fail("downstream_failure", "Refresh the tab status before retrying.")),
+        Effect.mapError(() => operation === "snapshot"
+          ? fail("downstream_failure", "Refresh the tab status before retrying.")
+          : { ...fail("unknown_outcome", "Inspect the tab before any later action."), effectStarted: true }),
       );
     const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
       function* (call, context) {
@@ -146,15 +148,19 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
             scope: context.invocation, operation: "open",
             serverHostOnly: true,
             input: { ...(stringField(arg, "url") ? { url: arg.url } : {}), reuseExistingTab: false },
-          }).pipe(Effect.mapError(() => fail("unknown_outcome", "Check live tabs before opening again.")));
-          const tabs = yield* list(context);
+          }).pipe(Effect.mapError(() => ({
+            ...fail("unknown_outcome", "Check live tabs before opening again."), effectStarted: true,
+          })));
+          const tabs = yield* list(context).pipe(Effect.mapError(() => ({
+            ...fail("unknown_outcome", "Reconcile the opened tab in preview status."), effectStarted: true,
+          })));
           const tab = tabs.find((entry) => entry.tabId === opened.tabId);
-          if (!tab) return yield* Effect.fail(fail("unknown_outcome", "Reconcile the opened tab in preview status."));
+          if (!tab) return yield* Effect.fail({ ...fail("unknown_outcome", "Reconcile the opened tab in preview status."), effectStarted: true });
           const ref = bind(tab, context);
           const openedBound = targets.get(ref.id);
-          if (!openedBound) return yield* Effect.fail(fail("unknown_outcome", "Reconcile the new tab."));
+          if (!openedBound) return yield* Effect.fail({ ...fail("unknown_outcome", "Reconcile the new tab."), effectStarted: true });
           yield* claims.recordOpened(identity(openedBound, context)).pipe(
-            Effect.mapError(() => fail("unknown_outcome", "The new tab could not be claimed.")));
+            Effect.mapError(() => ({ ...fail("unknown_outcome", "The new tab could not be claimed."), effectStarted: true })));
           return { value: { targetRef: ref, tab }, category: "confirmed", evidence: ["New preview tab opened"] };
         }
         const bound = lookup(call, context);
@@ -180,9 +186,11 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
           const mode = arg.mode === "diff" || arg.mode === "query" ? arg.mode : "full";
           const query = arg.query && typeof arg.query === "object" ? arg.query as { role?: string; name?: string; text?: string } : undefined;
           const baseObservationId = stringField(arg, "baseObservationId");
-          const observation = observations.renderObservation({ draft, mode,
+          const observation = yield* Effect.try({ try: () => observations.renderObservation({ draft, mode,
             ...(baseObservationId ? { baseObservationId } : {}), ...(query ? { query } : {}),
-            limits: { treeBytes: context.limits.treeBytes } });
+            limits: { treeBytes: context.limits.treeBytes } }),
+            catch: (cause) => fail(cause instanceof Error && cause.message === "Screen observation metadata exceeds tree budget"
+              ? "tree_limit" : "downstream_failure", "Observe a smaller tab region and retry.") });
           const screenshot = snapshot.screenshot;
           if (!screenshot || !screenshot.region || !screenshot.scale || !screenshot.data) {
             return { value: observation, category: "confirmed", evidence: ["Current tab tree observed"] };
@@ -317,8 +325,10 @@ export const makePreviewTargetHost = (broker: Pick<PreviewAutomationBroker["Serv
         if (target.ref.runId === input.runId && target.ref.turnId === input.turnId) targets.delete(id);
       return outcomes;
     });
+    const releaseControl = (input: Pick<ScreenHostContext, "runId" | "turnId"> & { tabId?: string }) =>
+      claims.suspendClaims(input, input.tabId);
     const setBindingHints = (identity: Pick<ScreenHostContext, "runId" | "turnId">, hints: ScreenBindingHints) => {
       bindingHints.set(turnKey(identity), hints);
     };
-    return { availability, dispatch, finishTurn, setBindingHints };
+    return { availability, dispatch, finishTurn, releaseControl, setBindingHints };
   });

@@ -58,6 +58,7 @@ import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenRunService from "./screenCode/ScreenRunService.ts";
+import * as ScreenRunTurnEnd from "./screenCode/ScreenRunTurnEnd.ts";
 import * as ScreenCursorPublisher from "./cua/ScreenCursorPublisher.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
@@ -1118,7 +1119,7 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(layerPullRequestService),
   // The same activity instance RunExecutionService reports to, by layer memoization.
   Layer.provide(
-    ScreenRunService.layerWithTabHost().pipe(
+    ScreenRunTurnEnd.layer.pipe(Layer.provideMerge(ScreenRunService.layerWithTabHost())).pipe(
       Layer.provideMerge(
         ScreenCursorPublisher.layer.pipe(
           Layer.provideMerge(

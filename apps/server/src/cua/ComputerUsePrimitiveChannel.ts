@@ -127,7 +127,7 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
         readonly reply: ComputerUsePrimitiveReply;
       },
     ) => Effect.Effect<boolean>;
-    readonly cancel: (runId: string, cellId: string) => Effect.Effect<void>;
+    readonly cancel: (runId: string, turnId: string) => Effect.Effect<void>;
     readonly cursor: (input: {
       readonly threadId: ThreadId;
       readonly event: ComputerUseCursorEvent;
@@ -462,12 +462,12 @@ export const make = Effect.gen(function* () {
           return true;
         }),
       ),
-    cancel: (runId, cellId) =>
+    cancel: (runId, turnId) =>
       Effect.sync(() => {
         for (const value of attachments.values())
           for (const record of value.registration?.controls.values() ?? [])
             for (const [id, pending] of record.pending)
-              if (pending.request.runId === runId && pending.request.turnId === cellId) {
+              if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 settle(pending);
               }

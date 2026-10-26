@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
@@ -42,12 +43,16 @@ export class TabClaims extends Context.Service<TabClaims, {
   readonly assertCurrent: (input: TabIdentity) => Effect.Effect<TabClaim, TabClaimError>;
   readonly keep: (input: TabIdentity, reason: "deliverable" | "handoff") => Effect.Effect<void, TabClaimError>;
   readonly releaseClaim: (input: TabIdentity) => Effect.Effect<void, TabClaimError>;
-  readonly captureCleanup: (identity: Pick<TabIdentity, "runId" | "turnId">) => Effect.Effect<CleanupAuthority>;
+  readonly suspendClaims: (identity: Pick<TabIdentity, "runId" | "turnId">,
+    tabId?: string) => Effect.Effect<void>;
+  readonly captureCleanup: (identity: Pick<TabIdentity, "runId" | "turnId">,
+    options?: { readonly fence?: boolean; readonly tabId?: string }) => Effect.Effect<CleanupAuthority>;
   readonly releaseTurn: (identity: Pick<TabIdentity, "runId" | "turnId">, authority: CleanupAuthority) => Effect.Effect<readonly CleanupOutcome[]>;
 }>()("goat/screenCode/TabClaims") {}
 
 export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => Effect.gen(function* () {
   const claims = yield* SynchronizedRef.make(new Map<string, TabClaim>());
+  const deferred = new Map<string, TabClaim[]>();
   const consumed = yield* SynchronizedRef.make(new Set<string>());
   const fencedTurns = new Set<string>();
   let epoch = 0;
@@ -91,10 +96,25 @@ export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => 
     releaseClaim: (input) => current(input).pipe(Effect.flatMap(() => SynchronizedRef.update(claims, (all) => {
       const next = new Map(all); next.delete(keyOf(input)); return next;
     }))),
-    captureCleanup: (identity) => SynchronizedRef.modify(claims, (all) => {
-      fencedTurns.add(turnOf(identity));
+    suspendClaims: (identity, tabId) => SynchronizedRef.update(claims, (all) => {
+      const next = new Map(all);
+      for (const [key, claim] of all) {
+        if (turnOf(claim) !== turnOf(identity) || (tabId !== undefined && claim.tabId !== tabId)) continue;
+        next.delete(key);
+        if (claim.provenance === "agent-created") {
+          const pending = deferred.get(turnOf(identity)) ?? [];
+          pending.push(claim);
+          deferred.set(turnOf(identity), pending);
+        }
+      }
+      return next;
+    }),
+    captureCleanup: (identity, options) => SynchronizedRef.modify(claims, (all) => {
+      if (options?.fence !== false) fencedTurns.add(turnOf(identity));
       return [{ ...identity, epoch: ++epoch,
-        tabs: [...all.values()].filter((tab) => turnOf(tab) === turnOf(identity)) }, all] as const;
+        tabs: [...(deferred.get(turnOf(identity)) ?? []), ...all.values()].filter((tab) =>
+          turnOf(tab) === turnOf(identity) &&
+          (options?.tabId === undefined || tab.tabId === options.tabId)) }, all] as const;
     }),
     releaseTurn: (identity, authority) => Effect.gen(function* () {
       if (authority.runId !== identity.runId || authority.turnId !== identity.turnId) return [];
@@ -107,20 +127,29 @@ export const makeTabClaims = (close: (tab: TabClaim) => Effect.Effect<void>) => 
       if (!fresh) return [];
       const outcomes: CleanupOutcome[] = [];
       for (const tab of authority.tabs) {
-        const found = yield* SynchronizedRef.modify(claims, (all) => {
+        const found = yield* SynchronizedRef.get(claims).pipe(Effect.map((all) => {
           const live = all.get(keyOf(tab));
-          if (!live || live.claimEpoch !== tab.claimEpoch) return [undefined, all] as const;
-          const next = new Map(all); next.delete(keyOf(tab));
-          return [live, next] as const;
-        });
+          return live?.claimEpoch === tab.claimEpoch ? live
+            : deferred.get(turnOf(tab))?.find((pending) => pending.claimEpoch === tab.claimEpoch);
+        }));
         if (!found) continue;
         if (found.provenance !== "agent-created") {
           outcomes.push({ tabId: found.tabId, status: "released" });
         } else if (found.keepReason) {
           outcomes.push({ tabId: found.tabId, status: "kept" });
         } else {
-          const result = yield* close(found).pipe(Effect.result);
-          outcomes.push({ tabId: found.tabId, status: result._tag === "Success" ? "closed" : "failed" });
+          const result = yield* Effect.exit(close(found));
+          outcomes.push({ tabId: found.tabId, status: Exit.isSuccess(result) ? "closed" : "failed" });
+        }
+        yield* SynchronizedRef.update(claims, (all) => {
+          if (all.get(keyOf(tab))?.claimEpoch !== tab.claimEpoch) return all;
+          const next = new Map(all); next.delete(keyOf(tab)); return next;
+        });
+        const pending = deferred.get(turnOf(tab));
+        if (pending) {
+          const remaining = pending.filter((claim) => claim.claimEpoch !== tab.claimEpoch);
+          if (remaining.length) deferred.set(turnOf(tab), remaining);
+          else deferred.delete(turnOf(tab));
         }
       }
       return outcomes;

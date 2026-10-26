@@ -282,6 +282,11 @@ export class ComputerUseLeases extends Context.Service<
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
     readonly changed: Effect.Effect<void>;
+    readonly onAuthorityChange?: (listener: (change: {
+      readonly kind: "stop" | "credentialRevoked" | "pause" | "private";
+      readonly threadId: ThreadId;
+      readonly controlId: string;
+    }) => void) => () => void;
     /** How this server starts its own lease proxy subcommand. */
     readonly proxy: SelfInvocation | undefined;
   }
@@ -311,6 +316,18 @@ const make = Effect.gen(function* () {
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
+  const authorityListeners = new Set<(change: {
+    kind: "stop" | "credentialRevoked" | "pause" | "private";
+    threadId: ThreadId;
+    controlId: string;
+  }) => void>();
+  const notifyAuthority = (change: {
+    kind: "stop" | "credentialRevoked" | "pause" | "private";
+    threadId: ThreadId;
+    controlId: string;
+  }) => {
+    for (const listener of authorityListeners) listener(change);
+  };
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
   const foreground = makeForegroundApprovals();
@@ -578,6 +595,8 @@ const make = Effect.gen(function* () {
     if (record === undefined || record.ended !== undefined) return false;
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
+    notifyAuthority({ kind: reason === "revoked" ? "credentialRevoked" : "stop",
+      threadId, controlId: record.controlId });
     // A pause belongs to the agents it held; with none left the next one starts unpaused.
     if (![...controls.values()].some((other) => other.ended === undefined)) paused = undefined;
     return true;
@@ -617,6 +636,10 @@ const make = Effect.gen(function* () {
       if (![...controls.values()].some(acting)) return false;
       paused = reason;
       interrupted(reason);
+      for (const record of controls.values())
+        if (record.ended === undefined)
+          notifyAuthority({ kind: reason === "private" ? "private" : "pause",
+            threadId: record.threadId, controlId: record.controlId });
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
@@ -670,6 +693,10 @@ const make = Effect.gen(function* () {
           if (report.active && !privateHost) {
             foreground.clear();
             interrupted("private");
+            for (const record of controls.values())
+              if (record.ended === undefined)
+                notifyAuthority({ kind: "private", threadId: record.threadId,
+                  controlId: record.controlId });
           }
           privateHost = report.active;
         }).pipe(Effect.andThen(changed));
@@ -962,6 +989,10 @@ const make = Effect.gen(function* () {
     ),
     subscribe: PubSub.subscribe(signals),
     changed,
+    onAuthorityChange: (listener) => {
+      authorityListeners.add(listener);
+      return () => void authorityListeners.delete(listener);
+    },
     proxy,
     blocked: (threadId, block) =>
       Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
