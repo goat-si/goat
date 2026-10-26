@@ -30,7 +30,7 @@ const snapshot: PreviewSessionSnapshot = {
   tabId: "tab-1",
   navStatus: {
     _tag: "Loading",
-    url: "https://t3.chat/",
+    url: "https://example.com/",
     title: "",
   },
   canGoBack: false,
@@ -62,7 +62,7 @@ describe("openPreviewSession", () => {
         browserProfiles: [{ id: "work", name: "Work", kind: "persistent" }],
       });
       const openPreview = vi.fn(async () => AsyncResult.success(snapshot));
-      const input = { openPreview, threadRef, url: "https://t3.chat/" };
+      const input = { openPreview, threadRef, url: "https://example.com/" };
       const open = entryPoint === "session" ? openPreviewSession : openUrlInPreview;
 
       const result = await open(input);
@@ -98,7 +98,7 @@ describe("openUrlInPreview from a link", () => {
     await openUrlInPreview({
       openPreview: async () => AsyncResult.success(snapshot),
       threadRef,
-      url: "https://t3.chat/",
+      url: "https://example.com/",
       background: true,
     });
 
@@ -119,7 +119,7 @@ describe("openUrlInPreview from a link", () => {
         return AsyncResult.success(snapshot);
       },
       threadRef,
-      url: "https://t3.chat/",
+      url: "https://example.com/",
       background: true,
     });
 

@@ -20,7 +20,7 @@ const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
   .check(Schema.isMaxLength(2048));
 const URL_GUIDANCE =
-  "Absolute http(s) URL or a schemeless host such as t3.chat or localhost:5173. Schemeless public hosts use https; loopback hosts use http.";
+  "Absolute http(s) URL or a schemeless host such as example.com or localhost:5173. Schemeless public hosts use https; loopback hosts use http.";
 const PROFILE_GUIDANCE =
   "Browser profile for a new tab, by id or name (case-insensitive) from goat_preview_status profiles. Omit to use the user's default profile. A tab keeps the profile it opened with.";
 const OptionalTimeoutMs = Schema.optional(
