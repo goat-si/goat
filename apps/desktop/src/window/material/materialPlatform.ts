@@ -58,7 +58,7 @@ const make = Effect.gen(function* () {
   if (!Number.isSafeInteger(major)) return unavailable();
   if (major < 26) return unavailable("os-version");
   const loader = yield* MacosObjcRuntime.MacosObjcRuntime;
-  // System glass is opt-in, so ffi-rs loads into main on the first attach, never at startup.
+  // System glass is opt-in, so ffi-rs loads into main only while it is on.
   // The probe is deterministic per process; a failure stays cached and reports native-failed.
   let probed: Adapters.MaterialAdapter | undefined;
   const probe = yield* Effect.cached(

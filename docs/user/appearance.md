@@ -7,9 +7,9 @@ separately on each device or browser.
 
 In the desktop app, turn on **System glass** in **Settings → Appearance** to use Liquid Glass on
 Macs with Apple silicon running macOS 26 or later, or Mica on Windows 11 22H2 or later. On macOS
-the glass is tinted for light or dark mode, so custom theme colors do not show through the sidebar
-and title bar. System glass is off at 100% glass opacity or while reduced transparency or high
-contrast is enabled.
+turning it on takes effect after you restart GOAT, and the glass is tinted for light or dark mode,
+so custom theme colors do not show through the sidebar and title bar. System glass is off at 100%
+glass opacity or while reduced transparency or high contrast is enabled.
 
 On web and desktop, use **Change theme** in the command palette to select a theme without leaving chat.
 Press **Cmd+Option+A** on macOS or **Ctrl+Alt+A** on Windows/Linux to open the theme picker directly.

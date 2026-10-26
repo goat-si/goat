@@ -143,7 +143,7 @@ snapshot feature keeps are isolated: `@crowecawcaw/xa11y` runs only in forked No
 (`SnapShotAccessibilityWorker`, `RegionSnapShotWorker`) and a worker thread, and `ffi-rs` loads
 lazily inside `WindowsForeground.ts` for a handful of Win32 calls. macOS System glass is the one
 exception that must run in main, because AppKit views belong to the main thread: `ffi-rs` loads
-there only after the user turns it on, and every selector is checked against a recorded type
+there only while the user has it turned on, and every selector is checked against a recorded type
 encoding before the first message is sent. macOS window lookup shells out
 to `osascript` instead of a native addon. A crash or stall in any of these must not take the app
 down, so new native capability goes in a child with a deadline, not an `import` in main.

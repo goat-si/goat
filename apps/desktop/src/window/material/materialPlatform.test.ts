@@ -174,10 +174,11 @@ describe("assembled material platform and window service", () => {
       assert.equal(f.loads(), 0);
       assert.equal(f.model.handleReads, 0);
       yield* f.commit({ desktopSystemMaterialEnabled: true });
-      let applied = (yield* Queue.take(f.states)).applied;
-      while (applied !== "macos-glass") applied = (yield* Queue.take(f.states)).applied;
+      assert.equal((yield* Queue.take(f.states)).reason, "off");
+      assert.equal((yield* Queue.take(f.states)).applied, "macos-glass");
       assert.equal(f.loads(), 1);
       assert.equal(f.state.liveViews.size, 1);
+      assert.equal(f.model.shadowInvalidations, 1);
     }),
   );
 
@@ -187,10 +188,22 @@ describe("assembled material platform and window service", () => {
       yield* f.material.afterReveal(f.window);
       assert.deepEqual(yield* f.material.windowOptions, {});
       yield* f.commit({ desktopSystemMaterialEnabled: true });
-      let reason = (yield* Queue.take(f.states)).reason;
-      while (reason !== "restart") reason = (yield* Queue.take(f.states)).reason;
-      assert.deepEqual(yield* f.material.windowOptions, { transparent: true });
+      assert.equal((yield* Queue.take(f.states)).reason, "off");
+      assert.equal((yield* Queue.take(f.states)).reason, "restart");
       assert.equal(f.loads(), 0);
+      assert.deepEqual(yield* f.material.windowOptions, { transparent: true });
+      assert.equal(f.loads(), 1);
+      assert.equal(f.model.handleReads, 0);
+    }),
+  );
+
+  it.effect("a Mac whose AppKit probe fails keeps an opaque window and reports native-failed", () =>
+    Effect.gen(function* () {
+      const f = yield* select({ transparent: false, native: { mismatch: "init" } });
+      assert.deepEqual(yield* f.material.windowOptions, {});
+      yield* f.material.afterReveal(f.window);
+      assert.equal((yield* f.material.getState(1)).reason, "native-failed");
+      assert.equal(f.state.allocations, 0);
       assert.equal(f.model.handleReads, 0);
     }),
   );

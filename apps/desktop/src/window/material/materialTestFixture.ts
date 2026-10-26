@@ -52,6 +52,7 @@ export const makeFixture = Effect.fn("test.materialFixture")(function* (
     appearances: [] as Adapters.MaterialAppearance[],
     releases: 0,
     releaseBackings: [] as string[],
+    shadowInvalidations: 0,
   };
   const window = Object.assign(native, {
     webContents: {
@@ -76,6 +77,9 @@ export const makeFixture = Effect.fn("test.materialFixture")(function* (
     },
     setTitleBarOverlay: (overlay: unknown) => {
       model.overlay = overlay;
+    },
+    invalidateShadow: () => {
+      model.shadowInvalidations++;
     },
   }) as unknown as BrowserWindow;
   let dark = false;
