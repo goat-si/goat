@@ -42,7 +42,7 @@ import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as HttpClient from "effect/http/HttpClient";
-import { isLoopbackHttpBaseUrl, LOOPBACK_SILENCE_TIMEOUT_MS } from "../connection/loopbackHost.ts";
+import { directRequestTimeout } from "../connection/loopbackHost.ts";
 
 import {
   DPOP_ACCESS_TOKEN_REFRESH_SKEW_MS,
@@ -104,11 +104,6 @@ const connectDisabled = () =>
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
 const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 
-/** A direct connection to this device's own server waits out a busy event loop; SSH forwards do not. */
-const directRequestTimeout = (httpBaseUrl: string, connectionMethod: ClientConnectionMethod) =>
-  connectionMethod !== "ssh" && isLoopbackHttpBaseUrl(httpBaseUrl)
-    ? { timeoutMs: LOOPBACK_SILENCE_TIMEOUT_MS }
-    : {};
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {

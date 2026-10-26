@@ -614,14 +614,15 @@ export const layer: Layer.Layer<
       let trimmedRows = 0;
       // Payload bytes overstate the pages a trim frees, so the walk re-measures after each thread.
       let current = before;
-      const trimUntilWithinBudget = (threadId: string) =>
-        Effect.gen(function* () {
+      const trimUntilWithinBudget = Effect.fn("ProjectionMaintenance.trimUntilWithinBudget")(
+        function* (threadId: string) {
           const { saved, trimmed } = yield* trimThread(threadId, current - policy.budgetBytes);
           reclaimedBytes += saved;
           trimmedRows += trimmed;
           if (trimmed > 0) current = yield* historyBytes;
           return current > policy.budgetBytes;
-        });
+        },
+      );
       if (current > policy.budgetBytes)
         yield* idleThreads(policy.now - ORCHESTRATION_HISTORY_TRIM_IDLE_MS, trimUntilWithinBudget);
       // A host that works every day has no week-idle threads, so history grew without bound

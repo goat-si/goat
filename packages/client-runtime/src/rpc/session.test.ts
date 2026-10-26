@@ -1082,32 +1082,6 @@ describe("RpcSessionFactory", () => {
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
-  // The desktop's own server shares this device, so silence there means a busy event loop.
-  it.effect("gives a loopback server a minute of silence before dropping its socket", () =>
-    Effect.gen(function* () {
-      const { factory, sockets } = yield* makeFactory();
-      const session = yield* factory.connect({
-        ...PREPARED,
-        httpBaseUrl: "http://127.0.0.1:3773",
-        socketUrl: "ws://127.0.0.1:3773/ws?wsTicket=test",
-      });
-      const ready = yield* Effect.forkChild(session.ready);
-      const closed = yield* Effect.forkChild(Effect.flip(session.closed));
-      const socket = yield* awaitSocket(sockets);
-      socket.open();
-      yield* completeInitialConfig(socket);
-      yield* Fiber.join(ready);
-      yield* TestClock.adjust("30 seconds");
-      expect(closed.pollUnsafe()).toBeUndefined();
-      yield* TestClock.adjust("35 seconds");
-      expect(yield* Fiber.join(closed)).toMatchObject({
-        reason: "transport",
-        detail:
-          "Test environment stopped responding for 60s. It may be overloaded, asleep, or off the network.",
-      });
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
-  );
-
   it.effect("keeps reading replies after closing a stream with a full buffer", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();

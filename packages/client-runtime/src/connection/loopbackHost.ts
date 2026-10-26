@@ -1,6 +1,8 @@
+import type { ClientConnectionMethod } from "@goat/contracts";
 import { isLoopbackHost } from "@goat/shared/preview";
 
-import type { ConnectionCatalogEntry, ConnectionTarget } from "./model.ts";
+import type { ConnectionCatalogEntry } from "./catalog.ts";
+import type { ConnectionTarget } from "./model.ts";
 import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 
 /**
@@ -9,14 +11,14 @@ import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
  * host's 10-15 s deadlines tore down a healthy connection during a maintenance pass and then
  * backed off for minutes after the server had recovered. A hung process still surfaces.
  */
-export const LOOPBACK_SILENCE_TIMEOUT_MS = 60_000;
+const LOOPBACK_SILENCE_TIMEOUT_MS = 60_000;
 
 const RETRY_BASE_DELAY_MS = 1_000;
 const RETRY_MAX_DELAY_MS = 300_000;
 /** Retries against this device's own server stay quick: nothing on the network needs to settle. */
 const LOOPBACK_RETRY_MAX_DELAY_MS = 5_000;
 
-export function isLoopbackHttpBaseUrl(httpBaseUrl: string): boolean {
+function isLoopbackHttpBaseUrl(httpBaseUrl: string): boolean {
   try {
     return isLoopbackHost(new URL(httpBaseUrl).hostname);
   } catch {
@@ -30,6 +32,16 @@ export function isLoopbackHttpBaseUrl(httpBaseUrl: string): boolean {
  */
 export function isLocalServerConnection(target: ConnectionTarget, httpBaseUrl: string): boolean {
   return target._tag !== "SshConnectionTarget" && isLoopbackHttpBaseUrl(httpBaseUrl);
+}
+
+/** A request budget override for a direct connection to this device's own server; SSH forwards keep the default. */
+export function directRequestTimeout(
+  httpBaseUrl: string,
+  connectionMethod: ClientConnectionMethod,
+): { readonly timeoutMs?: number } {
+  return connectionMethod !== "ssh" && isLoopbackHttpBaseUrl(httpBaseUrl)
+    ? { timeoutMs: LOOPBACK_SILENCE_TIMEOUT_MS }
+    : {};
 }
 
 /** Every route of the entry reaches this device's own server. */
