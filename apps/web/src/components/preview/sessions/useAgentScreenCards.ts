@@ -246,7 +246,7 @@ function onePerThread(sessions: ReadonlyArray<PreviewSession>) {
 /**
  * The sessions that get a card: every agent-driven browser tab and desktop session on the
  * environment's host, waiting ones first, one per thread for the desktop, minus the tab the
- * thread's mini player already shows and stopped sessions whose card the person closed.
+ * thread's mini player already shows and sessions whose card the person closed.
  */
 export function useAgentScreenSessions(
   environmentId: EnvironmentId | null,
@@ -257,11 +257,13 @@ export function useAgentScreenSessions(
   );
   const shownTab = miniPlayer?.source.kind === "browser" ? miniPlayer.source.tabId : null;
   const dismissed = usePreviewSessionStack((state) => state.dismissed);
+  const hiddenLive = usePreviewSessionStack((state) => state.hiddenLive);
   const sessions = usePreviewSessions(environmentId);
   const threadId = threadRef?.threadId;
   return onePerThread(orderPreviewSessions(sessions)).filter(
     (session) =>
       !(session.status === "stopped" && dismissed.has(sessionKey(session))) &&
+      !hiddenLive.has(sessionKey(session)) &&
       !(
         shownTab !== null &&
         session.threadId === threadId &&
@@ -269,6 +271,12 @@ export function useAgentScreenSessions(
         session.target.tabId === shownTab
       ),
   );
+}
+
+/** Sessions still listed on the host whose card the person closed; the header brings them back. */
+export function useHiddenLiveAgentSessions(environmentId: EnvironmentId | null) {
+  const hiddenLive = usePreviewSessionStack((state) => state.hiddenLive);
+  return usePreviewSessions(environmentId).filter((session) => hiddenLive.has(sessionKey(session)));
 }
 
 /**

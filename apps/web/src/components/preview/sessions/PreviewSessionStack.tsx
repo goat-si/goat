@@ -16,6 +16,7 @@ import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { AgentScreenCard } from "./AgentScreenCard";
+import { AGENT_CARDS_SCROLL_ATTRIBUTE } from "./NativeBrowserPicture";
 import { PreviewSessionStackSurface } from "./PreviewSessionStackSurface";
 import { useDocumentVisible } from "./PreviewSessionThumbnail";
 import {
@@ -109,6 +110,15 @@ export function PreviewSessionStack(props: {
             matchesFocus(session, expanded),
         ) ?? null);
   const column = (large !== null ? layout?.large : null) ?? layout?.card;
+  // A tab's webview is placed over its card by measurement, so anything that moves a card without
+  // resizing it (the column moving, a card above it changing) must say so.
+  const layoutVersion = [
+    column?.top,
+    column?.right,
+    column?.maxHeight,
+    large?.id ?? "",
+    sessions.map((session) => session.id).join(","),
+  ].join("|");
 
   const environmentId = props.environmentId;
   const send = async (input: {
@@ -182,7 +192,10 @@ export function PreviewSessionStack(props: {
                 {captureNotice}
               </p>
             ) : null}
-            <div className="pointer-events-none flex min-h-0 flex-col items-end gap-2 overflow-y-auto">
+            <div
+              {...{ [AGENT_CARDS_SCROLL_ATTRIBUTE]: "" }}
+              className="pointer-events-none flex min-h-0 flex-col items-end gap-2 overflow-y-auto"
+            >
               {sessions.map((session, index) => {
                 const enlarged = !floating && session.id === large?.id;
                 return (
@@ -194,6 +207,7 @@ export function PreviewSessionStack(props: {
                     focusRequest={focusRequest}
                     session={session}
                     live={live}
+                    layoutVersion={`${layoutVersion}|${floating ? "floating" : "docked"}`}
                     takeOverOnOpen={enlarged && takeOver.has(session.id)}
                     onTakeOverStarted={() =>
                       setTakeOver((current) => {
