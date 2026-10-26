@@ -29,29 +29,42 @@ import {
   type OrchestratorMcpThreadSendRelayed,
   type OrchestratorMcpThreadStatusInput,
   type OrchestratorMcpThreadWaitInput,
-  type OrchestratorMcpThreadWatch,
   type OrchestratorMcpThreadWatchInput,
   type ThreadId,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { withHostFanOutDeadline } from "./hostFanOutDeadline.ts";
-import { type LaunchWatch, replicaStatus } from "./launchWatch.ts";
+import { replicaStatus } from "./launchWatch.ts";
 import * as ThreadReplicaService from "./ThreadReplicaService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import { rearmAfterRetry, rearmAfterSend, watchKeyOf } from "./launchWatchRearm.ts";
 import { routePendingRead } from "./pendingRequestHostRoute.ts";
 import { McpInvocationContext, type McpInvocationScope } from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import {
+  failure,
+  iso,
+  withoutHost,
+  remoteSendArguments,
+  decodeRemote,
+  decodeList,
+  decodeRead,
+  decodeWait,
+  decodeSend,
+  decodeInterrupt,
+  decodeRetry,
+  decodeStatus,
+  watchView,
+  storeFailure,
+} from "./hostThreadsResults.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostToolAuthorization from "./HostToolAuthorization.ts";
 import {
@@ -80,9 +93,6 @@ const MAX_WAIT_MS = 60 * 60 * 1_000;
 /** Extra time a remote wait gets to answer after its own timeout. */
 const WAIT_ANSWER_MARGIN_MS = 60_000;
 
-const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
-  new OrchestratorMcpFailure({ code, message: Array.from(message).slice(0, 2000).join("") });
-
 type ListItem = OrchestratorMcpThreadListItem;
 
 /** Newest first, as each environment lists its own; the host breaks the last tie. */
@@ -107,60 +117,6 @@ export function mergeHostThreadLists(
   const total = lists.reduce((sum, list) => sum + list.total, 0);
   return { threads, total, truncated: total > threads.length };
 }
-
-const withoutHost = <T extends { readonly host?: unknown; readonly allHosts?: unknown }>(
-  input: T,
-): Omit<T, "host" | "allHosts"> => {
-  const { host: _host, allHosts: _allHosts, ...rest } = input;
-  return rest;
-};
-
-/**
- * A host older than turn capabilities refuses an argument it does not declare, so an empty
- * request is left out; a real one reaches it and fails there with nothing sent.
- */
-const remoteSendArguments = (input: OrchestratorMcpThreadSendInput) => {
-  const { capabilities, ...rest } = withoutHost(input);
-  return capabilities === undefined || capabilities.length === 0 ? rest : { ...rest, capabilities };
-};
-
-/** Another machine's answer is untrusted: it must decode as the tool's own result. */
-const decodeRemote =
-  <A, E>(decode: (value: unknown) => Effect.Effect<A, E>, host: string, tool: string) =>
-  (value: unknown) =>
-    decode(value).pipe(
-      Effect.mapError(() =>
-        failure("orchestration_error", `${host} returned a result ${tool} could not read.`),
-      ),
-    );
-
-const decodeList = Schema.decodeUnknownEffect(OrchestratorMcpThreadListResult);
-const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
-const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
-const decodeSend = Schema.decodeUnknownEffect(OrchestratorMcpThreadSendResult);
-const decodeInterrupt = Schema.decodeUnknownEffect(OrchestratorMcpThreadInterruptResult);
-const decodeRetry = Schema.decodeUnknownEffect(OrchestratorMcpThreadRetryResult);
-const decodeStatus = Schema.decodeUnknownEffect(OrchestratorMcpThreadStatusResult);
-
-const iso = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
-
-/** A stored watch as the watch tools show it. */
-function watchView(watch: LaunchWatch): OrchestratorMcpThreadWatch {
-  return {
-    ...(watch.host === null ? {} : { host: watch.host }),
-    threadId: watch.threadId,
-    title: watch.title,
-    pendingRunIds: watch.recovery === undefined ? [...watch.pendingRuns] : [],
-    replicaStatus: replicaStatus(watch),
-    lastReportedRunId: watch.reportedRuns.at(-1) ?? null,
-    hostUnavailableSince: watch.outage === null ? null : iso(watch.outage.since),
-    createdAt: iso(watch.createdAt),
-    updatedAt: iso(watch.updatedAt),
-  };
-}
-
-const storeFailure = (error: LaunchWatchService.LaunchWatchStoreError) =>
-  failure("orchestration_error", error.message);
 
 export interface HostThreadsMcpServiceShape {
   readonly reconcileCheckpoint: (
@@ -627,7 +583,31 @@ const make = Effect.gen(function* () {
                   : error,
               ),
             );
-    const replicaGrant = yield* replicaAuthorization(scope);
+    const { limits: replicaGrant, readFallback } = yield* replicaAuthorization(scope).pipe(
+      Effect.map((limits) => ({ limits, readFallback: false as const })),
+      Effect.catchIf(
+        (error) =>
+          // Only a linked host's own server judges the remote read; local watches keep operate.
+          input.host !== undefined &&
+          error.code === "capability_denied" &&
+          input.checkpointReplication !== "on" &&
+          scope.readOnly !== true &&
+          scope.client?.access !== "read-only",
+        () =>
+          readCaller().pipe(
+            Effect.tap(assertLiveCaller),
+            Effect.tap(
+              () =>
+                scope
+                  .reauthorize?.(["orchestration:read"])
+                  .pipe(Effect.mapError(reauthorizationFailure)) ?? Effect.void,
+            ),
+            Effect.map((caller) => ({ limits: caller.limits, readFallback: true as const })),
+            Effect.provideService(McpInvocationContext, scope),
+            Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+          ),
+      ),
+    );
     if (
       input.checkpointReplication === "on" &&
       (input.host === undefined ||
@@ -640,9 +620,12 @@ const make = Effect.gen(function* () {
       );
     const watch = yield* launchWatches
       .register({
-        ...(input.checkpointReplication === undefined
-          ? {}
-          : { checkpointReplication: input.checkpointReplication }),
+        // A read-scoped watch must not inherit a host setting that enables checkpoint capture.
+        ...(readFallback
+          ? { checkpointReplication: "off" as const }
+          : input.checkpointReplication === undefined
+            ? {}
+            : { checkpointReplication: input.checkpointReplication }),
         replicaCeiling: replicaGrant.runtimeMode,
         launcherThreadId,
         host: input.host,

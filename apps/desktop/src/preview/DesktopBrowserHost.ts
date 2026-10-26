@@ -203,6 +203,7 @@ export const make = Effect.gen(function* () {
     const tab = tabs.get(id);
     if (!tab) return;
     tabs.delete(id);
+    tab.relay?.close();
     tab.relay = null;
     tab.debuggee.debugger.off("message", tab.onMessage);
     tab.debuggee.webContents.off("did-navigate", tab.onNewDocument);
@@ -246,9 +247,10 @@ export const make = Effect.gen(function* () {
    * PreviewInputFence), and nothing that relay sent is still on its way, so the hold ends with it.
    */
   const dropRelay = (tab: {
-    relay: unknown;
+    relay: CdpRelayConnection | null;
     readonly debuggee: { readonly debugger: Electron.Debugger };
   }) => {
+    tab.relay?.close();
     tab.relay = null;
     const release = (method: string, params: Record<string, unknown>) =>
       void tab.debuggee.debugger.sendCommand(method, params).catch(() => undefined);

@@ -50,6 +50,7 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
   type OrchestrationV2Run,
+  type OrchestrationV2RunTerminationCause,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2ThreadShell,
   type OrchestrationV2ThreadShellSnapshot,
@@ -152,6 +153,10 @@ import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
+import {
+  queuedStartFailureKind,
+  stopTerminationKind as classifyStopTerminationKind,
+} from "./runTerminationCause.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import { isAutomaticCompletionRun, queuedRunsInDeliveryOrder } from "./QueuedRunOrder.ts";
@@ -1311,6 +1316,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
     });
 
+  const stopTerminationKind = (reason: string | undefined) =>
+    classifyStopTerminationKind(reason, RunExecutionService.USER_STOP_REASON, true);
+
   const emitQueuedRunCancellation = Effect.fn("Orchestrator.emitQueuedRunCancellation")(
     function* (input: {
       readonly command: OrchestrationV2ServerCommand;
@@ -1318,6 +1326,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       readonly projection: Pick<OrchestrationV2ThreadProjection, "nodes" | "attempts">;
       readonly run: OrchestrationV2Run;
       readonly now: DateTime.Utc;
+      readonly cause: OrchestrationV2RunTerminationCause["kind"];
     }) {
       const rootNode =
         input.run.rootNodeId === null
@@ -1340,6 +1349,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: {
           ...input.run,
           status: "cancelled",
+          terminationCause: { kind: input.cause },
           queuePosition: null,
           completedAt: input.now,
         },
@@ -1398,23 +1408,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const providerThread = projection.providerThreads.find(
       (entry) => entry.id === queuedRun.providerThreadId,
     );
-    const handoffUnsupported =
-      typeof cause === "object" &&
-      cause !== null &&
-      "_tag" in cause &&
-      cause._tag === "CommandPolicyCapabilityUnsupportedError";
-    const failureCause =
-      typeof cause === "object" &&
-      cause !== null &&
-      "_tag" in cause &&
-      cause._tag === "OrchestratorDispatchError" &&
-      "cause" in cause
-        ? cause.cause
-        : cause;
+    const failureCause = isOrchestratorDispatchError(cause) ? cause.cause : cause;
+    const kind = queuedStartFailureKind(cause);
     const failure = makeProviderFailure({
       cause: failureCause,
-      code: handoffUnsupported ? "context_handoff_unsupported" : "queued_start_failed",
-      class: handoffUnsupported ? "validation_error" : "unknown",
+      code: kind === "validation_error" ? "context_handoff_unsupported" : "queued_start_failed",
+      class: kind === "validation_error" ? "validation_error" : "unknown",
     });
     yield* writeSystemEvents([
       ...(attempt !== undefined && rootNode !== undefined
@@ -1483,7 +1482,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(rootNode === undefined ? {} : { nodeId: rootNode.id }),
         providerInstanceId: queuedRun.providerInstanceId,
         occurredAt: now,
-        payload: { ...queuedRun, status: "failed", queuePosition: null, completedAt: now },
+        payload: {
+          ...queuedRun,
+          status: "failed",
+          terminationCause: { kind },
+          queuePosition: null,
+          completedAt: now,
+        },
       },
     ]);
   });
@@ -2433,6 +2438,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           projection,
           run: deliveryRun,
           now,
+          cause: "delegated_wake_disposed",
         });
         return;
       }
@@ -2473,6 +2479,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly disposition: "stopped" | "disposed";
     readonly now: DateTime.Utc;
     readonly cancelQueuedDelivery?: boolean;
+    readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
   }) {
     const parentRun = input.projection.runs.find((candidate) => candidate.id === input.parentRunId);
     if (parentRun === undefined) {
@@ -2513,6 +2520,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection: input.projection,
         run: deliveryRun,
         now: input.now,
+        cause: input.terminationCause ?? "delegated_wake_disposed",
       });
     }
   });
@@ -3824,7 +3832,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId: run.id,
           providerInstanceId: run.providerInstanceId,
           occurredAt: now,
-          payload: { ...run, status: "cancelled", queuePosition: null, completedAt: now },
+          payload: {
+            ...run,
+            status: "cancelled",
+            terminationCause: { kind: "thread_archive" },
+            queuePosition: null,
+            completedAt: now,
+          },
         });
       }
       for (const run of preparingRuns) {
@@ -4877,6 +4891,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       activeAttemptId: nextAttemptId,
       userMessageId: input.messageId,
       status: "starting",
+      terminationCause: undefined,
       contextHandoffId: restartHandoff?.id ?? targetRun.contextHandoffId,
     };
     const nextAttempt: OrchestrationV2RunAttempt = {
@@ -8611,6 +8626,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...queuedRun,
         status: "cancelled",
+        terminationCause: { kind: "queued_replaced" },
         queuePosition: null,
         completedAt: now,
       },
@@ -8758,6 +8774,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchQueuedRunCancel = Effect.fn("Orchestrator.dispatchQueuedRunCancel")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "queued-run.cancel" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    cause: OrchestrationV2RunTerminationCause["kind"] = "queued_cancelled",
   ) {
     const projection = yield* projectionStore
       .getThreadRecords(
@@ -8786,6 +8803,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentRunId: queuedMessage.delegatedCompletion.parentRunId,
         disposition: "disposed",
         now,
+        terminationCause: cause,
       });
       return;
     }
@@ -8810,6 +8828,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...queuedRun,
         status: "cancelled",
+        terminationCause: { kind: cause },
         queuePosition: null,
         completedAt: now,
       },
@@ -9222,7 +9241,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       nodeId: state.rootNode.id,
       providerInstanceId: state.run.providerInstanceId,
       occurredAt: now,
-      payload: { ...state.run, status: "failed", completedAt: now },
+      payload: {
+        ...state.run,
+        status: "failed",
+        terminationCause: { kind: "preparation_failed" },
+        completedAt: now,
+      },
     });
   });
 
@@ -9300,7 +9324,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     yield* emitEvent({
       ...scope,
       type: "run.updated",
-      payload: { ...state.run, status: "preparing", completedAt: null },
+      payload: {
+        ...state.run,
+        status: "preparing",
+        terminationCause: undefined,
+        completedAt: null,
+      },
     });
     // Messages held when this preparation failed follow the run again. A hold
     // from a later run (a stop, say) is not this failure's to release.
@@ -9686,6 +9715,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         },
       });
     }
+    const interruptReason = yield* runInterruptReason(input.command, input.events, run.id);
     if (providerThread !== undefined) {
       yield* emitEvent({
         ...base,
@@ -9695,7 +9725,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           run,
           rootNode,
           providerThread,
-          reason: yield* runInterruptReason(input.command, input.events, run.id),
+          reason: interruptReason,
           completedAt: input.now,
         }),
       });
@@ -9707,6 +9737,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: {
         ...runWithoutDelegatedCompletion,
         status: "interrupted",
+        terminationCause: {
+          kind:
+            input.command.type === "run.interrupt"
+              ? stopTerminationKind(interruptReason)
+              : "unknown",
+        },
         completedAt: input.now,
       },
     });
@@ -9897,6 +9933,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             runId: run.id,
           },
           input.events,
+          stopTerminationKind(input.command.reason),
         );
         continue;
       }
@@ -9949,6 +9986,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         parentRunId,
         disposition: "stopped",
         now: input.now,
+        terminationCause: stopTerminationKind(input.command.reason),
       });
     }
   });
@@ -10542,7 +10580,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         nodeId: rootNode.id,
         providerInstanceId: run.providerInstanceId,
         occurredAt: now,
-        payload: { ...run, status: "interrupted", completedAt: now },
+        payload: {
+          ...run,
+          status: "interrupted",
+          terminationCause: { kind: stopTerminationKind(command.reason) },
+          completedAt: now,
+        },
       });
       yield* stopRemainingWork();
       yield* Ref.update(effects, (existing) => [...existing, ...otherProviderInterrupts]);
@@ -13105,131 +13148,4 @@ export const layer: Layer.Layer<
 > = Layer.effect(OrchestratorV2, makeOrchestrator()).pipe(
   Layer.provide(ThreadCommandExecutor.layer),
   Layer.provide(RuntimeAdmission.layer),
-);
-
-const layerUnavailable: Layer.Layer<OrchestratorV2> = Layer.succeed(
-  OrchestratorV2,
-  OrchestratorV2.of({
-    resumeQueuedRuns: Effect.fail(
-      new OrchestratorDispatchError({
-        commandId: CommandId.make("command:system:resume-queued-runs"),
-        commandType: "message.dispatch",
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-    recoverDelegatedTasks: Effect.void,
-    recoverDelegatedTask: () => Effect.void,
-    delegatedTaskResultPending: () => Effect.succeed(false),
-    restartContinuationPending: () => Effect.succeed(false),
-    awaitRestartContinuation: () => Effect.void,
-    autoArmLimitRecovery: (input) =>
-      Effect.fail(new OrchestratorProjectionError({ threadId: input.threadId })),
-    dispatch: (command) =>
-      Effect.fail(
-        new OrchestratorDispatchError({
-          commandId: command.commandId,
-          commandType: command.type,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    searchThreadStream: (input) =>
-      Stream.fail(new OrchestratorProjectionError({ threadId: input.threadId })),
-    searchThread: (input) =>
-      Effect.fail(new OrchestratorProjectionError({ threadId: input.threadId })),
-    getThreadHistoryPage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getTimelinePage: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getMessageCount: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getTurnItem: ({ threadId }) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getReviewLedgerEntries: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({ threadId: ThreadId.make("thread:review-ledger") }),
-      ),
-    getThreadRecords: (threadId) => Effect.fail(new OrchestratorProjectionError({ threadId })),
-    getThreadProjection: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getCheckpointContext: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadSnapshot: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadSnapshotWindow: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getShellSnapshot: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: ThreadId.make("thread:shell"),
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    listActiveSubagentThreadIds: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: ThreadId.make("thread:shell"),
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    readShellSnapshot: () =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: ThreadId.make("thread:shell"),
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getLaunchedPendingQuestions: (input) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId: input.launcherThreadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadShell: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    getThreadEventSequence: (threadId) =>
-      Effect.fail(
-        new OrchestratorProjectionError({
-          threadId,
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    streamStoredEvents: Stream.fail(
-      new OrchestratorDomainEventStreamError({
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-    streamStoredEventsFrom: () =>
-      Stream.fail(
-        new OrchestratorDomainEventStreamError({
-          cause: "Orchestration V2 live runtime is not configured.",
-        }),
-      ),
-    streamDomainEvents: Stream.fail(
-      new OrchestratorDomainEventStreamError({
-        cause: "Orchestration V2 live runtime is not configured.",
-      }),
-    ),
-  } satisfies OrchestratorV2Shape),
 );
