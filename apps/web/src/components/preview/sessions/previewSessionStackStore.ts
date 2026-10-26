@@ -54,6 +54,11 @@ interface PreviewSessionStackState {
   readonly revealedWhileNarrow: boolean;
   /** Stopped sessions whose card the person closed, by sessionKey. */
   readonly dismissed: ReadonlySet<string>;
+  /**
+   * Live sessions whose card the person closed while the agent works on, by sessionKey. Showing
+   * the cards again from the header brings them back.
+   */
+  readonly hiddenLive: ReadonlySet<string>;
   /** The session shown at the large size, until it is shrunk, closed or gone. */
   readonly expanded: (PreviewSessionStackFocus & { readonly environmentId?: EnvironmentId }) | null;
   readonly focus: PreviewSessionStackFocus | null;
@@ -71,6 +76,7 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
   narrow: false,
   revealedWhileNarrow: false,
   dismissed: new Set(),
+  hiddenLive: new Set(),
   expanded: null,
   focus: null,
   focusRequest: 0,
@@ -79,14 +85,20 @@ export const usePreviewSessionStack = create<PreviewSessionStackState>()((set, g
     // Hiding cards that only a narrow pane let through keeps the window's choice for wide panes.
     if (!shown && narrow) return set({ revealedWhileNarrow: false });
     writeHidden(!shown);
-    set({ hidden: !shown, revealedWhileNarrow: shown && narrow });
+    set({
+      hidden: !shown,
+      revealedWhileNarrow: shown && narrow,
+      ...(shown ? { hiddenLive: new Set<string>() } : {}),
+    });
   },
   setNarrow: (narrow) => {
     if (get().narrow !== narrow) set({ narrow, revealedWhileNarrow: false });
   },
   dismiss: (session) =>
     set((state) => ({
-      dismissed: new Set(state.dismissed).add(sessionKey(session)),
+      ...(session.status === "stopped"
+        ? { dismissed: new Set(state.dismissed).add(sessionKey(session)) }
+        : { hiddenLive: new Set(state.hiddenLive).add(sessionKey(session)) }),
       expanded: state.expanded?.sessionId === session.id ? null : state.expanded,
     })),
   expand: (session) =>

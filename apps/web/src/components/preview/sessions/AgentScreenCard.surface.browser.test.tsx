@@ -36,6 +36,14 @@ vi.mock("@goat/client-runtime/preview/server-browser-stream", async (importOrigi
     };
   },
 }));
+// Pop out uses the browser's picture-in-picture, which a headless test page cannot open.
+vi.mock("../../../browser/serverPictureInPicture", () => ({
+  serverPictureInPictureKey: (threadId: string, tabId: string) => JSON.stringify([threadId, tabId]),
+  supportsServerPictureInPicture: () => true,
+  useServerPictureInPictureKey: () => null,
+  openServerPictureInPicture: async () => undefined,
+  closeServerPictureInPicture: () => undefined,
+}));
 vi.mock("../../../state/previewStream", () => ({
   usePreviewStreamAccess: () => state.access,
   refreshPreviewStreamAccess: () => undefined,
@@ -46,6 +54,10 @@ vi.mock("../../../previewStateStore", async (importOriginal) => ({
 }));
 
 import { ServerBrowserSurface } from "../../../browser/ServerBrowserSurface";
+import {
+  acquireBrowserSurface,
+  useBrowserSurfaceStore,
+} from "../../../browser/browserSurfaceStore";
 import { AgentScreenCardView } from "./AgentScreenCard";
 
 const environmentId = "env-surface" as EnvironmentId;
@@ -229,9 +241,11 @@ it("still fits a person's own tab to the view it follows", async () => {
   await control({ controller: "you" });
   expect(state.sent.some((input) => input.type === "resize")).toBe(true);
 });
-it("a tab this desktop draws opens no stream, which would wait on a page that is not painting", async () => {
-  setup();
-  await using screen = await render(
+const RUNTIME_TAB = JSON.stringify([environmentId, "thread-1", "epoch-1", "tab-1"]);
+const hosted = { runtimeTabId: RUNTIME_TAB, overlay: null };
+
+function drawnCard(hostedTab: typeof hosted | null) {
+  return (
     <AgentScreenCardView
       session={tab}
       size="large"
@@ -241,16 +255,81 @@ it("a tab this desktop draws opens no stream, which would wait on a page that is
       canControl
       canOperateBrowser
       drawnHere
+      hosted={hostedTab}
       focused={false}
       focusRequest={0}
       onExpand={() => undefined}
+      onOpenInPanel={() => undefined}
       onControl={() => undefined}
       onDismiss={() => undefined}
-    />,
+    />
   );
-  await expect.element(screen.getByText("Open to watch")).toBeVisible();
+}
+
+const surfaceOf = () => useBrowserSurfaceStore.getState().byTabId[RUNTIME_TAB];
+const overlay = () => document.querySelector("[data-agent-card-overlay]");
+
+it("shows a tab this desktop draws as its own webview in the card, with no stream and no Take over", async () => {
+  setup();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  await page.viewport(1400, 900);
+  await using screen = await render(drawnCard(hosted));
+  // The card holds the webview's place, the way the right panel does, fitted to its picture.
+  await vi.waitFor(() => expect(surfaceOf()?.visible).toBe(true));
+  expect(surfaceOf()?.fitSourceContent).toBe(true);
+  const picture = screen.container.querySelector("[data-browser-surface-slot]")!;
+  const box = picture.getBoundingClientRect();
+  expect(surfaceOf()?.rect).toEqual({
+    x: Math.round(box.x),
+    y: Math.round(box.y),
+    width: Math.round(box.width),
+    height: Math.round(box.height),
+  });
+  // The picture's controls sit above the webview, over exactly its rect.
+  await vi.waitFor(() => expect(overlay()).not.toBeNull());
+  expect(overlay()!.querySelector('[aria-label="Stop"]')).not.toBeNull();
+  expect(overlay()!.querySelector('[aria-label="Take over"]')).toBeNull();
+  // No stream: the page is on screen, not parked behind a still that never comes.
   expect(state.created).toBe(0);
   expect(screen.container.querySelector("canvas")).toBeNull();
-  // No stream means nothing to take control through; it would do nothing.
+  // The floating player's actions are on the card.
+  await expect
+    .element(screen.getByRole("button", { name: "Open in the right panel" }))
+    .toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+});
+
+it("never takes a drawn tab from the panel showing it, and shows it once the panel lets go", async () => {
+  setup();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  await page.viewport(1400, 900);
+  const panel = acquireBrowserSurface(RUNTIME_TAB);
+  panel.present({ x: 900, y: 60, width: 400, height: 600 }, true);
+  const panelOwner = surfaceOf()?.owner;
+  await using screen = await render(drawnCard(hosted));
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  expect(surfaceOf()?.owner).toBe(panelOwner);
+  expect(surfaceOf()?.rect).toEqual({ x: 900, y: 60, width: 400, height: 600 });
+  expect(overlay()).toBeNull();
+  // The panel closes: the card shows the tab.
+  act(() => panel.release());
+  await vi.waitFor(() => expect(overlay()).not.toBeNull());
+  expect(surfaceOf()?.owner).not.toBe(panelOwner);
+  // The panel opens again and takes it back; the card gives it up without a fight.
+  const again = acquireBrowserSurface(RUNTIME_TAB);
+  act(() => void again.present({ x: 900, y: 60, width: 400, height: 600 }, true));
+  await vi.waitFor(() => expect(overlay()).toBeNull());
+  expect(surfaceOf()?.rect).toEqual({ x: 900, y: 60, width: 400, height: 600 });
+  again.release();
+});
+
+it("a drawn tab the desktop does not host yet shows a placeholder and opens no stream", async () => {
+  setup();
+  useBrowserSurfaceStore.setState({ byTabId: {}, activityByTabId: {} });
+  await using screen = await render(drawnCard(null));
+  await expect.element(screen.getByRole("article")).toBeVisible();
+  expect(state.created).toBe(0);
+  expect(screen.container.querySelector("canvas")).toBeNull();
+  expect(screen.container.querySelector("[data-browser-surface-slot]")).toBeNull();
   expect(screen.container.querySelector('[aria-label="Take over"]')).toBeNull();
 });

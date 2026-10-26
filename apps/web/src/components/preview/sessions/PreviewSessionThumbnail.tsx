@@ -5,19 +5,23 @@ import {
 } from "@goat/client-runtime/state/preview-sessions";
 import type { PreviewSession, PreviewSessionNoPicture } from "@goat/contracts";
 import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-browser-stream";
-import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
-
 import {
-  GlobeIcon,
-  LockIcon,
-  MonitorIcon,
-  MousePointerClickIcon,
-  MousePointerIcon,
-} from "~/components/solar";
+  type RefObject,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+
+import { GlobeIcon, LockIcon, MonitorIcon, MousePointerClickIcon } from "~/components/solar";
 import { type ServerBrowserHandle, ServerBrowserSurface } from "~/browser/ServerBrowserSurface";
 import { observeResize } from "~/lib/observeResize";
 import { cn } from "~/lib/utils";
 import { useDesktopSessionFrame } from "~/state/previewSessions";
+
+import { AgentCursorMark } from "../AgentBrowserCursor";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
 export function useDocumentVisible(doc: Document = document) {
@@ -176,7 +180,8 @@ function DesktopThumbnail(props: {
 
 /**
  * Where the agent's cursor is on the window, drawn over its live picture like the helper draws it
- * on screen. Positioned once per frame or resize; it moves without a repeating animation.
+ * on screen, with the browser's cursor mark. Positioned once per frame or resize; it moves without
+ * a repeating animation, and only a move or a new phase marks it active again, never a new frame.
  */
 function AgentCursor(props: {
   readonly session: PreviewSession;
@@ -197,20 +202,19 @@ function AgentCursor(props: {
       ? target.cursor
       : undefined;
   const place = cursor && agentCursorPlacement(cursor, props.frame, measured);
+  const key = cursor ? `${cursor.point.fx}:${cursor.point.fy}:${cursor.phase}` : null;
+  const [mark, setMark] = useState({ key, sequence: 0 });
+  if (mark.key !== key) setMark({ key, sequence: mark.sequence + 1 });
   return (
     <div ref={box} aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-      {place === undefined ? null : (
-        <span
-          data-testid="agent-cursor"
-          data-phase={cursor?.phase}
-          className="absolute top-0 left-0 transition-transform duration-150 ease-out"
-          style={{ transform: `translate(${place.left}px, ${place.top}px)` }}
-        >
-          {cursor?.phase === "acting" ? (
-            <span className="absolute -top-2 -left-2 size-4 rounded-full border-2 border-primary/80" />
-          ) : null}
-          <MousePointerIcon className="size-4 text-primary drop-shadow" />
-        </span>
+      {place === undefined || cursor === undefined ? null : (
+        <AgentCursorMark
+          phase={cursor.phase === "acting" ? "click" : "move"}
+          sequence={mark.sequence}
+          left={place.left}
+          top={place.top}
+          controller={props.session.owner === "agent" ? "agent" : "none"}
+        />
       )}
     </div>
   );
@@ -224,7 +228,9 @@ export function PreviewSessionThumbnail(props: {
   /**
    * This desktop draws the browser tab in a <webview> that paints only while on screen. A card
    * streaming it parked would stay empty and hold an agent's snapshot behind a still that never
-   * comes, so the card names it and opening it shows the webview itself.
+   * comes, so the card shows the webview itself over this picture (NativeBrowserPicture), and this
+   * is what shows while it cannot: the panel or floating player holds the tab, or the cards are
+   * popped out of GOAT.
    */
   readonly drawnHere?: boolean | undefined;
   /** The large browser view's stream, for Take over and Hand back. */
@@ -232,6 +238,7 @@ export function PreviewSessionThumbnail(props: {
   readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
 }) {
   const { session } = props;
+  const stackDocument = useContext(StackDocumentContext);
   const large = props.size === "large";
   const stopped = session.status === "stopped";
   // The large browser view may be the controller itself, typing a secret: it keeps its stream,
@@ -257,7 +264,11 @@ export function PreviewSessionThumbnail(props: {
     return (
       <Placeholder
         icon="globe"
-        text={stopped ? undefined : "Open to watch"}
+        text={
+          stopped || stackDocument === null || stackDocument === document
+            ? undefined
+            : "Watch in GOAT"
+        }
         className={stopped ? "opacity-50" : undefined}
       />
     );

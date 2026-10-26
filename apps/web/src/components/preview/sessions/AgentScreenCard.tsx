@@ -30,20 +30,21 @@ import {
   MonitorIcon,
   MousePointerClickIcon,
   MousePointerIcon,
-  PanelRightIcon,
   SquareIcon,
   XIcon,
 } from "~/components/solar";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import { browserMiniPlayerSource, usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
+import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useEnvironmentScope } from "~/state/session";
 
 import { FaviconImage } from "../PreviewFaviconIcon";
+import { BrowserCardActions } from "./BrowserCardActions";
+import { NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
@@ -68,12 +69,17 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
  */
 const HIDDEN_UNTIL_HOVER =
   "pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/card:pointer-events-auto group-focus-within/card:opacity-100";
+/**
+ * Over a webview the pointer never reaches the card, so a hidden control stays hit-testable: the
+ * pointer reaching a corner reveals the picture's controls, as the floating player's corner did.
+ */
+const HIDDEN_OVER_WEBVIEW =
+  "opacity-0 group-hover/card:opacity-100 group-focus-within/card:opacity-100 focus-visible:opacity-100";
 
-type Corner = "top-left" | "top-left-2" | "top-right" | "bottom-left" | "bottom-right";
+type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
 const CORNER: Record<Corner, string> = {
   "top-left": "top-2 left-2",
-  "top-left-2": "top-2 left-11",
   "top-right": "top-2 right-2",
   "bottom-left": "bottom-2 left-2",
   "bottom-right": "right-2 bottom-2",
@@ -84,6 +90,8 @@ function CornerButton(props: {
   readonly icon: ComponentType<{ readonly className?: string }>;
   readonly corner: Corner;
   readonly shown: boolean;
+  /** Drawn in the layer above a tab's webview, outside the card. */
+  readonly overWebview?: boolean;
   readonly destructive?: boolean;
   readonly disabled?: boolean;
   readonly onClick: () => void;
@@ -106,7 +114,11 @@ function CornerButton(props: {
               "absolute flex size-7 items-center justify-center rounded-lg bg-black/65 text-white shadow-sm outline-none backdrop-blur-sm transition-[opacity,background-color] duration-150 hover:bg-black/85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:text-white/40 motion-reduce:transition-none",
               props.destructive && "text-destructive hover:bg-destructive hover:text-white",
               CORNER[props.corner],
-              props.shown ? "pointer-events-auto opacity-100" : HIDDEN_UNTIL_HOVER,
+              props.shown
+                ? "pointer-events-auto opacity-100"
+                : props.overWebview
+                  ? cn("pointer-events-auto", HIDDEN_OVER_WEBVIEW)
+                  : HIDDEN_UNTIL_HOVER,
             )}
           />
         }
@@ -155,8 +167,15 @@ export interface AgentScreenCardViewProps {
   readonly canControl: boolean;
   /** Taking over a browser tab: the preview grant, checked by the tab's stream. */
   readonly canOperateBrowser: boolean;
-  /** A browser tab this desktop draws itself; see PreviewSessionThumbnail. */
+  /** A browser tab this desktop draws itself in a webview instead of streaming it. */
   readonly drawnHere?: boolean | undefined;
+  /** The drawn tab's hosted webview, which the card shows as its picture; null until hosted. */
+  readonly hosted?: {
+    readonly runtimeTabId: string;
+    readonly overlay: DesktopPreviewOverlay | null;
+  } | null;
+  /** Changes whenever the stack moves this card without resizing it. */
+  readonly layoutVersion?: string | undefined;
   readonly focused: boolean;
   readonly focusRequest: number;
   /** Take control of the browser stream as soon as the large view connects. */
@@ -201,6 +220,9 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const swallowClick = useRef(false);
   const shown = revealed;
   const stackDocument = useContext(StackDocumentContext);
+  // Popped out over other apps, the card lives in another window, where no webview can be shown.
+  const floating = stackDocument !== null && stackDocument !== document;
+  const hosted = browser && props.drawnHere && !floating ? (props.hosted ?? null) : null;
 
   useEffect(() => {
     if (!revealed) return;
@@ -256,8 +278,11 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       swallowClick.current = false;
       return;
     }
-    props.onExpand();
+    enlarge();
   };
+  // A drawn tab cannot show in the popped-out window; the right panel in GOAT shows it.
+  const enlarge = () =>
+    floating && props.drawnHere && props.onOpenInPanel ? props.onOpenInPanel() : props.onExpand();
   const collapse = () => {
     // The card is a passive view; control goes back to the agent before it shrinks.
     if (stream?.controller === "you") surface.current?.releaseControl();
@@ -306,6 +331,84 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       onStreamControl={onStreamControl}
     />
   );
+  // The picture's corners match every agent screen; a browser card closes from its header.
+  const corners = ({ overWebview }: { readonly overWebview: boolean }) => (
+    <>
+      {!large && overWebview ? (
+        // A card is a passive view: a click on its webview enlarges it instead of reaching the page.
+        <button
+          type="button"
+          className="pointer-events-auto absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+          onClick={expand}
+          onPointerDown={reveal}
+          aria-label={`Open ${name}`}
+        />
+      ) : null}
+      {stopped && !browser ? (
+        <CornerButton
+          label="Close"
+          icon={XIcon}
+          corner="top-right"
+          shown={shown}
+          overWebview={overWebview}
+          onClick={props.onDismiss}
+        />
+      ) : canStop ? (
+        <CornerButton
+          label="Stop"
+          icon={SquareIcon}
+          corner="top-right"
+          shown={shown}
+          overWebview={overWebview}
+          destructive
+          disabled={!props.canControl}
+          onClick={() => props.onControl("stop")}
+        />
+      ) : null}
+      {takeover === null ? null : (
+        <CornerButton
+          label={takeoverLabel}
+          icon={takeoverLabel === "Take over" ? MousePointerClickIcon : MousePointerIcon}
+          corner="bottom-left"
+          shown={shown}
+          overWebview={overWebview}
+          disabled={takeoverDisabled}
+          onClick={runTakeover}
+        />
+      )}
+      {large ? (
+        <CornerButton
+          label="Shrink to a card"
+          icon={MinimizeIcon}
+          corner="top-left"
+          shown={shown}
+          overWebview={overWebview}
+          onClick={collapse}
+        />
+      ) : (
+        <CornerButton
+          label="Enlarge"
+          icon={MaximizeIcon}
+          corner="bottom-right"
+          shown={shown}
+          overWebview={overWebview}
+          onClick={enlarge}
+        />
+      )}
+    </>
+  );
+  const picture = large ? (
+    <div className="size-full">{thumbnail}</div>
+  ) : (
+    <button
+      type="button"
+      className="block size-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      onClick={expand}
+      aria-label={`Open ${name}`}
+    >
+      {thumbnail}
+    </button>
+  );
 
   return (
     <article
@@ -326,13 +429,29 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           </TooltipTrigger>
           <TooltipPopup side="top">{detail ? `${detail} · ${chip}` : chip}</TooltipPopup>
         </Tooltip>
-        {props.headerAction ? (
+        {props.headerAction || browser ? (
           <span
             className={cn(
-              "flex shrink-0 transition-opacity motion-reduce:transition-none",
+              "flex shrink-0 items-center gap-0.5 transition-opacity motion-reduce:transition-none",
               shown ? "opacity-100" : HIDDEN_UNTIL_HOVER,
             )}
           >
+            {browser ? (
+              <BrowserCardActions
+                session={session}
+                hosted={hosted}
+                canvas={() => surface.current?.canvas() ?? null}
+                onOpenInPanel={
+                  props.onOpenInPanel
+                    ? () => {
+                        collapse();
+                        props.onOpenInPanel?.();
+                      }
+                    : null
+                }
+                onClose={props.onDismiss}
+              />
+            ) : null}
             {props.headerAction}
           </span>
         ) : null}
@@ -349,77 +468,20 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
         )}
         onPointerDown={reveal}
       >
-        {large ? (
-          <div className="size-full">{thumbnail}</div>
+        {hosted ? (
+          <NativeBrowserPicture
+            hosted={hosted}
+            live={props.live}
+            layoutVersion={`${props.layoutVersion ?? ""}|${large ? "large" : "card"}`}
+            ringClassName={tone.ring}
+            controls={corners}
+            fallback={picture}
+          />
         ) : (
-          <button
-            type="button"
-            className="block size-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-            onClick={expand}
-            aria-label={`Open ${name}`}
-          >
-            {thumbnail}
-          </button>
-        )}
-        {stopped ? (
-          <CornerButton
-            label="Close"
-            icon={XIcon}
-            corner="top-right"
-            shown={shown}
-            onClick={props.onDismiss}
-          />
-        ) : canStop ? (
-          <CornerButton
-            label="Stop"
-            icon={SquareIcon}
-            corner="top-right"
-            shown={shown}
-            destructive
-            disabled={!props.canControl}
-            onClick={() => props.onControl("stop")}
-          />
-        ) : null}
-        {takeover === null ? null : (
-          <CornerButton
-            label={takeoverLabel}
-            icon={takeoverLabel === "Take over" ? MousePointerClickIcon : MousePointerIcon}
-            corner="bottom-left"
-            shown={shown}
-            disabled={takeoverDisabled}
-            onClick={runTakeover}
-          />
-        )}
-        {large ? (
           <>
-            <CornerButton
-              label="Shrink to a card"
-              icon={MinimizeIcon}
-              corner="top-left"
-              shown={shown}
-              onClick={collapse}
-            />
-            {props.onOpenInPanel ? (
-              <CornerButton
-                label="Open in the right panel"
-                icon={PanelRightIcon}
-                corner="top-left-2"
-                shown={shown}
-                onClick={() => {
-                  collapse();
-                  props.onOpenInPanel?.();
-                }}
-              />
-            ) : null}
+            {picture}
+            {corners({ overWebview: false })}
           </>
-        ) : (
-          <CornerButton
-            label="Enlarge"
-            icon={MaximizeIcon}
-            corner="bottom-right"
-            shown={shown}
-            onClick={() => props.onExpand()}
-          />
         )}
       </div>
     </article>
@@ -441,6 +503,7 @@ export function AgentScreenCard(
     | "onTakeOverStarted"
     | "onExpand"
     | "onCollapse"
+    | "layoutVersion"
   > & {
     readonly onControl: (control: PreviewSessionControl) => void;
     readonly onDismiss: () => void;
@@ -468,14 +531,7 @@ export function AgentScreenCard(
   const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
   const drawnHere =
     useRendersServerTabNatively(session.environmentId, SERVER_TAB) && browserTab !== null;
-  // The floating player shows the webview this desktop draws the tab in, which paints.
-  const watchHere =
-    drawnHere && threadRef !== null && browserTab !== null
-      ? () => {
-          void navigate({ to: "/$environmentId/$threadId", params: threadRef });
-          usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(browserTab));
-        }
-      : null;
+  const hosted = useHostedTab(session);
   return (
     <AgentScreenCardView
       session={session}
@@ -491,11 +547,13 @@ export function AgentScreenCard(
       canControl={canControl}
       canOperateBrowser={canOperateBrowser}
       drawnHere={drawnHere}
+      hosted={drawnHere ? hosted : null}
+      layoutVersion={props.layoutVersion}
       focused={props.focused}
       focusRequest={props.focusRequest}
       takeOverOnOpen={props.takeOverOnOpen}
       onTakeOverStarted={props.onTakeOverStarted}
-      onExpand={watchHere ?? props.onExpand}
+      onExpand={props.onExpand}
       onCollapse={props.onCollapse}
       onOpenInPanel={openInPanel}
       onControl={props.onControl}
