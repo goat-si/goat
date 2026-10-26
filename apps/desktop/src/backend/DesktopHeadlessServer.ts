@@ -16,11 +16,10 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
-// SSH launches (`goat_ssh_thread_launch`, the desktop's SSH connect) run a
-// headless `goat serve --base-dir ~/.goat` that outlives any client, while
-// this app runs its own server on ~/.goat/desktop. Both stay where they are:
-// the headless server keeps the SSH work alive when the app quits, and its
-// database is never moved or merged. This service attaches that server as a
+// SSH clients use this app's own server while it runs (structure/ssh.md#app-server).
+// SSH work that arrived while the app was closed started a headless
+// `goat serve --base-dir ~/.goat` instead, which keeps running and whose database
+// is never moved or merged. This service attaches that server as a
 // desktop-local environment, so the threads it holds show up here.
 //
 // Its session is issued by the headless server's own runtime binary, never by

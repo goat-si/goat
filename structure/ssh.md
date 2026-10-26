@@ -60,9 +60,41 @@ of a forward that remains alive but stops carrying bytes. `ssh.reconnect.cost`
 counts all SSH spawns and reports `mastersStarted` and `controlCommands` separately
 from authentication milestones, so local mux requests do not imply new handshakes.
 
+### App server
+
+A host user has one GOAT server that remote hubs and desktops reach. When the packaged GOAT app
+runs there, that is the app's own server on `~/.goat/desktop`, which holds the threads the person
+starts in the app. `launchOrReuseRemoteServer` asks `probeAppServer`
+(`packages/ssh/src/appServer.ts`) first: it reads `~/.goat/desktop/userdata/server-runtime.json`,
+requires a live PID, a loopback answer on the recorded port, and the control token beside the
+record, then reads the descriptor. A server that advertises `capabilities.runtimeSessions` and
+whose protocol ranges are compatible is attached as `remoteServerKind: "app"`. GOAT never starts,
+stops, drains, updates or adopts it, and writes none of its launch records for it. Only when no
+app server runs, or it cannot serve this client (an older app, incompatible protocols, no `curl`,
+unreachable on loopback), does the launch start or reuse the managed server below, and that
+selection carries `appServerDeclined`. Windows hosts are not probed.
+
+Credentials for an app attachment come from the app server itself:
+`POST /.well-known/goat/runtime/session` (`apps/server/src/runtimeSessionRoute.ts`) takes the same
+loopback peer and `runtime-control.token` as a drain and answers what `goat auth ... --json`
+prints. The token reaches `curl` through its config on stdin. Running `goat auth` against
+`~/.goat/desktop` with an installed runtime instead would open the app's live database with another
+build's migrations.
+
+The managed server sets `appServerLive` in its descriptor while an app server's record names a
+live PID (`apps/server/src/environment/hostAppServer.ts`). A client reusing a managed forward
+reconnects, and so lands on the app server, only once the managed server's activity probe answers
+`idle` (`shouldMoveToAppServer`). Threads already running there finish where they started. The two
+homes keep separate databases; nothing is merged. While the managed server still runs, the app
+lists its threads as **Headless server** (`apps/desktop/src/backend/DesktopHeadlessServer.ts`).
+When the app quits, its forward fails and the next ensure starts or reuses the managed server.
+
+> Decision record: [ADR-0024](decisions/ADR-0024-one-host-server.md)
+
 ### Shared runtime
 
-One host user runs one SSH-managed server, and every client shares it. The launch, pairing, MCP
+When no [app server](#app-server) serves the host, one host user runs one SSH-managed server, and
+every client shares it. The launch, pairing, MCP
 session, stop, and log scripts keep their ownership records (`pid`, `port`, `managed`, `identity`,
 `run-t3.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
 `packages/ssh/src/command.ts`), whatever alias, hostname, or port the client dialled. A client that
