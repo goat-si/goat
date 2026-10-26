@@ -262,7 +262,7 @@ const links = Command.make("links", { dir: Flag.String("dir").pipe(Flag.atLeast(
   Effect.gen(function* () {
     const problems = yield* scanBuildLinks(dir);
     if (problems.length) return yield* new ReleaseVerificationError({ problems });
-    yield* Effect.log(`No private repository URLs in ${dir.join(", ")}.`);
+    yield* Effect.log(`No source repository URLs in ${dir.join(", ")}.`);
   }),
 );
 const command = Command.make("verify-release-artifacts").pipe(

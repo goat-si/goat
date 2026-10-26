@@ -189,9 +189,9 @@ const defaultBuildRoots = localBuildRoots(process.env, process.cwd());
 const sharedHostedHomes = new Set(["/home/runner", "/Users/runner", "C:\\Users\\runneradmin"]);
 
 /** D-10: shipped code never links into the GOAT source repository, whatever its visibility. */
-export function privateRepositoryUrlProblems(name: string, content: string): string[] {
+export function sourceRepositoryUrlProblems(name: string, content: string): string[] {
   return /(?:github\.com[/:]|repos\/)goat-si\/goat(?!(?:-releases|_))/i.test(content)
-    ? [`${name}: private repository URL`]
+    ? [`${name}: source repository URL`]
     : [];
 }
 
@@ -213,7 +213,7 @@ export function exposureProblems(
     problems.push(`${name}: inline source map`);
   if (ours && /["']sourcesContent["']/.test(content))
     problems.push(`${name}: embedded sourcesContent`);
-  problems.push(...privateRepositoryUrlProblems(name, content));
+  problems.push(...sourceRepositoryUrlProblems(name, content));
   // V8/Node's diagnostic code embeds this documented Windows example literally.
   const pathContent = content.replace(/C:\\(?:\\)?a\\(?:\\)?b\\(?:\\)?c(?=["'`\s)]|$)/g, "");
   const machineRoots = ours ? roots : roots.filter((root) => !sharedHostedHomes.has(root));
@@ -255,7 +255,7 @@ export const walkReleaseTree = Effect.fn("walkReleaseTree")(function* (root: str
 });
 
 /**
- * The private repository URL check over build output, so CI catches a link the release
+ * The source repository URL check over build output, so CI catches a link the release
  * verifier would reject. Source maps are skipped: CI builds emit them and releases do not.
  */
 export const scanBuildLinks = Effect.fn("scanBuildLinks")(function* (roots: readonly string[]) {
@@ -266,9 +266,7 @@ export const scanBuildLinks = Effect.fn("scanBuildLinks")(function* (roots: read
     for (const entry of yield* walkReleaseTree(root)) {
       if (entry.type !== "file" || entry.relative.endsWith(".map")) continue;
       const name = path.join(root, entry.relative).replace(/\\/g, "/");
-      problems.push(
-        ...privateRepositoryUrlProblems(name, yield* fs.readFileString(entry.absolute)),
-      );
+      problems.push(...sourceRepositoryUrlProblems(name, yield* fs.readFileString(entry.absolute)));
     }
   return problems;
 });
