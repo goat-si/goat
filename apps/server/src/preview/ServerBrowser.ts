@@ -1778,6 +1778,12 @@ const make = Effect.gen(function* () {
         );
       if (tab.control.controller !== null)
         throw new BrowserControlInterrupted("A human controls this tab.", "humanControl");
+      // A secret field has focus: closing now would throw away what the person is typing.
+      if (tab.control.isPrivate)
+        throw new BrowserControlInterrupted(
+          "A private field has focus in this tab.",
+          "privateMode",
+        );
       void tab.control.close().catch(constVoid);
       await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
       dropTab(tab, false);

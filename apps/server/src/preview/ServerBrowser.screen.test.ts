@@ -44,6 +44,13 @@ import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
 // One fake Chromium context per test; its page refuses every locator, so input never lands.
 const contexts: Array<ReturnType<typeof makeContext>> = [];
+const privacy = vi.hoisted(() => ({ setters: [] as Array<(on: boolean) => void> }));
+
+vi.mock("./PreviewPrivateMode.ts", () => ({
+  watchPrivateMode: async (_page: unknown, onChange: (on: boolean) => void) => {
+    privacy.setters.push(onChange);
+  },
+}));
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -190,6 +197,20 @@ it.effect("a queued input cannot dispatch after its expected control generation 
         .pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       expect(contexts[0]?.page.locator).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("an agent cannot close its own tab while a private field has focus", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      privacy.setters.at(-1)?.(true);
+      const result = yield* broker
+        .invoke({ scope, operation: "close", input: {}, tabId })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect((yield* broker.listBoundTabs(scope)).some((tab) => tab.tabId === tabId)).toBe(true);
     }),
   ).pipe(Effect.provide(layer)),
 );
