@@ -123,4 +123,10 @@ describe("deriveTrayMenu", () => {
     expect(menu.pinned).toHaveLength(20);
     expect(menu.pinned[0]?.threadId).toBe("pin-24");
   });
+
+  it("bounds titles so one long title cannot push the payload past the desktop's limit", () => {
+    const long = { ...shell("long", { pinOrderKey: "a" }), title: "x".repeat(5_000) };
+    const menu = deriveTrayMenu([long], [], new Set([local]));
+    expect(menu.pinned[0]?.title).toHaveLength(200);
+  });
 });

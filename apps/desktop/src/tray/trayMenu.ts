@@ -17,8 +17,8 @@ export interface TrayMenuInput {
   readonly actions: TrayMenuActions;
 }
 
-// Windows and Linux read "&" as a mnemonic marker; "&&" draws one ampersand.
-export function trayLabel(text: string, platform: NodeJS.Platform): string {
+// Electron reads "&" as a mnemonic marker on every platform (macOS drops it); "&&" draws one.
+export function trayLabel(text: string): string {
   const codePoints = Array.from(text.replace(/\s+/g, " ").trim());
   const shortened =
     codePoints.length > TITLE_CODE_POINTS
@@ -27,8 +27,7 @@ export function trayLabel(text: string, platform: NodeJS.Platform): string {
           .join("")
           .trimEnd()}…`
       : codePoints.join("");
-  const label = shortened.length > 0 ? shortened : "Untitled thread";
-  return platform === "darwin" ? label : label.replaceAll("&", "&&");
+  return (shortened.length > 0 ? shortened : "Untitled thread").replaceAll("&", "&&");
 }
 
 function threadItem(
@@ -36,7 +35,7 @@ function threadItem(
   { platform, actions }: TrayMenuInput,
 ): Electron.MenuItemConstructorOptions {
   return {
-    label: trayLabel(thread.title, platform),
+    label: trayLabel(thread.title),
     // Only macOS 14.4+ draws sublabels on menu items.
     ...(platform === "darwin" && thread.project !== null ? { sublabel: thread.project } : {}),
     click: () => actions.openThread(thread),
@@ -59,16 +58,16 @@ function section(
 }
 
 export function trayMenuTemplate(input: TrayMenuInput): Electron.MenuItemConstructorOptions[] {
-  const { menu, platform, appName, actions } = input;
+  const { menu, appName, actions } = input;
   const sections = [
     section("Needs attention", menu.attention, input),
     section("Running", menu.running, input),
     section("Pinned", menu.pinned, input),
   ].filter((items) => items.length > 0);
   return [
-    { label: trayLabel(`Open ${appName}`, platform), click: actions.openApp },
+    { label: trayLabel(`Open ${appName}`), click: actions.openApp },
     ...sections.flatMap((items) => [{ type: "separator" as const }, ...items]),
     { type: "separator" },
-    { label: trayLabel(`Quit ${appName}`, platform), click: actions.quit },
+    { label: trayLabel(`Quit ${appName}`), click: actions.quit },
   ];
 }

@@ -59,11 +59,10 @@ describe("trayMenuTemplate", () => {
 });
 
 describe("trayLabel", () => {
-  it("shortens long titles and keeps ampersands literal on every platform", () => {
+  it("shortens long titles and keeps ampersands literal", () => {
     const long = "Refactor the provider adapter registry & its tests for every runtime";
-    expect(trayLabel(long, "darwin")).toBe("Refactor the provider adapter registry…");
-    expect(trayLabel("Fix A & B", "win32")).toBe("Fix A && B");
-    expect(trayLabel("Fix A & B", "darwin")).toBe("Fix A & B");
-    expect(trayLabel("   ", "linux")).toBe("Untitled thread");
+    expect(trayLabel(long)).toBe("Refactor the provider adapter registry…");
+    expect(trayLabel("Fix A & B")).toBe("Fix A && B");
+    expect(trayLabel("   ")).toBe("Untitled thread");
   });
 });

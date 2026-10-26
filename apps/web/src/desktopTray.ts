@@ -2,7 +2,7 @@ import type { DesktopTrayMenu, DesktopTrayThread } from "@goat/contracts";
 import { classifyFleetThread } from "@goat/client-runtime/state/fleet";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import { sortPinnedThreadsByOrderKey } from "@goat/client-runtime/state/thread-sort";
-import type { EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { AtomRegistry } from "effect/reactivity";
 
@@ -12,6 +12,10 @@ import { environmentThreadShells } from "./state/threads";
 
 // The tray shows a handful; the cap keeps the IPC payload small however many threads exist.
 const SECTION_LIMIT = 20;
+// Titles have no length limit; the tray draws about 40 characters of one.
+const TEXT_LIMIT = 200;
+
+const bounded = (text: string) => Array.from(text).slice(0, TEXT_LIMIT).join("");
 
 type TrayShell = Pick<
   EnvironmentThreadShell,
@@ -53,8 +57,9 @@ export function deriveTrayMenu(
   const row = (thread: TrayShell): DesktopTrayThread => ({
     environmentId: thread.environmentId,
     threadId: thread.id,
-    title: thread.title,
-    project: projectTitles.get(`${thread.environmentId}\u0000${thread.projectId}`) ?? null,
+    title: bounded(thread.title),
+    project:
+      bounded(projectTitles.get(`${thread.environmentId}\u0000${thread.projectId}`) ?? "") || null,
   });
   const attention: TrayShell[] = [];
   const running: TrayShell[] = [];
@@ -117,17 +122,14 @@ export function startDesktopTray(
     queueMicrotask(publish);
   };
 
+  // The thread route waits for its environment's shells, so a fresh window can navigate at once.
   const openThread = (picked: Pick<DesktopTrayThread, "environmentId" | "threadId">) => {
-    const thread = registry
-      .get(environmentThreadShells.quietThreadShellsAtom)
-      .find(
-        (candidate) =>
-          candidate.environmentId === picked.environmentId && candidate.id === picked.threadId,
-      );
-    if (thread === undefined) return;
     void router.navigate({
       to: "/$environmentId/$threadId",
-      params: { environmentId: thread.environmentId, threadId: thread.id },
+      params: {
+        environmentId: EnvironmentId.make(picked.environmentId),
+        threadId: ThreadId.make(picked.threadId),
+      },
     });
   };
 
