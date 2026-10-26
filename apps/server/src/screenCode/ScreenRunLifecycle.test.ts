@@ -866,7 +866,11 @@ it.live("a full journal still reports a dispatched input as an unknown outcome a
         availability: () => Effect.succeed([{ kind: "app", available: true }]),
         dispatch: () =>
           ++calls === 1
-            ? Effect.fail({ code: "unavailable" as const, effectStarted: false })
+            ? Effect.fail({
+                code: "unavailable" as const,
+                effectStarted: false,
+                nextStep: "Retry later.",
+              })
             : Deferred.succeed(offered, undefined).pipe(
                 Effect.flatMap(() => Deferred.await(held)),
                 Effect.as({ value: true, category: "confirmed" as const }),
