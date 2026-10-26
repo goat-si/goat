@@ -227,8 +227,13 @@ function StorageCleanupDialog(props: {
         finished.push(outcome.value);
         continue;
       }
+      // A request that failed may still have removed the item the server was working on.
       if (!isAtomCommandInterrupted(outcome))
-        setError(failureText(squashAtomCommandFailure(outcome)));
+        setError(
+          "The cleanup stopped: " +
+            failureText(squashAtomCommandFailure(outcome)) +
+            ". Items in that request may already be gone, and later ones were not tried. Closing scans again.",
+        );
       break;
     }
     setResult(mergeCleanResults(finished));
@@ -271,7 +276,7 @@ function StorageCleanupDialog(props: {
               ))}
               {error !== null && (
                 <li role="alert" className="text-destructive-foreground">
-                  The rest was not deleted: {error}
+                  {error}
                 </li>
               )}
             </ul>
