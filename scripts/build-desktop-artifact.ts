@@ -1184,6 +1184,8 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/screen-code/quickjs.wasm", to: "screen-code/quickjs.wasm" },
+  // electron-builder treats apps/desktop/resources as buildResources and leaves it out of the app.
+  { from: "apps/desktop/resources/tray", to: "tray" },
   { from: "apps/desktop/prod-resources/cua-driver", to: "cua-driver" },
   {
     from: "apps/desktop/prod-resources/cursor-sdk",
