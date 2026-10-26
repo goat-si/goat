@@ -301,6 +301,8 @@ const BLOCKERS: Record<ComputerUseReadiness["blockers"][number], string> = {
   noInteractiveDesktop: "GOAT runs outside a desktop session here, so there is no screen to use.",
   otherUserAtConsole: "Another user is signed in at this computer's screen.",
   restartRequired: "A permission changed. Restart GOAT so its helper sees it.",
+  // Only the macOS helper reports it; kept so the table stays total.
+  accessibilityStale: "Accessibility shows on but the system refuses it. Turn it off and on again.",
 };
 
 /** The setup steps for a Linux machine's readiness, in the order a person works through them. */

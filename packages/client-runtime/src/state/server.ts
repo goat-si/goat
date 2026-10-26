@@ -1140,6 +1140,17 @@ export function createServerEnvironmentAtoms<R, E>(
       idleTtlMs: 0,
       refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
     }),
+    /**
+     * The host's running apps with names and icons (computerUse.apps), for the composer's @ list
+     * and the icons beside computer use calls. Refreshes with the computer use readiness.
+     */
+    computerUseApps: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:computer-use-apps",
+      tag: WS_METHODS.computerUseApps,
+      idleTtlMs: 0,
+      staleTimeMs: 15_000,
+      refreshTrigger: ({ environmentId }) => computerUseRefreshAtom(environmentId),
+    }),
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,

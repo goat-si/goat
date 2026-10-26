@@ -10,6 +10,7 @@ import {
   ComputerUseRequestInput,
   ComputerUseRequestResult,
   CuaHostStatus,
+  cuaAgentBlockMessage,
   DesktopCuaWatch,
 } from "./cua.ts";
 import {
@@ -345,5 +346,27 @@ describe("computer use on the wire", () => {
     expect(decode(row).computerUse).toBeUndefined();
     expect(decode({ ...row, computerUse }).computerUse).toEqual(computerUse);
     expect(decode({ ...row, computerUse: { enabled: "yes" } }).computerUse).toBeUndefined();
+  });
+});
+
+describe("a macOS grant that reads off", () => {
+  it("tells the person to switch an already-on Accessibility row off and on, since a rebuilt helper can leave it stale", () => {
+    const message = cuaAgentBlockMessage({
+      reason: "permissionsNotGranted",
+      missing: ["accessibility"],
+      holder: "helper",
+    });
+    expect(message).toContain("System Settings > Privacy & Security > Accessibility");
+    expect(message).toContain("already on");
+    expect(message).toContain("off and on again");
+  });
+
+  it("does not add the Accessibility toggle advice when only Screen Recording is missing", () => {
+    const message = cuaAgentBlockMessage({
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "helper",
+    });
+    expect(message).not.toContain("off and on again");
   });
 });

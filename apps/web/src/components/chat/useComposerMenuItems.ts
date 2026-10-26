@@ -5,6 +5,7 @@ import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
+  matchComposerAppItems,
   matchComposerCapabilityItems,
 } from "@goat/client-runtime/composerCapabilityItems";
 import type {
@@ -16,6 +17,7 @@ import type {
   ServerProvider,
   ThreadId,
   ThreadPullRequestLink,
+  ComputerUseApp,
 } from "@goat/contracts";
 import {
   composerPullRequestsFromLinks,
@@ -37,6 +39,7 @@ import {
   type EnvironmentQueryTarget,
 } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
+import { serverEnvironment } from "~/state/server";
 import { useComposerPathSearch, useDebouncedValue } from "~/state/queries";
 import {
   matchesPullRequestQuery,
@@ -55,6 +58,7 @@ const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<Pull
   [];
 
 const EMPTY_SSH_HOSTS: ReadonlyMap<EnvironmentId, string> = new Map();
+const EMPTY_COMPUTER_USE_APPS: ReadonlyArray<ComputerUseApp> = [];
 
 function threadContextSshHosts(
   entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>,
@@ -148,6 +152,11 @@ export function useComposerMenuItems({
       mayRunUnattended: composerThreadMayRunUnattended(activeThreadId, activeShell?.source),
     },
   });
+  // The host's running apps, asked for only while the @ list is open.
+  const computerUseAppsQuery = useEnvironmentQuery(
+    isPathTrigger ? serverEnvironment.computerUseApps({ environmentId, input: {} }) : null,
+  );
+  const computerUseApps = computerUseAppsQuery.data?.apps ?? EMPTY_COMPUTER_USE_APPS;
   const workspaceEntries = useComposerPathSearch({
     environmentId,
     cwd: isPathTrigger ? gitCwd : null,
@@ -217,6 +226,7 @@ export function useComposerMenuItems({
     if (composerTrigger.kind === "path") {
       return [
         ...matchComposerCapabilityItems(composerTrigger.query, capabilityContext),
+        ...matchComposerAppItems(composerTrigger.query, capabilityContext, computerUseApps),
         ...matchComposerThreadItems({
           shells: environmentThreadShells,
           sshHostsByEnvironment,

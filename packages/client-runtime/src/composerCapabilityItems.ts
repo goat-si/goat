@@ -1,5 +1,6 @@
 import {
   COMPUTER_USE_PROVIDER_DRIVERS,
+  type ComputerUseApp,
   TURN_CAPABILITIES,
   type CuaHostStatus,
   type ProviderInteractionMode,
@@ -17,7 +18,7 @@ export type ComposerCapabilityAvailability =
   | { readonly state: "checking" }
   | { readonly state: "unavailable"; readonly reason: string; readonly setup: boolean };
 
-/** An `@computer` / `@browser` entry in the composer's @ list. */
+/** An `@computer` / `@browser` entry in the composer's @ list, or an `@Finder` app entry. */
 export interface ComposerCapabilityItem {
   readonly id: string;
   readonly type: "capability";
@@ -25,7 +26,12 @@ export interface ComposerCapabilityItem {
   readonly label: string;
   readonly description: string;
   readonly availability: ComposerCapabilityAvailability;
+  /** Set for a running app: picking it asks for computer use aimed at that app. */
+  readonly app?: ComputerUseApp;
 }
+
+/** Most app entries one @ list shows; typing narrows the rest. */
+export const COMPOSER_APP_ITEM_LIMIT = 30;
 
 export interface ComposerCapabilityContext {
   /** The host's computer use state; null while the first check runs. */
@@ -128,6 +134,43 @@ export function matchComposerCapabilityItems(
     description: DESCRIPTION[capability],
     availability: turnCapabilityAvailability(capability, context),
   }));
+}
+
+/**
+ * The host's running apps as @ entries: only while `@computer` itself can run (an app entry is
+ * computer use aimed at one app), matched by a name or id that starts with the query or a word
+ * of the name that does, sorted by name and capped at COMPOSER_APP_ITEM_LIMIT.
+ */
+export function matchComposerAppItems(
+  query: string,
+  context: ComposerCapabilityContext,
+  apps: ReadonlyArray<ComputerUseApp>,
+): ComposerCapabilityItem[] {
+  const availability = turnCapabilityAvailability("computer-use", context);
+  if (availability.state !== "available") return [];
+  const normalized = query.trim().toLowerCase();
+  const matches = (app: ComputerUseApp) => {
+    if (normalized.length === 0) return true;
+    const name = app.name.toLowerCase();
+    return (
+      name.startsWith(normalized) ||
+      name.split(/[\s._-]+/).some((word) => word.startsWith(normalized)) ||
+      app.id.toLowerCase().startsWith(normalized)
+    );
+  };
+  return [...apps]
+    .filter(matches)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+    .slice(0, COMPOSER_APP_ITEM_LIMIT)
+    .map((app) => ({
+      id: `app:${app.id}`,
+      type: "capability" as const,
+      capability: "computer-use" as const,
+      label: app.name,
+      description: `Use ${app.name} with computer use for this turn`,
+      availability,
+      app,
+    }));
 }
 
 /** The line an entry shows under its name. */

@@ -60,7 +60,10 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { toolActivityFaviconUrl } from "@goat/shared/favicon";
 import { isJavaScriptReplTool } from "@goat/shared/toolActivity";
 import {
+  computerUseAppName,
+  computerUseAppToolIcon,
   computerUseDisplayInput,
+  computerUseObservedApp,
   computerUseRun,
   computerUseRunStatus,
 } from "@goat/client-runtime/work-log/computer-use";
@@ -1049,7 +1052,16 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
   const iconIsDestructive =
     !isSystemNotice && !isUsageLimit && (row.icon === "alert" || row.icon === "warning");
   const failed = row.status === "failure";
-  const toolIcon = row.workEntry.toolIcon ?? row.workEntry.toolSource?.icon;
+  // A pid-only call names its app in its observation's output, which the wire item carries.
+  const observedApp =
+    computerUse && row.projectedItem.item.type === "dynamic_tool"
+      ? computerUseObservedApp(row.projectedItem.item.output)
+      : null;
+  const computerUseApp = computerUse ? computerUseAppName(computerUse.app, observedApp) : null;
+  const toolIcon =
+    row.workEntry.toolIcon ??
+    row.workEntry.toolSource?.icon ??
+    (computerUse ? computerUseAppToolIcon(computerUse.app, observedApp) : undefined);
   const icon = reasoning ? "brain" : (toolPresentation?.icon ?? workRowSymbolName(row.icon));
   const lineCounts = fileChangeLineCounts(row.projectedItem.item);
 
@@ -1064,11 +1076,12 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
           notifiedSubagentThreadId !== undefined ? "link" : canExpand ? "button" : undefined
         }
         accessibilityLabel={
-          lineCounts
+          (computerUseApp === null ? "" : `${computerUseApp}: `) +
+          (lineCounts
             ? `${accessiblePreview}, ${lineCountsAccessibilityText(lineCounts)}${failed ? ", tool call failed" : ""}`
             : failed
               ? `${accessiblePreview}, tool call failed`
-              : accessiblePreview
+              : accessiblePreview)
         }
         accessibilityHint={
           notifiedSubagentThreadId !== undefined

@@ -47,7 +47,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
-import { markActed, nextTurn, rememberScope } from "./ComputerUseControl.ts";
+import { type Cursor, markActed, nextTurn, rememberScope, targeted } from "./ComputerUseControl.ts";
 import type {
   ComputerUseControl,
   ComputerUseControlState,
@@ -65,6 +65,9 @@ import { callAdmissionRefusal } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
+
+/** Private mode is off for now (#1695): secret-field reports never pause computer use. */
+const PRIVATE_MODE_DISABLED = true;
 
 export class ComputerUseLeaseError extends Schema.TaggedError<ComputerUseLeaseError>()(
   "ComputerUseLeaseError",
@@ -194,13 +197,13 @@ export class ComputerUseLeases extends Context.Service<
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
-     * Records the window an agent's admitted call named, reported by that control's own proxy;
-     * false when the control is not the thread's live one.
+     * Records the window an agent's admitted call named, or where its cursor is on it (see
+     * withCursor), reported by that control's own proxy; false when not the thread's live one.
      */
     readonly setTarget: (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number },
+      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
     ) => Effect.Effect<boolean>;
     /**
      * Keyboard or pointer events a control's proxy saw through its helper (#1235), judged one by
@@ -315,10 +318,13 @@ const make = Effect.gen(function* () {
     threadId?: ThreadId,
     withReleased = false,
   ) {
+    // SQLite uses a partial index only when the query repeats its predicate. Without the IN
+    // clause this read scans every turn item on the writer, and it runs on every lease check.
     const rows = yield* sql<{ handoff_json: string | null }>`
       SELECT json_extract(payload_json, '$.handoff') AS handoff_json
       FROM orchestration_v2_projection_turn_items
-      WHERE type = 'human_handoff' AND status = 'completed'
+      WHERE type IN ('human_handoff', 'secret_request') AND type = 'human_handoff'
+        AND status = 'completed'
         AND json_extract(payload_json, '$.handoff.target.path') = ${COMPUTER_USE_GRANT_HANDOFF_PATH}
         ${threadId === undefined ? sql`` : sql`AND thread_id = ${threadId}`}
     `.pipe(Effect.mapError((cause) => new ComputerUseLeaseError({ cause })));
@@ -647,6 +653,7 @@ const make = Effect.gen(function* () {
         if (report.type === "cuaHumanInput") return Effect.void;
         if (report.type === "cuaReadiness") return changed;
         return Effect.sync(() => {
+          if (PRIVATE_MODE_DISABLED) return;
           if (report.active && !privateHost) {
             foreground.clear();
             interrupted("private");
@@ -836,16 +843,13 @@ const make = Effect.gen(function* () {
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
-      target: { readonly pid: number; readonly windowId: number },
+      target: { readonly pid: number; readonly windowId: number } | { readonly cursor: Cursor },
     ) {
       const record = yield* liveControl(threadId, controlId);
       if (record === undefined) return false;
-      if (record.target?.pid === target.pid && record.target.windowId === target.windowId)
-        return true;
-      controls.set(threadId, {
-        ...record,
-        target: { pid: target.pid, windowId: target.windowId },
-      });
+      const next = targeted(record, target);
+      if (next === undefined) return true;
+      controls.set(threadId, next);
       yield* changed;
       return true;
     }),

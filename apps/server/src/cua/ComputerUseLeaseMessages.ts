@@ -11,7 +11,13 @@ import type {
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
-export type LeaseEnd = ComputerUseControlEnd | "lost" | "helper_restarted" | "wrong_display";
+export type LeaseEnd =
+  | ComputerUseControlEnd
+  | "lost"
+  | "helper_restarted"
+  | "helper_refused"
+  | "helper_unsupported"
+  | "wrong_display";
 
 const REQUEST = goatCallText("computer_use.request");
 
@@ -27,12 +33,17 @@ export const SCREEN_SHARED =
  * Why the server would not reserve a call (#1462): another thread's window reservation, a screen
  * another thread shares, or no reservation at all.
  */
+const POINTER_LOCKED =
+  "This computer keeps the person's pointer still, so a call that moves it (foreground pointer delivery or a desktop move_cursor) did not run. Use the element_token, the keyboard, or a background click (the virtual cursor). If the app ignores background clicks, tell the person instead of retrying.";
+
 export const reservationRefusal = (detail: string, holder: string | undefined) =>
-  detail === "screen_shared"
-    ? SCREEN_SHARED
-    : holder === undefined
-      ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-      : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+  detail === "pointer_locked"
+    ? POINTER_LOCKED
+    : detail === "screen_shared"
+      ? SCREEN_SHARED
+      : holder === undefined
+        ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+        : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -47,6 +58,12 @@ export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   lost: "GOAT could not confirm this thread's computer use approval, so computer use stopped.",
   helper_restarted:
     "GOAT Computer Use or its driver stopped or restarted (for example after an update), so computer use for this thread ended. A call already in progress may have acted before it stopped. Do not retry; end your turn and tell the person that computer use stopped, and that Restart agent session brings it back.",
+  // The helper exited 77: its parent check refused the process that started it.
+  helper_refused:
+    "GOAT Computer Use refused to start for this connection because it did not trust the process that launched it, so computer use is unavailable here. Nothing ran. Restarting the agent session will not fix it. Do not retry; end your turn and tell the person that GOAT Computer Use refused this GOAT's connection and GOAT needs an update.",
+  // The helper exited 64, 78 or 79: it could not start its service or driver on this Mac.
+  helper_unsupported:
+    "GOAT Computer Use could not start on this Mac (its service or bundled driver failed to start), so computer use is unavailable here. Nothing ran. Restarting the agent session will not fix it. Do not retry; end your turn and tell the person that GOAT Computer Use failed to start and GOAT needs an update or reinstall.",
   // The driver answered about another display than the one GOAT gave it (#1358).
   wrong_display:
     "The computer use driver answered about windows that are not on the screen GOAT gave it, so nothing it says or does can be trusted. Computer use stopped for this thread.",

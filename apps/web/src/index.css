@@ -578,6 +578,73 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
     var(--app-scrollbar-width) 100%;
 }
 
+@property --scroll-edge-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --scroll-edge-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@keyframes scroll-edge-fade {
+  0% {
+    --scroll-edge-fade-top: 0px;
+    --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
+  }
+  8%,
+  92% {
+    --scroll-edge-fade-top: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-bottom: var(--scroll-edge-fade-size);
+  }
+  100% {
+    --scroll-edge-fade-top: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-bottom: 0px;
+  }
+}
+
+/* Fades only the edges a scroller can still move toward. The scroll timeline
+   drives it without JavaScript or React state, and an element that does not
+   overflow has an inactive timeline, so it keeps hard edges. */
+@utility scroll-edge-fade {
+  --scroll-edge-fade-size: 1.5rem;
+  @supports (animation-timeline: scroll()) {
+    -webkit-mask-image:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--scroll-edge-fade-top),
+        black calc(100% - var(--scroll-edge-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black);
+    mask-image:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--scroll-edge-fade-top),
+        black calc(100% - var(--scroll-edge-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black);
+    -webkit-mask-position: left, right;
+    mask-position: left, right;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size:
+      calc(100% - var(--app-scrollbar-width)) 100%,
+      var(--app-scrollbar-width) 100%;
+    mask-size:
+      calc(100% - var(--app-scrollbar-width)) 100%,
+      var(--app-scrollbar-width) 100%;
+    animation: scroll-edge-fade linear both;
+    animation-timeline: scroll(self y);
+  }
+}
+
 /* Stage-channel art needs a mask and pseudo-element gradient, so keep the
    behavior composable without tying it to the global components layer. */
 @utility sidebar-stage-backdrop {

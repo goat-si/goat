@@ -96,7 +96,7 @@ The full rules and the lane brief checklist are in [Development discipline](docs
 - Stop what you started, by the PID you tracked. See rule 1.
 - Rust, C and C++ builds go through [kache](docs/operations/development.md#build-cache), GOAT's build cache: `kache init` once per machine, and `kache doctor` before a native build. When it fails, report that instead of building without the cache. After heavy Rust work, run `kache clean`.
 - Remove the large outputs you created before you finish: `target/` folders, `node_modules` of temporary worktrees, captures and scratch copies. `goat storage` shows what GOAT's folders hold on this machine.
-- Need a second checkout? Create it next to this worktree, not in `/tmp`, with `node scripts/worktree-add.ts ../<name> -b <branch> origin/dev`. It takes `git worktree add` arguments. From a submodule checkout with `extensions.worktreeConfig` on, a raw `git worktree add` leaves the new worktree resolving into the git directory; the script prevents that. Remove it when done.
+- Need another checkout? Use GOAT-managed worktrees: `worktree.handoff` for this thread (check `worktree.status` first), `thread.launch` with `workspaceStrategy:{type:"worktree"}` for a separate thread, or `task.create` with `isolation:"worktree"` for a bounded child lane. Do not create ad-hoc worktrees or clones for lanes, or tell children to create them. `scripts/worktree-add.ts` is for humans or when GOAT is unavailable; use GOAT's worktrees folder, as described in [Worktrees](docs/operations/development.md#worktrees).
 
 ## Test data
 

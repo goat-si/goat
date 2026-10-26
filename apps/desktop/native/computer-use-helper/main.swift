@@ -91,12 +91,13 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
   return SecCodeCheckValidity(code, [], requirement) == errSecSuccess
 }
 
-/// Release builds only serve the GOAT app of their own channel: the same Developer ID team and
-/// the bundle identifier this helper's id extends (si.goat.desktop for
-/// si.goat.desktop.computer-use). A dev helper (built with GOATComputerUseAllowAnyParent)
-/// serves an unpackaged Electron or a terminal.
+/// Release builds serve any process signed by this helper's own Developer ID team, whatever its
+/// identifier: the agent's lease proxy runs as GOAT's Electron `<name> Helper` (#1548), and the
+/// standalone server as GOAT's signed CLI runtime. Each of them runs arbitrary JavaScript as Node,
+/// so pinning one identifier refuses real parents without making the check stronger. A dev
+/// helper (built with GOATComputerUseAllowAnyParent) serves an unpackaged Electron or a terminal.
 ///
-/// This is not enough on its own: GOAT's signed executable runs any JavaScript under
+/// This is not enough on its own: GOAT's signed executables run any JavaScript under
 /// ELECTRON_RUN_AS_NODE, NODE_OPTIONS or Node inspect arguments (its Electron fuses are on, since
 /// GOAT's backend, CLI and lease proxy run it as Node), so any same-user program can pass this
 /// check by running its own code as GOAT. The helper does not read the parent's fuses at launch:
@@ -110,18 +111,10 @@ func parentRefusal(_ parent: pid_t) -> String? {
   guard let own = selfStaticCode(), let team = signingTeam(own) else {
     return "This helper has no Developer ID team, so it cannot verify who launched it."
   }
-  let suffix = ".computer-use"
-  guard let ownId = Bundle.main.bundleIdentifier, ownId.hasSuffix(suffix) else {
-    return "This helper's bundle identifier does not name its GOAT app."
-  }
-  let appId = String(ownId.dropLast(suffix.count))
   guard let parent = parentCode(parent),
-    satisfies(
-      parent,
-      "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\" and identifier \"\(appId)\""
-    )
+    satisfies(parent, "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
   else {
-    return "The process that launched the helper is not \(appId) signed by team \(team)."
+    return "The process that launched the helper is not signed by GOAT's team \(team)."
   }
   return nil
 }
@@ -327,6 +320,11 @@ final class DriverService {
           throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
         }
         result = try frames.frames(params)
+      case "captureCheck":
+        guard frameCaptureAvailable else {
+          throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
+        }
+        result = try frames.captureCheck(params)
       default: throw HelperError(code: "unknown_method", message: "Unknown method \(method).")
       }
       emit(["id": id, "result": result])
@@ -524,8 +522,19 @@ final class PrivateModeWatch {
   let queue = DispatchQueue(label: "si.goat.computer-use.private-mode")
   var watchId: String?
   var timer: DispatchSourceTimer?
-  /// The secure field's window last reported active under watchId.
+  /// The secure field's window last reported active under watchId. An unreadable focus is
+  /// reported active with no window (pid 0), so the host pauses until focus reads clean.
   var active: (pid: Int, windowId: Int)?
+
+  /// The window a focus answer holds private, or nil when nothing does.
+  private func privateTarget(_ focus: FocusedSecureField) -> (pid: Int, windowId: Int)? {
+    if HelperSafety.privateModeDisabled { return nil }
+    switch focus {
+    case .secure(let pid, let windowId): return (pid: pid, windowId: windowId)
+    case .unknown: return (pid: 0, windowId: 0)
+    case .none: return nil
+    }
+  }
 
   func watch(_ params: [String: Any]) throws -> [String: Any] {
     guard let watchId = params["watchId"] as? String, !watchId.isEmpty else {
@@ -562,7 +571,7 @@ final class PrivateModeWatch {
   func announce() {
     queue.async { [weak self] in
       guard let self, self.watchId != nil else { return }
-      let now = focusedSecureField()
+      let now = self.privateTarget(focusedSecureField())
       self.active = now
       self.send(active: now != nil, target: now ?? (pid: 0, windowId: 0))
     }
@@ -582,7 +591,7 @@ final class PrivateModeWatch {
 
   private func tick() {
     guard watchId != nil else { return }
-    let now = focusedSecureField()
+    let now = privateTarget(focusedSecureField())
     if now?.pid == active?.pid && now?.windowId == active?.windowId { return }
     clear()
     if let now {
@@ -603,23 +612,26 @@ final class PrivateModeWatch {
   }
 }
 
-/// The window of the focused secure text field, or nil when none has focus.
-func focusedSecureField() -> (pid: Int, windowId: Int)? {
+/// Whether a secure text field has focus, and in which window. A focus that cannot be read
+/// (a missing or stale Accessibility grant, an app that does not answer) is `.unknown`, which
+/// private mode treats as private (HelperSafety.isPrivate).
+func focusedSecureField() -> FocusedSecureField {
   let system = AXUIElementCreateSystemWide()
   var focused: CFTypeRef?
-  guard
-    AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
-      == .success,
-    let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
-  else { return nil }
+  let read = AXUIElementCopyAttributeValue(
+    system, kAXFocusedUIElementAttribute as CFString, &focused)
+  if HelperSafety.focusReadIsUnknown(read) { return .unknown }
+  guard read == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+    return .none
+  }
   let element = focused as! AXUIElement
   var subrole: CFTypeRef?
   guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole) == .success,
     (subrole as? String) == (kAXSecureTextFieldSubrole as String)
-  else { return nil }
+  else { return .none }
   var pid: pid_t = 0
-  guard AXUIElementGetPid(element, &pid) == .success else { return nil }
-  return (pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)
+  guard AXUIElementGetPid(element, &pid) == .success else { return .unknown }
+  return .secure(pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)
 }
 
 /// The app's frontmost ordinary window: the one its focused field almost always sits in.
@@ -654,7 +666,7 @@ func runService() -> Never {
     // Agent connections already report a person's input (InputActivity), but "humanInput" is
     // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
     // advertising it lets unattended turns run.
-    "features": frameCaptureAvailable ? ["watch", "frames"] : ["watch"],
+    "features": frameCaptureAvailable ? ["watch", "frames", "captureCheck"] : ["watch"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])
@@ -681,6 +693,9 @@ func runService() -> Never {
 }
 
 if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
+  // Before any capture, window listing or overlay: without it the first live-picture capture
+  // aborted the service (CGS_REQUIRE_INIT), and with it every capture the agent was promised.
+  WindowServer.connect()
   if CommandLine.arguments.contains("--mcp") { runMcp() }
   runService()
 } else {

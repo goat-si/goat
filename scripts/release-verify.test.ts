@@ -24,6 +24,7 @@ import {
   ReleaseVerificationError,
   renderSha256Sums,
   requiredReleaseAssets,
+  scanBuildLinks,
   scanReleasePayload,
   writePayloadReport,
   writeReleaseReport,
@@ -143,6 +144,11 @@ describe("release payload helpers", () => {
       expect(exposureProblems("main.js", content).length).toBeGreaterThan(0);
     // Clients and the CLI ship this link; a source-repository URL here blocks every nightly.
     expect(exposureProblems("main.js", GOAT_CONNECT_COMING_SOON.guideUrl)).toEqual([]);
+    // The web bundle's privacy link (apps/web/src/legalLinks.ts); a source-repository URL there
+    // failed nightly 271.
+    expect(
+      exposureProblems("main.js", "https://goat-si.github.io/goat/privacy-policy/#usage-data"),
+    ).toEqual([]);
     expect(exposureProblems("node_modules/pkg/types.d.ts")).toEqual([]);
     expect(
       exposureProblems(
@@ -405,6 +411,27 @@ describe("release payload filesystem verification", () => {
           yield* Effect.sync(uncacheAll);
         }),
       ),
+  );
+  // CI runs this over its build output so a nightly never meets a link the verifier rejects.
+  it.effect("finds the source repository links the release verifier rejects in build output", () =>
+    run(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-s1-test-" });
+        const link = "https://github.com/goat-si/goat/blob/dev/docs/user/telemetry.md";
+        yield* fs.makeDirectory(path.join(root, "client/assets"), { recursive: true });
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js"), `"${link}"`);
+        // CI builds keep source maps, which carry comments a release never ships.
+        yield* fs.writeFileString(path.join(root, "client/assets/legal.js.map"), link);
+        const releases = "https://github.com/goat-si/goat-releases/releases";
+        yield* fs.writeFileString(path.join(root, "index.js"), `"${releases}"`);
+        const problems = yield* scanBuildLinks([root]);
+        expect(problems).toEqual([
+          `${path.join(root, "client/assets/legal.js")}: private repository URL`,
+        ]);
+      }),
+    ),
   );
   it.effect("hashes only distributables in builder reports and fails on exposure", () =>
     run(

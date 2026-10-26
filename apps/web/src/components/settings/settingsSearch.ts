@@ -845,6 +845,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "computer-use-move-pointer",
+    title: "Let agents move my pointer",
+    to: "/settings/integrations",
+    searchTerms: [
+      "computer use pointer mouse cursor move foreground background click steal focus advanced",
+    ],
+  },
+  {
     id: "computer-use-skill",
     title: "Computer Use skill",
     to: "/settings/integrations",
@@ -1020,6 +1028,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/connections",
     targetId: "connections-environment",
     searchTerms: ["turn off on disable enable local server agents remote only restart"],
+    desktopOnly: true,
+  },
+  {
+    id: "headless-server",
+    title: "Headless server on this Mac",
+    to: "/settings/connections",
+    targetId: "connections-environment",
+    searchTerms: [
+      "hide show headless server ssh goat serve ~/.goat background environment restart",
+    ],
     desktopOnly: true,
   },
   {

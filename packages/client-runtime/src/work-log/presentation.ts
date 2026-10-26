@@ -718,7 +718,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
     }
   }
   // Two or more exploration kinds share one "Explored …" phrase so they never
-  // crowd a real command or edit out of the two-category summary.
+  // crowd a real command or edit out of the three-category summary.
   const exploreGroups = [...groups.values()].filter(
     (group) => group.goatAction === null && EXPLORE_ACTIONS.has(group.action),
   );
@@ -758,7 +758,7 @@ export function summarizeToolGroup(entries: ReadonlyArray<WorkLogPresentationEnt
   });
   const selected = [...summaries]
     .sort((a, b) => a.priority - b.priority || a.index - b.index)
-    .slice(0, 2)
+    .slice(0, 3)
     .sort((a, b) => a.index - b.index);
   const labels = selected.map(({ label }) => label);
   if (sources.size > 0) {

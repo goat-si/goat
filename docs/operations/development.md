@@ -35,7 +35,17 @@ Git reads the hook from the checkout that runs `git worktree add`, so that check
 `vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
 created without the hook, run `node scripts/setup-worktree.ts` from its root.
 
-Create worktrees by hand with `node scripts/worktree-add.ts <path> [git worktree add arguments]`.
+Agents running in GOAT use GOAT-managed worktrees for extra checkouts: `worktree.handoff`
+for the current thread (check `worktree.status` first), `thread.launch` with
+`workspaceStrategy:{type:"worktree"}` for a separate thread, or `task.create` with
+`isolation:"worktree"` for a bounded child lane. Do not create ad-hoc worktrees or clones for lanes,
+or ask children to create them; a shell-created checkout does not bind a GOAT thread.
+
+For humans or when GOAT is unavailable, create worktrees with
+`node scripts/worktree-add.ts <worktrees-directory>/goat/<name> -b <branch> origin/dev`.
+Use GOAT's configured worktrees directory, which defaults to `<GOAT home>/worktrees`
+(normally `~/.goat/desktop/worktrees` for the desktop app). Placing a checkout there does not
+bind it to a thread; use `thread.launch` with `workspaceStrategy:{type:"existing_worktree",worktreePath:"<absolute-path>",branch:"<branch>"}` when GOAT is available.
 When GOAT is checked out as a submodule with `extensions.worktreeConfig` on, a plain
 `git worktree add` inherits the submodule's `core.worktree`: the new worktree resolves to the git
 directory, the hook finds no setup script there, and `git status` reports the git directory's

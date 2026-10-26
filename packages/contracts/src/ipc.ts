@@ -485,7 +485,7 @@ export interface DesktopSshEnvironmentBootstrap {
   pairingToken: string | null;
   attachmentId?: string;
   remotePort?: number;
-  remoteServerKind?: "external" | "managed";
+  remoteServerKind?: "app" | "external" | "managed";
   /** GOAT version of the remote server, when the runtime reported one. Source runs omit it. */
   remoteServerVersion?: string;
   /**
@@ -513,7 +513,7 @@ export const DesktopSshEnvironmentBootstrapSchema = Schema.Struct({
   pairingToken: Schema.NullOr(Schema.String),
   attachmentId: Schema.optionalKey(TrimmedNonEmptyString),
   remotePort: Schema.optionalKey(Schema.Number),
-  remoteServerKind: Schema.optionalKey(Schema.Literals(["external", "managed"])),
+  remoteServerKind: Schema.optionalKey(Schema.Literals(["app", "external", "managed"])),
   remoteServerVersion: Schema.optionalKey(Schema.String),
   pendingReplacement: Schema.optionalKey(SshRuntimePendingReplacementSchema),
 });
