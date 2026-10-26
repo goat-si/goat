@@ -12,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import * as ServerConfig from "../config.ts";
 import { readHostCapacityExtras } from "./hostCapacity.ts";
 
 export class HostResources extends Context.Service<
@@ -46,7 +47,7 @@ function darwinAvailableMemory(output: string): number | null {
 const make = Effect.fn("makeHostResources")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const platform = yield* HostProcess.Platform;
-  const home = yield* HostProcess.HomeDirectory;
+  const { baseDir } = yield* ServerConfig.ServerConfig;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
   const sample = Effect.fn("HostResources.sample")(function* () {
@@ -59,7 +60,7 @@ const make = Effect.fn("makeHostResources")(function* () {
         Effect.sleep("200 millis"),
         readHostCapacityExtras({
           platform,
-          home,
+          dataDir: baseDir,
           loadavg: NodeOS.loadavg(),
           statfs: (path) => NodeFSP.statfs(path, { bigint: true }),
         }),
