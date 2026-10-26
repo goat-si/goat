@@ -159,6 +159,7 @@ const runService = <A, E>(
     Layer.provide(layerNoFleetSync),
     Layer.provide(
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
+        resolveThreadEnvironment: () => Effect.succeed(null),
         callHostTool: (call, authorize) => {
           calls.push(call);
           return authorize.pipe(Effect.andThen(options.hostCall(call)));
