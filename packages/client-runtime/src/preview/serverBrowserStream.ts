@@ -246,12 +246,15 @@ export function createPreviewStreamClient(
       events.onCursorState?.({ identity: cursorOwner.identity, phase: "hidden" });
     cursorOwner = null;
   };
-  const acceptCursor = (next: CursorState) => {
+  const acceptCursor = (next: CursorState, pointer = false) => {
     const old = cursorOwner;
     if (old !== null) {
       if (sameCursorOwner(old, next)) {
         if (
-          next.identity.sequence <= old.identity.sequence ||
+          (pointer
+            ? next.identity.sequence < old.identity.sequence ||
+              (next.identity.sequence === old.identity.sequence && next.phase !== old.phase)
+            : next.identity.sequence <= old.identity.sequence) ||
           ((old.phase === "hidden" || old.phase === "yielded") &&
             next.phase !== "hidden" &&
             next.phase !== "yielded")
@@ -349,9 +352,14 @@ export function createPreviewStreamClient(
       ) {
         if (cursor !== undefined) {
           const decoded = decodeCursorState(cursor);
-          if (Option.isNone(decoded) || !acceptCursor(decoded.value)) return;
+          if (Option.isNone(decoded) || !acceptCursor(decoded.value, true)) return;
           events.onPointer?.({ phase, x, y, sequence, cursor: decoded.value });
-        } else if (cursorOwner === null) events.onPointer?.({ phase, x, y, sequence });
+        } else if (
+          cursorOwner === null ||
+          cursorOwner.phase === "hidden" ||
+          cursorOwner.phase === "yielded"
+        )
+          events.onPointer?.({ phase, x, y, sequence });
       } else if (type === "cursor-state") {
         const decoded = decodeCursorState(cursor);
         if (Option.isSome(decoded) && acceptCursor(decoded.value))

@@ -189,18 +189,70 @@ describe("preview stream agent pointer", () => {
       generation: 1,
     };
     const message = (phase: string, sequence: number) =>
-      FakeSocket.current.message(JSON.stringify({
-        type: "cursor-state",
-        cursor: { identity: { ...identity, sequence }, phase },
-      }));
+      FakeSocket.current.message(
+        JSON.stringify({
+          type: "cursor-state",
+          cursor: { identity: { ...identity, sequence }, phase },
+        }),
+      );
     message("thinking", 1);
     message("unknown", 2);
     message("hidden", 2);
     message("acting", 1);
-    FakeSocket.current.message(JSON.stringify({ type: "pointer", phase: "move", x: 1, y: 2, sequence: 3 }));
+    FakeSocket.current.message(
+      JSON.stringify({ type: "pointer", phase: "move", x: 1, y: 2, sequence: 3 }),
+    );
     expect(onCursorState).toHaveBeenCalledTimes(2);
-    expect(onCursorState).toHaveBeenLastCalledWith({ identity: { ...identity, sequence: 2 }, phase: "hidden" });
-    expect(onPointer).not.toHaveBeenCalled();
+    expect(onCursorState).toHaveBeenLastCalledWith({
+      identity: { ...identity, sequence: 2 },
+      phase: "hidden",
+    });
+    expect(onPointer).toHaveBeenCalledExactlyOnceWith({ phase: "move", x: 1, y: 2, sequence: 3 });
+  });
+
+  it("renders a code-mode pointer with its owner and a legacy pointer after terminal hide", () => {
+    const onPointer = vi.fn();
+    createPreviewStreamClient(target, {
+      onFrame: vi.fn(),
+      onPointer,
+      onCursorState: vi.fn(),
+      onViewport: vi.fn(),
+      onConnectedChange: vi.fn(),
+      onUnauthorized: vi.fn(),
+    });
+    const cursor = {
+      identity: {
+        environmentId: "environment",
+        runId: "run",
+        turnId: "turn",
+        targetId: "target",
+        generation: 1,
+        sequence: 1,
+      },
+      phase: "thinking",
+    };
+    FakeSocket.current.message(JSON.stringify({ type: "cursor-state", cursor }));
+    FakeSocket.current.message(
+      JSON.stringify({ type: "pointer", phase: "move", x: 4, y: 5, sequence: 1, cursor }),
+    );
+    FakeSocket.current.message(
+      JSON.stringify({
+        type: "cursor-state",
+        cursor: { ...cursor, identity: { ...cursor.identity, sequence: 2 }, phase: "hidden" },
+      }),
+    );
+    FakeSocket.current.message(
+      JSON.stringify({ type: "pointer", phase: "click", x: 6, y: 7, sequence: 2 }),
+    );
+    expect(onPointer).toHaveBeenCalledTimes(2);
+    expect(onPointer).toHaveBeenNthCalledWith(1, {
+      phase: "move",
+      x: 4,
+      y: 5,
+      sequence: 1,
+      cursor,
+    });
+    expect(onPointer).toHaveBeenNthCalledWith(2, { phase: "click", x: 6, y: 7, sequence: 2 });
   });
 });
 

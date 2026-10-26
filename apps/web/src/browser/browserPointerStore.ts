@@ -60,7 +60,18 @@ export function reduceBrowserPointer(
     };
   }
   if (event.cursor !== undefined) {
-    if (!newer(previousOwner, event.cursor)) return state;
+    if (
+      !newer(previousOwner, event.cursor) &&
+      !(
+        previousOwner !== undefined &&
+        sameOwner(previousOwner, event.cursor) &&
+        previousOwner.identity.sequence === event.cursor.identity.sequence &&
+        previousOwner.phase === event.cursor.phase &&
+        previousOwner.phase !== "hidden" &&
+        previousOwner.phase !== "yielded"
+      )
+    )
+      return state;
     if (event.cursor.phase === "hidden" || event.cursor.phase === "yielded") {
       const { [event.tabId]: _removed, ...byTabId } = state.byTabId;
       return {
@@ -75,7 +86,12 @@ export function reduceBrowserPointer(
       ownerByTabId: { ...state.ownerByTabId, [event.tabId]: event.cursor },
     };
   }
-  if (previousOwner !== undefined) return state;
+  if (
+    previousOwner !== undefined &&
+    previousOwner.phase !== "hidden" &&
+    previousOwner.phase !== "yielded"
+  )
+    return state;
   const previous = state.byTabId[event.tabId];
   if (previous !== undefined && event.sequence <= previous.sequence) return state;
   return { ...state, byTabId: { ...state.byTabId, [event.tabId]: event } };

@@ -38,6 +38,28 @@ export function acceptsCursorState(
   );
 }
 
+export function acceptsPointerCursor(
+  previous: AgentCursorSnapshot | undefined,
+  next: AgentCursorSnapshot,
+): boolean {
+  return (
+    acceptsCursorState(previous, next) ||
+    (previous !== undefined &&
+      previous.phase !== "hidden" &&
+      previous.phase !== "yielded" &&
+      previous.phase === next.phase &&
+      previous.identity.environmentId === next.identity.environmentId &&
+      previous.identity.runId === next.identity.runId &&
+      previous.identity.turnId === next.identity.turnId &&
+      previous.identity.targetId === next.identity.targetId &&
+      previous.identity.generation === next.identity.generation &&
+      previous.identity.sequence === next.identity.sequence)
+  );
+}
+
+export const acceptsLegacyPointer = (previous: AgentCursorSnapshot | undefined): boolean =>
+  previous === undefined || previous.phase === "hidden" || previous.phase === "yielded";
+
 export function pointerEvent(
   pointer: AgentPointer,
   tabId: string,

@@ -42,6 +42,7 @@ import { inputKinds } from "./agentInputLog.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import { overlayCallCaptures, replyImageSize } from "./ComputerUseOverlay.ts";
+import { confirmCaptureHide } from "./ComputerUseCaptureHide.ts";
 import {
   type Envelope,
   namedWindows,
@@ -483,10 +484,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     yield* Deferred.succeed(confirmed, undefined);
     yield* Queue.offer(deadlineWake, undefined);
   }, Effect.uninterruptible);
-
   yield* Effect.addFinalizer(() => end("lost"));
   yield* start();
-
   const apply = (
     update: ComputerUseLeaseUpdate | undefined,
     fence: ReturnType<typeof fences.take>,
@@ -578,7 +577,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     Effect.catchCause(() => end("lost")),
     Effect.forkScoped,
   );
-
   const { proveDisplay, refuseCall } = makeProxyChecks({
     current: () => lifecycle.current,
     ownAnswers,
@@ -835,8 +833,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         overlayChannel !== undefined &&
         "captureHideConfirmed" in overlayChannel &&
         typeof overlayChannel.captureHideConfirmed === "function" &&
-        !overlayChannel.captureHideConfirmed()
-      )
+        !(yield* confirmCaptureHide(
+          overlayChannel,
+          overlayChannel.captureHideConfirmed as () => boolean,
+        ))
+      ) {
+        yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(
           refusal(
             id,
@@ -845,6 +847,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             "GOAT could not confirm that its cursor overlay was hidden. This capture did not run; wait for the helper and observe again.",
           ),
         );
+      }
       if (options.onTarget !== undefined) {
         const target = targetOf(message.params?.arguments);
         if (

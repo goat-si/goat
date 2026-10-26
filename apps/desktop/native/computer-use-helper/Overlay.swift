@@ -110,6 +110,7 @@ final class AgentOverlay {
     thinkLayer.fillColor = NSColor.clear.cgColor
     thinkLayer.strokeColor = NSColor(srgbRed: 0.27, green: 0.52, blue: 1, alpha: 0.55).cgColor
     thinkLayer.lineWidth = 2
+    thinkLayer.opacity = 0.15
     thinkLayer.isHidden = true
     view.layer?.addSublayer(thinkLayer)
     motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -155,6 +156,7 @@ final class AgentOverlay {
       pulse.duration = 0.6
       pulse.autoreverses = true
       pulse.repeatCount = 4
+      thinkLayer.opacity = 0.15
       thinkLayer.add(pulse, forKey: "boundedThink")
     }
     // External windows have no NSWindow notifications here. Sample geometry only briefly after
@@ -197,50 +199,55 @@ final class AgentOverlay {
       CGPoint(x: margin + $0.x * frame.width, y: margin + (1 - $0.y) * frame.height)
     }
     if let nextPoint {
-      let oldPoint = cursorLayer.presentation()?.position ?? settledPoint
-      let retargeting = cursorLayer.animation(forKey: "position") != nil
-      cursorLayer.removeAnimation(forKey: "position")
-      CATransaction.begin()
-      CATransaction.setDisableActions(true)
-      cursorLayer.position = nextPoint
-      thinkLayer.position = nextPoint
-      cursorLayer.isHidden = false
-      CATransaction.commit()
-      if animate && !reducedMotion, let oldPoint {
-        let distance = hypot(nextPoint.x - oldPoint.x, nextPoint.y - oldPoint.y)
-        if distance >= 4 {
-          if retargeting {
-            let spring = CASpringAnimation(keyPath: "position")
-            spring.fromValue = NSValue(point: oldPoint)
-            spring.toValue = NSValue(point: nextPoint)
-            spring.mass = 1
-            spring.stiffness = 324
-            spring.damping = 36
-            spring.duration = 0.6
-            cursorLayer.add(spring, forKey: "position")
-          } else {
-            let duration = min(0.45, max(0.15, 0.15 + 0.075 * log2(1 + distance / 16)))
-            let path = CAKeyframeAnimation(keyPath: "position")
-            path.values = (0...20).map { index -> NSValue in
-              let t = Double(index) / 20
-              let progress = 10 * pow(t, 3) - 15 * pow(t, 4) + 6 * pow(t, 5)
-              return NSValue(point: NSPoint(
-                x: oldPoint.x + (nextPoint.x - oldPoint.x) * progress,
-                y: oldPoint.y + (nextPoint.y - oldPoint.y) * progress))
+      if !animate, !cursorLayer.isHidden, settledPoint == nextPoint {
+        // Frame follow leaves the current position animation and opacity untouched.
+      } else {
+        let wasVisible = !cursorLayer.isHidden
+        let oldPoint = wasVisible ? (cursorLayer.presentation()?.position ?? settledPoint) : nil
+        let retargeting = cursorLayer.animation(forKey: "position") != nil
+        cursorLayer.removeAnimation(forKey: "position")
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        cursorLayer.position = nextPoint
+        thinkLayer.position = nextPoint
+        cursorLayer.isHidden = false
+        CATransaction.commit()
+        if animate && !reducedMotion, let oldPoint {
+          let distance = hypot(nextPoint.x - oldPoint.x, nextPoint.y - oldPoint.y)
+          if distance >= 4 {
+            if retargeting {
+              let spring = CASpringAnimation(keyPath: "position")
+              spring.fromValue = NSValue(point: oldPoint)
+              spring.toValue = NSValue(point: nextPoint)
+              spring.mass = 1
+              spring.stiffness = 324
+              spring.damping = 36
+              spring.duration = 0.6
+              cursorLayer.add(spring, forKey: "position")
+            } else {
+              let duration = min(0.45, max(0.15, 0.15 + 0.075 * log2(1 + distance / 16)))
+              let path = CAKeyframeAnimation(keyPath: "position")
+              path.values = (0...20).map { index -> NSValue in
+                let t = Double(index) / 20
+                let progress = 10 * pow(t, 3) - 15 * pow(t, 4) + 6 * pow(t, 5)
+                return NSValue(point: NSPoint(
+                  x: oldPoint.x + (nextPoint.x - oldPoint.x) * progress,
+                  y: oldPoint.y + (nextPoint.y - oldPoint.y) * progress))
+              }
+              path.duration = duration
+              path.calculationMode = .linear
+              cursorLayer.add(path, forKey: "position")
             }
-            path.duration = duration
-            path.calculationMode = .linear
-            cursorLayer.add(path, forKey: "position")
           }
+        } else if reducedMotion && (!wasVisible || settledPoint != nextPoint) {
+          let fade = CABasicAnimation(keyPath: "opacity")
+          fade.fromValue = 0.3
+          fade.toValue = 1
+          fade.duration = 0.1
+          cursorLayer.add(fade, forKey: "reducedFade")
         }
-      } else if reducedMotion {
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = 0.3
-        fade.toValue = 1
-        fade.duration = 0.1
-        cursorLayer.add(fade, forKey: "reducedFade")
+        settledPoint = nextPoint
       }
-      settledPoint = nextPoint
     } else {
       cursorLayer.isHidden = true
       thinkLayer.isHidden = true

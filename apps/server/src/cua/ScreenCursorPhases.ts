@@ -9,6 +9,7 @@ type State = { owner: Owner; sequence: number; pending: Set<number>; ended: bool
 /** Host-owned phase port. A guest can request a host call but cannot publish cursor state. */
 export class ScreenCursorPhases {
   private readonly targets = new Map<string, State>();
+  private readonly terminalGenerations = new Map<string, number>();
   private readonly publish: Sink;
 
   constructor(publish: Sink) {
@@ -22,6 +23,19 @@ export class ScreenCursorPhases {
   private state(ref: ScreenTargetRef): State {
     const key = this.key(ref);
     let state = this.targets.get(key);
+    if (state === undefined && (this.terminalGenerations.get(key) ?? -1) >= ref.generation)
+      return {
+        owner: {
+          environmentId: EnvironmentId.make(ref.environmentId),
+          runId: ref.runId,
+          turnId: ref.turnId,
+          targetId: ref.id,
+          generation: ref.generation,
+        },
+        sequence: 0,
+        pending: new Set(),
+        ended: true,
+      };
     if (state !== undefined && state.owner.generation > ref.generation) return state;
     if (!state || state.owner.generation !== ref.generation) {
       state = {
@@ -72,7 +86,8 @@ export class ScreenCursorPhases {
   }
 
   ended(ref: ScreenTargetRef, reason: "ended" | "private" | "takeover" = "ended") {
-    const state = this.targets.get(this.key(ref));
+    const key = this.key(ref);
+    const state = this.targets.get(key);
     if (!state || state.ended || state.owner.generation !== ref.generation) return;
     state.ended = true;
     state.pending.clear();
@@ -82,5 +97,14 @@ export class ScreenCursorPhases {
       phase: reason === "takeover" ? "yielded" : "hidden",
       reason,
     });
+    this.targets.delete(key);
+    this.terminalGenerations.set(key, ref.generation);
+  }
+
+  finishTurn(runId: string, turnId: string) {
+    const suffix = `\u0000${runId}\u0000${turnId}\u0000`;
+    for (const key of this.targets.keys()) if (key.includes(suffix)) this.targets.delete(key);
+    for (const key of this.terminalGenerations.keys())
+      if (key.includes(suffix)) this.terminalGenerations.delete(key);
   }
 }

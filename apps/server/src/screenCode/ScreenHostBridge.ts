@@ -553,6 +553,7 @@ export class ScreenHostBridge {
       if (ref) this.cursorPhases?.ended(ref);
       this.targetRefs.delete(targetId);
     }
+    this.cursorPhases?.finishTurn(runId, turnId);
     for (const cellId of this.cellTargets.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
     this.invalidTargets.delete(turn);

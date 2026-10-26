@@ -1501,9 +1501,19 @@ const make = Effect.gen(function* () {
       const show = (next: "move" | "click") => {
         const sequence = ++pointerSequence;
         const currentCursor = cursorByTab.get(tab);
-        const cursor = currentCursor?.phase === "hidden" || currentCursor?.phase === "yielded" ? undefined : currentCursor;
+        const cursor =
+          currentCursor?.phase === "hidden" || currentCursor?.phase === "yielded"
+            ? undefined
+            : currentCursor;
         for (const viewer of tab.viewers)
-          viewer.push({ _tag: "pointer", phase: next, x, y, sequence, ...(cursor ? { cursor } : {}) });
+          viewer.push({
+            _tag: "pointer",
+            phase: next,
+            x,
+            y,
+            sequence,
+            ...(cursor ? { cursor } : {}),
+          });
         if (tab.desktop)
           runFork(
             desktopChannel.pointer(

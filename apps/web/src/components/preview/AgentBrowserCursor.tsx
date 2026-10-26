@@ -56,7 +56,7 @@ function AgentBrowserCursorEvent(props: {
     <AgentCursorMark
       phase={event.phase}
       {...(event.cursor ? { cursorPhase: event.cursor.phase } : {})}
-      sequence={event.sequence}
+      sequence={event.cursor?.identity.sequence ?? event.sequence}
       left={event.x * scale + (content?.x ?? 0) - (content?.scrollLeft ?? 0)}
       top={event.y * scale + (content?.y ?? 0) - (content?.scrollTop ?? 0)}
       controller={controller}
@@ -107,11 +107,17 @@ export function AgentCursorMark(props: {
     const target = { x: left, y: top };
     const previous = motion.current;
     const now = performance.now();
-    const current = previous === null
-      ? { ...target, vx: 0, vy: 0 }
-      : previous.retarget
-        ? springRetargetSample(previous.from, previous.to, now - previous.startedAt)
-        : minimumJerkSample(previous.from, previous.to, now - previous.startedAt, previous.durationMs);
+    const current =
+      previous === null
+        ? { ...target, vx: 0, vy: 0 }
+        : previous.retarget
+          ? springRetargetSample(previous.from, previous.to, now - previous.startedAt)
+          : minimumJerkSample(
+              previous.from,
+              previous.to,
+              now - previous.startedAt,
+              previous.durationMs,
+            );
     node.getAnimations().forEach((animation) => animation.cancel());
     const plan = cursorMotionPlan(reducedMotion, current, target);
     node.style.transform = `translate3d(${left}px, ${top}px, 0)`;
@@ -142,10 +148,13 @@ export function AgentCursorMark(props: {
     if (node === null) return;
     node.dataset.cursorSequence = String(sequence);
     node.getAnimations().forEach((animation) => animation.cancel());
-    if (cursorPhase !== "thinking" || reducedMotion)
-      return;
+    if (cursorPhase !== "thinking" || reducedMotion) return;
     const animation = node.animate(
-      [{ opacity: 0.1, transform: "scale(0.8)" }, { opacity: 0.45, transform: "scale(1.12)" }, { opacity: 0.1, transform: "scale(0.8)" }],
+      [
+        { opacity: 0.1, transform: "scale(0.8)" },
+        { opacity: 0.45, transform: "scale(1.12)" },
+        { opacity: 0.1, transform: "scale(0.8)" },
+      ],
       { duration: 1200, iterations: 4 },
     );
     return () => animation.cancel();
@@ -158,14 +167,21 @@ export function AgentCursorMark(props: {
       ref={element}
       className="pointer-events-none absolute left-0 top-0 z-40"
       style={{
-        opacity: agentBrowserCursorOpacity(cursorPhase === undefined ? active : cursorPhase !== "resting", controller),
+        opacity: agentBrowserCursorOpacity(
+          cursorPhase === undefined ? active : cursorPhase !== "resting",
+          controller,
+        ),
         transform: `translate3d(${left}px, ${top}px, 0)`,
       }}
       aria-hidden="true"
       data-agent-browser-cursor
       data-phase={cursorPhase ?? phase}
     >
-      <span ref={halo} className="absolute left-0.5 top-0.5 size-4 rounded-full bg-primary/25" style={{ opacity: cursorPhase === "thinking" ? 0.1 : 0 }} />
+      <span
+        ref={halo}
+        className="absolute left-0.5 top-0.5 size-4 rounded-full bg-primary/25"
+        style={{ opacity: cursorPhase === "thinking" ? 0.1 : 0 }}
+      />
       {phase === "click" && cursorPhase === undefined ? (
         <span
           key={sequence}
